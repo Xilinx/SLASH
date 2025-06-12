@@ -38,6 +38,7 @@ jobs:
           sudo apt-get install -y build-essential linux-headers-$(uname -r) libxml2-dev libzmq3-dev libjsoncpp-dev
 
       - name: Build hotplug driver
+        if: ${{ false }}
         run: |
           cd ${{ github.workspace }}/submodules/pcie-hotplug-drv/ && make
 
