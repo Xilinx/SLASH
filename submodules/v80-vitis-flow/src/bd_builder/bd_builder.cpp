@@ -20,7 +20,9 @@
 
 #include "bd_builder.hpp"
 
+#include "arg_parser.hpp"
 #include "system_map.hpp"
+#include <sstream>
 
 bool BdBuilder::hasAximmIntf = false;
 
@@ -31,13 +33,16 @@ BdBuilder::BdBuilder(std::vector<Kernel> kernels, std::vector<Connection> connec
 }
 
 BdBuilder::BdBuilder(std::vector<Kernel> kernels, std::vector<Connection> connections,
-                     double targetClockFreq, bool segmented, Platform platform)
+                     double targetClockFreq, bool segmented, Platform platform,
+                     TclInjections tclInjections)
     : systemMap(segmented, platform) {
     this->kernels = kernels;
     this->streamConnections = connections;
     this->targetClockFreq = targetClockFreq;
     this->segmented = segmented;
     this->platform = platform;
+    this->tclInjections = std::move(tclInjections);
+
     systemMap.setClockFreq(targetClockFreq);
     StreamingConnection qdmaStreamConnection;
     for (auto sc = streamConnections.begin(); sc != streamConnections.end(); sc++) {
@@ -78,10 +83,13 @@ void BdBuilder::buildBlockDesign() {
         inputBlockDesignFile.open(INPUT_FILE_SIM);
     }
     std::ofstream blockDesignFile;
+    std::ofstream postBuildScriptFile;
     if (platform == Platform::EMULATOR) {
         blockDesignFile.open("/dev/null");
+        postBuildScriptFile.open("/dev/null");
     } else {
-        blockDesignFile.open(OUTPUT_FILE);
+        blockDesignFile.open(PRE_OUTPUT_FILE);
+        postBuildScriptFile.open(POST_OUTPUT_FILE);
     }
 
     if (platform == Platform::HARDWARE) {
@@ -188,8 +196,30 @@ void BdBuilder::buildBlockDesign() {
             }
         }
 
+
+
+        for (const auto &script : tclInjections.scriptsPreSynth) {
+            blockDesignFile << generateSourceInstruction(script);
+        }
+
         blockDesignFile << printFooter();
         blockDesignFile.close();
+
+        // Inline and dirty.
+        postBuildScriptFile << "proc run_post {} {\n"
+            << "\topen_run impl_1\n"
+            << "\treport_utilization -hierarchical -hierarchical_depth 3 -hierarchical_percentages -file build/report_utilization.txt\n"
+            << "\treport_timing_summary -delay_type min_max -check_timing_verbose -max_paths 1 -input_pins -routable_nets -name timing_1 -file build/report_timing.txt\n\n";
+
+
+        for (const auto &script : tclInjections.scriptsPostBuild) {
+            postBuildScriptFile << generateSourceInstruction(script);
+        }
+
+        postBuildScriptFile << "}\n"
+            << "run_post\n";
+
+
         systemMap.printToFile();
     } else if (platform == Platform::SIMULATOR) {
         std::string line;
@@ -1258,6 +1288,19 @@ std::string BdBuilder::addRunPreHeader() {
        << "    # Set parent object as current\n"
        << "    current_bd_instance $parentObj\n"
        << "\n";
+
+    return ss.str();
+}
+
+std::string BdBuilder::generateSourceInstruction(const std::string& path) const {
+    std::stringstream ss;
+
+    if (path.find("{") != std::string::npos
+        || path.find("}") != std::string::npos) {
+        throw std::runtime_error("Path to script to source cannot contian '{' or '}'");
+    }
+
+    ss << "\tsource {" << path << "}\n";
 
     return ss.str();
 }

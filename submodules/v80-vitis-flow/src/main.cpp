@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
         auto plat = parser.getPlatform();
 
         BdBuilder builder(parser.getKernels(), parser.getConnections(), parser.getFreqHz(),
-                          parser.isSegmented(), plat);
+                          parser.isSegmented(), plat, parser.getTclInjections());
         builder.buildBlockDesign();
 
         if (plat == Platform::EMULATOR) {

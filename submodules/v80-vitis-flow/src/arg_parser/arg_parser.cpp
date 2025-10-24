@@ -19,6 +19,8 @@
  */
 
 #include "arg_parser.hpp"
+#include <stdexcept>
+#include <filesystem>
 
 const std::string ArgParser::XML_PATH = "/syn/report/csynth.xml";
 
@@ -35,6 +37,18 @@ ArgParser::ArgParser(int argc, char** argv) {
             segmented = true;
         } else if (arg == "--kernels") {
             parsingKernels = true;
+        } else if (arg == "--source-pre-synth") {
+            if (i + 1 < argc) {
+                tclInjections.scriptsPreSynth.emplace_back(argv[++i]);
+            } else {
+                throw std::runtime_error("Missing argument to --source-pre-synth");
+            }
+        } else if (arg == "--source-post-build") {
+            if (i + 1 < argc) {
+                tclInjections.scriptsPostBuild.emplace_back(argv[++i]);
+            } else {
+                throw std::runtime_error("Missing argument to --source-pre-synth");
+            }
         } else if (arg == "--platform") {
             std::string plat = argv[++i];
             if (plat == "hw") {
@@ -105,6 +119,36 @@ void ArgParser::parseConfig() {
                 utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                                    "Setting clock at {} Hz", freqHz);
             }
+        } else if (line.find("pre_synth=") == 0) {
+            std::istringstream iss(line.substr(10));
+            std::string relfile;
+            if (std::getline(iss, relfile)) {
+                std::filesystem::path base = std::filesystem::absolute(std::filesystem::path(configFile)).parent_path();
+                std::filesystem::path candidate = std::filesystem::path(relfile);
+
+                if (candidate.is_relative()) {
+                    candidate = base / candidate;
+                }
+
+                std::string path = std::filesystem::weakly_canonical(candidate).string();
+
+                tclInjections.scriptsPreSynth.push_back(std::move(path));
+            }
+        } else if (line.find("post_build=") == 0) {
+            std::istringstream iss(line.substr(11));
+            std::string relfile;
+            if (std::getline(iss, relfile)) {
+                std::filesystem::path base = std::filesystem::absolute(std::filesystem::path(configFile)).parent_path();
+                std::filesystem::path candidate = std::filesystem::path(relfile);
+
+                if (candidate.is_relative()) {
+                    candidate = base / candidate;
+                }
+
+                std::string path = std::filesystem::weakly_canonical(candidate).string();
+
+                tclInjections.scriptsPostBuild.push_back(std::move(path));
+            }
         }
     }
 }
@@ -142,3 +186,5 @@ bool ArgParser::isSegmented() const { return segmented; }
 Platform ArgParser::getPlatform() { return platform; }
 
 std::vector<std::string> ArgParser::getKernelPaths() { return kernelPaths; }
+
+const TclInjections &ArgParser::getTclInjections() const { return tclInjections; }

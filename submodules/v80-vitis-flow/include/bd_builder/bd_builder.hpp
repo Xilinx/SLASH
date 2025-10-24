@@ -53,7 +53,8 @@ class BdBuilder {
         "../resources/base_bd.tcl";  ///< Base TCL file for hardware platform
     std::string INPUT_FILE_SIM =
         "../resources/sim_prj.tcl";           ///< Base TCL file for simulation platform
-    std::string OUTPUT_FILE = "run_pre.tcl";  ///< Output TCL file name
+    std::string PRE_OUTPUT_FILE = "run_pre.tcl";  ///< Output pre TCL file name
+    std::string POST_OUTPUT_FILE = "run_post.tcl"; ///< Output post TCL file name
     std::string NOC_SOLUTION = "../resources/noc_sol_compute.ncr";  ///< NoC solution file path
     std::string NOC0_ADDR_STR =
         " -target_address_space [get_bd_addr_spaces cips/CPM_PCIE_NOC_0] [get_bd_addr_segs "
@@ -73,6 +74,14 @@ class BdBuilder {
     SystemMap systemMap;                        ///< System memory map for the design
     bool segmented;                             ///< Flag indicating if design is segmented
     Platform platform;  ///< Target platform (hardware, simulation, emulation)
+    TclInjections tclInjections; ///< Set of Tcl files to inject
+
+    /**
+     * @brief Generate source instruction.
+     * @param path The path to source.
+     * @return The source instruction.
+     */
+    std::string generateSourceInstruction(const std::string& path) const;
 
    public:
     /**
@@ -89,9 +98,11 @@ class BdBuilder {
      * @param targetClockFreq Target clock frequency in Hz.
      * @param segmented Flag indicating if design is segmented.
      * @param platform Target platform (hardware, simulation, emulation).
+     * @param tclInjections Set of Tcl files to inject.
      */
     BdBuilder(std::vector<Kernel> kernels, std::vector<Connection> connections,
-              double targetClockFreq, bool segmented, Platform platform);
+              double targetClockFreq, bool segmented, Platform platform,
+              TclInjections tclInjections);
 
     /**
      * @brief Builds the block design by generating TCL commands.
