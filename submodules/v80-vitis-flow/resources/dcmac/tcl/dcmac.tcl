@@ -645,6 +645,11 @@ proc create_hier_cell_DCMAC_subsys { parentCell nameHier dcmac_index dual_dcmac}
     set dcmac_loc "DCMAC_X1Y1"
   }
 
+  # Get the DCMAC version
+  set dcmac_version [get_property VERSION [get_ipdefs xilinx.com:ip:dcmac*]]
+  # Extract major version number
+  set dcmac_major_version [lindex [split ${dcmac_version} "."] 0]
+
   # Create instance: dcmac_core, and set properties
   set dcmac_core [ create_bd_cell -type ip -vlnv xilinx.com:ip:dcmac ${dcmac_name} ]
 
@@ -694,6 +699,13 @@ proc create_hier_cell_DCMAC_subsys { parentCell nameHier dcmac_index dual_dcmac}
       CONFIG.MAC_PORT2_RX_STRIP_C0 {1} \
       CONFIG.MAC_PORT3_ENABLE_C0 {1} \
       CONFIG.MAC_PORT3_RX_STRIP_C0 {1} \
+    ] $dcmac_core
+  }
+
+  #if get dcmac_core older than 2.5
+  if {${dcmac_major_version} >= 3} {
+    set_property -dict [list \
+      CONFIG.IS_GT_WIZ_OLD {1} \
     ] $dcmac_core
   }
 
@@ -831,7 +843,7 @@ proc create_hier_cell_DCMAC_subsys { parentCell nameHier dcmac_index dual_dcmac}
     connect_bd_intf_net [get_bd_intf_pins seg_to_axis0/m_axis0_pkt_out] [get_bd_intf_pins M_AXIS_0]
     connect_bd_intf_net [get_bd_intf_pins axis_to_seg0/s_axis0_pkt_in] [get_bd_intf_pins S_AXIS_0]
   }
-
+  save_bd_design
   # Create port connections
   connect_bd_net -net aresetn_axis_seg_in1_1 [get_bd_pins aresetn_tx_390mhz] [get_bd_pins axis_to_seg0/aresetn_axis_seg_in]
   connect_bd_net -net aresetn_axis_seg_in_1 [get_bd_pins aresetn_rx_390mhz] [get_bd_pins seg_to_axis0/aresetn_axis_seg_in]
@@ -840,11 +852,16 @@ proc create_hier_cell_DCMAC_subsys { parentCell nameHier dcmac_index dual_dcmac}
   connect_bd_net -net axi_gpio_tx_datapath_gpio_io_o [get_bd_pins control_tx_datapath] [get_bd_pins xlslice_tx_datapath_1/Din] [get_bd_pins xlslice_tx_datapath_2/Din] [get_bd_pins xlslice_tx_datapath_3/Din] [get_bd_pins xlslice_tx_datapath_0/Din]
   connect_bd_net -net clk_wizard_0_clk_out1 [get_bd_pins core_clk_782mhz] [get_bd_pins ${dcmac_name}/tx_core_clk] [get_bd_pins ${dcmac_name}/rx_core_clk]
   connect_bd_net -net clk_wizard_0_clk_out2 [get_bd_pins axi_clk_390mhz] [get_bd_pins ${dcmac_name}/rx_axi_clk] [get_bd_pins ${dcmac_name}/tx_axi_clk] [get_bd_pins tx_flexif_clk_clock_bus/clk] [get_bd_pins ${dcmac_name}/rx_macif_clk] [get_bd_pins ${dcmac_name}/tx_macif_clk] [get_bd_pins rx_flexif_clk_clock_bus/clk] [get_bd_pins seg_to_axis0/aclk_axis_seg_in] [get_bd_pins axis_to_seg0/aclk_axis_seg_in]
-  connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_0] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch0_iloreset]
-  connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_1] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch1_iloreset]
-  connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_2] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch2_iloreset]
-  connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_3] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch3_iloreset]
-  connect_bd_net [get_bd_pins ${dcmac_name}/pllreset_out_0] [get_bd_pins ${dcmac_wrapper_name}/hsclk_pllreset0]
+  save_bd_design
+  #if get dcmac_core older than 3.0
+  if {${dcmac_major_version} < 3} {
+    connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_0] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch0_iloreset]
+    connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_1] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch1_iloreset]
+    connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_2] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch2_iloreset]
+    connect_bd_net [get_bd_pins ${dcmac_name}/iloreset_out_3] [get_bd_pins ${dcmac_wrapper_name}/gt0_ch3_iloreset]
+    connect_bd_net [get_bd_pins ${dcmac_name}/pllreset_out_0] [get_bd_pins ${dcmac_wrapper_name}/hsclk_pllreset0]
+    connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/hsclk_plllock0] [get_bd_pins ${dcmac_name}/plllock_in_0]
+  }
   connect_bd_net [get_bd_pins ${dcmac_name}/rx_clr_out_0] [get_bd_pins ${dcmac_wrapper_name}/MBUFG_GT_CLR]
   connect_bd_net [get_bd_pins ${dcmac_name}/rx_clrb_leaf_out_0] [get_bd_pins ${dcmac_wrapper_name}/MBUFG_GT_CLRB_LEAF]
   connect_bd_net [get_bd_pins ${dcmac_name}/tx_clr_out_0] [get_bd_pins ${dcmac_wrapper_name}/MBUFG_GT_CLR1]
@@ -854,7 +871,6 @@ proc create_hier_cell_DCMAC_subsys { parentCell nameHier dcmac_index dual_dcmac}
   connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/qsfp0_rx_usr_clk_664mhz] [get_bd_pins rx_serdes/usrclk]
   connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/qsfp0_tx_usr_clk_332mhz] [get_bd_pins tx_alt_serdes/usrclk]
   connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/qsfp0_tx_usr_clk_664mhz] [get_bd_pins tx_serdes/usrclk]
-  connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/hsclk_plllock0] [get_bd_pins ${dcmac_name}/plllock_in_0]
   connect_bd_net -net gt_reset_rx_datapath_in_0_1 [get_bd_pins xlslice_rx_datapath_0/Dout] [get_bd_pins ${dcmac_name}/gt_reset_rx_datapath_in_0]
   connect_bd_net -net gt_reset_rx_datapath_in_1_1 [get_bd_pins xlslice_rx_datapath_1/Dout] [get_bd_pins ${dcmac_name}/gt_reset_rx_datapath_in_1]
   connect_bd_net -net gt_reset_rx_datapath_in_2_1 [get_bd_pins xlslice_rx_datapath_2/Dout] [get_bd_pins ${dcmac_name}/gt_reset_rx_datapath_in_2]
@@ -929,10 +945,14 @@ proc create_hier_cell_DCMAC_subsys { parentCell nameHier dcmac_index dual_dcmac}
 
   connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gtpowergood_0] [get_bd_pins ${dcmac_name}/gtpowergood_in] [get_bd_pins gt0powergood]
   connect_bd_net [get_bd_pins xlslice_gt_reset/Dout] [get_bd_pins ${dcmac_name}/gt_reset_all_in]
-  connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch0_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_0]
-  connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch1_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_1]
-  connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch2_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_2]
-  connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch3_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_3]
+  save_bd_design
+  #if get dcmac_core older than 3.0
+  if {${dcmac_major_version} < 3} {
+    connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch0_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_0]
+    connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch1_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_1]
+    connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch2_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_2]
+    connect_bd_net [get_bd_pins ${dcmac_wrapper_name}/gt0_ch3_iloresetdone] [get_bd_pins ${dcmac_name}/ilo_reset_done_3]
+  }
 
   connect_bd_net [get_bd_pins s_axi_aclk] [get_bd_pins ${dcmac_name}/s_axi_aclk] [get_bd_pins ${dcmac_wrapper_name}/apb3clk_quad]
 
@@ -1302,6 +1322,7 @@ proc create_qsfp_hierarchy { dcmac_index dual_dcmac} {
   save_bd_design
 
   set qsfp_gt0_4x [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 "qsfp${new_index}_4x" ]
+
 
   set qsfp_gt_clk_name [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 "qsfp${new_index}_322mhz" ]
   set_property -dict [ list \
