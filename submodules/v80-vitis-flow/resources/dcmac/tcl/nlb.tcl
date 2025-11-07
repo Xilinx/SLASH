@@ -69,7 +69,7 @@ proc create_hier_nlb { parentCell nameHier} {
   set smartconnect [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect smartconnect ]
   set_property -dict [list \
     CONFIG.NUM_CLKS {1} \
-    CONFIG.NUM_MI {2} \
+    CONFIG.NUM_MI {1} \
     CONFIG.NUM_SI {1} \
   ] $smartconnect
 
@@ -94,15 +94,15 @@ proc create_hier_nlb { parentCell nameHier} {
   # Create instance: networklayer, and set properties
   set networklayer [ create_bd_cell -type ip -vlnv xilinx.com:RTLKernel:networklayer networklayer ]
 
-  set rx_tready [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant rx_tready]
-  set_property CONFIG.CONST_VAL {1} ${rx_tready}
+  #set rx_tready [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant rx_tready]
+  #set_property CONFIG.CONST_VAL {1} ${rx_tready}
 
-  set traffic_producer [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer traffic_producer ]
+  #set traffic_producer [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer traffic_producer ]
   save_bd_design
 
   connect_bd_intf_net [get_bd_intf_pins s_axi] [get_bd_intf_pins smartconnect/S00_AXI]
   connect_bd_intf_net [get_bd_intf_pins smartconnect/M00_AXI] [get_bd_intf_pins networklayer/S_AXIL_nl]
-  connect_bd_intf_net [get_bd_intf_pins smartconnect/M01_AXI] [get_bd_intf_pins traffic_producer/s_axi_control]
+  #connect_bd_intf_net [get_bd_intf_pins smartconnect/M01_AXI] [get_bd_intf_pins traffic_producer/s_axi_control]
   connect_bd_intf_net [get_bd_intf_pins RX_AXIS] [get_bd_intf_pins ars_rx/S_AXIS]
   connect_bd_intf_net [get_bd_intf_pins ars_tx/M_AXIS] [get_bd_intf_pins TX_AXIS]
   connect_bd_intf_net [get_bd_intf_pins networklayer/M_AXIS_nl2eth] [get_bd_intf_pins ars_tx/S_AXIS]
@@ -110,31 +110,35 @@ proc create_hier_nlb { parentCell nameHier} {
 
   save_bd_design
 
-  connect_bd_intf_net [get_bd_intf_pins traffic_producer/axis_out] [get_bd_intf_pins networklayer/S_AXIS_sk2nl]
+  #connect_bd_intf_net [get_bd_intf_pins traffic_producer/axis_out] [get_bd_intf_pins networklayer/S_AXIS_sk2nl]
   save_bd_design
 
-  connect_bd_net [get_bd_pins ap_clk] [get_bd_pins smartconnect/aclk] [get_bd_pins ars_tx/aclk] [get_bd_pins networklayer/ap_clk] [get_bd_pins ars_rx/aclk] [get_bd_pins traffic_producer/ap_clk]
-  connect_bd_net [get_bd_pins ap_rst_n] [get_bd_pins smartconnect/aresetn] [get_bd_pins ars_rx/aresetn] [get_bd_pins ars_tx/aresetn] [get_bd_pins networklayer/ap_rst_n] [get_bd_pins traffic_producer/ap_rst_n]
+  connect_bd_net [get_bd_pins ap_clk] [get_bd_pins smartconnect/aclk] [get_bd_pins ars_tx/aclk] [get_bd_pins networklayer/ap_clk] [get_bd_pins ars_rx/aclk]
+  connect_bd_net [get_bd_pins ap_rst_n] [get_bd_pins smartconnect/aresetn] [get_bd_pins ars_rx/aresetn] [get_bd_pins ars_tx/aresetn] [get_bd_pins networklayer/ap_rst_n]
 
-  connect_bd_net [get_bd_pins rx_tready/dout] [get_bd_pins networklayer/M_AXIS_nl2sk_tready]
+  #connect_bd_net [get_bd_pins traffic_producer/ap_clk]
+  #connect_bd_net [get_bd_pins traffic_producer/ap_rst_n]
+
+
+  #connect_bd_net [get_bd_pins rx_tready/dout] [get_bd_pins networklayer/M_AXIS_nl2sk_tready]
 
   save_bd_design
 
-  create_bd_cell -type ip -vlnv xilinx.com:ip:axis_ila axis_ila
-  set_property -dict [list \
-    CONFIG.C_MON_TYPE {Interface_Monitor} \
-    CONFIG.C_NUM_MONITOR_SLOTS {2} \
-    CONFIG.C_DATA_DEPTH {2048} \
-    CONFIG.C_EN_STRG_QUAL {1} \
-    CONFIG.C_SLOT_0_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-    CONFIG.C_SLOT_1_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
-  ] [get_bd_cells axis_ila]
+  #create_bd_cell -type ip -vlnv xilinx.com:ip:axis_ila axis_ila
+  #set_property -dict [list \
+  #  CONFIG.C_MON_TYPE {Interface_Monitor} \
+  #  CONFIG.C_NUM_MONITOR_SLOTS {2} \
+  #  CONFIG.C_DATA_DEPTH {2048} \
+  #  CONFIG.C_EN_STRG_QUAL {1} \
+  #  CONFIG.C_SLOT_0_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
+  #  CONFIG.C_SLOT_1_INTF_TYPE {xilinx.com:interface:axis_rtl:1.0} \
+  #] [get_bd_cells axis_ila]
 
-  connect_bd_intf_net [get_bd_intf_pins axis_ila/SLOT_0_AXIS] [get_bd_intf_pins traffic_producer/axis_out]
-  connect_bd_intf_net [get_bd_intf_pins axis_ila/SLOT_1_AXIS] [get_bd_intf_pins ars_tx/S_AXIS]
+  #connect_bd_intf_net [get_bd_intf_pins axis_ila/SLOT_0_AXIS] [get_bd_intf_pins traffic_producer/axis_out]
+  #connect_bd_intf_net [get_bd_intf_pins axis_ila/SLOT_1_AXIS] [get_bd_intf_pins ars_tx/S_AXIS]
 
-  connect_bd_net [get_bd_pins ap_clk] [get_bd_pins axis_ila/clk]
-  connect_bd_net [get_bd_pins ap_rst_n] [get_bd_pins axis_ila/resetn]
+  #connect_bd_net [get_bd_pins ap_clk] [get_bd_pins axis_ila/clk]
+  #connect_bd_net [get_bd_pins ap_rst_n] [get_bd_pins axis_ila/resetn]
   save_bd_design
   # Restore current instance
   current_bd_instance $oldCurInst
@@ -183,7 +187,7 @@ proc create_network_layer_box { nlb_index } {
   # Create address segments
   foreach pcie_noc {CPM_PCIE_NOC_0 CPM_PCIE_NOC_1} {
     assign_bd_address -offset [expr {0x020104000000 + ${offset_increment}}] -range 0x2000 -target_address_space [get_bd_addr_spaces cips/${pcie_noc}] [get_bd_addr_segs /${nlb_hier_name}/networklayer/S_AXIL_nl/reg0] -force
-    assign_bd_address -offset [expr {0x020104002000 + ${offset_increment}}] -range 512 -target_address_space [get_bd_addr_spaces cips/${pcie_noc}] [get_bd_addr_segs /${nlb_hier_name}/traffic_producer/s_axi_control/Reg] -force
+    #assign_bd_address -offset [expr {0x020104002000 + ${offset_increment}}] -range 512 -target_address_space [get_bd_addr_spaces cips/${pcie_noc}] [get_bd_addr_segs /${nlb_hier_name}/traffic_producer/s_axi_control/Reg] -force
     save_bd_design
   }
 

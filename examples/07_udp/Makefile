@@ -26,12 +26,13 @@ HLS_DIR=$(shell realpath ./../06_dcmac/hls)
 V80PP_PATH=$(shell realpath ../../submodules/v80-vitis-flow)
 VPP_DIR=$(BUILD_DIR)/v80-vitis-flow
 UDP = vnx/NetLayers/packaged_kernel_networklayer_v80/component.xml
+BENCHMARK = vnx/Benchmark_kernel/packaged_kernel_traffic_generator_v80/component.xml
 
 .PHONY: all setup hls hw app clean
 
-all: setup $(UDP) hls hw app
+all: setup $(UDP) $(BENCHMARK) hls hw app
 
-hw_all: setup $(UDP) hls hw app
+hw_all: setup $(UDP) $(BENCHMARK) hls hw app
 
 setup:
 	mkdir -p $(BUILD_DIR)
@@ -43,6 +44,10 @@ $(UDP):
 	git clone https://github.com/mariodruiz/xup_vitis_network_example.git -b v80 vnx
 	cd vnx/ && git submodule init && git submodule update
 	cd vnx/NetLayers && make all DEVICE=v80
+
+$(BENCHMARK): $(UDP)
+	@echo "Building Benchmarking kernel"
+	cd vnx/Benchmark_kernel && make all DEVICE=v80
 
 hls:
 	@echo "Running HLS step"
@@ -67,3 +72,4 @@ app: setup
 clean:
 	rm -rf $(BUILD_DIR)
 	make -C $(HLS_DIR) clean
+	rm -rf *.log *.jou *.str

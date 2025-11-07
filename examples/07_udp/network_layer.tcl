@@ -21,9 +21,9 @@
 
 # Normalize pwd
 set exec_dir "[file normalize "."]"
-set root_dir "${exec_dir}/../../../../../../"
+set root_dir "[file normalize "${exec_dir}/../../../../../../"]"
 
-puts "root_dir is ${root_dir}"
+puts "\n\n\nroot_dir for network layer is ${root_dir} and exec_dir is ${exec_dir} \n\n\n"
 
 # Source information about the network configuration
 source ${root_dir}/build/v80-vitis-flow/build/dcmac_config.tcl
@@ -31,13 +31,15 @@ source ${root_dir}/build/v80-vitis-flow/resources/dcmac/tcl/nlb.tcl
 
 # Get existing IP repository
 set oldrepos [get_property ip_repo_paths [current_project]]
+
 # Update IP repository
-set_property ip_repo_paths [list $oldrepos ${root_dir}/vnx/NetLayers] [current_project]
+set newrepos ${oldrepos}
+lappend newrepos [file normalize "${root_dir}/vnx/NetLayers"]
+set_property ip_repo_paths ${newrepos} [current_project]
 update_ip_catalog
 
 # Open BD
 open_bd_design {${exec_dir}/build/prj.srcs/sources_1/bd/top/top.bd}
-
 save_bd_design
 
 # Create network hierarchy
@@ -57,3 +59,4 @@ if { ${DCMAC1_ENABLED} == "1" } {
 }
 
 save_bd_design
+#close_bd_design [get_bd_designs top]
