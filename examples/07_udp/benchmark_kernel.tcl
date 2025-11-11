@@ -51,7 +51,7 @@ if {[llength ${bd_design}] == 0} {
 save_bd_design
 
 # Network Layer Box
-proc modify_hier_nlb { nlb_index} {
+proc modify_hier_nlb { nlb_index } {
 
   variable script_folder
 
@@ -67,11 +67,12 @@ proc modify_hier_nlb { nlb_index} {
   set hier_obj [get_bd_cell $nameHier]
   current_bd_instance $hier_obj
 
+  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:axis_rtl:1.0 summary
+
   for {set idx 0} {$idx < 4} {incr idx} {
     create_bd_cell -type ip -vlnv xilinx.com:RTLKernel:traffic_generator:1.0 traffic_generator_${idx}
   }
 
-  create_bd_cell -type ip -vlnv xilinx.com:hls:collector:1.0 collector_0
   create_bd_cell -type ip -vlnv xilinx.com:RTLKernel:switch_wrapper:1.0 switch_wrapper_0
 
   for {set idx 0} {$idx < 4} {incr idx} {
@@ -82,12 +83,12 @@ proc modify_hier_nlb { nlb_index} {
   connect_bd_intf_net [get_bd_intf_pins switch_wrapper_0/m_tx_out] [get_bd_intf_pins networklayer/S_AXIS_sk2nl]
   connect_bd_intf_net [get_bd_intf_pins networklayer/M_AXIS_nl2sk] [get_bd_intf_pins switch_wrapper_0/s_rx_in]
 
-  connect_bd_intf_net [get_bd_intf_pins traffic_generator_0/M_AXIS_summary] [get_bd_intf_pins collector_0/summary]
+  connect_bd_intf_net [get_bd_intf_pins traffic_generator_0/M_AXIS_summary] [get_bd_intf_pins summary]
 
   save_bd_design
 
   set_property -dict [list \
-    CONFIG.NUM_MI {6} \
+    CONFIG.NUM_MI {5} \
   ] [get_bd_cells smartconnect]
 
   for {set idx 0} {$idx < 4} {incr idx} {
@@ -97,12 +98,8 @@ proc modify_hier_nlb { nlb_index} {
     connect_bd_intf_net [get_bd_intf_pins smartconnect/M0${port}_AXI] [get_bd_intf_pins traffic_generator_${idx}/S_AXIL]
   }
 
-  connect_bd_intf_net [get_bd_intf_pins smartconnect/M05_AXI] [get_bd_intf_pins collector_0/s_axi_control]
-
   save_bd_design
 
-  connect_bd_net [get_bd_pins ap_clk] [get_bd_pins collector_0/ap_clk]
-  connect_bd_net [get_bd_pins ap_rst_n] [get_bd_pins collector_0/ap_rst_n]
   connect_bd_net [get_bd_pins ap_clk] [get_bd_pins switch_wrapper_0/ap_clk]
   connect_bd_net [get_bd_pins ap_rst_n] [get_bd_pins switch_wrapper_0/ap_rst_n]
 
@@ -116,29 +113,63 @@ proc modify_hier_nlb { nlb_index} {
     }
   }
 
-  foreach pcie_noc {CPM_PCIE_NOC_0 CPM_PCIE_NOC_1} {
-    set offset_increment [expr  0x1000000 * ${nlb_index} + 2048]
-    assign_bd_address -offset [expr {0x020104002000 + ${offset_increment}}] -range 512 -target_address_space [get_bd_addr_spaces cips/${pcie_noc}] [get_bd_addr_segs collector_0/s_axi_control/Reg] -force
-    save_bd_design
-  }
-
   save_bd_design
   # Restore current instance
   current_bd_instance $oldCurInst
 }
 
+# Modify Base Logic
+proc modify_base_logic { nlb_index } {
+
+  variable script_folder
+
+  # Save current instance; Restore later
+  set oldCurInst [current_bd_instance .]
+
+  # Set parent object as current
+  set parentObj [current_bd_instance .]
+  current_bd_instance $parentObj
+
+  # Get bd cell and set as current instance
+  set nameHier "base_logic"
+  set hier_obj [get_bd_cell $nameHier]
+  current_bd_instance $hier_obj
+
+  save_bd_design
+  create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:axis_rtl:1.0 "summary_${nlb_index}"
+  save_bd_design
+  connect_bd_intf_net [get_bd_intf_pins summary_${nlb_index}] [get_bd_intf_pins collector_${nlb_index}/summary]
+  save_bd_design
+
+  foreach pcie_noc {CPM_PCIE_NOC_0 CPM_PCIE_NOC_1} {
+    set offset_increment [expr  0x1000000 * ${nlb_index} + 2048]
+    #delete_bd_objs [get_bd_addr_segs cips/${pcie_noc}/SEG_collector_${nlb_index}_Reg]
+    assign_bd_address -offset [expr {0x020104002000 + ${offset_increment}}] -range 512 -target_address_space [get_bd_addr_spaces cips/${pcie_noc}] [get_bd_addr_segs collector_${nlb_index}/s_axi_control/Reg] -force
+    save_bd_design
+  }
+
+  # Restore current instance
+  current_bd_instance $oldCurInst
+  connect_bd_intf_net [get_bd_intf_pins nlb${nlb_index}/summary] [get_bd_intf_pins base_logic/summary_${nlb_index}]
+  save_bd_design
+}
+
 # Create network hierarchy
 if { ${DCMAC0_ENABLED} == "1" } {
     modify_hier_nlb 0
+    modify_base_logic 0
     if { ${DUAL_QSFP_DCMAC0} == "1"} {
         modify_hier_nlb 1
+        modify_base_logic 0
     }
     save_bd_design
 }
 if { ${DCMAC1_ENABLED} == "1" } {
     modify_hier_nlb 2
+    modify_base_logic 2
     if { ${DUAL_QSFP_DCMAC1} == "1"} {
         modify_hier_nlb 3
+        modify_base_logic 3
     }
     save_bd_design
 }

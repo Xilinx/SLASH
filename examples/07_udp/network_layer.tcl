@@ -42,8 +42,17 @@ update_ip_catalog
 open_bd_design {${exec_dir}/build/prj.srcs/sources_1/bd/top/top.bd}
 save_bd_design
 
+if { ${DCMAC0_ENABLED} == "1" || ${DCMAC1_ENABLED} == "1"} {
+    set_property CONFIG.NUM_CLKS {2} [get_bd_cells bar_sc]
+    connect_bd_net [get_bd_pins bar_sc/aclk1] [get_bd_pins base_logic/clk_out2]
+}
+
 # Create network hierarchy
 if { ${DCMAC0_ENABLED} == "1" } {
+    disconnect_bd_net /clock_reset_resetn_pl_ic [get_bd_pins qsfp_0_n_1/ap_rst_n]
+    disconnect_bd_net /cips_pl0_ref_clk [get_bd_pins qsfp_0_n_1/ap_clk]
+    connect_bd_net [get_bd_pins base_logic/clk_out2] [get_bd_pins qsfp_0_n_1/ap_clk]
+    connect_bd_net [get_bd_pins base_logic/peripheral_aresetn] [get_bd_pins qsfp_0_n_1/ap_rst_n]
     create_network_layer_box 0
     if { ${DUAL_QSFP_DCMAC0} == "1"} {
         create_network_layer_box 1
@@ -51,6 +60,10 @@ if { ${DCMAC0_ENABLED} == "1" } {
     save_bd_design
 }
 if { ${DCMAC1_ENABLED} == "1" } {
+    disconnect_bd_net /clock_reset_resetn_pl_ic [get_bd_pins qsfp_2_n_3/ap_rst_n]
+    disconnect_bd_net /cips_pl0_ref_clk [get_bd_pins qsfp_2_n_3/ap_clk]
+    connect_bd_net [get_bd_pins base_logic/clk_out2] [get_bd_pins qsfp_2_n_3/ap_clk]
+    connect_bd_net [get_bd_pins base_logic/peripheral_aresetn] [get_bd_pins qsfp_2_n_3/ap_rst_n]
     create_network_layer_box 2
     if { ${DUAL_QSFP_DCMAC1} == "1"} {
         create_network_layer_box 3

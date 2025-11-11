@@ -178,8 +178,8 @@ proc create_network_layer_box { nlb_index } {
   connect_bd_intf_net [get_bd_intf_pins ${qsfp_hier_name}/M_AXIS_${qsfp_interface}] [get_bd_intf_pins ${nlb_hier_name}/RX_AXIS]
   connect_bd_intf_net [get_bd_intf_pins ${qsfp_hier_name}/S_AXIS_${qsfp_interface}] [get_bd_intf_pins ${nlb_hier_name}/TX_AXIS]
 
-  connect_bd_net [get_bd_pins cips/pl0_ref_clk] [get_bd_pins ${nlb_hier_name}/ap_clk]
-  connect_bd_net [get_bd_pins clock_reset/resetn_pl_ic] [get_bd_pins ${nlb_hier_name}/ap_rst_n]
+  connect_bd_net [get_bd_pins base_logic/clk_out2] [get_bd_pins ${nlb_hier_name}/ap_clk]
+  connect_bd_net [get_bd_pins base_logic/peripheral_aresetn] [get_bd_pins ${nlb_hier_name}/ap_rst_n]
   save_bd_design
 
   set offset_increment [expr  0x1000000 * ${nlb_index}]
