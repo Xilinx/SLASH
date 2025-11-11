@@ -71,4 +71,5 @@ clean:
 	rm -rf *.log *.jou *.str
 
 distclean: clean
+	make -C $(UDP_DIR) distclean
 	make -C $(BENCHMARK_DIR) distclean
