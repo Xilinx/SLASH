@@ -8,6 +8,7 @@ from tabulate import tabulate
 from IPython.display import JSON
 from default_ip import DefaultIP
 from netlayer_regs import nl_regs
+from rtl_tg_regs import rtl_tg_regs
 
 
 def _byte_ordering_endianess(num, length=4):
@@ -47,8 +48,6 @@ class NetworkLayer(DefaultIP):
 
     """
 
-    bindto = ["xilinx.com:kernel:networklayer:1.0"]
-
     _socketType = np.dtype(
         [
             ("theirIP", str, 16),
@@ -87,9 +86,9 @@ class NetworkLayer(DefaultIP):
         numSocketsHW = int(self.read(self.registers['udp_number_sockets']['offset']))
 
         if numSocketsHW < len(self.sockets):
-            raise Exception(f"Socket list length ({len(self.sockets)}) is "
-                            "bigger than the number of sockets in hardware "
-                            f"({numSocketsHW})")
+            raise ValueError(f"Socket list length ({len(self.sockets)}) is "
+                             "bigger than the number of sockets in hardware "
+                             f"({numSocketsHW})")
 
         # Iterate over the socket object
         for i in range(numSocketsHW):
@@ -336,10 +335,11 @@ class NetworkLayer(DefaultIP):
         ipaddr = int(ipaddress.IPv4Address(ipaddrsrt))
         self.write(self.registers['ip_address']['offset'], ipaddr)
         if gwaddr == "None":
-            self.write(self.registers['gateway']['offset'], (ipaddr & 0xFFFFFF00) + 1)
+            self.write(self.registers['gateway']['offset'],
+                       (ipaddr & 0xFFFFFF00) + 1)
         else:
-            self.write(self.registers['gateway']['offset'], int(ipaddress.IPv4Address(gwaddr)))
-
+            self.write(self.registers['gateway']['offset'],
+                       int(ipaddress.IPv4Address(gwaddr)))
 
         #currentMAC = int(self.read(self.registers['mac_address']['offset']))
         #newMAC = (currentMAC & 0xFFFFFFFFF00) + (ipaddr & 0xFF)
@@ -454,15 +454,17 @@ class NetworkLayer(DefaultIP):
                 if tot_cycles != 0:
                     tot_time = (1 / (390.625 * 10 ** 6)) * tot_cycles
                     thr_bs = (tot_bytes * 8) / tot_time
-                table_data.append([protocol, v['packets'], tot_bytes, tot_cycles, f'{thr_bs/10**6:.2f}'])
+                table_data.append([protocol, v['packets'],
+                                   tot_bytes, tot_cycles, f'{thr_bs/10**6:.2f}'])
 
             print(f"Debug {path} probes")
-            print(tabulate(table_data, headers=[f'Probe {path}', 'Packets', 'Bytes', 'Cycles', 'BW (Mb/s)'], tablefmt='pretty'))
+            print(tabulate(table_data,
+                           headers=[f'Probe {path}', 'Packets', 'Bytes', 'Cycles', 'BW (Mb/s)'], tablefmt='pretty'))
 
         return JSON(probes, rootname='debug_probes')
 
     @property
-    def get_freq(self):
+    def get_freq(self) -> int:
         return int(self.read(self.registers['frequency']['offset']))
 
 
@@ -474,18 +476,16 @@ class TgMode(Enum):
     CONSUMER = 3
 
 
-class TrafficGenerator(DefaultIP):
-    """ This class wraps the common function of the Traffic Generator IP
-    """
+class RTLTrafficGenerator(DefaultIP):
+    """ This class wraps the common function of the RTL Traffic Generator IP"""
 
-    bindto = ["xilinx.com:kernel:traffic_generator:1.0"]
-
-    def __init__(self, description):
-        super().__init__(description=description)
-        self.start = self._call = self._start_sw = self.start_sw = self.call = self._start_ert
+    def __init__(self, device: str = 'e2', base_offset: int = 0x0,
+                 debug: bool = False):
+        super().__init__(device, base_offset, debug)
+        self.registers = rtl_tg_regs
         self.freq = None
 
-    def _start_ert(self, mode: TgMode, dest: int=0, packets: int=None,
+    def start(self, mode: TgMode, dest: int=0, packets: int=None,
               beats: int=None, tbwp: int=None):
         """Starts the Traffic generator
 
@@ -507,26 +507,24 @@ class TrafficGenerator(DefaultIP):
         """
         if mode == TgMode.PRODUCER or mode == TgMode.LATENCY:
             if packets is None:
-                raise RuntimeError("packets must be specified when mode is {}"
-                                   .format(mode))
+                raise RuntimeError(f"packets must be specified when mode is {mode}")
             elif beats is None:
-                raise RuntimeError("beats must be specified when mode is {}"
-                                   .format(mode))
+                raise RuntimeError(f"beats must be specified when mode is {mode}")
             elif tbwp is None:
-                raise RuntimeError("tbwp must be specified when mode is {}"
-                                   .format(mode))
+                raise RuntimeError(f"tbwp must be specified when mode is {mode}")
 
-            self.register_map.number_packets = packets
-            self.register_map.number_beats = beats
-            self.register_map.time_between_packets = tbwp
+            self.write(self.registers['number_packets']['offset'], packets)
+            self.write(self.registers['number_beats']['offset'], beats)
+            self.write(self.registers['time_between_packets']['offset'], tbwp)
 
-        self.register_map.mode = int(mode.value)
-        self.register_map.dest_id = dest
-        self.register_map.CTRL.AP_START = 1
+        self.write(self.registers['mode']['offset'], int(mode.value))
+        self.write(self.registers['dest_id']['offset'], dest)
 
-    def reset_fsm(self):
+        super().start(value=1)
+
+    def reset_fsm(self) -> None:
         """Reset internal FSM"""
-        self.register_map.reset_fsm = 1
+        self.write(self.registers['reset_fsm']['offset'], 1)
 
     def compute_app_throughput(self, direction: str="rx") -> float:
         """
@@ -551,79 +549,49 @@ class TrafficGenerator(DefaultIP):
             )
 
         if direction == "rx":
-            tot_bytes = int(self.register_map.in_traffic_bytes)
-            tot_cycles = int(self.register_map.in_traffic_cycles)
-            tot_pkts = int(self.register_map.in_traffic_packets)
+            tot_bytes = int(self.read_long(self.registers['in_traffic_bytes']['offset']))
+            tot_cycles = int(self.read_long(self.registers['in_traffic_cycles']['offset']))
+            tot_pkts = int(self.read_long(self.registers['in_traffic_packets']['offset']))
         else:
-            tot_bytes = int(self.register_map.out_traffic_bytes)
-            tot_cycles = int(self.register_map.out_traffic_cycles)
-            tot_pkts = int(self.register_map.out_traffic_packets)
+            tot_bytes = int(self.read_long(self.registers['out_traffic_bytes']['offset']))
+            tot_cycles = int(self.read_long(self.registers['out_traffic_cycles']['offset']))
+            tot_pkts = int(self.read_long(self.registers['out_traffic_packets']['offset']))
 
         tot_time = (1 / (self.freq * 10 ** 6)) * tot_cycles
         thr_bs = (tot_bytes * 8) / tot_time
 
         return tot_pkts, thr_bs / (10 ** 9), tot_time
 
-    def reset_stats(self):
+    def reset_stats(self) -> None:
         """
         Reset embedded probes
         """
-        self.register_map.debug_reset = 1
+        self.write(self.registers['debug_reset']['offset'], 1)
 
+    def consumer_mode(self) -> None:
+        """Set Traffic Generator in consumer mode
+        """
+        self.write(self.registers['mode']['offset'], int(TgMode.CONSUMER.value))
 
-class CounterIP(DefaultIP):
-    """ This class wraps the common function of counter IP
+    def read_output_packet(self) -> int:
+        """Read one output packet from the Traffic Generator
 
-    """
-
-    bindto = ["xilinx.com:hls:krnl_counters:1.0"]
-
-    def __init__(self, description):
-        super().__init__(description=description)
-        self._fullpath = description['fullpath']
-        self.start = self.start_sw = self.start_none = \
-            self.start_ert = self.call
-
-    def _setup_packet_prototype(self):
-        pass
-
-    def call(self, *args, **kwargs):
-        raise RuntimeError("{} is a free running kernel and cannot be "
-                           "starter or called".format(self._fullpath))
-
-    @property
-    def counters(self):
-        """ Return counters
-
+        Returns
+        -------
+        An integer with the packet read from the Traffic Generator
         """
 
-        counters = {
-            'packets': int(self.register_map.packets),
-            'beats': int(self.register_map.beats),
-            'bytes': int(self.register_map.bytes),
-        }
-
-        return counters
-
-    def reset_counters(self):
-        """ Reset internal counters
-
-        """
-
-        self.register_map.reset = 0
-        self.register_map.reset = 1
-        self.register_map.reset = 0
-
+        return int(self.read_long(self.registers['output_packet']['offset']))
 
 class CollectorIP(DefaultIP):
     """ This class wraps the common function the collector Kernel
 
     """
 
-    bindto = ["xilinx.com:hls:collector:1.0"]
-
-    def __init__(self, description):
-        super().__init__(description=description)
+    def __init__(self, device: str = 'e2', base_offset: int = 0x0,
+                 debug: bool = False):
+        super().__init__(device, base_offset, debug)
+        self.registers = rtl_tg_regs
 
     @property
     def received_packets(self):
