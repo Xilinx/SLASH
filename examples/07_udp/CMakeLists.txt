@@ -32,7 +32,7 @@ include_directories(/usr/local/vrt/include
                     /usr/include/jsoncpp)
 
 # Define sources for the executable
-set(EXE_SOURCES 06_dcmac.cpp)
+set(EXE_SOURCES 07_udp.cpp)
 
 # Create the executable
 add_executable(${PROJECT_NAME} ${EXE_SOURCES})
