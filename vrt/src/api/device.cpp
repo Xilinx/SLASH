@@ -337,7 +337,7 @@ void Device::setFrequency(uint64_t freq) {
                                "Setting frequency {}, which is higher than max frequency {}", freq,
                                clockFreq);
         }
-        clkWiz.setRateHz(200000000);
+        clkWiz.setRateHz(freq);
     }
 }
 
