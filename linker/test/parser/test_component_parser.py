@@ -27,6 +27,7 @@ import pytest
 
 from parser.component_parser import parse_component_xml
 from core.port import BusType
+from emit.hls_meta import load_hls_metadata, parse_hls_args
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +146,8 @@ class TestParseComponentXml:
 # ---------------------------------------------------------------------------
 
 FIXTURES_DIR = Path(__file__).parents[1] / "fixtures"
+def component_path_for_kernel(name: str) -> Path:
+    return FIXTURES_DIR / name / "hls" / "impl" / "ip" / "component.xml"
 
 
 class TestPassthroughFixture:
@@ -152,7 +155,9 @@ class TestPassthroughFixture:
 
     @classmethod
     def setup_class(cls):
-        cls.k = parse_component_xml(FIXTURES_DIR / "passthrough" / "component.xml")
+        cls.k = parse_component_xml(component_path_for_kernel("passthrough"))
+        cls.hls = load_hls_metadata(cls.k.hls_data_path)
+        cls.args = parse_hls_args(cls.hls)
 
     def test_name(self):
         assert self.k.name == "passthrough"
@@ -178,13 +183,58 @@ class TestPassthroughFixture:
     def test_no_memory_maps(self):
         assert self.k.memory_maps == []
 
+    # hls_data.json tests
+    def test_hls_data_path_resolved(self):
+        assert self.k.hls_data_path is not None
+        assert self.k.hls_data_path.exists()
+
+    def test_hls_function_protocol(self):
+        assert self.hls["FunctionProtocol"] == "ap_ctrl_none"
+
+    def test_hls_clock_name(self):
+        assert self.hls["ClockInfo"]["ClockName"] == "ap_clk"
+
+    def test_hls_clock_period(self):
+        assert self.hls["ClockInfo"]["ClockPeriod"] == "2"
+
+    def test_hls_top_name(self):
+        assert self.hls["Top"] == "passthrough"
+
+    def test_hls_args_count(self):
+        # passthrough has axis_in and axis_out — two args
+        assert len(self.args) == 2
+
+    def test_hls_args_sorted_by_index(self):
+        indices = [a["index"] for a in self.args]
+        assert indices == sorted(indices)
+
+    def test_hls_arg_axis_in(self):
+        arg = next(a for a in self.args if a["name"] == "axis_in")
+        assert arg["direction"] == "in"
+        assert arg["src_size"] == 64
+        refs = arg["hw_refs"]
+        assert len(refs) == 1
+        assert refs[0]["type"] == "interface"
+        assert refs[0]["interface"] == "axis_in"
+
+    def test_hls_arg_axis_out(self):
+        arg = next(a for a in self.args if a["name"] == "axis_out")
+        assert arg["direction"] == "out"
+        assert arg["src_size"] == 64
+        refs = arg["hw_refs"]
+        assert len(refs) == 1
+        assert refs[0]["type"] == "interface"
+        assert refs[0]["interface"] == "axis_out"
+
 
 class TestDmaInFixture:
     """AXI4Lite control + AXI4Full master + AXIS master (read-from-memory, stream-out)."""
 
     @classmethod
     def setup_class(cls):
-        cls.k = parse_component_xml(FIXTURES_DIR / "dma_in" / "component.xml")
+        cls.k = parse_component_xml(component_path_for_kernel("dma_in"))
+        cls.hls = load_hls_metadata(cls.k.hls_data_path)
+        cls.args = parse_hls_args(cls.hls)
 
     def test_name(self):
         assert self.k.name == "dma_in"
@@ -205,13 +255,62 @@ class TestDmaInFixture:
     def test_memory_maps(self):
         assert len(self.k.memory_maps) >= 1
 
+    # hls_data.json tests
+    def test_hls_data_path_resolved(self):
+        assert self.k.hls_data_path is not None
+        assert self.k.hls_data_path.exists()
+
+    def test_hls_function_protocol(self):
+        assert self.hls["FunctionProtocol"] == "ap_ctrl_hs"
+
+    def test_hls_top_name(self):
+        assert self.hls["Top"] == "dma_in"
+
+    def test_hls_clock_name(self):
+        assert self.hls["ClockInfo"]["ClockName"] == "ap_clk"
+
+    def test_hls_args_count(self):
+        # dma_in has: in (pointer), axis_out (stream), size (scalar) — three args
+        assert len(self.args) == 3
+
+    def test_hls_args_sorted_by_index(self):
+        indices = [a["index"] for a in self.args]
+        assert indices == sorted(indices)
+
+    def test_hls_arg_in_has_axi_interface_ref(self):
+        arg = next(a for a in self.args if a["name"] == "in")
+        assert arg["direction"] == "in"
+        iface_refs = [r for r in arg["hw_refs"] if r["type"] == "interface"]
+        assert any(r["interface"] == "m_axi_gmem0" for r in iface_refs)
+
+    def test_hls_arg_in_has_register_refs(self):
+        arg = next(a for a in self.args if a["name"] == "in")
+        reg_refs = [r for r in arg["hw_refs"] if r["type"] == "register"]
+        assert len(reg_refs) >= 1
+        assert all(r["interface"] == "s_axi_control" for r in reg_refs)
+
+    def test_hls_arg_axis_out(self):
+        arg = next(a for a in self.args if a["name"] == "axis_out")
+        assert arg["direction"] == "out"
+        assert arg["src_size"] == 64
+        refs = arg["hw_refs"]
+        assert any(r["interface"] == "axis_out" for r in refs)
+
+    def test_hls_arg_size_is_scalar_register(self):
+        arg = next(a for a in self.args if a["name"] == "size")
+        assert arg["direction"] == "in"
+        assert arg["src_size"] == 32
+        assert all(r["type"] == "register" for r in arg["hw_refs"])
+
 
 class TestDmaOutFixture:
     """AXI4Lite control + AXI4Full master + AXIS slave (stream-in, write-to-memory)."""
 
     @classmethod
     def setup_class(cls):
-        cls.k = parse_component_xml(FIXTURES_DIR / "dma_out" / "component.xml")
+        cls.k = parse_component_xml(component_path_for_kernel("dma_out"))
+        cls.hls = load_hls_metadata(cls.k.hls_data_path)
+        cls.args = parse_hls_args(cls.hls)
 
     def test_name(self):
         assert self.k.name == "dma_out"
@@ -231,3 +330,50 @@ class TestDmaOutFixture:
 
     def test_memory_maps(self):
         assert len(self.k.memory_maps) >= 1
+
+    # hls_data.json tests
+    def test_hls_data_path_resolved(self):
+        assert self.k.hls_data_path is not None
+        assert self.k.hls_data_path.exists()
+
+    def test_hls_function_protocol(self):
+        assert self.hls["FunctionProtocol"] == "ap_ctrl_hs"
+
+    def test_hls_top_name(self):
+        assert self.hls["Top"] == "dma_out"
+
+    def test_hls_clock_name(self):
+        assert self.hls["ClockInfo"]["ClockName"] == "ap_clk"
+
+    def test_hls_args_count(self):
+        # dma_out has: size (scalar), axis_in (stream), out (pointer) — three args
+        assert len(self.args) == 3
+
+    def test_hls_args_sorted_by_index(self):
+        indices = [a["index"] for a in self.args]
+        assert indices == sorted(indices)
+
+    def test_hls_arg_out_has_axi_interface_ref(self):
+        arg = next(a for a in self.args if a["name"] == "out")
+        assert arg["direction"] == "out"
+        iface_refs = [r for r in arg["hw_refs"] if r["type"] == "interface"]
+        assert any(r["interface"] == "m_axi_gmem0" for r in iface_refs)
+
+    def test_hls_arg_out_has_register_refs(self):
+        arg = next(a for a in self.args if a["name"] == "out")
+        reg_refs = [r for r in arg["hw_refs"] if r["type"] == "register"]
+        assert len(reg_refs) >= 1
+        assert all(r["interface"] == "s_axi_control" for r in reg_refs)
+
+    def test_hls_arg_axis_in(self):
+        arg = next(a for a in self.args if a["name"] == "axis_in")
+        assert arg["direction"] == "in"
+        assert arg["src_size"] == 64
+        refs = arg["hw_refs"]
+        assert any(r["interface"] == "axis_in" for r in refs)
+
+    def test_hls_arg_size_is_scalar_register(self):
+        arg = next(a for a in self.args if a["name"] == "size")
+        assert arg["direction"] == "in"
+        assert arg["src_size"] == 32
+        assert all(r["type"] == "register" for r in arg["hw_refs"])
