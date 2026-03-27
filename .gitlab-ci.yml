@@ -1,3 +1,8 @@
+default:
+  id_tokens:
+    CI_JOB_JWT:
+      aud: https://git.uni-paderborn.de
+
 hello_world:
   tags:
     - otus
