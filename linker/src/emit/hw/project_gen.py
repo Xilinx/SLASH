@@ -129,6 +129,7 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
 
     static_impl_dir = config.build_dir / "slash.runs" / "impl_1"
     aved_build_script = config.resources_dir / "aved" / "build_all.sh"
+    aved_bsp_script = config.resources_dir / "aved" / "build_bsp.sh"
     aved_profile_hal_src = config.resources_dir / "aved" / "profile_hal.h"
     aved_pdi_combine_src = config.resources_dir / "aved" / "pdi_combine.bif"
     xsa_src = config.resources_dir / "aved" / f"{AVED_DESIGN_NAME}.xsa"
@@ -141,6 +142,8 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
     _copy_checked(regenerated_top_wrapper_pdi,
                   aved_build_dir / "top_wrapper.pdi")
     _copy_checked(aved_build_script, aved_hw_dir / "build_all.sh")
+    _copy_checked(aved_bsp_script,
+                  aved_dir / "fw" / "AMC" / "scripts" / "build_bsp.sh")
     _copy_checked(aved_profile_hal_src, aved_fw_profile_hal)
     _copy_checked(aved_pdi_combine_src, aved_fpt_dir / "pdi_combine.bif")
     _copy_checked(xsa_src, aved_build_dir / f"{AVED_DESIGN_NAME}.xsa")
