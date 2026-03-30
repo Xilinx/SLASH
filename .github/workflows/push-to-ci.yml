@@ -13,4 +13,4 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "pr/$GITHUB_REF_NAME"
+          git push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "+HEAD:pr/$GITHUB_REF_NAME"
