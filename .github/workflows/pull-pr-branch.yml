@@ -3,12 +3,12 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: The pull request to pull
+        description: The pull request ID to pull
         required: true
         type: int
   
 jobs:
-  Push-PR:
+  Pull/Push PR:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -18,4 +18,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           gh pr checkout -b "pr/${{inputs.pr_number}}" ${{inputs.pr_number}}
-          git push "${GITHUB_SERVER_URL}/${{inputs.pr_number}}}" "pr/${{inputs.pr_number}}"
+          git push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "pr/${{inputs.pr_number}}"
