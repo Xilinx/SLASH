@@ -1,0 +1,8 @@
+name: Push PR to Gitlab CI/CD
+on:
+  - pull_request
+jobs:
+  Say-Hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello world!"
