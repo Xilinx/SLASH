@@ -173,7 +173,7 @@ static int slash_hotplug_handle_remove(const char *bdf)
     pci_lock_rescan_remove();
     pci_clear_master(pdev);
     pr_info("slash_hotplug: removing %s\n", pci_name(pdev));
-    pci_stop_and_remove_bus_device_locked(pdev);
+    pci_stop_and_remove_bus_device(pdev);
     pci_unlock_rescan_remove();
     pci_dev_put(pdev);
     pr_info("slash_hotplug: remove: %s complete\n", bdf);
@@ -338,7 +338,7 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
     pci_lock_rescan_remove();
     pci_clear_master(pdev);
     dev_info(&pdev->dev, "slash_hotplug: removing device for hotplug cycle\n");
-    pci_stop_and_remove_bus_device_locked(pdev);
+    pci_stop_and_remove_bus_device(pdev);
     pci_dev_put(pdev);
 
     /* Rescan the device's bus to re-discover it. */
