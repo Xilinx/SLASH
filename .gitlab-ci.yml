@@ -12,4 +12,4 @@ hello_world:
   variables:
     SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p normal -c 16 --mem 16G -t 00:05:00"
   script:
-    - echo "Hello World from $(hostname)! I have $(nproc) cores!"
+    - echo "Hello World from $(hostname)! My name is $(whoami) and I have $(nproc) cores!"
