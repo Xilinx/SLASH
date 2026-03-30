@@ -15,5 +15,5 @@ jobs:
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          gh pr checkout -b "pr/${{input.pr_number}}" ${{input.pr_number}}
-          git push "${GITHUB_SERVER_URL}/${{input.pr_number}}}" "pr/${{input.pr_number}}"
+          gh pr checkout -b "pr/${{inputs.pr_number}}" ${{inputs.pr_number}}
+          git push "${GITHUB_SERVER_URL}/${{inputs.pr_number}}}" "pr/${{inputs.pr_number}}"
