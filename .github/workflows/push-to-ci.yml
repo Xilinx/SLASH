@@ -10,4 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: echo "Hello World!"
+      - run: |
+          echo config user.name "github-actions[bot]"
+          echo config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" $GITHUB_REF_NAME
+      #- run: git push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" 
