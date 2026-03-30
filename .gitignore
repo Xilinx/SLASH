@@ -53,6 +53,7 @@ Thumbs.db
 *~
 *.Xil
 !build_all.sh
+!build_bsp.sh
 
 .clang-format
 .cache
