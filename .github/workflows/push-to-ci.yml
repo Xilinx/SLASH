@@ -1,12 +1,11 @@
 name: Push PR to Gitlab CI/CD
 on:
-  - pull_request
-  #pull_request_review:
-  #  types: [edited, submitted]
+  pull_request_review:
+    types: [edited, submitted]
   
 jobs:
   Push-PR:
-    #if: github.event.review.state == 'approved'
+    if: github.event.review.state == 'approved'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
