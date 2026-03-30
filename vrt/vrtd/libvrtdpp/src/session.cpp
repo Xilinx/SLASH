@@ -18,6 +18,22 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file session.cpp
+ *
+ * Implementation of the vrtd::Session C++ wrapper.
+ *
+ * Session manages a single AF_UNIX connection to the vrtd daemon,
+ * providing thread-safe request dispatch (via an internal mutex) and
+ * RAII resource management.
+ *
+ * The key design pattern is **callback injection**: when creating QDMA
+ * queue pairs or other resources, Session passes lambdas that capture
+ * the session fd.  This allows resource objects (QdmaQpair, etc.) to
+ * issue their own cleanup requests to the daemon when destroyed,
+ * without holding a direct reference to the Session.
+ */
+
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #include "vrtd/wire.h"
@@ -30,6 +46,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <iostream>
 #include <utility>
 #include <string>
 
@@ -118,11 +135,12 @@ Device Session::getDevice(size_t i) const {
         [&](const Device& device, BufferAllocType type, uint64_t size, uint64_t arg, BufferAllocDir dir) {
             return openBuffer(device, type, size, arg, dir);
         },
-        [&](const Device& device, HotplugOp op) { return hotplugOp(device, op); },
+        [&](const Device& device, HotplugOp op, uint8_t function) { return hotplugOp(device, op, function); },
         [&](const Device& device, int input_fd) { return designWrite(device, input_fd); },
         [&](const Device& device, std::string_view path) { return designWriteFile(device, path); },
         [&](const Device& device, ClockRegion region) { return getClockRate(device, region); },
-        [&](const Device& device, ClockRegion region, uint32_t rate_hz) { return setClockRate(device, region, rate_hz); }
+        [&](const Device& device, ClockRegion region, uint32_t rate_hz) { return setClockRate(device, region, rate_hz); },
+        [&](const Device& device) { return getSensorInfo(device); }
     );
 }
 
@@ -132,8 +150,30 @@ Device Session::getDeviceByBdf(std::string_view bdf) const {
     }
     std::lock_guard<std::mutex> lk(*m);
 
+    // Normalize to board-level BDF (DDDD:BB:DD) to match how the daemon
+    // stores devices.  Strip function digit if present, and prepend domain
+    // 0000: if only one colon (short BDF like "03:00").
+    std::string bdf_str(bdf);
+
+    // Strip function digit (.F)
+    auto dot = bdf_str.rfind('.');
+    if (dot != std::string::npos) {
+        std::cerr << "Warning: BDF '" << bdf
+                  << "' contains a PF function number; "
+                  << "stripping " << bdf_str.substr(dot)
+                  << " — use board address (e.g. "
+                  << bdf_str.substr(0, dot) << ") instead"
+                  << std::endl;
+        bdf_str = bdf_str.substr(0, dot);
+    }
+
+    // Prepend default domain if missing
+    if (bdf_str.find(':') == bdf_str.rfind(':')) {
+        bdf_str = "0000:" + bdf_str;
+    }
+
     uint32_t dev_num = 0;
-    auto ret = vrtd_get_device_by_bdf(fd, std::string(bdf).c_str(), &dev_num);
+    auto ret = vrtd_get_device_by_bdf(fd, bdf_str.c_str(), &dev_num);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }
@@ -157,11 +197,12 @@ Device Session::getDeviceByBdf(std::string_view bdf) const {
         [&](const Device& device, BufferAllocType type, uint64_t size, uint64_t arg, BufferAllocDir dir) {
             return openBuffer(device, type, size, arg, dir);
         },
-        [&](const Device& device, HotplugOp op) { return hotplugOp(device, op); },
+        [&](const Device& device, HotplugOp op, uint8_t function) { return hotplugOp(device, op, function); },
         [&](const Device& device, int input_fd) { return designWrite(device, input_fd); },
         [&](const Device& device, std::string_view path) { return designWriteFile(device, path); },
         [&](const Device& device, ClockRegion region) { return getClockRate(device, region); },
-        [&](const Device& device, ClockRegion region, uint32_t rate_hz) { return setClockRate(device, region, rate_hz); }
+        [&](const Device& device, ClockRegion region, uint32_t rate_hz) { return setClockRate(device, region, rate_hz); },
+        [&](const Device& device) { return getSensorInfo(device); }
     );
 }
 
@@ -270,13 +311,15 @@ Buffer Session::openBuffer(
     return Buffer(raw);
 }
 
-void Session::hotplugOp(const Device& device, HotplugOp op) const {
+void Session::hotplugOp(const Device& device, HotplugOp op,
+                        uint8_t function) const {
     if (isClosed()) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
     std::lock_guard<std::mutex> lk(*m);
 
-    auto ret = vrtd_device_hotplug_op(fd, device.getNum(), static_cast<uint8_t>(op));
+    auto ret = vrtd_device_hotplug_op(fd, device.getNum(),
+                                      static_cast<uint8_t>(op), function);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }
@@ -386,6 +429,36 @@ int Session::openQdmaQpairFd(const Device& device, uint32_t qid, uint32_t flags)
     }
 
     return qfd;
+}
+
+std::vector<SensorEntry> Session::getSensorInfo(const Device& device) const {
+    if (isClosed()) {
+        throw Error(VRTD_RET_BAD_LIB_CALL);
+    }
+    std::lock_guard<std::mutex> lk(*m);
+
+    struct vrtd_sensor_entry entries[VRTD_SENSOR_MAX_ENTRIES];
+    uint32_t count = 0;
+
+    auto ret = vrtd_get_sensor_info(fd, device.getNum(), entries,
+                                    VRTD_SENSOR_MAX_ENTRIES, &count);
+    if (ret != VRTD_RET_OK) {
+        throw Error(ret);
+    }
+
+    std::vector<SensorEntry> result;
+    result.reserve(count);
+    for (uint32_t i = 0; i < count; i++) {
+        result.push_back(SensorEntry{
+            std::string(entries[i].name, strnlen(entries[i].name, sizeof(entries[i].name))),
+            entries[i].type,
+            entries[i].status,
+            entries[i].unit_mod,
+            entries[i].value
+        });
+    }
+
+    return result;
 }
 
 void Session::close() noexcept {

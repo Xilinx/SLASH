@@ -18,6 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file allocator.hpp
+ * @brief Memory allocator with buddy-system block management.
+ */
+
 #ifndef VRT_ALLOCATOR_HPP
 #define VRT_ALLOCATOR_HPP
 
@@ -28,6 +33,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -118,6 +124,21 @@ enum class HBMRegion : uint64_t {
     NON_HBM = std::numeric_limits<uint64_t>::max(),
 };
 
+/**
+ * @brief Describes the memory type and optional HBM port for a Buffer.
+ *
+ * Obtained from Kernel::portMemoryConfig() or Kernel::argMemoryConfig() and
+ * passed directly to the Buffer constructor so callers do not need to specify
+ * type and port separately.
+ */
+struct MemoryConfig {
+    MemoryRangeType type;            ///< DDR, HBM, or HBM_VNOC
+    std::optional<uint8_t> hbmPort; ///< Set only when type == HBM
+};
+
+/**
+ * @brief RAII wrapper around a vrtd::Buffer allocation.
+ */
 class UntypedBuffer {
     vrtd::Buffer* backingBuffer;
 
@@ -145,6 +166,9 @@ public:
     friend bool operator!=(std::nullptr_t, const UntypedBuffer& buffer) noexcept;
 };
 
+/**
+ * @brief Abstract base for allocated memory blocks.
+ */
 class Block {
 public:
     Block();
@@ -153,7 +177,9 @@ public:
     virtual UntypedBuffer *getUntypedBuffer() const noexcept = 0;
 };
 
-/* >64MB */
+/**
+ * @brief Direct allocation for buffers larger than 64 MB.
+ */
 class LargeBlock : public Block {
     std::unique_ptr<vrtd::Buffer> backingBuffer;
     std::unique_ptr<UntypedBuffer> untypedBuffer;
@@ -164,6 +190,15 @@ public:
     UntypedBuffer *getUntypedBuffer() const noexcept override;
 };
 
+/**
+ * @brief Template base for buddy-system superblock allocators.
+ *
+ * Manages power-of-two blocks from 2^MIN_K to 2^MAX_K bytes, splitting
+ * larger blocks on allocation and coalescing buddies on deallocation.
+ *
+ * @tparam MIN_K  Log2 of the minimum block size.
+ * @tparam MAX_K  Log2 of the maximum block size (superblock size).
+ */
 template <size_t MIN_K, size_t MAX_K>
 class BuddySuperblockBase {
 protected:
@@ -275,6 +310,9 @@ protected:
     }
 };
 
+/**
+ * @brief Superblock managing 2 MB -- 64 MB sub-allocations via buddy system.
+ */
 class LargeBlockSuperblock : public LargeBlock, private BuddySuperblockBase<21, 26> {
     using Buddy = BuddySuperblockBase<21, 26>;  // 2MB - 64MB
 public:
@@ -288,7 +326,9 @@ public:
     bool isFree() const;
 };
 
-/* 2MB - 64MB */
+/**
+ * @brief Allocation from a LargeBlockSuperblock (2 MB -- 64 MB).
+ */
 class MediumBlock : public Block {
     std::unique_ptr<UntypedBuffer> untypedBuffer;
     LargeBlockSuperblock *backingBlockSuperblock;
@@ -299,6 +339,9 @@ public:
     UntypedBuffer *getUntypedBuffer() const noexcept override;
 };
 
+/**
+ * @brief Superblock managing 4 KB -- 2 MB sub-allocations via buddy system.
+ */
 class MediumBlockSuperblock : public MediumBlock, private BuddySuperblockBase<12, 21> {
     using Buddy = BuddySuperblockBase<12, 21>;  // 4KB - 2MB
 public:
@@ -312,7 +355,9 @@ public:
     bool isFree() const;
 };
 
-/* <=2MB */
+/**
+ * @brief Allocation from a MediumBlockSuperblock (up to 2 MB).
+ */
 class SmallBlock : public Block {
     std::unique_ptr<UntypedBuffer> untypedBuffer;
     MediumBlockSuperblock *backingBlockSuperblock;
@@ -323,6 +368,9 @@ public:
     UntypedBuffer *getUntypedBuffer() const noexcept override;
 };
 
+/**
+ * @brief Top-level allocator dispatching to the buddy-system hierarchy.
+ */
 class Allocator {
     std::vector<std::unique_ptr<LargeBlockSuperblock>> largeBlockSuperblocks;
     std::vector<std::unique_ptr<MediumBlockSuperblock>> mediumBlockSuperblocks;

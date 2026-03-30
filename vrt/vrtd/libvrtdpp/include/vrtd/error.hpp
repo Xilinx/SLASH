@@ -30,11 +30,11 @@ namespace vrtd {
 /**
  * @brief Exception type for libvrtd/libvrtd++ operations.
  *
- * Wraps a #vrtd_ret code and exposes a human-readable, static message via
+ * Wraps a @c vrtd_ret code and exposes a human-readable, static message via
  * @c what(). Use @c getErrorCode() to branch on a specific error.
  *
  * @note Transport/socket issues in the C++ layer are mapped to
- *       #VRTD_RET_BAD_CONN.
+ *       @c VRTD_RET_BAD_CONN.
  * @note The message returned by @c what() is a static string mapped from the
  *       code (e.g., "Authentication error") and does not allocate.
  */
@@ -45,7 +45,7 @@ private:
 public:
     /**
      * @brief Construct an Error with the given code.
-     * @param errorCode A value from #vrtd_ret.
+     * @param errorCode A value from @c vrtd_ret.
      */
     explicit Error(vrtd_ret errorCode) noexcept;
 

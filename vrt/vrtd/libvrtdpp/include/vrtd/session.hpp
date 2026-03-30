@@ -204,11 +204,17 @@ private:
     /**
      * @internal Perform a PCIe hotplug operation.
      *
-     * @param device Device target.
-     * @param op     One of vrtd::HotplugOp.
+     * For board-level operations (Rescan, ResetSequence), @p function is ignored.
+     * For PF-level operations (Remove, ToggleSbr, Hotplug), @p function selects
+     * the PCI physical function (0-7).
+     *
+     * @param device   Device target.
+     * @param op       One of vrtd::HotplugOp.
+     * @param function PCI function number (0-7) for PF-level ops.
      * @throws vrtd::Error on error.
      */
-    void hotplugOp(const Device& device, HotplugOp op) const;
+    void hotplugOp(const Device& device, HotplugOp op,
+                   uint8_t function = 0) const;
 
     /**
      * @internal Perform a design writer transfer using an input FD.
@@ -271,6 +277,15 @@ private:
      * @throws vrtd::Error on error.
      */
     int openQdmaQpairFd(const Device& device, uint32_t qid, uint32_t flags = 0) const;
+
+    /**
+     * @internal Query sensor information for a device.
+     *
+     * @param device Device to query sensors for.
+     * @return Vector of sensor entries.
+     * @throws vrtd::Error on error.
+     */
+    std::vector<SensorEntry> getSensorInfo(const Device& device) const;
 };
 
 }

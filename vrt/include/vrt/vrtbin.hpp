@@ -51,6 +51,7 @@ class Vrtbin {
     std::string emulationExecPath;                                  ///< Path to the emulation executable
     std::string emulationManifestPath;                              ///< Path to emu manifest (if present)
     std::string simulationExecPath;                                 ///< Path to the simulation executable
+    std::string utilizationReportPath;                              ///< Path to utilization report (if present)
     Platform platform;                                              ///< Platform type
     /**
      * @brief Copies a file from source to destination.
@@ -60,6 +61,8 @@ class Vrtbin {
     void copy(const std::string& source, const std::string& destination);
     void discoverPdiFiles();
     std::filesystem::path findExtractedFile(const std::string& filename) const;
+    std::filesystem::path findExtractedFileByPrefix(const std::string& prefix,
+                                                    const std::string& extension) const;
     static std::string sanitizeForPath(const std::string& input);
 
    public:
@@ -110,6 +113,32 @@ class Vrtbin {
      * @return The path to the simulation executable file.
      */
     std::string getSimulationExec();
+
+    /**
+     * @brief Gets the path to the utilization report (if present in the vbin).
+     * @return The path to the utilization report, or empty string if absent.
+     */
+    std::string getUtilizationReportPath() const;
+
+    /**
+     * @brief Gets the platform type parsed from the system map.
+     * @return The platform type.
+     */
+    Platform getPlatform() const;
+
+    /**
+     * @brief Gets the path to the system map last loaded on a bdf.
+     * @param bdf The bdf to query.
+     * @return The path to the system map.
+     */
+    static std::string getSystemMapPathFromBdf(const std::string& bdf);
+
+    /**
+     * @brief Gets the path to the utilization report last loaded on a bdf.
+     * @param bdf The bdf to query.
+     * @return The path to the utilization report.
+     */
+    static std::string getUtilizationReportPathFromBdf(const std::string& bdf);
 };
 
 }  // namespace vrt

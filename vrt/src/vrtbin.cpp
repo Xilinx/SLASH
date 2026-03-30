@@ -18,6 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file vrtbin.cpp
+ * @brief Vrtbin archive extraction and metadata discovery.
+ */
+
 #include <vrt/vrtbin.hpp>
 
 #include <tar.h>
@@ -260,9 +265,11 @@ Vrtbin::Vrtbin(std::string vrtbinPath, const std::string& bdf) {
     this->platform = parser.getPlatform();
     copy(tempSystemMapPath.string(), systemMapPath);
 
-    const std::filesystem::path reportPath = findExtractedFile("report_utilization.xml");
+    const std::filesystem::path reportPath =
+        findExtractedFileByPrefix("report_utilization", ".xml");
     if (!reportPath.empty()) {
-        copy(reportPath.string(), (metadataPath / "report_utilization.xml").string());
+        utilizationReportPath = (metadataPath / "report_utilization.xml").string();
+        copy(reportPath.string(), utilizationReportPath);
     }
 
     if (this->platform == Platform::HARDWARE) {
@@ -471,6 +478,8 @@ std::string Vrtbin::getEmulationManifest() { return emulationManifestPath; }
 
 std::string Vrtbin::getSimulationExec() { return simulationExecPath; }
 
+Platform Vrtbin::getPlatform() const { return platform; }
+
 void Vrtbin::discoverPdiFiles() {
     pdiPaths.clear();
 
@@ -534,6 +543,36 @@ std::string Vrtbin::sanitizeForPath(const std::string& input) {
         }
     }
     return out.empty() ? std::string("default") : out;
+}
+
+std::string Vrtbin::getUtilizationReportPath() const { return utilizationReportPath; }
+
+std::filesystem::path Vrtbin::findExtractedFileByPrefix(const std::string& prefix,
+                                                        const std::string& extension) const {
+    if (!std::filesystem::exists(tempExtractPath)) {
+        return {};
+    }
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(tempExtractPath)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::string fname = entry.path().filename().string();
+        if (fname.size() >= prefix.size() && fname.rfind(prefix, 0) == 0 &&
+            entry.path().extension().string() == extension) {
+            return entry.path();
+        }
+    }
+    return {};
+}
+
+std::string Vrtbin::getSystemMapPathFromBdf(const std::string& bdf) {
+    return (FilesystemCache::getCachePath() / ("metadata_" + sanitizeForPath(bdf)) / "system_map.xml").string();
+}
+
+std::string Vrtbin::getUtilizationReportPathFromBdf(const std::string& bdf) {
+    return (FilesystemCache::getCachePath() / ("metadata_" + sanitizeForPath(bdf)) /
+            "report_utilization.xml")
+        .string();
 }
 
 }  // namespace vrt

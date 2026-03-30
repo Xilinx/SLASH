@@ -33,18 +33,21 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  bash
 BuildRequires:  cmake
+BuildRequires:  make
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
-BuildRequires:  inih-devel
-BuildRequires:  jsoncpp-devel
-BuildRequires:  systemd-devel
-BuildRequires:  libxml2-devel
-BuildRequires:  zeromq-devel
-BuildRequires:  cppzmq-devel
 BuildRequires:  ninja-build
 BuildRequires:  pkg-config
-BuildRequires:  rsync
+BuildRequires:  cli11-devel
+BuildRequires:  cppzmq-devel
+BuildRequires:  inih-devel
+BuildRequires:  jsoncpp-devel
+BuildRequires:  libxml2-devel
+BuildRequires:  systemd-devel
+BuildRequires:  zeromq-devel
 BuildRequires:  zlib-devel
+BuildRequires:  rsync
+BuildRequires:  ((python3 >= 3.10 and python3-pip) or (python3.11 and python3.11-pip) or (python3.12 and python3.12-pip) or (python3.13 and python3.13-pip))
 BuildRequires:  systemd-rpm-macros
 
 # ---- Metapackages ----
@@ -82,7 +85,7 @@ SLASH/VRT System for simulation and emulation (development files)
 
 %package -n     slash-dkms
 Summary:        SLASH kernel module (DKMS)
-Requires:       dkms
+Requires:       dkms, gcc, make
 BuildArch:      noarch
 
 %description -n slash-dkms
@@ -146,11 +149,16 @@ Requires:       zlib-devel
 %description -n libvrt-devel
 VRT Runtime (development files)
 
+%package -n     v80-smi
+Summary:        V80 System Management Interface
+Requires:       libvrt = %{version}-%{release}
+
+%description -n v80-smi
+V80 System Management Interface
+
 %package -n     v80++
 Summary:        SLASH Linker
-Requires:       python3
-Requires:       python3-jinja2
-BuildArch:      noarch
+Requires:       (python3 >= 3.10 or python3.11 or python3.12 or python3.13)
 
 %description -n v80++
 SLASH Linker
@@ -173,6 +181,15 @@ install -D -m 0644 vrt/vrtd/systemd/vrtd.service \
     %{buildroot}%{_unitdir}/vrtd.service
 install -D -m 0644 vrt/vrtd/systemd/vrtd.socket \
     %{buildroot}%{_unitdir}/vrtd.socket
+
+# sysusers (mirrors debian/vrtd.install + vrtd.postinst)
+install -D -m 0644 vrt/vrtd/sysusers/vrtd.conf \
+    %{buildroot}%{_sysusersdir}/vrtd.conf
+
+# vrtd config and drop-in directory
+install -D -m 0644 vrt/vrtd/conf/vrtd.conf \
+    %{buildroot}%{_sysconfdir}/vrt/vrtd.conf
+install -d %{buildroot}%{_sysconfdir}/vrt/vrtd.conf.d
 
 # udev rules (mirrors debian/vrtd.udev)
 install -D -m 0644 vrt/vrtd/udev/99-vrtd.rules \
@@ -232,12 +249,29 @@ EOF
 %{_includedir}/slash/
 %{_libdir}/cmake/slash/
 
+%pre -n vrtd
+%sysusers_create_package vrtd vrt/vrtd/sysusers/vrtd.conf
+
+%post -n vrtd
+%systemd_post vrtd.service vrtd.socket
+udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
+
+%preun -n vrtd
+%systemd_preun vrtd.service vrtd.socket
+
+%postun -n vrtd
+%systemd_postun_with_restart vrtd.service vrtd.socket
+udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
+
 %files -n vrtd
 %{_bindir}/vrtd
 %{_bindir}/vrtd-*
 %{_unitdir}/vrtd.service
 %{_unitdir}/vrtd.socket
 %{_udevrulesdir}/99-vrtd.rules
+%{_sysusersdir}/vrtd.conf
+%config(noreplace) %{_sysconfdir}/vrt/vrtd.conf
+%dir %{_sysconfdir}/vrt/vrtd.conf.d
 
 %files -n libvrtd
 %{_libdir}/libvrtd.so
@@ -257,11 +291,24 @@ EOF
 %{_includedir}/vrt/
 %{_libdir}/cmake/vrt/
 
+%files -n v80-smi
+%{_bindir}/v80-smi
+
 %files -n v80++
 %{_bindir}/v80++
-%{_prefix}/libexec/slash/linker/
+%{_prefix}/libexec/v80++/
+%{_libdir}/cmake/SlashTools/
+%{_datadir}/v80++/
 
 # ---- Scriptlets ----
+
+%post -n slash-dkms
+dkms add -m %{dkms_name} -v %{dkms_version} --rpm_safe_upgrade
+dkms build -m %{dkms_name} -v %{dkms_version}
+dkms install -m %{dkms_name} -v %{dkms_version}
+
+%preun -n slash-dkms
+dkms remove -m %{dkms_name} -v %{dkms_version} --all --rpm_safe_upgrade
 
 %post -n libslash -p /sbin/ldconfig
 %postun -n libslash -p /sbin/ldconfig

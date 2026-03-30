@@ -18,6 +18,18 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file bar.cpp
+ *
+ * Implementation of the vrtd::Bar C++ wrapper.
+ *
+ * Bar is a lightweight value-type that holds PCI BAR metadata (number,
+ * physical start address, length, usable/in-use flags) plus a callback
+ * for opening a memory-mapped BarFile.  It is constructed by Session
+ * when the user queries device BARs and does not own any kernel
+ * resources itself.
+ */
+
 #include <vrtd/bar.hpp>
 
 namespace vrtd {

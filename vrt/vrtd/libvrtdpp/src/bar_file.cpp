@@ -18,6 +18,18 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file bar_file.cpp
+ *
+ * Implementation of the vrtd::BarFile C++ wrapper.
+ *
+ * BarFile provides RAII management of a memory-mapped PCI BAR region.
+ * It wraps a slash_bar_file (fd + mmap pointer + length) obtained from
+ * the daemon, and unmaps/closes on destruction.
+ *
+ * Move semantics are fully supported; copying is disabled.
+ */
+
 #include <vrtd/bar_file.hpp>
 
 #include <sys/mman.h>

@@ -18,9 +18,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-all: ip/*.zip
+.PHONY: all clean
 
-ip/*.zip: *.cpp
+all:
 	v++ -c --mode hls --config traffic_producer.cfg --work_dir ip
 	vitis-run --mode hls --package --config traffic_producer.cfg --work_dir ip
 

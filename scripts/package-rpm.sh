@@ -22,9 +22,10 @@
 
 set -euxo pipefail
 
+# SLASH root
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-0.0.1}"
+VERSION="$(tr -d '[:space:]' < packaging/version)"
 TOPDIR="$(pwd)/rpmbuild"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/rpm}"
 
@@ -47,12 +48,15 @@ cp packaging/rpm/slash.spec "${TOPDIR}/SPECS/"
 rpmbuild \
     --define "_topdir ${TOPDIR}" \
     --define "_version ${VERSION}" \
-    -ba "${TOPDIR}/SPECS/slash.spec"
+    -bb "${TOPDIR}/SPECS/slash.spec"
 
 cp "${TOPDIR}"/RPMS/*/*.rpm "${ARTIFACTS_DIR}/"
-cp "${TOPDIR}"/SRPMS/*.rpm  "${ARTIFACTS_DIR}/"
 
-cd "${ARTIFACTS_DIR}"
+# Build AMI package into the same artifacts directory
+ARTIFACTS_DIR="${ARTIFACTS_DIR}" "$(dirname "$0")/package-ami.sh"
+
+pushd "${ARTIFACTS_DIR}"
 createrepo .
+popd
 
 echo "RPMs available in ${ARTIFACTS_DIR}/"

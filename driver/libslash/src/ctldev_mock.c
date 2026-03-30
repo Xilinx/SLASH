@@ -12,6 +12,11 @@
  * 02110-1301, USA.
  */
 
+/**
+ * @file ctldev_mock.c
+ * @brief Mock control-device implementation backed by temporary files.
+ */
+
 #define _GNU_SOURCE
 
 #include "ctldev_mock.h"
@@ -32,6 +37,7 @@
 
 #define SLASH_MOCK_BAR_SIZE (64ULL * 1024ULL * 1024ULL)
 
+/** @brief Generate a random 64-bit value, falling back to time/pid XOR. */
 static uint64_t slash_mock_random(void)
 {
     uint64_t value;
@@ -54,6 +60,7 @@ static uint64_t slash_mock_random(void)
     return value;
 }
 
+/** @brief Create a temporary file for mock BAR storage in XDG_RUNTIME_DIR or /tmp. */
 static int slash_mock_create_backing_file(char **path_out)
 {
     const char *env_dir = getenv("XDG_RUNTIME_DIR");

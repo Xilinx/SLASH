@@ -78,7 +78,13 @@ bool parseBoolInt(const std::string& text, bool defaultValue = false) {
 XMLParser::XMLParser(const std::string& file_path) {
     this->filename = file_path;
     this->document = xmlReadFile(this->filename.c_str(), NULL, 0);
+    if (this->document == nullptr) {
+        throw std::runtime_error("Failed to parse XML file: " + file_path);
+    }
     this->rootNode = xmlDocGetRootElement(this->document);
+    if (this->rootNode == nullptr) {
+        throw std::runtime_error("XML file has no root element: " + file_path);
+    }
     this->workingNode = rootNode->children;
 }
 
@@ -91,6 +97,7 @@ void XMLParser::parseXML() {
             std::string range;
             std::vector<Register> registers;
             std::vector<FunctionalArg> functionalArgs;
+            std::map<std::string, std::string> connections;
             for (xmlNode* childNode = kernelNode->children; childNode;
                  childNode = childNode->next) {
                 if (childNode->type == XML_ELEMENT_NODE) {
@@ -113,6 +120,12 @@ void XMLParser::parseXML() {
                         reg.setDescription(description);
                         reg.setWidth(parseU32(regRange, 32));
                         registers.push_back(reg);
+                    } else if (xmlStrcmp(childNode->name, BAD_CAST "connection") == 0) {
+                        std::string connPort = getNodeProp(childNode, "port");
+                        std::string connTarget = getNodeProp(childNode, "target");
+                        if (!connPort.empty() && !connTarget.empty()) {
+                            connections[connPort] = connTarget;
+                        }
                     } else if (xmlStrcmp(childNode->name, BAD_CAST "functional_args") == 0) {
                         for (xmlNode* argNode = childNode->children; argNode;
                              argNode = argNode->next) {
@@ -128,6 +141,7 @@ void XMLParser::parseXML() {
                             arg.range = parseU32(getNodeProp(argNode, "range"), 32);
                             arg.readable = parseBoolInt(getNodeProp(argNode, "r"));
                             arg.writable = parseBoolInt(getNodeProp(argNode, "w"));
+                            arg.port = getNodeProp(argNode, "port");
                             functionalArgs.push_back(arg);
                         }
                     }
@@ -140,6 +154,9 @@ void XMLParser::parseXML() {
             auto ba = parseU64(baseAddress);
             auto r = parseU64(range);
             Kernel kernel(name, ba, r, registers, functionalArgs);
+            if (!connections.empty()) {
+                kernel.setConnections(connections);
+            }
             kernels[name] = kernel;
         } else if (kernelNode->type == XML_ELEMENT_NODE &&
                    xmlStrcmp(kernelNode->name, BAD_CAST "ClockFrequency") == 0) {
@@ -190,7 +207,6 @@ XMLParser::~XMLParser() {
     if (this->document != nullptr) {
         xmlFreeDoc(this->document);
     }
-    xmlCleanupParser();
 }
 
 }  // namespace vrt

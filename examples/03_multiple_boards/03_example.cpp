@@ -22,7 +22,7 @@
 #include <cstring>
 #include <random>
 
-#include <utils/logger.hpp>
+#include <vrt/utils/logger.hpp>
 #include <vrt/device.hpp>
 #include <vrt/buffer.hpp>
 #include <vrt/kernel.hpp>

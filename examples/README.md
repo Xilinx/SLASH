@@ -6,60 +6,62 @@ This directory contains the example projects for VRT. Each example demonstrates 
 |------|-----------|----------------|
 | 0 | Linking, AXI-Lite control | |
 | 1 | Kernels with AXI-MM interfaces | |
-| 2 | Freerunning streaming kernels | Emulation not possible |
-| 3 | Controlling multiple V80s | Uses VRTBIN of example 0 |
+| 2 | Freerunning streaming kernels | |
+| 3 | Controlling multiple V80s | Uses vrtbin of example 0 |
 | 4 | Frequency targets | |
 | 5 | Memory performance test | Instantiates current maximum number of kernels |
 
 ## How to run the examples
 
-Each example project has its own Makefile that automates the build process.
+Each example project has its own `CMakeLists.txt` that defines the build targets.
 
-### Makefile recipes
+### Build targets
 
-The `Makefile` in each example include several recipes:
+Each `CMakeLists.txt` provides the following targets:
 
-- `all`: Runs the `setup`, `hls`, `hw`, `emu`, `sim` and `app` recipes.
-- `setup`: Sets up the build environment.
-- `hls`: Builds the HLS kernels specified in the `hls` directory.
-- `hw`: Builds the hardware design for the specified project.
-- `emu`: Builds the emulation design flow for the specified project.
-- `sim`: Builds the simulation design flow for the specified project.
-- `app`: Builds the runtime application for the specified project.
-- `clean`: Cleans up the build environment.
-- `hw_all`: Builds all the necessary recipes for the full hardware flow.
-- `emu_all`: Builds all the necessary recipes for the emulation flow.
-- `sim_all`: Builds all the necessary recipes for the simulation flow.
-
+- `hls`: Compile the HLS kernels in the `hls/` directory.
+- `<design>_hw`: Link a hardware vrtbin for the specified project.
+- `<design>_emu`: Link an emulation vrtbin for the specified project.
+- `<design>_sim`: Link a simulation vrtbin for the specified project.
+- `<project_name>`: Build the runtime application (e.g. `00_axilite`).
 
 ### Example usage
 
-```
-cd 0x_<example_name>/
-make <recipe>_all
-```
-where recipe can be `hw`, `emu` or `sim`.
+```bash
+cd examples/00_axilite
 
-In order to run an example, navigate to the build directory and an executable named `0x_<example_name>` will be found.
+# Configure (use -DSLASH_USE_REPO=ON when building against the local repo tree)
+cmake -B build -S . -G Ninja -DSLASH_USE_REPO=ON
+
+# Build the application
+cmake --build build
+
+# Build FPGA artefacts (requires Vivado/Vitis)
+cmake --build build --target hls            # compile HLS kernels
+cmake --build build --target axilite_hw     # link hardware vrtbin
+cmake --build build --target axilite_emu    # link emulation vrtbin
+cmake --build build --target axilite_sim    # link simulation vrtbin
+```
+
+The vrtbin files and the application executable are placed in the `build/` directory.
 
 ## How to run
 
-The following environment variable needs to be set prior to running any examples:
+The following environment variables need to be set prior to building or running any examples:
 
+```bash
+source <path-to-vivado>/settings64.sh
+source <path-to-vitis-hls>/settings64.sh
 ```
-mkdir -p /home/<user>/.ami
-export AMI_HOME="/home/<user>/.ami"
-source <VIVADO>
-source <VITIS>
-```
-To make the changes persistent, add the commands to .bashrc. Sourcing the Vivado scripts are needed for the hardware builds, whereas vitis is needed for emulation.
 
-In order to run one of the built examples, one must identify the BDF for the V80 and input it into the code.
+To make the changes persistent, add the commands to `.bashrc`. Sourcing the Vivado scripts is needed for the hardware builds, whereas Vitis HLS is needed for emulation.
+
+In order to run one of the built examples, one must identify the BDF for the V80:
 
 ```
 v80-smi list
 --------------------------------------------------------------------
-Listing V80 devices 
+Listing V80 devices
 --------------------------------------------------------------------
 V80 device found with BDF: 0000:e2:00.0
 --------------------------------------------------------------------
@@ -67,4 +69,4 @@ V80 device found with BDF: 0000:21:00.0
 --------------------------------------------------------------------
 ```
 
-To run the example, navigate to the `build` directory, and you will find an executable, called `0x_<project_name>`. The format for running is `0x_<project_name> <BDF> <VRTBIN File>`.
+To run the example, navigate to the `build` directory. The format for running is `0x_<project_name> <BDF> <VRTBIN file>`.

@@ -18,6 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file device.hpp
+ * @brief Device class — entry point for V80 hardware interaction.
+ */
+
 #ifndef VRT_DEVICE_HPP
 #define VRT_DEVICE_HPP
 
@@ -97,11 +102,11 @@ class Device {
     std::string pdiPath;                                        ///< Path to the PDI file
     std::vector<std::string> pdiPaths;                          ///< Paths to PDI files discovered in archive
     Vrtbin vrtbin;                                              ///< Vrtbin object for handling VRTBIN operations
-    uint64_t clockFreq;                                         ///< Clock frequency
-    ProgramType programType;                                    ///< Type of programming
+    uint64_t clockFreq = 0;                                     ///< Clock frequency
+    ProgramType programType{};                                  ///< Type of programming
     std::map<std::string, Kernel> kernels;                      ///< Map of kernel names to Kernel objects
-    Allocator* allocator;                                       ///< Allocator object
-    Platform platform;                                          ///< Platform information
+    Allocator* allocator = nullptr;                             ///< Allocator object
+    Platform platform{};                                        ///< Platform information
     std::shared_ptr<ZmqServer> zmqServer;                       ///< ZeroMQ server object
     std::vector<QdmaConnection> qdmaConnections;                ///< Vector of QDMA connections
     std::vector<QdmaIntf*> qdmaIntfs;                           ///< Vector of QDMA interfaces for streaming
@@ -224,6 +229,12 @@ class Device {
 };
 }  // namespace impl
 
+/**
+ * @brief Public handle to a V80 device with move semantics.
+ *
+ * Thin wrapper around impl::Device providing the user-facing API for
+ * device initialization, kernel retrieval, frequency control, and cleanup.
+ */
 class Device {
     std::shared_ptr<impl::Device> handle;
 

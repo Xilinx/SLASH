@@ -12,6 +12,21 @@
  * 02110-1301, USA.
  */
 
+/**
+ * @file hotplug.c
+ *
+ * Implementation of the libslash hotplug wrapper.
+ *
+ * This file provides the userspace side of the slash hotplug interface.
+ * Each public function maps directly to a single ioctl on the hotplug
+ * character device — there is no caching, batching, or retry logic.
+ *
+ * Error handling follows POSIX conventions throughout: functions return
+ * -1 and set errno.  errno values originate either from this library
+ * (EINVAL for NULL handles or oversized BDF strings) or from the
+ * underlying syscalls (open, close, ioctl).
+ */
+
 #define _GNU_SOURCE
 
 #include <slash/hotplug.h>
@@ -24,6 +39,15 @@
 
 #include <sys/ioctl.h>
 
+/**
+ * slash_hotplug_ioctl_without_request() — Issue an ioctl that takes no
+ * argument struct (used by RESCAN).
+ *
+ * @hotplug: Open hotplug handle.  Must not be NULL.
+ * @op:      ioctl request number.
+ *
+ * Returns 0 on success, -1 on failure (errno set by ioctl or EINVAL).
+ */
 static int slash_hotplug_ioctl_without_request(struct slash_hotplug *hotplug, unsigned long op)
 {
     int ret;
@@ -41,6 +65,19 @@ static int slash_hotplug_ioctl_without_request(struct slash_hotplug *hotplug, un
     return 0;
 }
 
+/**
+ * slash_hotplug_ioctl_with_request() — Issue an ioctl that carries a
+ * slash_hotplug_device_request identifying a device by BDF.
+ *
+ * @hotplug: Open hotplug handle.  Must not be NULL.
+ * @op:      ioctl request number.
+ * @bdf:     PCI BDF string, or NULL / empty string to let the kernel
+ *           pick the only tracked device.  Must be shorter than
+ *           SLASH_HOTPLUG_BDF_LEN bytes (including NUL); otherwise
+ *           EINVAL is returned.
+ *
+ * Returns 0 on success, -1 on failure.
+ */
 static int slash_hotplug_ioctl_with_request(
     struct slash_hotplug *hotplug,
     unsigned long op,
@@ -115,10 +152,16 @@ int slash_hotplug_close(struct slash_hotplug *hotplug)
         ret = -1;
     }
 
+    /* Free unconditionally — the handle is invalid after this call
+     * regardless of whether close() succeeded. */
     free(hotplug);
 
     return ret;
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Public hotplug operations — each is a thin wrapper over an ioctl.
+ * ───────────────────────────────────────────────────────────────────── */
 
 int slash_hotplug_rescan(struct slash_hotplug *hotplug)
 {

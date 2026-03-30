@@ -12,14 +12,35 @@
  * 02110-1301, USA.
  */
 
+/**
+ * @file slash_hotplug_driver.h
+ *
+ * Kernel-internal interface for the SLASH hotplug subsystem.
+ *
+ * The hotplug subsystem manages the PCIe-level lifecycle of SLASH FPGA
+ * devices: removing them from the bus, performing Secondary Bus Resets,
+ * and rescanning.  This is essential for FPGA reconfiguration workflows
+ * where loading a new bitstream requires re-enumerating the device.
+ *
+ * A single misc device (/dev/slash_hotplug) handles ioctls.  All
+ * operations that target a specific device require an explicit BDF.
+ */
+
 #ifndef SLASH_HOTPLUG_DRIVER_H
 #define SLASH_HOTPLUG_DRIVER_H
 
-#include <linux/pci.h>
-
+/**
+ * slash_hotplug_init() - Register the hotplug misc device.
+ *
+ * Creates /dev/slash_hotplug.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
 int slash_hotplug_init(void);
+
+/**
+ * slash_hotplug_exit() - Unregister the hotplug misc device.
+ */
 void slash_hotplug_exit(void);
-int slash_hotplug_register_device(struct pci_dev *pdev);
-void slash_hotplug_unregister_device(struct pci_dev *pdev);
 
 #endif /* SLASH_HOTPLUG_DRIVER_H */

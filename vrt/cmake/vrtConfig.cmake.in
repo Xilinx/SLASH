@@ -22,9 +22,18 @@
 
 include(CMakeFindDependencyMacro)
 
-# If you have dependencies, call find_dependency() here.
-# e.g.: find_dependency(Threads)
+# Library dependencies
 find_dependency(slash)
 find_dependency(vrtd)
+
+# Transitive dependencies (vrt links these PUBLIC)
+find_dependency(ZLIB)
+find_dependency(LibXml2)
+find_dependency(jsoncpp CONFIG)
+if(NOT TARGET JsonCpp::JsonCpp AND TARGET jsoncpp_lib)
+  add_library(JsonCpp::JsonCpp ALIAS jsoncpp_lib)
+endif()
+find_dependency(PkgConfig)
+pkg_check_modules(PC_ZMQ REQUIRED IMPORTED_TARGET libzmq)
 
 include("${CMAKE_CURRENT_LIST_DIR}/vrtTargets.cmake")

@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
 
         vrt::Kernel accumulate(device, "accumulate_0");
         vrt::Kernel increment(device, "increment_0");
-        vrt::Buffer<float> buffer(device, size, vrt::MemoryRangeType::HBM);
+        vrt::Buffer<float> buffer(device, size, increment.argMemoryConfig("in"));
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_real_distribution<> dis(0.0, 1.0);
@@ -112,8 +112,17 @@ int main(int argc, char* argv[]) {
             device.cleanup();
             return 1;
         }
-        if(!std::isfinite(floatVal) || absError > effectiveTolerance) {
-            std::cerr << "Test failed!" << std::endl;
+        if(!std::isfinite(floatVal)) {
+            std::cerr << "Test failed! (NaN/Inf)" << std::endl;
+            std::cout << "out_r_ctrl: 0x" << std::hex << outCtrl << std::dec << std::endl;
+            std::cout << std::setprecision(10);
+            std::cout << "Expected: " << goldenModel << std::endl;
+            std::cout << "Got: " << floatVal << std::endl;
+            std::cout << "Raw register value: 0x" << std::hex << val << std::dec << std::endl;
+            device.cleanup();
+            return 1;
+        } else if(absError > effectiveTolerance) {
+            std::cerr << "Test failed! (accuracy)" << std::endl;
             std::cout << "out_r_ctrl: 0x" << std::hex << outCtrl << std::dec << std::endl;
             std::cout << std::setprecision(10);
             std::cout << "Expected: " << goldenModel << std::endl;
@@ -123,11 +132,8 @@ int main(int argc, char* argv[]) {
                       << ", abs " << kAbsTolerance
                       << ", rel " << kRelTolerance << ")"
                       << std::endl;
-            if (!std::isfinite(floatVal)) {
-                std::cout << "Raw register value: 0x" << std::hex << val << std::dec << std::endl;
-            }
             device.cleanup();
-            return 1;
+            return 2;
         } else {
             std::cout << std::setprecision(10);
             std::cout << "Expected: " << goldenModel << std::endl;
