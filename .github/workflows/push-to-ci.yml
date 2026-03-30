@@ -1,7 +1,5 @@
 name: Push PR to Gitlab CI/CD
-on:
-  pull_request_review:
-    types: [edited, submitted]
+on: pull_request_target
   
 jobs:
   Push-PR:
