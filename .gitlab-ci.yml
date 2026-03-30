@@ -1,6 +1,6 @@
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "push" && ( $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH =~ /pr/[0-9]+/merge/ )
+    - if: $CI_PIPELINE_SOURCE == "push" && ( $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH =~ /pr\/[0-9]+\/merge/ )
 
 variables:
   SLURM_ACCOUNT: hpc-prf-cifi
