@@ -1,0 +1,15 @@
+name: Push PR to Gitlab CI/CD
+on:
+  pull_request_review:
+    types: [edited, submitted]
+  
+jobs:
+  Push-PR:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "+HEAD:refs/heads/pr/$GITHUB_REF_NAME"
