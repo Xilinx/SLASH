@@ -78,37 +78,6 @@ class Kernel:
         p = self.bus_physical(bus_name, logical=logical)
         return p.name if p is not None else None
 
-    @staticmethod
-    def from_spec(name: str, spec: Dict[str, Dict]) -> "Kernel":
-        """
-        Build a Kernel from a spec dictionary, for example:
-            spec = {
-                "ap_clk":     {"ptype": "CLOCK"},
-                "ap_rst_n":   {"ptype": "RESET"},
-                "s_axilite":  {"ptype": "AXILITE", "width": 32},
-                "m_axi_gmem": {"ptype": "AXI4FULL", "width": 128},
-                "axis_in":    {"ptype": "AXIS", "width": 64},
-            }
-        """
-        type_map = {
-            "CLOCK": BusType.CLOCK,
-            "RESET": BusType.RESET,
-            "AXILITE": BusType.AXILITE,
-            "AXI4FULL": BusType.AXI4FULL,
-            "AXIS": BusType.AXIS,
-            "INTERRUPT": BusType.INTERRUPT,
-        }
-
-        ports: Dict[str, Port] = {}
-        buses: Dict[str, Bus] = {}
-        for pname, attrs in spec.items():
-            ptype = type_map[attrs["ptype"].strip().upper()]
-            width = attrs.get("width")
-            ports[pname] = Port(name=pname, ptype=ptype, width=width)
-            buses[pname] = Bus(name=pname, ptype=ptype, width=width)
-
-        return Kernel(name=name, ports=ports, buses=buses)
-
 
 @dataclass
 class KernelInstance:
