@@ -76,3 +76,6 @@ __pycache__/
 
 # Python virtual environment
 .venv
+
+# Python test coverage
+.coverage
