@@ -18,6 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file platform.hpp
+ * @brief Platform enum for hardware, emulation, and simulation targets.
+ */
+
 #ifndef VRT_PLATFORM_HPP
 #define VRT_PLATFORM_HPP
 

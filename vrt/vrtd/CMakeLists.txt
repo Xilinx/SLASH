@@ -20,8 +20,20 @@
 
 cmake_minimum_required(VERSION 3.16)
 
+# Read version from packaging/version
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../packaging/version" VRTD_VERSION)
+string(STRIP "${VRTD_VERSION}" VRTD_VERSION)
+
+# Parse into components
+string(REPLACE "." ";" VERSION_LIST "${VRTD_VERSION}")
+list(GET VERSION_LIST 0 VRTD_VERSION_MAJOR)
+list(GET VERSION_LIST 1 VRTD_VERSION_MINOR)
+list(GET VERSION_LIST 2 VRTD_VERSION_PATCH)
+
+message(STATUS "VRTD version: ${VRTD_VERSION} (${VRTD_VERSION_MAJOR}.${VRTD_VERSION_MINOR}.${VRTD_VERSION_PATCH})")
+
 project(vrtd
-  VERSION 0.1.0
+  VERSION ${VRTD_VERSION}
   LANGUAGES C CXX
 )
 
@@ -39,6 +51,17 @@ if(VRTD_INCLUDE_LIBSLASH)
 else()
   find_package(slash REQUIRED)
 endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ami.cmake)
+
+find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+
+# Find libsystemd
+pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
+
+# Find libinih
+pkg_check_modules(INIH REQUIRED IMPORTED_TARGET inih)
 
 add_subdirectory(src)
 
@@ -67,12 +90,16 @@ install(
 )
 
 install(
-  TARGETS vrtd libvrtd libvrtdpp
+  TARGETS libvrtd libvrtdpp
   EXPORT  vrtdTargets
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
   INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+install(
+  TARGETS vrtd
+  RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 
 # -------- CMake package configuration --------

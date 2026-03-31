@@ -22,6 +22,7 @@
 
 set -euxo pipefail
 
+# SLASH root
 cd "$(dirname "$0")/.."
 
 if [[ $# -ne 1 ]]; then
@@ -40,4 +41,5 @@ COMMON_CMAKE_OPTIONS=(
     "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
 )
 
-cmake -B pbuild/vrt -S vrt -G Ninja -DVRT_INCLUDE_VRTD=ON -DVRTD_INCLUDE_LIBSLASH=ON "${COMMON_CMAKE_OPTIONS[@]}"
+cmake -B pbuild/smi -S smi -G Ninja -DSMI_INCLUDE_VRT=ON -DVRT_INCLUDE_VRTD=ON -DVRTD_INCLUDE_LIBSLASH=ON "${COMMON_CMAKE_OPTIONS[@]}"
+cmake -B pbuild/cmake-tools -S cmake -G Ninja "${COMMON_CMAKE_OPTIONS[@]}"

@@ -18,6 +18,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file error.cpp
+ *
+ * Implementation of the vrtd::Error exception class.
+ *
+ * Error wraps a @c vrtd_ret error code (from the C wire protocol) into
+ * a C++ @c std::exception.  The @c what() override translates the
+ * numeric code into a human-readable string for diagnostics.
+ */
+
 #include <vrtd/error.hpp>
 
 namespace vrtd {

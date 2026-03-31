@@ -18,6 +18,28 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file buffer.c
+ *
+ * DMA buffer lifecycle management for the vrtd C client library.
+ *
+ * Buffers are host-side memory regions used for DMA transfers to/from
+ * the FPGA.  Each buffer is backed by an anonymous mmap (preferring
+ * 2 MB hugepages for TLB efficiency, with automatic fallback to
+ * regular pages) and associated with a QDMA queue pair fd for
+ * performing the actual H2C / C2H transfers.
+ *
+ * Sync operations (sync_to_device / sync_from_device) transfer data
+ * between the host buffer and FPGA memory in TRANSFER_STEP_SIZE (4 KB)
+ * chunks using positional I/O on the QDMA qpair fd.
+ *
+ * Buffer lifecycle:
+ *   1. vrtd_buffer_open()          -- daemon allocates, returns qpair fd
+ *   2. vrtd_buffer_create_raw()    -- client mmaps host memory
+ *   3. vrtd_buffer_sync_to/from_device() -- DMA transfers
+ *   4. vrtd_buffer_close()         -- tells daemon to free, unmaps locally
+ */
+
 #define _GNU_SOURCE
 
 #include <vrtd/vrtd.h>

@@ -103,6 +103,9 @@ enum vrtd_opcode {
 
     /** Perform a PCIe hotplug operation for a device. */
     VRTD_REQ_DEVICE_HOTPLUG_OP,
+
+    /** Query sensor information for a device via AMI. */
+    VRTD_REQ_GET_SENSOR_INFO,
 };
 
 /**
@@ -226,7 +229,7 @@ struct vrtd_resp_get_bar_fd {
 /**
  * @brief Request QDMA capability information for a device.
  *
- * Complementary to @ref slash_qdma_info; this wraps the libslash QDMA
+ * Complementary to @c slash_qdma_info; this wraps the libslash QDMA
  * info query and exposes it over the vrtd protocol.
  */
 struct vrtd_req_qdma_get_info {
@@ -240,7 +243,7 @@ struct vrtd_resp_qdma_get_info {
 /**
  * @brief Request creation of a QDMA qpair.
  *
- * The @ref slash_qdma_qpair_add payload is passed through to the kernel
+ * The @c slash_qdma_qpair_add payload is passed through to the kernel
  * and the resulting qid is returned in the response.
  */
 struct vrtd_req_qdma_qpair_add {
@@ -255,7 +258,7 @@ struct vrtd_resp_qdma_qpair_add {
 /**
  * @brief Request an operation on an existing QDMA qpair.
  *
- * @ref op uses the same numeric values as @ref SLASH_QDMA_QUEUE_OP_START and friends.
+ * @ref op uses the same numeric values as @c SLASH_QDMA_QUEUE_OP_START and friends.
  */
 struct vrtd_req_qdma_qpair_op {
     uint32_t dev_number; ///< Device index (0-based).
@@ -333,14 +336,23 @@ enum vrtd_device_hotplug_op {
     VRTD_DEVICE_HOTPLUG_OP_REMOVE = 1,
     VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR = 2,
     VRTD_DEVICE_HOTPLUG_OP_HOTPLUG = 3,
+    VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE = 4,
 };
 
 /**
  * @brief Request a PCIe hotplug operation for a device.
+ *
+ * For board-level operations (RESCAN, RESET_SEQUENCE), only dev_number
+ * and op are required; the function field is ignored.
+ *
+ * For PF-level operations (REMOVE, TOGGLE_SBR, HOTPLUG), the function
+ * field selects the PCI physical function (0-7).  These operations are
+ * SLASH-agnostic shortcuts to the kernel hotplug interface.
  */
 struct vrtd_req_device_hotplug_op {
     uint32_t dev_number; ///< Device index (0-based).
     uint8_t op;          ///< One of vrtd_device_hotplug_op.
+    uint8_t function;    ///< PCI function number (0-7) for PF-level ops.
 } __attribute__((packed));
 
 struct vrtd_resp_device_hotplug_op {
@@ -369,6 +381,50 @@ struct vrtd_req_clock_op {
 
 struct vrtd_resp_clock_op {
     uint32_t rate_hz; ///< Current/achieved rate for GET/SET.
+} __attribute__((packed));
+
+/**
+ * @brief Maximum number of sensor entries that fit in a single response message.
+ */
+#define VRTD_SENSOR_MAX_ENTRIES \
+    ((VRTD_MSG_MAX_SIZE - sizeof(struct vrtd_resp_header) - sizeof(uint32_t)) \
+     / sizeof(struct vrtd_sensor_entry))
+
+/**
+ * @brief A single sensor reading.
+ *
+ * Each entry corresponds to one (sensor-name, sensor-type) pair.
+ * For example, "vccint" may produce separate entries for temperature,
+ * voltage, current, and power.
+ */
+struct vrtd_sensor_entry {
+    char name[64];   ///< Sensor name (e.g., "vccint").
+    uint8_t type;    ///< Sensor type bitmask (1=temp, 2=current, 4=voltage, 8=power).
+    uint8_t status;  ///< Sensor status (0x01 = OK, see AMI sensor status codes).
+    int8_t unit_mod; ///< Unit modifier exponent (e.g., -3 for milli-).
+    uint8_t _pad;    ///< Reserved, must be zero.
+    int32_t value;   ///< Sensor reading (apply 10^unit_mod to get base unit value).
+} __attribute__((packed));
+
+/**
+ * @brief Request sensor information for a device.
+ *
+ * The daemon opens an AMI handle, discovers sensors, reads their values,
+ * and returns them all in the response.
+ */
+struct vrtd_req_get_sensor_info {
+    uint32_t dev_number; ///< Device index (0-based).
+} __attribute__((packed));
+
+/**
+ * @brief Response to VRTD_REQ_GET_SENSOR_INFO.
+ *
+ * Contains a variable number of sensor entries.  The actual response size
+ * is sizeof(num_sensors) + num_sensors * sizeof(struct vrtd_sensor_entry).
+ */
+struct vrtd_resp_get_sensor_info {
+    uint32_t num_sensors; ///< Number of sensor entries following.
+    struct vrtd_sensor_entry sensors[]; ///< Variable-length array of sensor entries.
 } __attribute__((packed));
 
 #ifdef __cplusplus

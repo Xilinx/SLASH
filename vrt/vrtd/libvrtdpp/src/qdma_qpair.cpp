@@ -18,6 +18,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file qdma_qpair.cpp
+ *
+ * Implementation of the vrtd::QdmaQpair C++ wrapper.
+ *
+ * QdmaQpair manages the lifecycle of a QDMA queue pair obtained from
+ * the vrtd daemon.  It uses the **callback injection** pattern: the
+ * Session that creates the QdmaQpair provides start/stop/delete/openFd
+ * callbacks that issue the appropriate wire protocol requests.  This
+ * keeps QdmaQpair decoupled from Session while still enabling RAII
+ * cleanup (stop + delete on destruction).
+ */
+
 #include <vrtd/qdma_qpair.hpp>
 
 #include <utility>

@@ -12,10 +12,29 @@
  * 02110-1301, USA.
  */
 
+/**
+ * @file slash_ctldev.c
+ *
+ * Control device implementation for the SLASH kernel module.
+ *
+ * Creates a per-device misc character device (/dev/slash_ctl<N>) that
+ * exposes device identity, BAR properties, and dma-buf-backed BAR
+ * mappings to userspace via ioctl.  This is an ioctl-only interface —
+ * no read/write/mmap file operations are provided on the control
+ * device itself.
+ *
+ * The ioctl interface uses **size-versioned structs** for ABI
+ * compatibility: every ioctl struct has a leading @size field that the
+ * caller sets to sizeof(struct ...).  The kernel reads the minimum
+ * required fields (MIN_SIZE), copies min(user_size, kernel_size)
+ * bytes, and zero-fills any trailing space when a newer userspace sends
+ * a larger struct than the kernel knows about.  This allows the driver
+ * and userspace library to evolve independently.
+ */
+
 #include "slash_ctldev.h"
 
 #include <linux/atomic.h>
-#include <linux/capability.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 #include <linux/printk.h>
@@ -27,7 +46,15 @@
 #include "slash.h"
 #include "slash_dmabuf.h"
 
+/** Compute the size of a struct member without needing an instance. */
 #define SLASH_FIELD_SIZE(_type, _member) (sizeof(((_type *)0)->_member))
+
+/*
+ * Minimum struct sizes needed to read the input fields, and minimum
+ * sizes needed to write back the output fields, for each ioctl.
+ * These define the ABI backward-compatibility boundary: any userspace
+ * that provides at least MIN_SIZE bytes is accepted.
+ */
 
 #define SLASH_IOCTL_BAR_INFO_MIN_SIZE \
     (offsetof(struct slash_ioctl_bar_info, bar_number) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_info, bar_number))
@@ -48,6 +75,7 @@ static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev);
 
 static long slash_ctldev_fop_ioctl(struct file *, unsigned int, unsigned long);
 
+/** Monotonically increasing counter for /dev/slash_ctl<N> numbering. */
 static atomic_t slash_ctldev_devcount = ATOMIC_INIT(0);
 
 static struct file_operations slash_ctldev_fops = {
@@ -55,8 +83,18 @@ static struct file_operations slash_ctldev_fops = {
     .unlocked_ioctl = slash_ctldev_fop_ioctl,
 };
 
+/**
+ * slash_ctldev_create() - Create a control device for a PCI function.
+ * @pdev: PCI device to create the control device for.
+ *
+ * Allocates the control device state, probes all PCI BARs, creates
+ * dma-buf exporters for MMIO BARs, and registers a misc device.
+ * The state is stored as PCI driver data on @pdev.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
 int slash_ctldev_create(struct pci_dev *pdev)
-{   
+{
     int err;
 
     struct slash_ctldev *ctldev = kzalloc(sizeof(*ctldev), GFP_KERNEL);
@@ -68,6 +106,7 @@ int slash_ctldev_create(struct pci_dev *pdev)
 
     dev_info(&pdev->dev, "ctldev: creating control device\n");
 
+    /* Store early so that the ioctl handler can find us via pci_get_drvdata(). */
     pci_set_drvdata(pdev, ctldev);
 
     err = slash_ctldev_set_bar_info(pdev, ctldev);
@@ -79,9 +118,9 @@ int slash_ctldev_create(struct pci_dev *pdev)
     err = slash_ctldev_create_bar_dmabufs(ctldev);
     if (err) {
         dev_err(&pdev->dev, "ctldev: creating BAR dma-bufs failed: %d\n", err);
-        /**
-         * We go here because there may be some dmabufs to free
-         * if some succeded and some failed.
+        /*
+         * Some dmabufs may have been created before the failure,
+         * so we must destroy whatever was successfully created.
          */
         goto err_destroy_dmabufs;
     }
@@ -105,6 +144,17 @@ err_free_ctldev:
     return err;
 }
 
+/**
+ * slash_ctldev_set_bar_info() - Probe and cache BAR metadata.
+ * @pdev:   PCI device to read BAR info from.
+ * @ctldev: Control device state to populate.
+ *
+ * Iterates over all 6 standard PCI BARs and records their start
+ * address, size, and type (MMIO vs I/O port).  BARs with a zero
+ * start address are considered unused and skipped.
+ *
+ * Return: Always 0 (BAR discovery cannot fail).
+ */
 static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *ctldev)
 {
     int i;
@@ -136,6 +186,16 @@ static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *
     return 0;
 }
 
+/**
+ * slash_ctldev_create_bar_dmabufs() - Create dma-buf exporters for MMIO BARs.
+ * @ctldev: Control device whose BARs to export.
+ *
+ * Only active MMIO BARs get a dma-buf; I/O-port BARs are skipped.
+ * The dma-buf lets userspace mmap the BAR for direct register access.
+ *
+ * Return: 0 on success, negative errno on first failure (some dmabufs
+ *         may already have been created and must be cleaned up by the caller).
+ */
 static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev)
 {
     int i;
@@ -160,17 +220,29 @@ static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev)
     return 0;
 }
 
+/**
+ * slash_ctldev_create_misc() - Register the misc character device.
+ * @ctldev: Control device to register.
+ *
+ * Creates /dev/slash_ctl<N> with an auto-incrementing index.  The
+ * sysfs name includes the PCI BDF for identification; the /dev node
+ * uses a simple numeric suffix for scripting convenience.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
 static int slash_ctldev_create_misc(struct slash_ctldev *ctldev)
 {
     int err, id;
     const char *name, *nodename;
-    
+
+    /* sysfs name: includes PCI BDF (e.g. "slash_ctl_0000:03:00.2"). */
     name = kasprintf(GFP_KERNEL, SLASH_CTLDEV_NAME_FMT, pci_name(ctldev->pdev));
     if (!name) {
         dev_err(&ctldev->pdev->dev, "ctldev: kasprintf(name) failed\n");
         return -ENOMEM;
     }
 
+    /* /dev node name: simple numeric index (e.g. "slash_ctl0"). */
     id = atomic_inc_return(&slash_ctldev_devcount) - 1;
     nodename = kasprintf(GFP_KERNEL, SLASH_CTLDEV_NODENAME_FMT, id);
     if (!nodename) {
@@ -237,6 +309,22 @@ static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev)
     }
 }
 
+/**
+ * slash_ctldev_fop_ioctl() - Handle control device ioctls.
+ * @file: Open file for the misc device.
+ * @op:   ioctl command number.
+ * @arg:  Pointer to the user-space ioctl struct.
+ *
+ * Dispatches to one of:
+ *   - GET_BAR_INFO:    Return BAR properties (start, size, usability).
+ *   - GET_BAR_FD:      Return a dma-buf fd for mmap'ing a BAR.
+ *   - GET_DEVICE_INFO: Return PCI identity (BDF, vendor/device IDs).
+ *
+ * All ioctls use the size-versioning pattern described in the file
+ * header.
+ *
+ * Return: 0 (or positive fd for GET_BAR_FD) on success, negative errno on failure.
+ */
 static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned long arg)
 {
     struct miscdevice *misc = file->private_data;
@@ -251,6 +339,10 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
         u32 bar_info_alleged_size;
         size_t copy_size;
 
+        /*
+         * Size-versioning: read the leading size field first to
+         * determine how much data the caller provided.
+         */
         if (copy_from_user(&bar_info_alleged_size, (void __user *)arg, sizeof(bar_info_alleged_size))) {
             dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_BAR_INFO copy_from_user failed\n");
             return -EFAULT;
@@ -261,6 +353,11 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
             return -EINVAL;
         }
 
+        /*
+         * Copy the smaller of (user struct, kernel struct), then
+         * zero-fill any kernel fields that the user struct doesn't
+         * cover.  This handles older userspace gracefully.
+         */
         copy_size = min_t(size_t, bar_info_alleged_size, sizeof(bar_info));
         if (copy_from_user(&bar_info, (void __user *)arg, copy_size)) {
             dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_BAR_INFO copy_from_user failed\n");
@@ -277,11 +374,13 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
 
         bar = &ctldev->bars[bar_info.bar_number];
 
+        /* Populate output fields. */
         bar_info.usable = bar->active && bar->mmio;
         bar_info.in_use = 0;
         bar_info.start_address = bar->start;
         bar_info.length = bar->len;
 
+        /* Tell userspace the kernel's struct size for version negotiation. */
         bar_info.size = sizeof(bar_info);
 
         if (bar_info_alleged_size < SLASH_IOCTL_BAR_INFO_RESPONSE_SIZE) {
@@ -294,6 +393,11 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
             dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_BAR_INFO copy_to_user failed\n");
             return -EFAULT;
         }
+        /*
+         * If the user struct is larger than what we know, zero-fill
+         * the tail.  This ensures newer userspace sees zeroed fields
+         * when talking to an older kernel (forward compatibility).
+         */
         if (bar_info_alleged_size > sizeof(bar_info)) {
             size_t extra = bar_info_alleged_size - sizeof(bar_info);
             void __user *dst = (void __user *)((unsigned long)arg + sizeof(bar_info));
@@ -314,11 +418,15 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
         u32 fd_request_alleged_size;
         size_t copy_size;
 
-        if (!capable(CAP_SYS_RAWIO)) {
-            dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_BAR_FD capability check failed\n");
-            return -EPERM;
-        }
+        /*
+         * Access control is enforced by device-node permissions
+         * (udev: slash_ctl* is 0600, owned by vrtd:vrtd).
+         * No capability check is needed here or at mmap() time —
+         * the dma-buf mmap handler uses fault-based vmf_insert_pfn()
+         * which does not require CAP_SYS_RAWIO.
+         */
 
+        /* Size-versioning: same pattern as GET_BAR_INFO above. */
         if (copy_from_user(&fd_request_alleged_size, (void __user *)arg, sizeof(fd_request_alleged_size))) {
             dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_BAR_FD copy_from_user failed\n");
             return -EFAULT;
@@ -355,7 +463,6 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
         }
 
         fd_request.length = bar->len;
-
         fd_request.size = sizeof(fd_request);
 
         if (fd_request_alleged_size < SLASH_IOCTL_BAR_FD_RESPONSE_SIZE) {
@@ -378,6 +485,11 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
             }
         }
 
+        /*
+         * Take an extra reference on the dma-buf before creating the
+         * fd.  The fd will hold this reference; if dma_buf_fd() fails
+         * we must drop it ourselves.
+         */
         get_dma_buf(bar->dmabuf);
         ret = dma_buf_fd(bar->dmabuf, fd_request.flags);
         if (ret < 0) {
@@ -386,6 +498,7 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
             return ret;
         }
 
+        /* The fd number is returned as the ioctl return value. */
         dev_dbg(&pdev->dev, "ctldev: GET_BAR_FD BAR%d -> fd %d\n", fd_request.bar_number, ret);
         return ret;
     }

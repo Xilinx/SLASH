@@ -11,6 +11,18 @@
  * not, write to the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301, USA.
  */
+
+/**
+ * @file slash.h
+ *
+ * Umbrella include for the SLASH kernel module.
+ *
+ * Pulls in the build-time configuration (PCI IDs, naming, log format)
+ * and the user-kernel ABI definitions (ioctl structs and command
+ * numbers) so that every driver source file can include a single
+ * header for the common definitions.
+ */
+
 #ifndef SLASH_H
 #define SLASH_H
 

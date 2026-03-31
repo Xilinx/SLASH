@@ -18,6 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file allocator.cpp
+ * @brief Memory allocator implementation.
+ */
+
 #include <vrt/allocator/allocator.hpp>
 
 #include <vrtd/device.hpp>

@@ -20,29 +20,30 @@
 
 cmake_minimum_required(VERSION 3.16)
 
+# Read version from packaging/version
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../packaging/version" LIBSLASH_VERSION)
+string(STRIP "${LIBSLASH_VERSION}" LIBSLASH_VERSION)
+
+# Parse into components
+string(REPLACE "." ";" VERSION_LIST "${LIBSLASH_VERSION}")
+list(GET VERSION_LIST 0 LIBSLASH_VERSION_MAJOR)
+list(GET VERSION_LIST 1 LIBSLASH_VERSION_MINOR)
+list(GET VERSION_LIST 2 LIBSLASH_VERSION_PATCH)
+
+message(STATUS "LIBSLASH version: ${LIBSLASH_VERSION} (${LIBSLASH_VERSION_MAJOR}.${LIBSLASH_VERSION_MINOR}.${LIBSLASH_VERSION_PATCH})")
+
 project(libslash
-  VERSION 0.1.0
+  VERSION ${LIBSLASH_VERSION}
   LANGUAGES C
 )
 
 # Allow user to choose shared vs static (standard CMake variable)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-# Optionally build examples
-option(SLASH_BUILD_EXAMPLES "Build example executables" ON)
-
-include(CTest)
-option(SLASH_BUILD_TESTS "Build libslash unit tests" ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 add_subdirectory(src)
-if(SLASH_BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-if(BUILD_TESTING AND SLASH_BUILD_TESTS)
-  add_subdirectory(tests)
-endif()
 
 # -------- Installation: headers and library --------
 # Public headers are under include/  (layout: include/slash/*.h)

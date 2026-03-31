@@ -12,6 +12,20 @@
  * 02110-1301, USA.
  */
 
+/**
+ * @file ctldev.c
+ *
+ * Implementation of the slash control device wrapper.
+ *
+ * Each public function either delegates to the mock implementation
+ * (ctldev_mock.h) or issues a single ioctl/syscall against the real
+ * character device. No caching or retry logic.
+ *
+ * Error handling follows POSIX conventions: -1 or NULL on failure
+ * with errno set.
+ */
+
+
 #define _GNU_SOURCE
 
 #include <slash/ctldev.h>
@@ -34,7 +48,12 @@ struct slash_ctldev *slash_ctldev_open(const char *path)
 {
     struct slash_ctldev *ctldev;
 
-    if (path != NULL && strcmp(path, "@mock") == 0) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if (strcmp(path, "@mock") == 0) {
         return slash_ctldev_mock_open();
     }
 
@@ -76,6 +95,7 @@ int slash_ctldev_close(struct slash_ctldev *ctldev)
         ret = -1;
     }
 
+    /* Free unconditionally — the handle is invalid after this call. */
     free(ctldev);
 
     return ret;
@@ -100,6 +120,7 @@ struct slash_ioctl_device_info *slash_device_info_read(struct slash_ctldev *ctld
         return NULL;
     }
 
+    /* Set size so the kernel can version-check the struct. */
     info->size = sizeof(*info);
 
     ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, info);
@@ -180,13 +201,23 @@ struct slash_bar_file *slash_bar_file_open(struct slash_ctldev *ctldev, int bar_
         return NULL;
     }
 
+    /* The ioctl returns the dma-buf fd directly as its return value. */
     bar_file->fd = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_FD, &req);
     if (bar_file->fd < 0) {
         goto err_free_bar_file;
     }
 
+    /* The kernel filled in req.length with the BAR size. */
     bar_file->len = (size_t) req.length;
 
+    /*
+     * Map the entire BAR into our address space.  The dma-buf fd
+     * backs this mapping — the kernel's slash_bar_dmabuf_mmap()
+     * installs a fault handler that maps BAR pages via
+     * vmf_insert_pfn() on first access.  Callers must bracket
+     * accesses with the DMA_BUF_IOCTL_SYNC start/end helpers
+     * (see the inline functions in ctldev.h).
+     */
     bar_file->map = mmap(NULL, bar_file->len, PROT_READ | PROT_WRITE, MAP_SHARED, bar_file->fd, 0);
     if (bar_file->map == MAP_FAILED) {
         goto err_close_fd;
@@ -226,6 +257,7 @@ int slash_bar_file_close(struct slash_bar_file *bar_file)
         ret = -1;
     }
 
+    /* Free unconditionally — the handle is invalid after this call. */
     free(bar_file);
 
     return ret;

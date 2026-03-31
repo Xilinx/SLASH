@@ -19,10 +19,23 @@
 # ##################################################################################################
 
 cmake_minimum_required(VERSION 3.10)
+
+# Read version from packaging/version
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/version" VRT_VERSION)
+string(STRIP "${VRT_VERSION}" VRT_VERSION)
+
+# Parse into components
+string(REPLACE "." ";" VERSION_LIST "${VRT_VERSION}")
+list(GET VERSION_LIST 0 VRT_VERSION_MAJOR)
+list(GET VERSION_LIST 1 VRT_VERSION_MINOR)
+list(GET VERSION_LIST 2 VRT_VERSION_PATCH)
+
+message(STATUS "VRT version: ${VRT_VERSION} (${VRT_VERSION_MAJOR}.${VRT_VERSION_MINOR}.${VRT_VERSION_PATCH})")
+
 project(
   vrt
 
-  VERSION 0.1.0
+  VERSION ${VRT_VERSION}
   LANGUAGES C CXX
 )
 
@@ -36,18 +49,31 @@ include(CMakePackageConfigHelpers)
 
 add_compile_options("-Wunused-result")
 
+option(ENABLE_SANITIZERS "Build with AddressSanitizer and UBSan" OFF)
+if(ENABLE_SANITIZERS)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+# Generate the header
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vrt_version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/vrt/vrt_version.hpp"
+    @ONLY
+)
+
 file(
   GLOB
   LIB_SOURCES
   
-  ${CMAKE_SOURCE_DIR}/src/allocator/*.cpp
-  ${CMAKE_SOURCE_DIR}/include/buffer/*.hpp
-  ${CMAKE_SOURCE_DIR}/src/qdma/*.cpp
-  ${CMAKE_SOURCE_DIR}/src/*.cpp 
-  ${CMAKE_SOURCE_DIR}/src/parser/*.cpp
-  ${CMAKE_SOURCE_DIR}/src/register/*.cpp
-  ${CMAKE_SOURCE_DIR}/src/driver/*.cpp
-  ${CMAKE_SOURCE_DIR}/src/utils/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/allocator/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/buffer/*.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/qdma/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp 
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/register/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/driver/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/utils/*.cpp
 )
 
 add_library(vrt SHARED ${LIB_SOURCES})
@@ -59,6 +85,7 @@ target_include_directories(
   
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
     $<INSTALL_INTERFACE:include>
     
   PRIVATE
@@ -88,30 +115,31 @@ find_package(ZLIB REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(jsoncpp CONFIG REQUIRED)
 
-if(NOT TARGET jsoncpp_lib AND TARGET JsonCpp::JsonCpp)
-  add_library(jsoncpp_lib ALIAS JsonCpp::JsonCpp)
+if(NOT TARGET JsonCpp::JsonCpp AND TARGET jsoncpp_lib)
+  add_library(JsonCpp::JsonCpp ALIAS jsoncpp_lib)
 endif()
-
-# find_package(ZeroMQ CONFIG REQUIRED)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PC_ZMQ REQUIRED IMPORTED_TARGET libzmq)
-
-target_link_libraries(vrt PUBLIC PkgConfig::PC_ZMQ)
 
 target_link_libraries(vrt
   PUBLIC
     vrtd::libvrtdpp
     ZLIB::ZLIB
     LibXml2::LibXml2
-    jsoncpp_lib
+    JsonCpp::JsonCpp
     PkgConfig::PC_ZMQ
 )
 
 set_target_properties(vrt PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 install(
-  DIRECTORY ${CMAKE_SOURCE_DIR}/include/
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+install(
+  DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/generated/
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
 

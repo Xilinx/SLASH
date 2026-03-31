@@ -20,6 +20,7 @@
 
 #include <iostream>
 #include <cstdint>
+#include <vrt/utils/logger.hpp>
 #include <vrt/device.hpp>
 #include <vrt/buffer.hpp>
 #include <vrt/kernel.hpp>
@@ -38,8 +39,8 @@ int main(int argc, char* argv[]) {
 
         vrt::Kernel dma_in(device, "dma_in_0");
         vrt::Kernel dma_out(device, "dma_out_0");
-        vrt::Buffer<uint64_t> buffer_in(device, size, vrt::MemoryRangeType::HBM);
-        vrt::Buffer<uint64_t> buffer_out(device, size, vrt::MemoryRangeType::HBM);
+        vrt::Buffer<uint64_t> buffer_in(device, size, dma_in.argMemoryConfig("in"));
+        vrt::Buffer<uint64_t> buffer_out(device, size, dma_out.argMemoryConfig("out"));
         for(uint32_t i = 0; i < size; i++) {
             buffer_in[i] = static_cast<uint64_t>(i);
         }
@@ -55,15 +56,16 @@ int main(int argc, char* argv[]) {
         buffer_out.sync(vrt::SyncType::DEVICE_TO_HOST);
         for(uint32_t i = 0; i < size; i++) {
             if(buffer_in[i] != buffer_out[i]) {
-                vrt::utils::Logger::log(vrt::utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Test failed");
+                vrt::utils::Logger::log(vrt::utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Test failed (accuracy)");
                 device.cleanup();
-                return 0;
+                return 2;
             }
         }
         vrt::utils::Logger::log(vrt::utils::LogLevel::INFO, __PRETTY_FUNCTION__, "Test passed");
         device.cleanup();
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
+        return 1;
     }
     return 0;
 }

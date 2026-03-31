@@ -1,1 +1,0 @@
-# Simulation emit helpers.

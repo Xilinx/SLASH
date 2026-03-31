@@ -1,0 +1,19 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && ( $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH =~ /^pr\// )
+
+variables:
+  SLURM_ACCOUNT: hpc-prf-cifi
+
+default:
+  id_tokens:
+    CI_JOB_JWT:
+      aud: https://git.uni-paderborn.de
+
+hello_world:
+  tags:
+    - otus
+  variables:
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p normal -c 16 --mem 16G -t 00:05:00"
+  script:
+    - echo "Hello World from $(hostname)! My name is $(whoami) and I have $(nproc) cores!"

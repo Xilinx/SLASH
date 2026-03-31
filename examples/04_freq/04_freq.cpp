@@ -65,9 +65,10 @@ int main(int argc, char* argv[]) {
         c.sync(vrt::SyncType::DEVICE_TO_HOST);
         for (int i = 0; i < size; i++) {
             if (c[i] != a[i] + b[i]) {
+                std::cerr << "Test failed (accuracy)" << std::endl;
                 std::cerr << "Error: " << c[i] << " != " << a[i] << " + " << b[i] << std::endl;
                 device.cleanup();
-                return 1;
+                return 2;
             }
         }
         std::cout << "Test passed" << std::endl;

@@ -18,6 +18,24 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file requests.c
+ *
+ * Wire protocol request/response marshalling for the vrtd C client library.
+ *
+ * Each public vrtd_*() function builds a wire protocol message (header +
+ * body), sends it to the daemon over the AF_UNIX SOCK_SEQPACKET socket,
+ * and receives the response.  File descriptors (BAR fds, QDMA qpair fds)
+ * are passed out-of-band via SCM_RIGHTS ancillary data on the Unix socket.
+ *
+ * The protocol is strictly request-response: one sendmsg() followed by
+ * one recvmsg().  Sequence numbers are included for future pipelining
+ * but currently always set to 1.
+ *
+ * All functions are synchronous and thread-safe only if each thread uses
+ * its own connection fd (obtained from vrtd_connect()).
+ */
+
 #define _GNU_SOURCE
 
 #include <slash/uapi/slash_interface.h>
@@ -37,6 +55,21 @@
 
 #include <vrtd/vrtd.h>
 
+/**
+ * vrtd_recv_response() - Receive a response message from the daemon.
+ * @fd:            Connection socket.
+ * @resp_body_buf: Buffer for the response body (may be NULL if no body expected).
+ * @resp_bufsz:    Size of @resp_body_buf.
+ * @resp_fd:       If non-NULL, receives an out-of-band file descriptor
+ *                 sent by the daemon via SCM_RIGHTS (e.g. a BAR fd or
+ *                 QDMA qpair fd).  Set to -1 if no fd was received.
+ *
+ * Uses recvmsg() with scatter-gather I/O: the header and body are read
+ * into separate buffers in a single system call.  MSG_CMSG_CLOEXEC
+ * ensures any received fd is close-on-exec.
+ *
+ * Return: VRTD_RET_OK on success, or an error code.
+ */
 static enum vrtd_ret vrtd_recv_response(
     int fd,
     void *resp_body_buf,
@@ -85,7 +118,7 @@ static enum vrtd_ret vrtd_recv_response(
         return VRTD_RET_BAD_CONN;
     }
 
-    /* Extract FD if any */
+    /* Extract file descriptor from SCM_RIGHTS ancillary data, if any. */
     for (struct cmsghdr *c = CMSG_FIRSTHDR(&rmsg); c != NULL; c = CMSG_NXTHDR(&rmsg, c)) {
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len >= CMSG_LEN(sizeof(int))) {
             assert(resp_fd != NULL);
@@ -127,6 +160,24 @@ int vrtd_connect(const char *path)
     return fd;
 }
 
+/**
+ * vrtd_raw_request() - Send a request and receive the response.
+ * @fd:            Connection socket (from vrtd_connect()).
+ * @opcode:        Wire protocol opcode (VRTD_REQ_*).
+ * @req_body:      Request body payload (may be NULL if @req_size is 0).
+ * @req_size:      Size of @req_body in bytes.
+ * @resp_body_buf: Buffer for the response body.
+ * @resp_bufsz:    Size of @resp_body_buf.
+ * @resp_fd:       If non-NULL, receives an out-of-band fd from the daemon.
+ * @req_fd:        If non-NULL and *req_fd >= 0, sends this fd to the daemon
+ *                 via SCM_RIGHTS (e.g. a bitstream fd for design_write).
+ *
+ * Builds a request message (header + body), optionally attaches an fd
+ * via SCM_RIGHTS ancillary data, sends it with sendmsg(), then waits
+ * for the response via vrtd_recv_response().
+ *
+ * Return: VRTD_RET_OK on success, or an error code.
+ */
 enum vrtd_ret vrtd_raw_request(
     int fd,
     uint16_t opcode,
@@ -515,12 +566,14 @@ enum vrtd_ret vrtd_design_write_file(
 enum vrtd_ret vrtd_device_hotplug_op(
     int fd,
     uint32_t dev,
-    uint8_t op
+    uint8_t op,
+    uint8_t function
 )
 {
     struct vrtd_req_device_hotplug_op req = {
         .dev_number = dev,
         .op = op,
+        .function = function,
     };
     struct vrtd_resp_device_hotplug_op resp = {0};
 
@@ -537,22 +590,22 @@ enum vrtd_ret vrtd_device_hotplug_op(
 
 enum vrtd_ret vrtd_device_hotplug_rescan(int fd, uint32_t dev)
 {
-    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_RESCAN);
+    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_RESCAN, 0);
 }
 
-enum vrtd_ret vrtd_device_hotplug_remove(int fd, uint32_t dev)
+enum vrtd_ret vrtd_device_hotplug_remove(int fd, uint32_t dev, uint8_t function)
 {
-    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_REMOVE);
+    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_REMOVE, function);
 }
 
-enum vrtd_ret vrtd_device_hotplug_toggle_sbr(int fd, uint32_t dev)
+enum vrtd_ret vrtd_device_hotplug_toggle_sbr(int fd, uint32_t dev, uint8_t function)
 {
-    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR);
+    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, function);
 }
 
-enum vrtd_ret vrtd_device_hotplug_hotplug(int fd, uint32_t dev)
+enum vrtd_ret vrtd_device_hotplug_hotplug(int fd, uint32_t dev, uint8_t function)
 {
-    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_HOTPLUG);
+    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, function);
 }
 
 enum vrtd_ret vrtd_clock_get_rate(
@@ -657,4 +710,50 @@ void vrtd_close_bar_file(struct slash_bar_file *bar_file)
 
         bar_file->map = NULL;
     }
+}
+
+enum vrtd_ret vrtd_get_sensor_info(
+    int fd,
+    uint32_t dev,
+    struct vrtd_sensor_entry *entries_out,
+    uint32_t max_entries,
+    uint32_t *num_entries_out
+)
+{
+    if (entries_out == NULL || num_entries_out == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    struct vrtd_req_get_sensor_info req = {
+        .dev_number = dev,
+    };
+
+    /*
+     * The response is variable-length: a uint32_t count followed by
+     * sensor entries.  We receive into a stack buffer sized to the
+     * maximum the protocol can carry.
+     */
+    uint8_t resp_buf[VRTD_MSG_MAX_SIZE - sizeof(struct vrtd_resp_header)];
+    memset(resp_buf, 0, sizeof(resp_buf));
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_GET_SENSOR_INFO,
+                               &req, sizeof(req),
+                               resp_buf, sizeof(resp_buf),
+                               NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    /* Parse the variable-length response. */
+    struct vrtd_resp_get_sensor_info *resp = (struct vrtd_resp_get_sensor_info *)resp_buf;
+    uint32_t count = resp->num_sensors;
+
+    if (count > max_entries) {
+        count = max_entries;
+    }
+
+    memcpy(entries_out, resp->sensors, count * sizeof(struct vrtd_sensor_entry));
+    *num_entries_out = count;
+
+    return VRTD_RET_OK;
 }

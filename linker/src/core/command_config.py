@@ -252,7 +252,7 @@ class LinkerConfiguration(CommandConfiguration):
         # Resolve and verify the configuration file
         configuration_file = args.config.expanduser().resolve()
         if not configuration_file.is_file():
-            raise FileNotFoundError(self._configuration_file)
+            raise FileNotFoundError(configuration_file)
 
         # Resolve and verify the kernel component files
         self._kernel_component_paths: List[Path] = [

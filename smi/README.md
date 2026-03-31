@@ -1,0 +1,257 @@
+# v80-smi
+
+Command-line tool for managing AMD Alveo V80 devices.  v80-smi can
+enumerate boards, inspect vrtbin metadata, program devices, reset
+hardware, and validate memory integrity and bandwidth.
+
+| Command    | Purpose                                           |
+|------------|---------------------------------------------------|
+| `version`  | Print build version                               |
+| `list`     | Enumerate V80 boards and check readiness          |
+| `inspect`  | Display metadata from a vbin file on disk         |
+| `query`    | Display metadata of the vbin loaded on a device   |
+| `program`  | Load a vbin file onto a V80 device                |
+| `reset`    | Hardware-reset a V80 board                        |
+| `validate` | Reset board and test memory integrity + bandwidth |
+
+## Building
+
+```sh
+cmake -B build -S . -G Ninja
+cmake --build build
+```
+
+CMake options:
+
+| Option            | Default | Description                                  |
+|-------------------|---------|----------------------------------------------|
+| `SMI_INCLUDE_VRT` | `OFF`   | Build the bundled VRT library instead of using the system package |
+
+Requires a C++20 compiler.
+
+## Installing
+
+```sh
+sudo cmake --install build --prefix /usr/local
+```
+
+This installs the `v80-smi` binary to `<prefix>/bin/`.
+
+## Commands
+
+### version
+
+Print build version and exit.
+
+```
+v80-smi version [-p]
+```
+
+| Flag           | Description                                              |
+|----------------|----------------------------------------------------------|
+| `-p,--plain`   | Print only the version number (useful in scripts)        |
+
+```console
+$ v80-smi version
+SMI v1.2.3
+
+$ v80-smi version --plain
+1.2.3
+```
+
+### list
+
+Enumerate V80 boards by scanning sysfs for matching PCI vendor/device
+IDs.  Each board's readiness is checked across all three PCI functions
+and the VRTD daemon.
+
+```
+v80-smi list [-l] [-s] [-j | -J]
+```
+
+| Flag               | Description                                             |
+|--------------------|---------------------------------------------------------|
+| `-l,--long`        | Print detailed per-PF info (vendor/device ID, driver, NUMA node, IRQ) |
+| `-s,--sensors`     | Include sensor readings from VRTD (temperature, current, voltage, power) |
+| `-j,--json`        | Compact JSON output                                     |
+| `-J,--pretty-json` | Indented JSON output                                    |
+
+Readiness checks per board:
+
+- **PF0** (device 0x50B4) &mdash; expected driver: `ami`
+- **PF1** (device 0x50B5) &mdash; expected driver: `slash_qdma`
+- **PF2** (device 0x50B6) &mdash; expected driver: `slash_ctl`
+- **VRTD** &mdash; daemon reachable and device registered
+
+```console
+$ v80-smi list
+Board 0000:03:00 OK (PF0: OK) (PF1: OK) (PF2: OK) (VRTD: OK)
+Board 0000:83:00 NOT READY (PF0: OK) (PF1: NOT READY: wrong driver) (PF2: OK) (VRTD: NOT READY)
+```
+
+### inspect
+
+Display metadata from a vbin file without hardware.  Shows the target
+platform, clock frequency, resource utilization, and kernel argument
+maps.
+
+```
+v80-smi inspect <vbin> [-j | -J]
+```
+
+| Flag               | Description                   |
+|--------------------|-------------------------------|
+| `-j,--json`        | Compact JSON output           |
+| `-J,--pretty-json` | Indented JSON output          |
+
+```console
+$ v80-smi inspect design.vbin
+Vbin design.vbin:
+    Platform: HARDWARE
+    Clock frequency: 300000000
+    Utilization:
+        Slash: LUTs: 45032 (5.2%), FFs: 62001 (3.6%), LUTRAM: 3200 (0.7%), SRL: 1100 (0.3%), RAMB36: 48, RAMB18: 12, URAM: 0, DSP: 12
+    Kernel:
+        Name: increment_0
+        Physical address: 0x20100000000
+        Argument:
+            Index: 0
+            Name: size
+            Type: int
+            Offset: 0x10
+            Range: 0x20
+            Direction: Read
+```
+
+No hardware or VRTD required.
+
+### query
+
+Same output as `inspect`, but reads metadata from the vbin last
+programmed by the user on a device.
+
+```
+v80-smi query -d <BDF> [-j | -J]
+```
+
+| Flag               | Description                                         |
+|--------------------|-----------------------------------------------------|
+| `-d,--device`      | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `-j,--json`        | Compact JSON output                                 |
+| `-J,--pretty-json` | Indented JSON output                                |
+
+Requires the device to have been programmed at least once.
+
+### program
+
+Load a vbin file onto a V80 device.
+
+```
+v80-smi program <vbin> -d <BDF>
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+
+```console
+$ v80-smi program design.vbin -d 03:00
+```
+
+### reset
+
+Hardware-reset a V80 board.  Performs the full hotplug sequence
+(remove &rarr; SBR &rarr; settle &rarr; rescan &rarr; hotplug) via the
+VRTD daemon.
+
+```
+v80-smi reset -d <BDF>
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+
+Requires root access and a running VRTD daemon.  The device must be
+programmed with the static SLASH design.
+
+### validate
+
+Reset a board, then test HBM and DDR memory for data integrity and
+bandwidth.
+
+```
+v80-smi validate -d <BDF> [-j <threads>]
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `-j,--threads`    | Parallel buffers/threads, 1-64 (default 8)           |
+
+Each buffer is 64 MB.  The integrity test writes a pattern, syncs to
+device, clears host memory, syncs back, and verifies.  The bandwidth
+test runs parallel H2C writes and C2H reads.
+
+```console
+$ v80-smi validate -d 03:00
+Resetting device 0000:03:00...
+Testing HBM data integrity (8 regions)...
+    HBM0: OK
+    HBM1: OK
+    ...
+Testing HBM bandwidth (8 threads)...
+    Write: 9832.10 MB/s
+    Read:  9547.22 MB/s
+Testing DDR data integrity (8 buffers)...
+    DDR0: OK
+    DDR1: OK
+    ...
+Testing DDR bandwidth (8 threads)...
+    Write: 5120.45 MB/s
+    Read:  4980.33 MB/s
+```
+
+Requires root access and a running VRTD daemon.
+
+## Device addressing
+
+All commands that accept a `-d,--device` option support four BDF
+(Bus:Device.Function) formats:
+
+| Format          | Example         | Notes                       |
+|-----------------|-----------------|-----------------------------|
+| `DDDD:BB:DD`    | `0000:03:00`    | Board-level, no function    |
+| `BB:DD`         | `03:00`         | Short form                  |
+| `DDDD:BB:DD.F`  | `0000:03:00.0`  | Full with PCI function (not recommended)     |
+| `BB:DD.F`       | `03:00.0`       | Domain defaults to `0000` (not recommended)   |
+
+All forms are normalised to board-level `DDDD:BB:DD`.  If a PCI
+function digit is supplied it is accepted but ignored with a warning,
+since v80-smi always operates at board granularity.
+
+## Dependencies
+
+| Dependency | Purpose                                          |
+|------------|--------------------------------------------------|
+| libvrt     | VRT runtime library (device, kernel, vrtbin APIs) |
+| vrtd       | Runtime daemon (sensors, reset, validate, query)  |
+
+## Project layout
+
+```
+smi/
+  src/
+    smi.cpp           Entry point and subcommand dispatch
+    list.cpp/hpp      Board enumeration via sysfs
+    inspect.cpp/hpp   Vbin metadata inspection and device query
+    program.cpp/hpp   Device programming
+    reset.cpp/hpp     Hardware reset via VRTD
+    validate.cpp/hpp  Memory integrity and bandwidth testing
+    bdf.hpp           BDF address parser
+    utils.hpp         Formatting and output utilities
+```
+
+## License
+
+MIT — see [LICENSE](../LICENSE).

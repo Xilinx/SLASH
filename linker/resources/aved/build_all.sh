@@ -28,6 +28,10 @@ FW_DIR=$(realpath ./../../fw/AMC)
 XSA=${XSA:-$(realpath ${HW_DIR})/build/${DESIGN}.xsa}
 
 # Step FW
+# Exempt zero-length-bounds from -Werror (submodule MCTP code uses
+# zero-length arrays as flexible-array-member idiom inside a union).
+export CFLAGS="${CFLAGS:-} -Wno-error=zero-length-bounds"
+
 pushd ${FW_DIR}
  ./scripts/build.sh -os freertos10_xilinx -profile v80 -xsa $XSA
   cp -a ${FW_DIR}/build/amc.elf ${HW_DIR}/build

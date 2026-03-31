@@ -22,16 +22,24 @@
 
 set -euxo pipefail
 
+# SLASH root
 cd "$(dirname "$0")/.."
+
+VERSION="$(tr -d '[:space:]' < packaging/version)"
 
 export ARTIFACTS_DIR="${ARTIFACTS_DIR:-"$(pwd)"/deb}"
 export DPKG_ARCH="$(dpkg --print-architecture)"
 export DPKG_PARSED_VERSION="$(dpkg-parsechangelog -SVersion)"
 
 # Clean build
+rm -rf deb
 mkdir -p deb
 rm -rf pbuild
-rm -rf debian/tmp
+rm -rf debian
+
+rsync -a packaging/debian/ ./debian/
+
+sed -i "1s/(UNRELEASED) UNRELEASED;/(${VERSION}) unstable;/" debian/changelog
 
 rsync vrt/vrtd/systemd/vrtd.service debian/vrtd.service
 rsync vrt/vrtd/systemd/vrtd.socket  debian/vrtd.socket
@@ -45,12 +53,15 @@ rsync vrt/vrtd/udev/99-vrtd.rules   debian/vrtd.udev
 # This means that `..` has to be writable by the user building, which is inconvenient.
 dpkg-buildpackage \
     --no-sign \
-    --pre-clean \
-    --post-clean \
+    --build=binary \
+    --diff-ignore='.*' \
     --buildinfo-option="-u${ARTIFACTS_DIR}" \
     --buildinfo-file"=${ARTIFACTS_DIR}/slash_${DPKG_PARSED_VERSION}_${DPKG_ARCH}.buildinfo" \
     --changes-option="-u${ARTIFACTS_DIR}" \
     --changes-file="${ARTIFACTS_DIR}/slash_${DPKG_PARSED_VERSION}_${DPKG_ARCH}.changes"
+
+# Build AMI package into the same artifacts directory
+ARTIFACTS_DIR="${ARTIFACTS_DIR}" "$(dirname "$0")/package-ami.sh"
 
 cd "${ARTIFACTS_DIR:-deb}"
 apt-ftparchive packages . > Packages

@@ -12,6 +12,19 @@
  * 02110-1301, USA.
  */
 
+/**
+ * @file qdma.c
+ *
+ * Implementation of the slash QDMA userspace wrapper.
+ *
+ * Each public function validates its arguments, then issues a single
+ * ioctl against the QDMA character device. No mock path exists yet.
+ *
+ * The ioctl structs use a size field for kernel-side version
+ * negotiation: userspace sets size = sizeof(struct), and the kernel
+ * can handle older/newer struct layouts accordingly.
+ */
+
 #define _GNU_SOURCE
 
 #include <slash/qdma.h>
@@ -64,6 +77,7 @@ int slash_qdma_close(struct slash_qdma *qdma)
         ret = -1;
     }
 
+    /* Free unconditionally — handle is invalid after this call. */
     free(qdma);
 
     return ret;
@@ -87,11 +101,19 @@ int slash_qdma_info_read(struct slash_qdma *qdma, struct slash_qdma_info *info)
         return -1;
     }
 
+    /* Copy the kernel-filled result back to the caller. */
     *info = tmp;
 
     return 0;
 }
 
+/**
+ * slash_qdma_qpair_add() — Create a new queue pair.
+ *
+ * Copies caller-provided configuration into a zeroed temporary to
+ * ensure no stale fields leak to the kernel, then copies the full
+ * kernel response (including assigned qid) back into @req.
+ */
 int slash_qdma_qpair_add(struct slash_qdma *qdma,
                          struct slash_qdma_qpair_add *req)
 {
@@ -116,11 +138,18 @@ int slash_qdma_qpair_add(struct slash_qdma *qdma,
         return -1;
     }
 
+    /* Write back — kernel will have filled in qid and other fields. */
     *req = tmp;
 
     return 0;
 }
 
+/**
+ * slash_qdma_qpair_op() — Issue a queue pair lifecycle operation.
+ *
+ * Internal helper shared by start/stop/del. The @op parameter selects
+ * which operation the kernel performs.
+ */
 static int slash_qdma_qpair_op(struct slash_qdma *qdma,
                                uint32_t qid,
                                uint32_t op)

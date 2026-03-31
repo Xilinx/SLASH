@@ -63,33 +63,9 @@ __pycache__/
 *.pyc
 
 # Build files for package
-pbuild
-rpmbuild
-debian/tmp
-debian/*.log
-debian/*.substvars
-debian/debhelper-build-stamp
-debian/files
-debian/.debhelper/
-debian/*.debhelper
-debian/libslash/
-debian/libslash-dev/
-debian/libvrt/
-debian/libvrt-dev/
-debian/libvrtd/
-debian/libvrtd-dev/
-debian/vrtd/
-debian/slash-dkms/
-debian/v80++/
-debian/slash/
-debian/slash-dev/
-debian/slash-sim-emu/
-debian/slash-sim-emu-dev/
-
-# Files copied here by package.sh
-debian/vrtd.service
-debian/vrtd.socket
-debian/vrtd.udev
+/pbuild/
+/rpmbuild/
+/debian/
 
 # Output files for package
 /deb/

@@ -18,6 +18,23 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file buffer.cpp
+ *
+ * Implementation of the vrtd::Buffer C++ wrapper.
+ *
+ * Buffer provides RAII ownership of a @c vrtd_buffer obtained from the
+ * daemon via libvrtd.  It wraps the host-side mmap, the QDMA queue pair
+ * fd, and the device-side physical address into a single movable object.
+ *
+ * Key features:
+ *  - Move-only semantics (no copies); destruction calls vrtd_buffer_close().
+ *  - @c syncToDevice() / @c syncFromDevice() for DMA transfers.
+ *  - @c fstream() opens a std::fstream on the qpair fd via
+ *    @c /proc/self/fd/<n>, allowing stream-style I/O on the DMA channel.
+ *  - @c releaseFd() transfers qpair fd ownership to the caller.
+ */
+
 #include <vrtd/buffer.hpp>
 #include <vrtd/error.hpp>
 #include <vrtd/vrtd.h>

@@ -18,6 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/**
+ * @file device.cpp
+ * @brief Device class implementation.
+ */
+
 #include <vrt/device.hpp>
 
 #include <unistd.h>
@@ -27,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <vrtd/bar.hpp>
 
@@ -37,22 +43,48 @@ namespace impl {
 
 namespace {
 
+// Normalize a user-supplied BDF to board-level "DDDD:BB:DD" for vrtd lookup.
+// Strips function digit (.F) if present, prepends domain 0000: if missing.
 std::string normalizeBdfForVrtd(const std::string& bdf) {
-    const auto firstColon = bdf.find(':');
-    const auto lastColon = bdf.rfind(':');
-    if (firstColon != std::string::npos && firstColon != lastColon) {
-        return bdf;
+    std::string result = bdf;
+
+    // Strip function digit
+    auto dot = result.rfind('.');
+    if (dot != std::string::npos) {
+        std::cerr << "Warning: BDF '" << bdf
+                  << "' contains a PF function number; "
+                  << "stripping " << result.substr(dot)
+                  << " — use board address instead"
+                  << std::endl;
+        result = result.substr(0, dot);
     }
-    return "0000:" + bdf;
+
+    // Prepend domain if missing (only one colon means short BDF)
+    const auto firstColon = result.find(':');
+    const auto lastColon = result.rfind(':');
+    if (firstColon == std::string::npos || firstColon == lastColon) {
+        result = "0000:" + result;
+    }
+    return result;
 }
 
+// Normalize a user-supplied BDF to board-level "BB:DD" (no domain, no function).
 std::string normalizeBdfLegacy(const std::string& bdf) {
-    const auto firstColon = bdf.find(':');
-    const auto lastColon = bdf.rfind(':');
-    if (firstColon != std::string::npos && firstColon != lastColon) {
-        return bdf.substr(firstColon + 1);
+    std::string result = bdf;
+
+    // Strip function digit
+    auto dot = result.rfind('.');
+    if (dot != std::string::npos) {
+        result = result.substr(0, dot);
     }
-    return bdf;
+
+    // Strip domain
+    const auto firstColon = result.find(':');
+    const auto lastColon = result.rfind(':');
+    if (firstColon != std::string::npos && firstColon != lastColon) {
+        result = result.substr(firstColon + 1);
+    }
+    return result;
 }
 
 std::string shellQuote(const std::string& value) {
@@ -201,7 +233,7 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     this->pdiPaths = this->vrtbin.getPdiPaths();
     this->programType = programType;
     this->zmqServer = std::make_shared<ZmqServer>();
-    findPlatform();
+    this->platform = vrtbin.getPlatform();
     if (platform == Platform::HARDWARE) {
         vrtdSession = std::make_shared<vrtd::Session>();
         vrtdDevice = vrtdSession->getDeviceByBdf(bdfFull);
@@ -258,6 +290,8 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
 
 Device::~Device() {
     cleanup();
+    delete allocator;
+    allocator = nullptr;
 }
 
 void Device::parseSystemMap() {

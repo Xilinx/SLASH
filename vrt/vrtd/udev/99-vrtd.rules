@@ -19,5 +19,6 @@
 # ##################################################################################################
 
 KERNEL=="slash",           MODE="0600", OWNER="vrtd", GROUP="vrtd"
+KERNEL=="slash_hotplug",   MODE="0600", OWNER="vrtd", GROUP="vrtd"
 KERNEL=="slash_ctl*",      MODE="0600", OWNER="vrtd", GROUP="vrtd"
 KERNEL=="slash_qdma_ctl*", MODE="0600", OWNER="vrtd", GROUP="vrtd"

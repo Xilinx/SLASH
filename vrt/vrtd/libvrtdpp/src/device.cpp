@@ -32,11 +32,12 @@ Device::Device(uint32_t num,
                std::function<Bar(const Device&, uint8_t)> fGetBar,
                std::function<QdmaQpair(const Device&, const struct slash_qdma_qpair_add&)> fCreateQdmaQpair,
                std::function<Buffer(const Device&, BufferAllocType, uint64_t, uint64_t, BufferAllocDir)> fOpenBuffer,
-               std::function<void(const Device&, HotplugOp)> fHotplugOp,
+               std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
                std::function<void(const Device&, int)> fDesignWrite,
                std::function<void(const Device&, std::string_view)> fDesignWriteFile,
                std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
-               std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate) {
+               std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate,
+               std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo) {
     this->num = num;
     this->name = name;
     this->bdf = bdf;
@@ -52,6 +53,7 @@ Device::Device(uint32_t num,
     this->fDesignWriteFile = fDesignWriteFile;
     this->fGetClockRate = fGetClockRate;
     this->fSetClockRate = fSetClockRate;
+    this->fGetSensorInfo = fGetSensorInfo;
 }
 
 uint32_t Device::getNum() const noexcept {
@@ -97,8 +99,8 @@ Buffer Device::openBuffer(BufferAllocType allocType,
     return fOpenBuffer(*this, allocType, size, allocArg, allocDir);
 }
 
-void Device::hotplugOp(HotplugOp op) const {
-    fHotplugOp(*this, op);
+void Device::hotplugOp(HotplugOp op, uint8_t function) const {
+    fHotplugOp(*this, op, function);
 }
 
 void Device::designWrite(int input_fd) const {
@@ -115,6 +117,10 @@ uint32_t Device::getClockRate(ClockRegion region) const {
 
 uint32_t Device::setClockRate(ClockRegion region, uint32_t rate_hz) const {
     return fSetClockRate(*this, region, rate_hz);
+}
+
+std::vector<SensorEntry> Device::getSensorInfo() const {
+    return fGetSensorInfo(*this);
 }
 
 }
