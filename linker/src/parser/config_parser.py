@@ -169,20 +169,6 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
             section = line[1:-1].strip().lower()
             continue
 
-        # Accept connectivity lines even outside [connectivity] and end a [clock] block implicitly.
-        if line.startswith("nk=") or line.startswith("stream_connect=") or line.startswith("sp="):
-            if section == "clock":
-                _commit_clock()
-                section = "connectivity"
-            if line.startswith("nk="):
-                cfg.nk.append(_parse_nk_value(line.split("=", 1)[1].strip()))
-            elif line.startswith("stream_connect="):
-                cfg.streams.append(_parse_stream_connect_value(
-                    line.split("=", 1)[1].strip()))
-            elif line.startswith("sp="):
-                cfg.sps.append(_parse_sp_value(line.split("=", 1)[1].strip()))
-            continue
-
         if section == "connectivity":
             if line.startswith("nk="):
                 cfg.nk.append(_parse_nk_value(line.split("=", 1)[1].strip()))
@@ -191,8 +177,6 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                     line.split("=", 1)[1].strip()))
             elif line.startswith("sp="):
                 cfg.sps.append(_parse_sp_value(line.split("=", 1)[1].strip()))
-            else:
-                pass
 
         elif section == "clock":
             # Accumulate key-value pairs for this clock block

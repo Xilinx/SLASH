@@ -19,11 +19,11 @@
 # ##################################################################################################
 
 from __future__ import annotations
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "vendor"))
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 
 def render_template(template_dir: str | Path, template_name: str, out_path: str | Path, context: dict) -> None:
