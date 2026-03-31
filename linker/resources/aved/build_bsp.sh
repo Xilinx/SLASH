@@ -142,23 +142,30 @@ mkdir -p amc_bsp
 cd amc_bsp
 sdtgen -eval "sdtgen set_dt_param -xsa $xsa -dir ${SDT}; generate_sdt"
 empyro repo -st ${XILINX_VITIS}/data/embeddedsw
-empyro create_bsp -t empty_application -w amc_bsp -s ${SDT}/system-top.dts -p psv_cortexr5_0 -o freertos || {
-    # Retry: Vitis installations with read-only files (444) cause copy2 to
-    # preserve those permissions, blocking overwrites within create_bsp.
-    chmod -R u+rwX amc_bsp 2>/dev/null
-    empyro create_bsp -t empty_application -w amc_bsp -s ${SDT}/system-top.dts -p psv_cortexr5_0 -o freertos
-}
-# Vitis installations with read-only source files (444) cause shutil.copy2 to
-# preserve those permissions in the BSP output. Each empyro command may copy
-# new files from the installation, so fix permissions after every step.
-chmod -R u+rwX amc_bsp
+# empyro copies files from its PyInstaller bundle using shutil.copy2, which
+# preserves the bundle's read-only (444) permissions into the workspace.
+# empyro then writes to those same files a second time within create_bsp,
+# hitting Permission denied. A background loop keeps the workspace writable
+# throughout the run so each second write succeeds.
+while true; do chmod -R u+rw amc_bsp 2>/dev/null; done &
+CHMOD_PID=$!
+empyro create_bsp -t empty_application -w amc_bsp -s ${SDT}/system-top.dts -p psv_cortexr5_0 -o freertos
+EMPYRO_RC=$?
+kill $CHMOD_PID 2>/dev/null
+wait $CHMOD_PID 2>/dev/null
+if [ $EMPYRO_RC -ne 0 ]; then
+    echo "Error: empyro create_bsp failed (exit $EMPYRO_RC)"
+    exit 1
+fi
+# Each subsequent empyro step may also copy new 444 files from its bundle.
+chmod -R u+rw amc_bsp
 empyro config_bsp -d amc_bsp -al xilfpga
-chmod -R u+rwX amc_bsp
+chmod -R u+rw amc_bsp
 empyro config_bsp -d amc_bsp -al xilloader
-chmod -R u+rwX amc_bsp
+chmod -R u+rw amc_bsp
 empyro config_bsp -d amc_bsp -st freertos freertos_support_static_allocation:true
 empyro config_bsp -d amc_bsp -st freertos freertos_tick_rate:1000
 empyro config_bsp -d amc_bsp -st freertos freertos_total_heap_size:131072
-chmod -R u+rwX amc_bsp
+chmod -R u+rw amc_bsp
 empyro build_bsp  -d amc_bsp
 cd ..
