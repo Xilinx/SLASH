@@ -21,8 +21,11 @@
 name: Linker unit testing
 
 on:
-  - push
-  - pull_request
+  push:
+    branches:
+    - main
+    - dev
+  pull_request:
 
 jobs:
   linker_unit_tests:
