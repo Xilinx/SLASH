@@ -292,17 +292,18 @@ static int slash_hotplug_handle_toggle_sbr(const char *bdf)
     /*
      * Post-SBR link training delay.  The PCIe spec requires at minimum
      * 100 ms for link training after SBR deassertion; real FPGA hardware
-     * can take longer.  300 ms matches the old driver and provides margin.
+     * can take longer.  1000 ms provides margin for link instability seen
+     * on repeated resets where 300 ms was insufficient.
      * Without this delay, config-space reads on root ports return 0xFFFF
      * because the link is not yet trained.
      *
      * Userspace adds its own ~5 s wait for full FPGA re-initialisation;
-     * this 300 ms covers the kernel-internal window between SBR
+     * this 1000 ms covers the kernel-internal window between SBR
      * deassertion and ioctl return.
      */
-    pr_info("slash_hotplug: toggle_sbr: waiting 300 ms for PCIe link training\n");
-    msleep(300);
-    pr_info("slash_hotplug: toggle_sbr: post-SBR settle complete (300 ms)\n");
+    pr_info("slash_hotplug: toggle_sbr: waiting 1000 ms for PCIe link training\n");
+    msleep(1000);
+    pr_info("slash_hotplug: toggle_sbr: post-SBR settle complete (1000 ms)\n");
 
 out_put:
     pci_dev_put(bridge);

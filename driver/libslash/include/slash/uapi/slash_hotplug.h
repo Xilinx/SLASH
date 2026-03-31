@@ -91,7 +91,7 @@ struct slash_hotplug_device_request {
  * bridge.  The kernel first attempts pci_bridge_secondary_bus_reset()
  * (which saves/restores bridge config space), falling back to a manual
  * PCI_BRIDGE_CONTROL register toggle if the kernel API is unavailable.
- * A 300 ms post-SBR link training delay is included before the ioctl
+ * A 1000 ms post-SBR link training delay is included before the ioctl
  * returns.  The caller should wait an additional ~5 s for full FPGA
  * re-initialisation before rescanning.
  */
