@@ -346,6 +346,7 @@ void Device::parseSystemMap() {
         std::optional<vrtd::Bar> barHandle = vrtdDevice->getBar(bar);
         for (auto& kernel : kernels) {
             kernel.second.setVrtdBar(barHandle);
+            kernel.second.setPlatform(platform);
         }
     }
     this->qdmaConnections = parser.getQdmaConnections();
