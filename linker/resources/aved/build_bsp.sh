@@ -145,20 +145,20 @@ empyro repo -st ${XILINX_VITIS}/data/embeddedsw
 empyro create_bsp -t empty_application -w amc_bsp -s ${SDT}/system-top.dts -p psv_cortexr5_0 -o freertos || {
     # Retry: Vitis installations with read-only files (444) cause copy2 to
     # preserve those permissions, blocking overwrites within create_bsp.
-    chmod -R u+rw amc_bsp 2>/dev/null
+    chmod -R u+rwX amc_bsp 2>/dev/null
     empyro create_bsp -t empty_application -w amc_bsp -s ${SDT}/system-top.dts -p psv_cortexr5_0 -o freertos
 }
 # Vitis installations with read-only source files (444) cause shutil.copy2 to
 # preserve those permissions in the BSP output. Each empyro command may copy
 # new files from the installation, so fix permissions after every step.
-chmod -R u+rw amc_bsp
+chmod -R u+rwX amc_bsp
 empyro config_bsp -d amc_bsp -al xilfpga
-chmod -R u+rw amc_bsp
+chmod -R u+rwX amc_bsp
 empyro config_bsp -d amc_bsp -al xilloader
-chmod -R u+rw amc_bsp
+chmod -R u+rwX amc_bsp
 empyro config_bsp -d amc_bsp -st freertos freertos_support_static_allocation:true
 empyro config_bsp -d amc_bsp -st freertos freertos_tick_rate:1000
 empyro config_bsp -d amc_bsp -st freertos freertos_total_heap_size:131072
-chmod -R u+rw amc_bsp
+chmod -R u+rwX amc_bsp
 empyro build_bsp  -d amc_bsp
 cd ..
