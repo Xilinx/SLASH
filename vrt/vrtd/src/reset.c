@@ -311,10 +311,10 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
 
     /*
      * Step 9: Wait for the FPGA to complete reconfiguration and re-train
-     * the PCIe link.  5 seconds is a conservative estimate that accounts for
+     * the PCIe link.  10 seconds is a conservative estimate that accounts for
      * bitstream loading time and link training, mentioned in a AVED sw comment.
      */
-    usleep(5000000);
+    usleep(10000000);
 
     /*
      * Step 10-12: Rescan the PCI bus and verify the device reappears.
@@ -344,14 +344,14 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
          * * The kernel needs to signal to userspace systemd-udev that the device node was created.
          * * systemd-udev needs to set permisions on the device node.
          *
-         * That all takes time, so we wait a generous 5 seconds for all of that to occur.
+         * That all takes time, so we wait a generous 10 seconds for all of that to occur.
          *
          * TODO: A much more robust method would be to remove all the code bellow this
          * and rework how devices are discovered. We could bring in libudev.
          * This would allow us to get netlink notifications on device events, such as new devices
          * appearing. Then we could attempt to open these devices only after the userspace has configured them.
          */
-        usleep(5000000);
+        usleep(10000000);
 
         ret = ami_dev_find(pf0_bdf, &ami_device);
         if (ret == AMI_STATUS_OK) {
