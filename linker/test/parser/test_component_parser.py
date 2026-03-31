@@ -215,6 +215,8 @@ class TestParseComponentXml:
 # ---------------------------------------------------------------------------
 
 FIXTURES_DIR = Path(__file__).parents[1] / "fixtures"
+
+
 def component_path_for_kernel(name: str) -> Path:
     return FIXTURES_DIR / name / "hls" / "impl" / "ip" / "component.xml"
 
@@ -314,7 +316,8 @@ class TestDmaInFixture:
         assert self.k.ports["s_axi_control"].width == 32
 
     def test_axi4full_port_present(self):
-        axi_full = [p for p in self.k.ports.values() if p.ptype == BusType.AXI4FULL]
+        axi_full = [p for p in self.k.ports.values() if p.ptype ==
+                    BusType.AXI4FULL]
         assert len(axi_full) >= 1
 
     def test_axis_port_present(self):
@@ -390,7 +393,8 @@ class TestDmaOutFixture:
         assert self.k.ports["s_axi_control"].width == 32
 
     def test_axi4full_port_present(self):
-        axi_full = [p for p in self.k.ports.values() if p.ptype == BusType.AXI4FULL]
+        axi_full = [p for p in self.k.ports.values() if p.ptype ==
+                    BusType.AXI4FULL]
         assert len(axi_full) >= 1
 
     def test_axis_port_present(self):

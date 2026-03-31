@@ -363,7 +363,8 @@ class TestParseConnectivityFile:
             [user_region]
             pre_synth=/absolute/path/to/setup.tcl
         """))
-        assert cfg.user_region.pre_synth_tcls == ["/absolute/path/to/setup.tcl"]
+        assert cfg.user_region.pre_synth_tcls == [
+            "/absolute/path/to/setup.tcl"]
 
     def test_user_region_empty_pre_synth_raises(self, cfg_file):
         with pytest.raises(ValueError, match="empty pre_synth"):
@@ -451,7 +452,8 @@ class TestApplyConfigToInstances:
         assert names == {"dma_0", "pt_0", "pt_1"}
 
     def test_unknown_kernel_type_raises(self):
-        cfg = ConnectivityConfig(nk=[NKSpec("nonexistent", 1, ["nonexistent_0"])])
+        cfg = ConnectivityConfig(
+            nk=[NKSpec("nonexistent", 1, ["nonexistent_0"])])
         with pytest.raises(KeyError, match="nonexistent"):
             apply_config_to_instances(cfg, [])
 
@@ -495,13 +497,15 @@ class TestApplyConfigToInstances:
         )
         instances = apply_config_to_instances(cfg, [k])
         inst = next(i for i in instances if i.name == "dma_0")
-        assert inst.params["mem_sp"]["m_axi_gmem"] == {"domain": "HBM", "index": 2}
+        assert inst.params["mem_sp"]["m_axi_gmem"] == {
+            "domain": "HBM", "index": 2}
 
     def test_sp_unknown_instance_raises(self):
         k = _make_kernel("dma", {"m_axi_gmem": (BusType.AXI4FULL, 512)})
         cfg = ConnectivityConfig(
             nk=[NKSpec("dma", 1, ["dma_0"])],
-            sps=[SpMapping("nonexistent", "m_axi_gmem", MemoryTarget("HBM", 0))],
+            sps=[SpMapping("nonexistent", "m_axi_gmem",
+                           MemoryTarget("HBM", 0))],
         )
         with pytest.raises(KeyError, match="nonexistent"):
             apply_config_to_instances(cfg, [k])
@@ -538,7 +542,8 @@ class TestApplyConfigToInstances:
         cfg = ConnectivityConfig(nk=[NKSpec("dma", 1, ["dma_0"])])
         instances = apply_config_to_instances(cfg, [k])
         inst = next(i for i in instances if i.name == "dma_0")
-        assert inst.params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert inst.params["mem_sp"]["m_axi_gmem"] == {
+            "domain": "MEM", "index": ""}
 
     def test_explicit_sp_not_overwritten_by_fallback(self):
         # Explicit sp for one port, fallback for the other — both coexist correctly.
@@ -552,8 +557,10 @@ class TestApplyConfigToInstances:
         )
         instances = apply_config_to_instances(cfg, [k])
         inst = next(i for i in instances if i.name == "dma_0")
-        assert inst.params["mem_sp"]["m_axi_gmem0"] == {"domain": "HBM", "index": 3}
-        assert inst.params["mem_sp"]["m_axi_gmem1"] == {"domain": "MEM", "index": ""}
+        assert inst.params["mem_sp"]["m_axi_gmem0"] == {
+            "domain": "HBM", "index": 3}
+        assert inst.params["mem_sp"]["m_axi_gmem1"] == {
+            "domain": "MEM", "index": ""}
 
     def test_no_axi4full_ports_mem_sp_empty(self):
         # Kernels with no AXI4FULL ports still get mem_sp={} (empty, not absent).

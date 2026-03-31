@@ -47,3 +47,6 @@ jobs:
 
       - name: Run unit tests
         run: cd linker && pytest
+
+      - name: Check formatting
+        run: cd linker && autopep9 -r --diff --exit-code src/ test/
