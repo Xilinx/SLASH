@@ -21,11 +21,12 @@
 """Tests for parser.component_parser — parse_component_xml and helpers."""
 
 import textwrap
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 
-from parser.component_parser import parse_component_xml
+from parser.component_parser import parse_component_xml, _int
 from core.port import BusType
 from emit.hls_meta import load_hls_metadata, parse_hls_args
 
@@ -51,6 +52,38 @@ _XML_HEADER = f"""\
   </spirit:busInterfaces>
 </spirit:component>
 """
+
+_AXILITE_SLAVE_NO_PROTOCOL = """\
+    <spirit:busInterface>
+      <spirit:name>s_axi_ctrl</spirit:name>
+      <spirit:busType spirit:vendor="xilinx.com" spirit:library="interface"
+                      spirit:name="aximm" spirit:version="1.0"/>
+      <spirit:slave/>
+      <spirit:parameters/>
+    </spirit:busInterface>"""
+
+_UNKNOWN_BUS_TYPE = """\
+    <spirit:busInterface>
+      <spirit:name>mystery_if</spirit:name>
+      <spirit:busType spirit:vendor="acme.com" spirit:library="proprietary"
+                      spirit:name="wizbus" spirit:version="1.0"/>
+      <spirit:parameters/>
+    </spirit:busInterface>"""
+
+_AXIS_NO_TDATA = """\
+    <spirit:busInterface>
+      <spirit:name>axis_stream</spirit:name>
+      <spirit:busType spirit:vendor="xilinx.com" spirit:library="interface"
+                      spirit:name="axis" spirit:version="1.0"/>
+      <spirit:parameters/>
+    </spirit:busInterface>"""
+
+_NAMELESS_BUSIF = """\
+    <spirit:busInterface>
+      <spirit:busType spirit:vendor="xilinx.com" spirit:library="interface"
+                      spirit:name="axis" spirit:version="1.0"/>
+      <spirit:parameters/>
+    </spirit:busInterface>"""
 
 _AXILITE_BUSIF = """\
     <spirit:busInterface>
@@ -139,6 +172,42 @@ class TestParseComponentXml:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(Exception):
             parse_component_xml(tmp_path / "missing.xml")
+
+    def test_int_invalid_string_returns_none(self):
+        # _int() must catch ValueError and return None when the element text
+        # cannot be parsed as an integer (e.g. a malformed XML value).
+        el = ET.fromstring("<n>not_a_number</n>")
+        assert _int(el) is None
+
+    def test_axilite_inferred_from_slave_without_protocol_param(self, component_xml):
+        # An aximm slave with no PROTOCOL parameter still resolves to AXILITE
+        # via the is_slave fallback branch, distinct from the PROTOCOL="AXI4LITE" path.
+        path = component_xml(bus_interfaces=_AXILITE_SLAVE_NO_PROTOCOL)
+        k = parse_component_xml(path)
+        assert "s_axi_ctrl" in k.ports
+        assert k.ports["s_axi_ctrl"].ptype == BusType.AXILITE
+
+    def test_unknown_bus_type_is_skipped(self, component_xml):
+        # An unrecognised vendor/library/name combination causes _to_port_type()
+        # to return None, and the interface is silently skipped.
+        path = component_xml(bus_interfaces=_UNKNOWN_BUS_TYPE)
+        k = parse_component_xml(path)
+        assert k.ports == {}
+
+    def test_axis_width_none_when_tdata_num_bytes_absent(self, component_xml):
+        # _axis_width_from_params() returns None when TDATA_NUM_BYTES is not
+        # present in the parameter map, so the port is created with width=None.
+        path = component_xml(bus_interfaces=_AXIS_NO_TDATA)
+        k = parse_component_xml(path)
+        assert "axis_stream" in k.ports
+        assert k.ports["axis_stream"].width is None
+
+    def test_nameless_bus_interface_is_skipped(self, component_xml):
+        # A bus interface with no <spirit:name> element is skipped entirely
+        # rather than being added under an empty key.
+        path = component_xml(bus_interfaces=_NAMELESS_BUSIF)
+        k = parse_component_xml(path)
+        assert k.ports == {}
 
 
 # ---------------------------------------------------------------------------
