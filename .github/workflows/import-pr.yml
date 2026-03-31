@@ -1,14 +1,14 @@
-name: Pull a PR's branch from a fork into the repository
+name: Import a PR branch into the repository
 on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: The pull request ID to pull
+        description: The pull request ID to import
         required: true
         type: int
   
 jobs:
-  Pull_Push_PR:
+  import_pr:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
