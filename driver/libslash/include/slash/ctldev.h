@@ -44,8 +44,10 @@
 
 #include "uapi/slash_interface.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #include <linux/dma-buf.h>
 
@@ -171,7 +173,12 @@ static __inline__ int slash_bar_file_sync(struct slash_bar_file *bar_file, unsig
         return 0;
     }
 
-    return ioctl(bar_file->fd, DMA_BUF_IOCTL_SYNC, &sync);
+    int ret = ioctl(bar_file->fd, DMA_BUF_IOCTL_SYNC, &sync);
+    if (ret == -1) {
+        fprintf(stderr, "slash_bar_file_sync: DMA_BUF_IOCTL_SYNC failed (flags=0x%x, fd=%d, errno=%d)\n",
+                flags, bar_file->fd, errno);
+    }
+    return ret;
 }
 
 /** Acquire write access to the BAR mapping. Equivalent to slash_bar_file_sync(bar_file, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE). */
