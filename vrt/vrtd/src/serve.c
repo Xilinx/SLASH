@@ -403,11 +403,32 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
     d->path = new_ctl_path;
     new_ctl_path = NULL; /* ownership transferred — prevent cleanup_free from freeing */
 
-    d->ctl = slash_ctldev_open(d->path);
+    /*
+     * After a hotplug rescan the kernel creates the device node immediately
+     * but udev sets ownership (vrtd:vrtd) asynchronously.  Opening the node
+     * before udev acts yields EACCES.  Retry with a short backoff to let udev
+     * catch up; any other error is fatal immediately.
+     */
+    #define CTL_OPEN_RETRIES    10
+    #define CTL_OPEN_RETRY_US   500000  /* 500 ms per attempt, 5 s total */
+    for (int attempt = 1; attempt <= CTL_OPEN_RETRIES; attempt++) {
+        d->ctl = slash_ctldev_open(d->path);
+        if (d->ctl != NULL)
+            break;
+        if (errno != EACCES) {
+            LOG(LOG_ERR, "device_refresh_pf2: failed to reopen ctl device %s: %m", d->path);
+            return VRTD_RET_INTERNAL_ERROR;
+        }
+        LOG(LOG_INFO, "device_refresh_pf2: waiting for udev to set permissions on %s "
+            "(attempt %d/%d)", d->path, attempt, CTL_OPEN_RETRIES);
+        usleep(CTL_OPEN_RETRY_US);
+    }
     if (d->ctl == NULL) {
-        LOG(LOG_ERR, "device_refresh_pf2: failed to reopen ctl device %s: %m", d->path);
+        LOG(LOG_ERR, "device_refresh_pf2: timed out waiting for permissions on %s: %m", d->path);
         return VRTD_RET_INTERNAL_ERROR;
     }
+    #undef CTL_OPEN_RETRIES
+    #undef CTL_OPEN_RETRY_US
 
     for (size_t i = 0; i < SIZEOF_ARRAY(d->bar_info); i++) {
         d->bar_info[i] = slash_bar_info_read(d->ctl, i);
