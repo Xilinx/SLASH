@@ -151,6 +151,62 @@ static int find_qdma_dev_path_by_bdf(const char *ctl_bdf, char **out_path)
 }
 
 /**
+ * Find the /dev/ path of a slash_ctl device by its full PCI BDF string.
+ *
+ * The slash_ctl misc device is registered by the kernel driver under a
+ * stable sysfs name derived from the full PCI BDF (including function number),
+ * e.g. /sys/class/misc/slash_ctl_0000:61:00.2.  The corresponding /dev/ node
+ * uses an incrementing counter (slash_ctlN) that changes after each hotplug
+ * remove+rescan cycle.  This function resolves the current /dev/ path by
+ * reading the DEVNAME entry from the stable sysfs uevent file.
+ *
+ * @param bdf       Full PCI BDF string including function (e.g. "0000:61:00.2").
+ * @param out_path  On success, receives a heap-allocated string with the /dev/
+ *                  path of the slash_ctl device.  Set to NULL if the device is
+ *                  not yet registered (which is not an error).  Caller must free.
+ * @return 0 on success (device found or not yet present), -1 on I/O or
+ *         allocation error.
+ */
+int find_slash_ctl_dev_path_by_bdf(const char *bdf, char **out_path)
+{
+    *out_path = NULL;
+
+    _cleanup_(cleanup_free)
+    char *uevent_path = NULL;
+    if (asprintf(&uevent_path, "/sys/class/misc/slash_ctl_%s/uevent", bdf) < 0) {
+        return -1;
+    }
+
+    FILE *f = fopen(uevent_path, "r");
+    if (f == NULL) {
+        /* Device not yet registered in sysfs — treat as no-match, not an error. */
+        return 0;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), f) != NULL) {
+        static const char devname_key[] = "DEVNAME=";
+        if (strncmp(line, devname_key, sizeof(devname_key) - 1) != 0) {
+            continue;
+        }
+        const char *devname = line + sizeof(devname_key) - 1;
+        size_t len = strlen(devname);
+        while (len > 0 && (devname[len - 1] == '\n' || devname[len - 1] == '\r')) {
+            len--;
+        }
+        if (asprintf(out_path, "/dev/%.*s", (int)len, devname) < 0) {
+            *out_path = NULL;
+            fclose(f);
+            return -1;
+        }
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return 0;
+}
+
+/**
  * Discover all SLASH control devices and open them.
  *
  * Enumerates device nodes by globbing /dev/slash_ctl* and opens each one

@@ -104,6 +104,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -265,7 +266,7 @@ static uint16_t client_handle_request_get_sensor_info(
     uint16_t *resp_size
 );
 
-static uint16_t device_refresh_pf2_after_design_write(const struct device *d);
+static uint16_t device_refresh_pf2_after_design_write(struct device *d);
 static void cleanup_client_buffers(struct client *client);
 
 /* ---- Helper: opcode / hotplug-op to human-readable string --------------- */
@@ -330,7 +331,7 @@ static const char *vrtd_hotplug_op_to_string(uint32_t op)
  * @param d  The device whose PF2 should be refreshed.
  * @return   VRTD_RET_OK on success, or an appropriate VRTD_RET_* error code.
  */
-static uint16_t device_refresh_pf2_after_design_write(const struct device *d)
+static uint16_t device_refresh_pf2_after_design_write(struct device *d)
 {
     char pf2_bdf[VRTD_PCI_BDF_LEN] = {0};
     if (pci_bdf_set_function(d->pci_info.bdf, 2, pf2_bdf) != 0) {
@@ -359,6 +360,64 @@ static uint16_t device_refresh_pf2_after_design_write(const struct device *d)
 
     if (slash_hotplug_close(hotplug) != 0) {
         return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    /*
+     * The BAR dma-buf fds in d->bar_files[] were opened against the pre-PDI
+     * PF2.  After partial reconfiguration the AXI fabric behind PF2's BAR
+     * has changed; clients that mmap the old fd will hit an unresponsive AXI
+     * slave and trigger a fatal PCIe completion timeout.  Close the stale
+     * fds and reopen them against the freshly-probed PF2 so that subsequent
+     * GET_BAR_FD requests return a valid mapping.
+     */
+    for (size_t i = 0; i < SIZEOF_ARRAY(d->bar_files); i++) {
+        if (d->bar_files[i] != NULL) {
+            (void) slash_bar_file_close(d->bar_files[i]);
+            d->bar_files[i] = NULL;
+        }
+        if (d->bar_info[i] != NULL) {
+            slash_bar_info_free(d->bar_info[i]);
+            d->bar_info[i] = NULL;
+        }
+    }
+
+    /*
+     * The /dev/slash_ctlN suffix is assigned by an incrementing kernel counter
+     * and changes after each hotplug remove+rescan.  d->path still holds the
+     * path from daemon startup (e.g. /dev/slash_ctl0); that node no longer
+     * exists.  Resolve the new path via the stable sysfs name
+     * /sys/class/misc/slash_ctl_<bdf>/uevent and update d->path in-place so
+     * that subsequent GET_BAR_FD and devices_discover_and_open deduplication
+     * both see the current path.
+     */
+    _cleanup_(cleanup_free) char *new_ctl_path = NULL;
+    if (find_slash_ctl_dev_path_by_bdf(pf2_bdf, &new_ctl_path) != 0 || new_ctl_path == NULL) {
+        LOG(LOG_ERR, "device_refresh_pf2: cannot find slash_ctl device for %s in sysfs", pf2_bdf);
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    LOG(LOG_INFO, "device_refresh_pf2: new slash_ctl path for %s is %s", pf2_bdf, new_ctl_path);
+
+    slash_ctldev_close(d->ctl);
+    free(d->path);
+    d->path = new_ctl_path;
+    new_ctl_path = NULL; /* ownership transferred — prevent cleanup_free from freeing */
+
+    d->ctl = slash_ctldev_open(d->path);
+    if (d->ctl == NULL) {
+        LOG(LOG_ERR, "device_refresh_pf2: failed to reopen ctl device %s: %m", d->path);
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    for (size_t i = 0; i < SIZEOF_ARRAY(d->bar_info); i++) {
+        d->bar_info[i] = slash_bar_info_read(d->ctl, i);
+        if (d->bar_info[i] != NULL && d->bar_info[i]->usable) {
+            d->bar_files[i] = slash_bar_file_open(d->ctl, i, O_CLOEXEC);
+            if (d->bar_files[i] == NULL) {
+                LOG(LOG_ERR, "device_refresh_pf2: failed to reopen bar_file %zu on %s: %m",
+                    i, d->path);
+            }
+        }
     }
 
     return VRTD_RET_OK;
@@ -1157,7 +1216,7 @@ static int client_finalize_pending_design_write(struct client *client)
     /* Build the deferred response now that the async write has finished. */
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
-       // design_write_ret = device_refresh_pf2_after_design_write(d);
+        design_write_ret = device_refresh_pf2_after_design_write(d);
         LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
             (unsigned int)client->uid, (unsigned long long)client->conn_id);
     } else {

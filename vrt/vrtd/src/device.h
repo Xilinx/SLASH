@@ -111,4 +111,19 @@ DECLARE_OWNING_PTR_ARRAY(device_ptr_array, struct device *, cleanup_device);
  */
 int devices_discover_and_open(struct device_ptr_array *devices);
 
+/**
+ * @brief Find the current /dev/slash_ctlN path for a PF2 device by its full BDF.
+ *
+ * The /dev node suffix is assigned by an incrementing kernel counter and changes
+ * after each hotplug remove+rescan cycle.  This function resolves the current
+ * path by reading the stable sysfs uevent file at
+ * /sys/class/misc/slash_ctl_<bdf>/uevent.
+ *
+ * @param bdf       Full PCI BDF including function number (e.g. "0000:61:00.2").
+ * @param out_path  On success, receives a heap-allocated /dev/ path string, or
+ *                  NULL if the device is not yet registered.  Caller must free.
+ * @return 0 on success (device found or absent), -1 on I/O or allocation error.
+ */
+int find_slash_ctl_dev_path_by_bdf(const char *bdf, char **out_path);
+
 #endif // VRTD_DEVICE_H
