@@ -641,6 +641,129 @@ static struct file_operations slash_qdma_fops = {
 };
 
 /* ─────────────────────────────────────────────────────────────────────
+ * BDF-to-device-number map (stable /dev/slash_qdma_ctlN across hotplug)
+ * ───────────────────────────────────────────────────────────────────── */
+
+/**
+ * struct slash_qdma_id_entry - Stable BDF-to-number mapping entry.
+ * @node:    Intrusive list linkage for @slash_qdma_id_map.
+ * @bdf:     Full PCI BDF string including function (e.g. "0000:61:00.1").
+ * @number:  The /dev/slash_qdma_ctl<N> suffix permanently assigned to this BDF.
+ * @in_use:  True while the device is bound to the driver.  Cleared on remove,
+ *           set on probe.  A probe that finds @in_use already true indicates
+ *           the kernel handed us a device that was never properly unbound —
+ *           this should never happen under normal operation.
+ *
+ * Entries are allocated in probe and intentionally never freed.  They survive
+ * hotplug remove+rescan cycles so that a device always gets back the same N.
+ */
+struct slash_qdma_id_entry {
+    struct list_head node;
+    char bdf[32]; /* "DDDD:BB:SS.F\0" fits comfortably in 32 bytes */
+    int  number;
+    bool in_use;
+};
+
+/** Persistent BDF-to-number map; entries live for the module's lifetime. */
+static LIST_HEAD(slash_qdma_id_map);
+/** Serialises all accesses to @slash_qdma_id_map and @in_use fields. */
+static DEFINE_MUTEX(slash_qdma_id_map_lock);
+/** Source of new numbers; only incremented when a BDF is seen for the first time. */
+static atomic_t slash_qdma_devcount = ATOMIC_INIT(0);
+
+/**
+ * slash_qdma_id_get() - Look up or allocate a stable number for a BDF.
+ * @bdf: Full PCI BDF string (e.g. "0000:61:00.1") from pci_name().
+ *
+ * Called from probe.  Returns the number permanently associated with @bdf,
+ * allocating a new one if this BDF is seen for the first time.  Also marks
+ * the entry as in_use = true.
+ *
+ * If an existing entry is found with in_use already set, the device was
+ * never properly unbound before probe was called again — this indicates a
+ * kernel PCI driver bug.  The function logs a loud error and returns
+ * -EBUSY so that probe aborts without touching the device.
+ *
+ * Return: non-negative stable device number on success, negative errno on
+ *         failure (-ENOMEM if allocation fails, -EBUSY if already in use).
+ */
+static int slash_qdma_id_get(const char *bdf)
+{
+    struct slash_qdma_id_entry *entry;
+    int number;
+
+    mutex_lock(&slash_qdma_id_map_lock);
+
+    list_for_each_entry(entry, &slash_qdma_id_map, node) {
+        if (strcmp(entry->bdf, bdf) != 0)
+            continue;
+
+        if (entry->in_use) {
+            pr_err("slash_qdma: BUG: probe called for %s but entry is already in_use "
+                   "(number=%d); refusing to bind\n", bdf, entry->number);
+            mutex_unlock(&slash_qdma_id_map_lock);
+            return -EBUSY;
+        }
+
+        entry->in_use = true;
+        number = entry->number;
+        mutex_unlock(&slash_qdma_id_map_lock);
+        pr_info("slash_qdma: reusing number %d for %s\n", number, bdf);
+        return number;
+    }
+
+    /* First time we've seen this BDF — allocate a fresh entry. */
+    entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+    if (!entry) {
+        mutex_unlock(&slash_qdma_id_map_lock);
+        return -ENOMEM;
+    }
+
+    strscpy(entry->bdf, bdf, sizeof(entry->bdf));
+    entry->number = atomic_inc_return(&slash_qdma_devcount) - 1;
+    entry->in_use = true;
+    list_add_tail(&entry->node, &slash_qdma_id_map);
+
+    number = entry->number;
+    mutex_unlock(&slash_qdma_id_map_lock);
+
+    pr_info("slash_qdma: assigned number %d to %s\n", number, bdf);
+    return number;
+}
+
+/**
+ * slash_qdma_id_release() - Mark a BDF's entry as no longer in use.
+ * @bdf: Full PCI BDF string passed to the matching slash_qdma_id_get() call.
+ *
+ * Called when the misc device is deregistered (remove path, or probe error
+ * unwind after misc_register succeeds).  Clears in_use so that the next probe
+ * for the same BDF can reuse the stored number.  The entry itself is not freed.
+ *
+ * If no entry exists for @bdf (should never happen after a successful probe),
+ * the call is a no-op and a warning is logged.
+ */
+static void slash_qdma_id_release(const char *bdf)
+{
+    struct slash_qdma_id_entry *entry;
+
+    mutex_lock(&slash_qdma_id_map_lock);
+
+    list_for_each_entry(entry, &slash_qdma_id_map, node) {
+        if (strcmp(entry->bdf, bdf) != 0)
+            continue;
+
+        entry->in_use = false;
+        mutex_unlock(&slash_qdma_id_map_lock);
+        pr_info("slash_qdma: released number %d for %s\n", entry->number, bdf);
+        return;
+    }
+
+    /* Should be unreachable: release without a prior successful id_get. */
+    pr_warn("slash_qdma: WARNING: release called for %s but no entry found\n", bdf);
+    mutex_unlock(&slash_qdma_id_map_lock);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * Module init / exit
  * ───────────────────────────────────────────────────────────────────── */
 
@@ -773,6 +896,11 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
     err = misc_register(&device->misc);
     if (err) {
         dev_err(&pdev->dev, "slash: qdma: could not register misc device: %d", err);
+        /*
+         * is_misc_registered is still false here, so slash_qdma_destroy_qdma_device
+         * will not call misc_deregister or id_release.  Release the id explicitly.
+         */
+        slash_qdma_id_release(pci_name(pdev));
         goto err_free;
     }
     device->is_misc_registered = true;
@@ -825,7 +953,6 @@ static int slash_qdma_create_qdma_device(struct pci_dev *pdev, struct slash_qdma
 {
     int err;
     struct slash_qdma_dev *device;
-    static atomic_t devcount = ATOMIC_INIT(0);
     int id;
 
     device = kzalloc(sizeof(*device), GFP_KERNEL);
@@ -853,19 +980,31 @@ static int slash_qdma_create_qdma_device(struct pci_dev *pdev, struct slash_qdma
             goto err_free;
         }
 
-        /* /dev node name: slash_qdma_ctl0, slash_qdma_ctl1, ... */
-        id = atomic_inc_return(&devcount) - 1;
+        /* /dev node name: stable numeric index from BDF-to-number map. */
+        id = slash_qdma_id_get(pci_name(device->pdev));
+        if (id < 0) {
+            dev_err(&device->pdev->dev, "qdma: id_get failed: %d\n", id);
+            err = id;
+            goto err_free_name;
+        }
+
         device->misc.nodename = kasprintf(GFP_KERNEL, SLASH_QDMA_CTLDEV_NODENAME_FMT, id);
         if (!device->misc.nodename) {
             dev_err(&device->pdev->dev, "qdma: kasprintf(nodename) failed\n");
-
             err = -ENOMEM;
-            goto err_free;
+            goto err_release_id;
         }
     }
 
     *pdevice = device;
     return 0;
+
+err_release_id:
+    slash_qdma_id_release(pci_name(device->pdev));
+
+err_free_name:
+    kfree(device->misc.name);
+    device->misc.name = NULL;
 
 err_free:
     slash_qdma_destroy_qdma_device(device);
@@ -915,6 +1054,7 @@ static void slash_qdma_destroy_qdma_device(struct slash_qdma_dev *device)
     /* Deregister miscdevice to prevent new file opens. */
     if (device->is_misc_registered) {
         misc_deregister(&device->misc);
+        slash_qdma_id_release(pci_name(device->pdev));
         device->is_misc_registered = false;
     }
 
