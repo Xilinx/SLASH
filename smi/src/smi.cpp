@@ -23,13 +23,15 @@
 /// Entry point for the SMI (System Management Interface) CLI tool.
 ///
 /// Parses command-line arguments using CLI11 and dispatches to the
-/// appropriate command handler (version, inspect, query, list, program).
+/// appropriate command handler (version, inspect, query, list, program,
+/// reset, validate, debug).
 
 #include <iostream>
 #include <string_view>
 
 #include <CLI/CLI.hpp>
 
+#include "debug.hpp"
 #include "inspect.hpp"
 #include "list.hpp"
 #include "program.hpp"
@@ -108,6 +110,26 @@ static int smiMain(int argc, char **argv) {
     validateCommand->add_option("-j,--threads", validateOptions.threads,
         "Number of parallel buffers/threads (1-64)")->default_val(8)->check(CLI::Range(1u, 64u));
 
+    // -- debug (low-level debug utilities) --
+    auto* debugCommand = app.add_subcommand("debug", "Low-level debug utilities");
+    debugCommand->require_subcommand(1, 1);
+
+    auto* barPokeCommand = debugCommand->add_subcommand("bar-poke", "Read or write BAR words");
+    Debug::Options debugOptions;
+    barPokeCommand->add_option("-d,--device", debugOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    barPokeCommand->add_option("-b,--bar", debugOptions.bar, "BAR number (0-5)")->required()->check(CLI::Range(0u, 5u));
+    barPokeCommand->add_flag("-r,--read", debugOptions.readMode, "Read words from BAR");
+    barPokeCommand->add_flag("-w,--write", debugOptions.writeMode, "Write one word to BAR");
+    barPokeCommand->add_flag("-x,--hex", debugOptions.hexMode, "Print read output in hexadecimal");
+    barPokeCommand->add_option("-W,--word-size", debugOptions.wordSize, "Word size in bytes (1, 2, 4, 8)")
+        ->default_val(4)->check(CLI::IsMember({1u, 2u, 4u, 8u}));
+    barPokeCommand->add_option("-c,--count", debugOptions.count, "Number of words to read (must be 1 for write)")
+        ->default_val(1);
+    barPokeCommand->add_option("address", debugOptions.addressText,
+        "BAR-relative address (0x... for hex, decimal otherwise)")->required();
+    barPokeCommand->add_option("value", debugOptions.valueText,
+        "Value for --write (0x... for hex, decimal otherwise)");
+
     CLI11_PARSE(app, argc, argv);
 
     // Route commands
@@ -125,6 +147,8 @@ static int smiMain(int argc, char **argv) {
         return Reset::run(resetOptions);
     } else if (validateCommand->parsed()) {
         return Validate::run(validateOptions);
+    } else if (barPokeCommand->parsed()) {
+        return Debug::run(debugOptions);
     } else {
         // No subcommand given - print help and exit with error.
         std::cerr << app.help() << std::endl;

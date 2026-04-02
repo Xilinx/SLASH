@@ -13,6 +13,7 @@ hardware, and validate memory integrity and bandwidth.
 | `program`  | Load a vbin file onto a V80 device                |
 | `reset`    | Hardware-reset a V80 board                        |
 | `validate` | Reset board and test memory integrity + bandwidth |
+| `debug`    | Low-level BAR read/write debug utilities          |
 
 ## Building
 
@@ -214,6 +215,47 @@ Testing DDR bandwidth (8 threads)...
 
 Requires root access and a running VRTD daemon.
 
+### debug bar-poke
+
+Perform low-level BAR reads or writes for troubleshooting.
+
+```
+v80-smi debug bar-poke -d <BDF> -b <bar> (-r | -w) [-x] [-W <size>] [-c <count>] <address> [value]
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `-b,--bar`        | BAR number (required), range `0-5`                   |
+| `-r,--read`       | Read operation (required unless `--write`)           |
+| `-w,--write`      | Write operation (required unless `--read`)           |
+| `-x,--hex`        | Print read output in hex                               |
+| `-W,--word-size`  | Word size in bytes: `1`, `2`, `4`, or `8` (default `4`) |
+| `-c,--count`      | Number of words to read (default `1`; must be `1` for write) |
+
+Rules:
+
+- Exactly one of `--read` or `--write` must be provided.
+- `<address>` is a BAR-relative byte offset.
+- `<value>` is required for `--write` and forbidden for `--read`.
+- Input numbers are auto-detected: `0x...` is parsed as hex; otherwise values are parsed as base-10.
+- `--hex` affects output formatting only.
+
+Examples:
+
+```console
+$ v80-smi debug bar-poke -d 03:00 -b 4 --read 65536
+0
+
+$ v80-smi debug bar-poke -d 03:00 -b 4 --read --hex -W 4 -c 4 0x10000
+0x0
+0x1
+0x2
+0x3
+
+$ v80-smi debug bar-poke -d 03:00 -b 4 --write --hex -W 4 0x10000 0x1
+```
+
 ## Device addressing
 
 All commands that accept a `-d,--device` option support four BDF
@@ -248,6 +290,7 @@ smi/
     program.cpp/hpp   Device programming
     reset.cpp/hpp     Hardware reset via VRTD
     validate.cpp/hpp  Memory integrity and bandwidth testing
+    debug.cpp/hpp     BAR read/write debug utilities
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
 ```

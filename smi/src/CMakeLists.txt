@@ -21,6 +21,7 @@
 add_executable(
     v80-smi
     
+    debug.cpp
     inspect.cpp
     list.cpp
     program.cpp
