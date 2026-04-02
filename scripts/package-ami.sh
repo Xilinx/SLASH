@@ -22,6 +22,10 @@
 
 set -euxo pipefail
 
+# Ensure directories created during packaging have standard permissions.
+# dpkg-deb requires the control directory to be >=0755 and <=0775.
+umask 0022
+
 # SLASH root
 cd "$(dirname "$0")/.."
 
