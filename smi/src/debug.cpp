@@ -119,11 +119,21 @@ void validateRangeAndAlignment(uint64_t address,
     }
 }
 
-void printValue(uint64_t value, bool hexMode) {
+template<typename T>
+void printValue(T value, bool hexMode) {
     if (hexMode) {
-        std::cout << "0x" << std::hex << std::nouppercase << value << std::dec << '\n';
+        const std::ios_base::fmtflags flags = std::cout.flags();
+        const char fill = std::cout.fill();
+        std::cout << "0x"
+                  << std::hex << std::nouppercase
+                  << std::setw(static_cast<int>(sizeof(T) * 2))
+                  << std::setfill('0')
+                  << static_cast<uint64_t>(value)
+                  << '\n';
+        std::cout.flags(flags);
+        std::cout.fill(fill);
     } else {
-        std::cout << value << '\n';
+        std::cout << static_cast<uint64_t>(value) << '\n';
     }
 }
 
@@ -135,7 +145,7 @@ void runRead(vrtd::BarFile& barFile,
     auto ptr = barFile.getPtr<T>(vrtd::BarFile::Direction::Read,
                                  static_cast<size_t>(address));
     for (uint64_t i = 0; i < count; ++i) {
-        printValue(static_cast<uint64_t>(ptr[i]), hexMode);
+        printValue(ptr[i], hexMode);
     }
 }
 
