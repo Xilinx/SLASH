@@ -246,42 +246,6 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
         if (program && !kernels.empty()) {
             sleep(1); // wait for device to be ready after programming before accessing BAR
 
-            // After a partial PDI write the FPGA fabric needs additional time to finish
-            // partial reconfiguration. The DMA write completing does not mean the PR region
-            // is ready — the AXI decoupler isolates the kernel during reconfiguration, so
-            // reads return 0x0 (decoupled) or 0xffffffff (PCIe unresponsive). Neither is a
-            // false-positive for "ready". Wait for ap_idle (bit 2 of the AXI4-Lite AP
-            // control register at offset 0x0) which is only set once the kernel has fully
-            // initialized after partial reconfiguration completes.
-            constexpr uint32_t kApIdle = 0x4u;
-            constexpr int kPollIntervalMs = 10;
-            constexpr int kTimeoutMs = 10000;
-            int elapsed = 0;
-            auto& anyKernel = kernels.begin()->second;
-            uint32_t val;
-            while (true) {
-                val = anyKernel.read(0x0);
-                if (val == 0x4) {
-                // if (val != 0xffffffffu && (val & kApIdle) != 0u) {
-                    break;
-                } else {
-                    utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
-                                        "Kernel not ready after PDI write: AP control reads {}", val);
-                }
-                if (elapsed >= kTimeoutMs) {
-                    throw std::runtime_error(
-                        "Kernel did not reach ap_idle within " +
-                        std::to_string(kTimeoutMs) +
-                        " ms after partial reconfiguration (last ap_ctrl=0x" +
-                        std::to_string(val) + ")");
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(kPollIntervalMs));
-                elapsed += kPollIntervalMs;
-            }
-            if (elapsed > 0) {
-                utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
-                                   "Kernel reached ap_idle {} ms after PDI write", elapsed);
-            }
         }
         if (vrtdDevice.has_value()) {
             if (clockFreq > CLOCK_MAX_FREQ) {
