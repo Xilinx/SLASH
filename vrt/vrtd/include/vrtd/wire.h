@@ -106,6 +106,9 @@ enum vrtd_opcode {
 
     /** Query sensor information for a device via AMI. */
     VRTD_REQ_GET_SENSOR_INFO,
+
+    /** Open a raw buffer (QDMA qpair at caller-specified device address, bypassing allocator). */
+    VRTD_REQ_BUFFER_OPEN_RAW,
 };
 
 /**
@@ -316,6 +319,26 @@ struct vrtd_req_buffer_close {
 
 struct vrtd_resp_buffer_close {
     uint8_t zero; ///< Placeholder to avoid empty-struct ABI issues.
+} __attribute__((packed));
+
+/**
+ * @brief Request a raw buffer (QDMA qpair at caller-specified device address).
+ *
+ * Bypasses the allocator entirely — the caller is responsible for ensuring the
+ * address is valid and not in use.  Requires the @c raw-mem-access permission.
+ *
+ * The qpair FD is sent out-of-band via SCM_RIGHTS when
+ * @ref vrtd_resp_header::ret == VRTD_RET_OK.
+ */
+struct vrtd_req_buffer_open_raw {
+    uint32_t dev_number; ///< Device index (0-based).
+    uint32_t alloc_dir;  ///< One of enum vrtd_alloc_dir.
+    uint64_t phys_addr;  ///< Caller-specified device physical address (bypasses allocator).
+    uint64_t size;       ///< Size in bytes.
+} __attribute__((packed));
+
+struct vrtd_resp_buffer_open_raw {
+    uint8_t zero; ///< Placeholder; all data is carried via SCM_RIGHTS.
 } __attribute__((packed));
 
 /**

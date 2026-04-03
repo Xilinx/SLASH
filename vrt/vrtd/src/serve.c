@@ -1089,6 +1089,18 @@ static int client_handle_request(struct client *client)
                 &client->have_out_fd
             );
         break;
+    case VRTD_REQ_BUFFER_OPEN_RAW:
+        resp_header->ret =
+            client_handle_request_buffer_open_raw(
+                client,
+                CLIENT_IN_BODY(*client, vrtd_req_buffer_open_raw),
+                req_header->size,
+                CLIENT_OUT_BODY(*client, vrtd_resp_buffer_open_raw),
+                &size,
+                &client->out_fd,
+                &client->have_out_fd
+            );
+        break;
     case VRTD_REQ_BUFFER_CLOSE:
         resp_header->ret =
             client_handle_request_buffer_close(
@@ -2011,6 +2023,115 @@ static uint16_t client_handle_request_buffer_open(
 
     LOG(LOG_INFO, "Buffer opened size=%llu phys_addr=0x%llx dev=%u uid=%u conn_id=%llu",
         (unsigned long long)real_size, (unsigned long long)phys_addr,
+        (unsigned int)req_body->dev_number,
+        (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+    return VRTD_RET_OK;
+}
+
+/* ---- BUFFER_OPEN_RAW ---------------------------------------------------- */
+
+/**
+ * Handles VRTD_REQ_BUFFER_OPEN_RAW -- creates a QDMA qpair at a caller-specified
+ * device address, bypassing the allocator entirely.
+ *
+ * The caller is responsible for ensuring the address is valid and not in use.
+ * Requires the raw-mem-access permission.  The qpair fd is returned to the client
+ * via SCM_RIGHTS.  The buffer is tracked in the device's buffer list so the qpair
+ * is torn down automatically if the client disconnects.
+ *
+ * Auth: auth_request_buffer_open_raw.
+ * FD passing: outbound -- the qpair fd is sent via SCM_RIGHTS.
+ *
+ * Wire format:
+ *   Request body:  vrtd_req_buffer_open_raw { uint32_t dev_number,
+ *                                             uint32_t alloc_dir,
+ *                                             uint64_t phys_addr,
+ *                                             uint64_t size }
+ *   Response body: vrtd_resp_buffer_open_raw { uint8_t zero }
+ *                  + SCM_RIGHTS fd
+ *
+ * @return VRTD_RET_OK on success, error code otherwise.
+ */
+static uint16_t client_handle_request_buffer_open_raw(
+    struct client *client,
+    const struct vrtd_req_buffer_open_raw *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_buffer_open_raw *resp_body,
+    uint16_t *resp_size,
+    int *out_fd,
+    bool *have_out_fd
+)
+{
+    int ret = auth_request_buffer_open_raw(client, req_body);
+    if (ret == -1) {
+        char pwbuf[1024];
+        LOG(LOG_WARNING, "Failed to authorize raw buffer open request for uid %u(%s): %m",
+            (unsigned int) client->uid, uid_to_username(client->uid, pwbuf, sizeof(pwbuf)));
+        return VRTD_RET_INTERNAL_ERROR;
+    } else if (ret == 0) {
+        return VRTD_RET_AUTH_ERROR;
+    }
+
+    *resp_size = 0;
+    *have_out_fd = false;
+
+    if (req_size < sizeof(*req_body)) {
+        LOG(LOG_WARNING, "Received malformed raw buffer open request");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    if (req_body->dev_number >= client->state->devices.len) {
+        LOG(LOG_WARNING, "Received raw buffer open request for non-existent device");
+        return VRTD_RET_NOEXIST;
+    }
+
+    if (req_body->size == 0) {
+        LOG(LOG_WARNING, "Received raw buffer open request with zero size");
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
+    struct device *d = client->state->devices.d[req_body->dev_number];
+    if (d == NULL || d->qdma == NULL) {
+        LOG(LOG_WARNING, "Received raw buffer open request for non-existent or non-functional device");
+        return VRTD_RET_NOEXIST;
+    }
+
+    _cleanup_(cleanup_bufferp)
+    struct buffer *buf = buffer_create_raw(
+        d->qdma,
+        req_body->phys_addr,
+        req_body->size,
+        (enum vrtd_alloc_dir) req_body->alloc_dir
+    );
+    if (buf == NULL) {
+        if (errno == EINVAL) {
+            LOG(LOG_WARNING, "buffer_open_raw: invalid arguments for device %u", (unsigned int)req_body->dev_number);
+            return VRTD_RET_INVALID_ARGUMENT;
+        }
+        LOG(LOG_ERR, "Failed to create raw buffer: %m");
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    if (buf->fd < 0) {
+        LOG(LOG_ERR, "Raw buffer created without valid fd");
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    int fd = buf->fd;
+
+    if (buffer_ptr_array_push_move(&d->buffers, &buf) != 0) {
+        LOG(LOG_ERR, "Failed to add raw buffer to device buffer list");
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    resp_body->zero = 0;
+    *out_fd = fd;
+    *have_out_fd = true;
+    *resp_size = sizeof(*resp_body);
+
+    LOG(LOG_WARNING, "Raw buffer opened phys_addr=0x%llx size=%llu dev=%u uid=%u conn_id=%llu",
+        (unsigned long long)req_body->phys_addr, (unsigned long long)req_body->size,
         (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 

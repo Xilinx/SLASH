@@ -23,6 +23,7 @@ add_executable(
     
     debug/bar_poke.cpp
     debug/clockwiz.cpp
+    debug/mem_poke.cpp
     inspect.cpp
     list.cpp
     program.cpp

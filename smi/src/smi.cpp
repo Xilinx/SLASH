@@ -33,6 +33,7 @@
 
 #include "debug/bar_poke.hpp"
 #include "debug/clockwiz.hpp"
+#include "debug/mem_poke.hpp"
 #include "inspect.hpp"
 #include "list.hpp"
 #include "program.hpp"
@@ -140,6 +141,25 @@ static int smiMain(int argc, char **argv) {
         ->default_val("user");
     clockwizCommand->add_flag("-x,--hex", clockwizOptions.hexMode, "Print --get output in hexadecimal");
 
+    auto* memPokeCommand = debugCommand->add_subcommand("mem-poke", "Read or write device memory at a raw physical address (bypasses allocator; requires raw-mem-access permission)");
+    MemPoke::Options memPokeOptions;
+    memPokeCommand->add_option("-d,--device", memPokeOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    memPokeCommand->add_flag("-r,--read", memPokeOptions.readMode, "Read words from device memory");
+    memPokeCommand->add_flag("-w,--write", memPokeOptions.writeMode, "Write one word to device memory");
+    memPokeCommand->add_flag("-x,--hex", memPokeOptions.hexMode, "Print read output in hexadecimal");
+    memPokeCommand->add_option("-W,--word-size", memPokeOptions.wordSize, "Word size in bytes (1, 2, 4, 8)")
+        ->default_val(4)->check(CLI::IsMember({1u, 2u, 4u, 8u}));
+    memPokeCommand->add_option("-c,--count", memPokeOptions.count, "Number of words to read (must be 1 for write)")
+        ->default_val(1);
+    memPokeCommand->add_option("address", memPokeOptions.addressText,
+        "Device physical address (0x... for hex, decimal otherwise)")->required();
+    memPokeCommand->add_option("value", memPokeOptions.valueText,
+        "Value for --write (0x... for hex, decimal otherwise)");
+    memPokeCommand->add_option("-f,--file", memPokeOptions.filePath,
+        "File path: source for --write, destination for --read. "
+        "With -x: hexdump format (no 0x prefix); without -x: raw binary. "
+        "In file mode -W and -c determine the byte count (-W * -c), not word alignment.");
+
     CLI11_PARSE(app, argc, argv);
 
     // Route commands
@@ -161,6 +181,8 @@ static int smiMain(int argc, char **argv) {
         return BarPoke::run(barPokeOptions);
     } else if (clockwizCommand->parsed()) {
         return Clockwiz::run(clockwizOptions);
+    } else if (memPokeCommand->parsed()) {
+        return MemPoke::run(memPokeOptions);
     } else {
         // No subcommand given - print help and exit with error.
         std::cerr << app.help() << std::endl;

@@ -69,6 +69,8 @@ struct device_policy {
     bool clock;
     /** @brief If true, the client may perform PCIe hotplug operations on this device. */
     bool pcie_hotplug;
+    /** @brief If true, the client may open raw DMA buffers at caller-specified device addresses (bypasses allocator). */
+    bool raw_mem_access;
 };
 
 /**

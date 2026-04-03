@@ -338,7 +338,8 @@ int role_merge_add_role(struct role *dst, const struct role *src)
         dst_dp->buffer       = dst_dp->buffer       || src_dp->buffer;
         dst_dp->design_write = dst_dp->design_write || src_dp->design_write;
         dst_dp->clock        = dst_dp->clock        || src_dp->clock;
-        dst_dp->pcie_hotplug = dst_dp->pcie_hotplug || src_dp->pcie_hotplug;
+        dst_dp->pcie_hotplug    = dst_dp->pcie_hotplug    || src_dp->pcie_hotplug;
+        dst_dp->raw_mem_access  = dst_dp->raw_mem_access  || src_dp->raw_mem_access;
     }
 
     return 0;
@@ -1013,6 +1014,7 @@ static int role_device_find_and_add_value(
  *   - "design-write":  "yes" | "no" -- controls FPGA bitstream programming.
  *   - "clock":         "yes" | "no" -- controls clock get/set operations.
  *   - "pcie-hotplug":  "yes" | "no" -- controls per-device hotplug operations.
+ *   - "raw-mem-access": "yes" | "no" -- controls raw DMA buffer open (bypasses allocator).
  *
  * @param dp     The device_policy to modify.
  * @param name   Key name.
@@ -1082,6 +1084,17 @@ static int device_policy_add_value(struct device_policy *dp, const char *name, c
             return 0;
         } else {
             LOG(LOG_ERR, "Invalid value for device pcie-hotplug: '%s'", value);
+            return -1;
+        }
+    } else if (strcmp(name, "raw-mem-access") == 0) {
+        if (strcmp(value, "yes") == 0) {
+            dp->raw_mem_access = true;
+            return 0;
+        } else if (strcmp(value, "no") == 0) {
+            dp->raw_mem_access = false;
+            return 0;
+        } else {
+            LOG(LOG_ERR, "Invalid value for device raw-mem-access: '%s'", value);
             return -1;
         }
     } else {
