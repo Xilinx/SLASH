@@ -18,27 +18,24 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-/// @file debug.hpp
-/// @brief Declaration of the Debug command family.
-///
-/// The Debug command currently provides BAR-level read/write operations
-/// for low-level troubleshooting.
+/// @file debug/bar_poke.hpp
+/// @brief Declaration of the BarPoke debug command.
 
-#ifndef SMI_DEBUG_HPP
-#define SMI_DEBUG_HPP
+#ifndef SMI_DEBUG_BAR_POKE_HPP
+#define SMI_DEBUG_BAR_POKE_HPP
 
 #include <cstdint>
 #include <optional>
 #include <string>
 
-/// @brief Static entry-point for debug commands.
+/// @brief Static entry-point for the debug bar-poke command.
 ///
 /// This class is not instantiable; it groups the command options and
 /// its run() entry-point.
-class Debug {
-    Debug() = delete;
+class BarPoke {
+    BarPoke() = delete;
 public:
-    /// @brief Options parsed from the CLI for debug bar-poke.
+    /// @brief Options parsed from the CLI for the bar-poke command.
     struct Options {
         std::string bdf;                        ///< Target board address.
         unsigned bar{};                         ///< BAR number (0-5).
@@ -51,10 +48,10 @@ public:
         std::optional<std::string> valueText;   ///< Optional raw value argument from CLI.
     };
 
-    /// @brief Executes the debug bar-poke command.
+    /// @brief Executes the bar-poke command.
     /// @param options Populated options struct.
     /// @return Exit code (0 on success).
     static int run(const Options& options);
 };
 
-#endif // SMI_DEBUG_HPP
+#endif // SMI_DEBUG_BAR_POKE_HPP

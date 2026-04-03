@@ -13,7 +13,7 @@ hardware, and validate memory integrity and bandwidth.
 | `program`  | Load a vbin file onto a V80 device                |
 | `reset`    | Hardware-reset a V80 board                        |
 | `validate` | Reset board and test memory integrity + bandwidth |
-| `debug`    | Low-level BAR read/write debug utilities          |
+| `debug`    | Low-level BAR and clock debug utilities            |
 
 ## Building
 
@@ -256,6 +256,45 @@ $ v80-smi debug bar-poke -d 03:00 -b 4 --read --hex -W 4 -c 4 0x10000
 $ v80-smi debug bar-poke -d 03:00 -b 4 --write --hex -W 4 0x10000 0x1
 ```
 
+### debug clockwiz
+
+Read or set clock rates through the vrtd clock-op API.
+
+```
+v80-smi debug clockwiz -d <BDF> (--get | --set <rate_hz>) [--region <region>] [-x]
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `--get`           | Read current clock rate for selected region          |
+| `--set`           | Set requested clock rate in Hz for selected region   |
+| `--region`        | Clock region: `user` or `service` (default `user`)   |
+| `-x,--hex`        | Print `--get` output in hex                          |
+
+Rules:
+
+- Exactly one of `--get` or `--set` must be provided.
+- `--set` value is in Hz and must be greater than zero.
+- `--hex` is valid only with `--get`.
+- `--set` prints both requested and achieved frequencies.
+
+Examples:
+
+```console
+$ v80-smi debug clockwiz -d 03:00 --get
+300000000
+
+$ v80-smi debug clockwiz -d 03:00 --get --region service --hex
+0x11e1a300
+
+$ v80-smi debug clockwiz -d 03:00 --set 300000000 --region user
+requested_hz=300000000
+achieved_hz=300000000
+```
+
+Requires a running VRTD daemon and clock permission in the user's role.
+
 ## Device addressing
 
 All commands that accept a `-d,--device` option support four BDF
@@ -290,7 +329,7 @@ smi/
     program.cpp/hpp   Device programming
     reset.cpp/hpp     Hardware reset via VRTD
     validate.cpp/hpp  Memory integrity and bandwidth testing
-    debug.cpp/hpp     BAR read/write debug utilities
+    debug.cpp/hpp     BAR poke and clockwiz debug utilities
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
 ```

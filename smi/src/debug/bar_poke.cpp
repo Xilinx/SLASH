@@ -18,10 +18,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-/// @file debug.cpp
-/// @brief Implementation of debug BAR read/write operations.
+/// @file debug/bar_poke.cpp
+/// @brief Implementation of the debug BAR read/write command.
 
-#include "debug.hpp"
+#include "bar_poke.hpp"
 
 #include <charconv>
 #include <cstdint>
@@ -33,7 +33,7 @@
 
 #include <vrtd/session.hpp>
 
-#include "bdf.hpp"
+#include "../bdf.hpp"
 
 namespace {
 
@@ -70,7 +70,7 @@ uint64_t parseUnsigned(const std::string_view text,
     return value;
 }
 
-void validateOptions(const Debug::Options& options) {
+void validateOptions(const BarPoke::Options& options) {
     if (options.readMode == options.writeMode) {
         throw std::invalid_argument("Exactly one of --read or --write must be specified");
     }
@@ -158,7 +158,7 @@ void runWrite(vrtd::BarFile& barFile,
     *ptr = static_cast<T>(value);
 }
 
-void executeByWordSize(const Debug::Options& options,
+void executeByWordSize(const BarPoke::Options& options,
                        vrtd::BarFile& barFile,
                        uint64_t address,
                        uint64_t count,
@@ -208,7 +208,7 @@ void executeByWordSize(const Debug::Options& options,
 
 } // namespace
 
-int Debug::run(const Options& options) {
+int BarPoke::run(const Options& options) {
     validateOptions(options);
 
     const uint64_t address = parseUnsigned(options.addressText, "address");

@@ -31,7 +31,8 @@
 
 #include <CLI/CLI.hpp>
 
-#include "debug.hpp"
+#include "debug/bar_poke.hpp"
+#include "debug/clockwiz.hpp"
 #include "inspect.hpp"
 #include "list.hpp"
 #include "program.hpp"
@@ -115,20 +116,29 @@ static int smiMain(int argc, char **argv) {
     debugCommand->require_subcommand(1, 1);
 
     auto* barPokeCommand = debugCommand->add_subcommand("bar-poke", "Read or write BAR words");
-    Debug::Options debugOptions;
-    barPokeCommand->add_option("-d,--device", debugOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
-    barPokeCommand->add_option("-b,--bar", debugOptions.bar, "BAR number (0-5)")->required()->check(CLI::Range(0u, 5u));
-    barPokeCommand->add_flag("-r,--read", debugOptions.readMode, "Read words from BAR");
-    barPokeCommand->add_flag("-w,--write", debugOptions.writeMode, "Write one word to BAR");
-    barPokeCommand->add_flag("-x,--hex", debugOptions.hexMode, "Print read output in hexadecimal");
-    barPokeCommand->add_option("-W,--word-size", debugOptions.wordSize, "Word size in bytes (1, 2, 4, 8)")
+    BarPoke::Options barPokeOptions;
+    barPokeCommand->add_option("-d,--device", barPokeOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    barPokeCommand->add_option("-b,--bar", barPokeOptions.bar, "BAR number (0-5)")->required()->check(CLI::Range(0u, 5u));
+    barPokeCommand->add_flag("-r,--read", barPokeOptions.readMode, "Read words from BAR");
+    barPokeCommand->add_flag("-w,--write", barPokeOptions.writeMode, "Write one word to BAR");
+    barPokeCommand->add_flag("-x,--hex", barPokeOptions.hexMode, "Print read output in hexadecimal");
+    barPokeCommand->add_option("-W,--word-size", barPokeOptions.wordSize, "Word size in bytes (1, 2, 4, 8)")
         ->default_val(4)->check(CLI::IsMember({1u, 2u, 4u, 8u}));
-    barPokeCommand->add_option("-c,--count", debugOptions.count, "Number of words to read (must be 1 for write)")
+    barPokeCommand->add_option("-c,--count", barPokeOptions.count, "Number of words to read (must be 1 for write)")
         ->default_val(1);
-    barPokeCommand->add_option("address", debugOptions.addressText,
+    barPokeCommand->add_option("address", barPokeOptions.addressText,
         "BAR-relative address (0x... for hex, decimal otherwise)")->required();
-    barPokeCommand->add_option("value", debugOptions.valueText,
+    barPokeCommand->add_option("value", barPokeOptions.valueText,
         "Value for --write (0x... for hex, decimal otherwise)");
+
+    auto* clockwizCommand = debugCommand->add_subcommand("clockwiz", "Read or set clock rates via vrtd clock-op");
+    Clockwiz::Options clockwizOptions;
+    clockwizCommand->add_option("-d,--device", clockwizOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    clockwizCommand->add_flag("--get", clockwizOptions.getMode, "Read clock rate for selected region");
+    clockwizCommand->add_option("--set", clockwizOptions.setRateText, "Set requested clock rate in Hz for selected region");
+    clockwizCommand->add_option("--region", clockwizOptions.regionText, "Clock region: user or service")
+        ->default_val("user");
+    clockwizCommand->add_flag("-x,--hex", clockwizOptions.hexMode, "Print --get output in hexadecimal");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -148,7 +158,9 @@ static int smiMain(int argc, char **argv) {
     } else if (validateCommand->parsed()) {
         return Validate::run(validateOptions);
     } else if (barPokeCommand->parsed()) {
-        return Debug::run(debugOptions);
+        return BarPoke::run(barPokeOptions);
+    } else if (clockwizCommand->parsed()) {
+        return Clockwiz::run(clockwizOptions);
     } else {
         // No subcommand given - print help and exit with error.
         std::cerr << app.help() << std::endl;

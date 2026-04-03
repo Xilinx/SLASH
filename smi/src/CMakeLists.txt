@@ -21,7 +21,8 @@
 add_executable(
     v80-smi
     
-    debug.cpp
+    debug/bar_poke.cpp
+    debug/clockwiz.cpp
     inspect.cpp
     list.cpp
     program.cpp
