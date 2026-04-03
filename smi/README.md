@@ -13,7 +13,7 @@ hardware, and validate memory integrity and bandwidth.
 | `program`  | Load a vbin file onto a V80 device                |
 | `reset`    | Hardware-reset a V80 board                        |
 | `validate` | Reset board and test memory integrity + bandwidth |
-| `debug`    | Low-level BAR and clock debug utilities            |
+| `debug`    | Low-level BAR, memory, and clock debug utilities   |
 
 ## Building
 
@@ -256,6 +256,53 @@ $ v80-smi debug bar-poke -d 03:00 -b 4 --read --hex -W 4 -c 4 0x10000
 $ v80-smi debug bar-poke -d 03:00 -b 4 --write --hex -W 4 0x10000 0x1
 ```
 
+### debug mem-poke
+
+Perform low-level raw memory reads or writes at device physical addresses.
+This bypasses the allocator and requires raw-mem-access permission in vrtd.
+
+```
+v80-smi debug mem-poke -d <BDF> (-r | -w) [-x] [-W <size>] [-c <count>] <address> [value] [-f <path>]
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `-r,--read`       | Read operation (required unless `--write`)           |
+| `-w,--write`      | Write operation (required unless `--read`)           |
+| `-x,--hex`        | Hex output in read mode; hex text/hexdump file mode with `-f` |
+| `-W,--word-size`  | Word size in bytes: `1`, `2`, `4`, or `8` (default `4`) |
+| `-c,--count`      | Number of words (default `1`)                        |
+| `-f,--file`       | File path for file-mode read/write                   |
+
+Rules:
+
+- Exactly one of `--read` or `--write` must be provided.
+- `<address>` is a device physical address.
+- In scalar mode (no `--file`):
+    - `--write` requires `<value>` and `--count` must be `1`.
+    - `--read` forbids `<value>`.
+    - Address must be aligned to word size.
+- In file mode (`--file`):
+    - `<value>` is forbidden.
+    - Byte count is exactly `word-size * count`.
+    - With `--hex`: file is parsed/emitted as hex text (hexdump-compatible).
+    - Without `--hex`: file is raw binary.
+
+Examples:
+
+```console
+$ v80-smi debug mem-poke -d 03:00 --read --hex -W 4 -c 4 0x40000000
+0x3f800000
+0x40000000
+0x40400000
+0x40800000
+
+$ v80-smi debug mem-poke -d 03:00 --write --hex -W 4 0x40000000 0x3f800000
+
+$ v80-smi debug mem-poke -d 03:00 --write -W 4 -c 256 -f input.bin 0x40000000
+```
+
 ### debug clockwiz
 
 Read or set clock rates through the vrtd clock-op API.
@@ -329,7 +376,9 @@ smi/
     program.cpp/hpp   Device programming
     reset.cpp/hpp     Hardware reset via VRTD
     validate.cpp/hpp  Memory integrity and bandwidth testing
-    debug.cpp/hpp     BAR poke and clockwiz debug utilities
+    debug/bar_poke.cpp/hpp  BAR read/write debug command
+    debug/mem_poke.cpp/hpp  Raw device memory read/write command
+    debug/clockwiz.cpp/hpp  Clock read/set debug command
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
 ```

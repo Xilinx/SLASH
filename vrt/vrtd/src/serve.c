@@ -230,6 +230,15 @@ static uint16_t client_handle_request_buffer_open(
     int *out_fd,
     bool *have_out_fd
 );
+static uint16_t client_handle_request_buffer_open_raw(
+    struct client *client,
+    const struct vrtd_req_buffer_open_raw *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_buffer_open_raw *resp_body,
+    uint16_t *resp_size,
+    int *out_fd,
+    bool *have_out_fd
+);
 static uint16_t client_handle_request_buffer_close(
     struct client *client,
     const struct vrtd_req_buffer_close *req_body,
