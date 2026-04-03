@@ -157,16 +157,17 @@ int Validate::run(const Options& options) {
     std::string bdf = resolveBoardBdf(options.bdf, "validate");
     unsigned N = options.threads;
 
-    // -- Step 1: Reset the device via vrtd --
-    std::cout << "Resetting device " << bdf << "..." << std::endl;
-    {
-        vrtd::Session session;
-        auto device = session.getDeviceByBdf(bdf);
-        device.hotplugOp(vrtd::HotplugOp::ResetSequence);
+    // -- Step 1: (Optional) Reset the device via vrtd --
+    if (!options.noReset) {
+        std::cout << "Resetting device " << bdf << "..." << std::endl;
+        {
+            vrtd::Session session;
+            auto device = session.getDeviceByBdf(bdf);
+            device.hotplugOp(vrtd::HotplugOp::ResetSequence);
+        }
+        // Session is torn down; the daemon has re-discovered the device.
     }
-    // Session is torn down; the daemon has re-discovered the device.
 
-    // Reconnect after reset.
     vrtd::Session session;
     auto device = session.getDeviceByBdf(bdf);
 

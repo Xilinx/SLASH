@@ -157,6 +157,7 @@ BDF="$1"
 shift
 
 ITERATIONS=100
+NO_RESET=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --iterations)
@@ -167,12 +168,21 @@ while [[ $# -gt 0 ]]; do
             ITERATIONS="$2"
             shift 2
             ;;
+        --no-reset)
+            NO_RESET=1
+            shift
+            ;;
         *)
             echo "ERROR: Unknown argument '$1'"
             usage
             ;;
     esac
 done
+
+if [[ "$NO_RESET" -eq 1 ]]; then
+    ACTION_NAMES=("run_example" "program" "validate")
+    NUM_ACTIONS=${#ACTION_NAMES[@]}
+fi
 
 # =========================================================================
 #  Pre-flight checks
@@ -301,8 +311,10 @@ for ((i = 1; i <= ITERATIONS; i++)); do
 
         validate)
             threads=$((RANDOM % 64 + 1))
-            log "Running: v80-smi validate -d $BDF -j $threads"
-            if ! v80-smi validate -d "$BDF" -j "$threads"; then
+            NO_RESET_FLAG=""
+            if [[ "$NO_RESET" -eq 1 ]]; then NO_RESET_FLAG="--no-reset"; fi
+            log "Running: v80-smi validate -d $BDF -j $threads $NO_RESET_FLAG"
+            if ! v80-smi validate -d "$BDF" -j "$threads" $NO_RESET_FLAG; then
                 log "FAILED: $action (threads=$threads) at iteration $i"
                 ACTION_FAIL[$action]=$((ACTION_FAIL[$action] + 1))
                 ITERATIONS_DONE=$i

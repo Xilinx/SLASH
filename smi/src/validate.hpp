@@ -41,6 +41,7 @@ public:
     struct Options {
         std::string bdf;           ///< BDF (Bus:Device.Function) address of the target device.
         unsigned threads = 8;      ///< Number of parallel buffers/threads (1-64).
+        bool noReset = false;      ///< Skip the device reset step before running memory tests.
     };
 
     /// @brief Executes the validate command.

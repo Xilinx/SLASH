@@ -111,6 +111,8 @@ static int smiMain(int argc, char **argv) {
     validateCommand->add_option("-d,--device", validateOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
     validateCommand->add_option("-j,--threads", validateOptions.threads,
         "Number of parallel buffers/threads (1-64)")->default_val(8)->check(CLI::Range(1u, 64u));
+    validateCommand->add_flag("-R,--no-reset", validateOptions.noReset,
+        "Skip the device reset step before running memory tests");
 
     // -- debug (low-level debug utilities) --
     auto* debugCommand = app.add_subcommand("debug", "Low-level debug utilities");
