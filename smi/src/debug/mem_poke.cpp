@@ -23,6 +23,7 @@
 
 #include "mem_poke.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <cstring>
@@ -39,6 +40,72 @@
 #include "../bdf.hpp"
 
 namespace {
+
+// ---- Region constants (mirror vrt/vrtd/src/allocator.h, which is private) --
+
+constexpr uint64_t HBM_BASE         = 0x4000000000ULL;
+constexpr uint64_t DDR_BASE         = 0x60000000000ULL;
+constexpr uint64_t MEM_REGION_SIZE  = 512ULL * 1024 * 1024;
+constexpr uint32_t HBM_REGION_COUNT = 64;
+constexpr uint32_t DDR_REGION_COUNT = 64;
+
+// ---- Region helpers ---------------------------------------------------------
+
+std::string toUpper(std::string_view text) {
+    std::string out(text);
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return out;
+}
+
+MemRegion parseRegion(std::string_view text) {
+    const std::string upper = toUpper(text);
+
+    if (upper == "RAW") {
+        return MemRegion{MemRegionKind::Raw, 0, false};
+    }
+    if (upper == "DDR") {
+        return MemRegion{MemRegionKind::Ddr, 0, false};
+    }
+    if (upper == "HBM") {
+        return MemRegion{MemRegionKind::Hbm, 0, true};
+    }
+    if (upper.size() > 3 && upper.substr(0, 3) == "HBM") {
+        const std::string_view indexStr = std::string_view(upper).substr(3);
+        uint32_t index{};
+        const auto* begin = indexStr.data();
+        const auto* end   = begin + indexStr.size();
+        const auto result = std::from_chars(begin, end, index);
+        if (result.ec == std::errc() && result.ptr == end && index < HBM_REGION_COUNT) {
+            return MemRegion{MemRegionKind::Hbm, index, false};
+        }
+    }
+
+    throw std::invalid_argument(
+        std::string("Invalid region '") + std::string(text) +
+        "': must be DDR, HBM, HBM0..HBM63, or RAW");
+}
+
+uint64_t regionBase(const MemRegion& region) {
+    switch (region.kind) {
+    case MemRegionKind::Raw: return 0;
+    case MemRegionKind::Ddr: return DDR_BASE;
+    case MemRegionKind::Hbm: return HBM_BASE + region.hbmIndex * MEM_REGION_SIZE;
+    }
+    return 0; // unreachable
+}
+
+uint64_t regionSize(const MemRegion& region) {
+    switch (region.kind) {
+    case MemRegionKind::Raw: return std::numeric_limits<uint64_t>::max();
+    case MemRegionKind::Ddr: return DDR_REGION_COUNT * MEM_REGION_SIZE;
+    case MemRegionKind::Hbm:
+        return region.hbmWholeSpace ? HBM_REGION_COUNT * MEM_REGION_SIZE : MEM_REGION_SIZE;
+    }
+    return 0; // unreachable
+}
+
+// ---- General helpers --------------------------------------------------------
 
 bool hasHexPrefix(const std::string_view text) {
     return text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
@@ -74,6 +141,31 @@ uint64_t parseUnsigned(const std::string_view text,
 }
 
 void validateOptions(const MemPoke::Options& options) {
+    // --print-base-address / --print-size are mutually exclusive with I/O flags
+    if (options.printBaseAddress || options.printSize) {
+        if (options.readMode || options.writeMode) {
+            throw std::invalid_argument(
+                "--print-base-address/--print-size cannot be combined with --read or --write");
+        }
+        if (options.relativeAddress) {
+            throw std::invalid_argument(
+                "--print-base-address/--print-size cannot be combined with --relative");
+        }
+        if (!options.addressText.empty()) {
+            throw std::invalid_argument(
+                "--print-base-address/--print-size cannot be combined with an address argument");
+        }
+        if (options.valueText.has_value()) {
+            throw std::invalid_argument(
+                "--print-base-address/--print-size cannot be combined with a value argument");
+        }
+        if (options.filePath.has_value()) {
+            throw std::invalid_argument(
+                "--print-base-address/--print-size cannot be combined with --file");
+        }
+        return;
+    }
+
     if (options.readMode == options.writeMode) {
         throw std::invalid_argument("Exactly one of --read or --write must be specified");
     }
@@ -320,7 +412,32 @@ void runFileWrite(vrtd::Buffer& buf, uint64_t totalBytes,
 int MemPoke::run(const Options& options) {
     validateOptions(options);
 
-    const uint64_t address = parseUnsigned(options.addressText, "address");
+    const MemRegion region = parseRegion(options.regionText);
+
+    // --print-base-address / --print-size: no device access needed.
+    if (options.printBaseAddress || options.printSize) {
+        const std::ios_base::fmtflags flags = std::cout.flags();
+        std::cout << std::hex << std::nouppercase;
+        if (options.printBaseAddress) {
+            std::cout << "0x" << regionBase(region) << '\n';
+        }
+        if (options.printSize) {
+            std::cout << "0x" << regionSize(region) << '\n';
+        }
+        std::cout.flags(flags);
+        return 0;
+    }
+
+    const uint64_t rawAddress = parseUnsigned(options.addressText, "address");
+
+    // Resolve relative addresses before bounds checking.
+    uint64_t address = rawAddress;
+    if (options.relativeAddress) {
+        if (region.kind == MemRegionKind::Raw) {
+            throw std::invalid_argument("--relative has no effect with --region RAW");
+        }
+        address = regionBase(region) + rawAddress;
+    }
 
     if (options.count > std::numeric_limits<uint64_t>::max() / options.wordSize) {
         throw std::invalid_argument("requested count is too large");
@@ -329,6 +446,18 @@ int MemPoke::run(const Options& options) {
 
     if (!options.filePath.has_value()) {
         validateRangeAndAlignment(address, options.count, options.wordSize);
+    }
+
+    // Region bounds check (skipped for RAW).
+    if (region.kind != MemRegionKind::Raw) {
+        const uint64_t base = regionBase(region);
+        const uint64_t size = regionSize(region);
+        // Check: address must be within [base, base+size) and address+totalBytes <= base+size.
+        // Written to avoid unsigned underflow: totalBytes <= size && address - base <= size - totalBytes.
+        if (address < base || totalBytes > size || (address - base) > size - totalBytes) {
+            throw std::invalid_argument(
+                "address+size is out of bounds for region " + options.regionText);
+        }
     }
 
     const std::string bdf = resolveBoardBdf(options.bdf, "debug mem-poke");

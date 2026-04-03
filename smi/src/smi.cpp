@@ -141,18 +141,28 @@ static int smiMain(int argc, char **argv) {
         ->default_val("user");
     clockwizCommand->add_flag("-x,--hex", clockwizOptions.hexMode, "Print --get output in hexadecimal");
 
-    auto* memPokeCommand = debugCommand->add_subcommand("mem-poke", "Read or write device memory at a raw physical address (bypasses allocator; requires raw-mem-access permission)");
+    auto* memPokeCommand = debugCommand->add_subcommand("mem-poke",
+        "Read or write device memory at a raw physical address (bypasses allocator; requires raw-mem-access permission). "
+        "Use --region to declare the target memory space and validate address bounds.");
     MemPoke::Options memPokeOptions;
     memPokeCommand->add_option("-d,--device", memPokeOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
-    memPokeCommand->add_flag("-r,--read", memPokeOptions.readMode, "Read words from device memory");
-    memPokeCommand->add_flag("-w,--write", memPokeOptions.writeMode, "Write one word to device memory");
+    memPokeCommand->add_option("--region,-r", memPokeOptions.regionText,
+        "Memory region: DDR, HBM, HBM0..HBM63, or RAW (no bounds check)")->required();
+    memPokeCommand->add_flag("--read", memPokeOptions.readMode, "Read words from device memory");
+    memPokeCommand->add_flag("--write,-w", memPokeOptions.writeMode, "Write one word to device memory");
     memPokeCommand->add_flag("-x,--hex", memPokeOptions.hexMode, "Print read output in hexadecimal");
+    memPokeCommand->add_flag("--relative", memPokeOptions.relativeAddress,
+        "Interpret address as relative to the region base address");
+    memPokeCommand->add_flag("--print-base-address", memPokeOptions.printBaseAddress,
+        "Print the region base address in hex and exit (mutually exclusive with I/O flags)");
+    memPokeCommand->add_flag("--print-size", memPokeOptions.printSize,
+        "Print the region size in bytes in hex and exit (mutually exclusive with I/O flags)");
     memPokeCommand->add_option("-W,--word-size", memPokeOptions.wordSize, "Word size in bytes (1, 2, 4, 8)")
         ->default_val(4)->check(CLI::IsMember({1u, 2u, 4u, 8u}));
     memPokeCommand->add_option("-c,--count", memPokeOptions.count, "Number of words to read (must be 1 for write)")
         ->default_val(1);
     memPokeCommand->add_option("address", memPokeOptions.addressText,
-        "Device physical address (0x... for hex, decimal otherwise)")->required();
+        "Device physical address (0x... for hex, decimal otherwise); relative to region base if --relative");
     memPokeCommand->add_option("value", memPokeOptions.valueText,
         "Value for --write (0x... for hex, decimal otherwise)");
     memPokeCommand->add_option("-f,--file", memPokeOptions.filePath,

@@ -28,6 +28,20 @@
 #include <optional>
 #include <string>
 
+/// @brief Identifies which broad memory space a mem-poke region belongs to.
+enum class MemRegionKind { Raw, Ddr, Hbm };
+
+/// @brief A parsed memory region specifier.
+///
+/// For HBM, @p hbmIndex selects a specific 512 MiB channel (0–63).
+/// When the user passes bare "HBM" (no index), @p hbmWholeSpace is true
+/// and bounds checking covers the entire HBM address space.
+struct MemRegion {
+    MemRegionKind kind         = MemRegionKind::Raw;
+    uint32_t      hbmIndex     = 0;
+    bool          hbmWholeSpace = false; ///< True when region is "HBM" (all channels).
+};
+
 /// @brief Static entry-point for the debug mem-poke command.
 ///
 /// Reads or writes device memory at a raw physical address, bypassing the
@@ -49,6 +63,10 @@ public:
         std::string addressText;                ///< Raw device physical address argument from CLI.
         std::optional<std::string> valueText;   ///< Optional raw value argument from CLI (scalar write).
         std::optional<std::string> filePath;    ///< Optional file path for file-mode read/write.
+        std::string regionText;                 ///< Memory region: DDR, HBM, HBM0..HBM63, or RAW.
+        bool relativeAddress{};                 ///< Interpret address as relative to region base.
+        bool printBaseAddress{};                ///< Print region base address (hex) and exit.
+        bool printSize{};                       ///< Print region size in bytes (hex) and exit.
     };
 
     /// @brief Executes the mem-poke command.
