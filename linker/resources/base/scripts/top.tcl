@@ -148,7 +148,6 @@ xilinx.com:inline_hdl:ilreduced_logic:1.0\
 xilinx.com:ip:c_shift_ram:12.0\
 xilinx.com:ip:hw_discovery:1.0\
 xilinx.com:ip:shell_utils_uuid_rom:2.0\
-xilinx.com:ip:smbus:1.1\
 xilinx.com:ip:cmd_queue:2.0\
 xilinx.com:ip:axi_gpio:2.0\
 xilinx.com:ip:xlconcat:2.1\
@@ -362,7 +361,6 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:pcie3_cfg_ext_rtl:1.0 pcie_cfg_ext
 
-  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 smbus_rpu
 
   create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 m_axi_pcie_mgmt_pdi_reset
 
@@ -374,7 +372,6 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   create_bd_pin -dir I -type rst resetn_pl_periph
   create_bd_pin -dir I -type rst resetn_pl_ic
   create_bd_pin -dir O -type intr irq_gcq_m2r
-  create_bd_pin -dir O -type intr irq_axi_smbus_rpu
 
   # Create instance: pcie_slr0_mgmt_sc, and set properties
   set pcie_slr0_mgmt_sc [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 pcie_slr0_mgmt_sc ]
@@ -437,32 +434,22 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   set_property CONFIG.C_INITIAL_UUID {00000000000000000000000000000000} $uuid_rom
 
 
-  # Create instance: axi_smbus_rpu, and set properties
-  set axi_smbus_rpu [ create_bd_cell -type ip -vlnv xilinx.com:ip:smbus:1.1 axi_smbus_rpu ]
-  set_property -dict [list \
-    CONFIG.NUM_TARGET_DEVICES {8} \
-    CONFIG.SMBUS_DEV_CLASS {0} \
-  ] $axi_smbus_rpu
 
 
   # Create instance: gcq_m2r, and set properties
   set gcq_m2r [ create_bd_cell -type ip -vlnv xilinx.com:ip:cmd_queue:2.0 gcq_m2r ]
 
   # Create interface connections
-  connect_bd_intf_net -intf_net axi_smbus_rpu_SMBUS [get_bd_intf_pins axi_smbus_rpu/SMBUS] [get_bd_intf_pins smbus_rpu]
   connect_bd_intf_net -intf_net pcie_cfg_ext_1 [get_bd_intf_pins pcie_cfg_ext] [get_bd_intf_pins hw_discovery/s_pcie4_cfg_ext]
   connect_bd_intf_net -intf_net pcie_slr0_mgmt_sc_M00_AXI [get_bd_intf_pins pcie_slr0_mgmt_sc/M00_AXI] [get_bd_intf_pins hw_discovery/s_axi_ctrl_pf0]
   connect_bd_intf_net -intf_net pcie_slr0_mgmt_sc_M01_AXI [get_bd_intf_pins pcie_slr0_mgmt_sc/M01_AXI] [get_bd_intf_pins uuid_rom/S_AXI]
   connect_bd_intf_net -intf_net pcie_slr0_mgmt_sc_M02_AXI [get_bd_intf_pins pcie_slr0_mgmt_sc/M02_AXI] [get_bd_intf_pins gcq_m2r/S00_AXI]
   connect_bd_intf_net -intf_net pcie_slr0_mgmt_sc_M03_AXI [get_bd_intf_pins pcie_slr0_mgmt_sc/M03_AXI] [get_bd_intf_pins m_axi_pcie_mgmt_pdi_reset]
   connect_bd_intf_net -intf_net rpu_sc_M00_AXI [get_bd_intf_pins rpu_sc/M00_AXI] [get_bd_intf_pins gcq_m2r/S01_AXI]
-  connect_bd_intf_net -intf_net rpu_sc_M01_AXI [get_bd_intf_pins axi_smbus_rpu/S_AXI] [get_bd_intf_pins rpu_sc/M01_AXI]
   connect_bd_intf_net -intf_net s_axi_pcie_mgmt_slr0_1 [get_bd_intf_pins s_axi_pcie_mgmt_slr0] [get_bd_intf_pins pcie_slr0_mgmt_sc/S00_AXI]
   connect_bd_intf_net -intf_net s_axi_rpu_1 [get_bd_intf_pins s_axi_rpu] [get_bd_intf_pins rpu_sc/S00_AXI]
 
   # Create port connections
-  connect_bd_net -net axi_smbus_rpu_ip2intc_irpt  [get_bd_pins axi_smbus_rpu/ip2intc_irpt] \
-  [get_bd_pins irq_axi_smbus_rpu]
   connect_bd_net -net clk_pcie_1  [get_bd_pins clk_pcie] \
   [get_bd_pins hw_discovery/aclk_pcie]
   connect_bd_net -net clk_pl_1  [get_bd_pins clk_pl] \
@@ -470,8 +457,7 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   [get_bd_pins rpu_sc/aclk] \
   [get_bd_pins hw_discovery/aclk_ctrl] \
   [get_bd_pins uuid_rom/S_AXI_ACLK] \
-  [get_bd_pins gcq_m2r/aclk] \
-  [get_bd_pins axi_smbus_rpu/s_axi_aclk]
+  [get_bd_pins gcq_m2r/aclk]
   connect_bd_net -net gcq_m2r_irq_sq  [get_bd_pins gcq_m2r/irq_sq] \
   [get_bd_pins irq_gcq_m2r]
   connect_bd_net -net resetn_pcie_periph_1  [get_bd_pins resetn_pcie_periph] \
@@ -482,8 +468,7 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   connect_bd_net -net resetn_pl_periph_1  [get_bd_pins resetn_pl_periph] \
   [get_bd_pins hw_discovery/aresetn_ctrl] \
   [get_bd_pins uuid_rom/S_AXI_ARESETN] \
-  [get_bd_pins gcq_m2r/aresetn] \
-  [get_bd_pins axi_smbus_rpu/s_axi_aresetn]
+  [get_bd_pins gcq_m2r/aresetn]
 
   # Restore current instance
   current_bd_instance $oldCurInst
@@ -1494,7 +1479,6 @@ proc create_hier_cell_aved { parentCell nameHier } {
 
   create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 gt_pciea1
 
-  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 smbus_0
 
   create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 CPM_PCIE_NOC_0
 
@@ -1782,7 +1766,6 @@ proc create_hier_cell_aved { parentCell nameHier } {
   # Create interface connections
   connect_bd_intf_net -intf_net Conn1 [get_bd_intf_pins cips/gt_refclk1] [get_bd_intf_pins gt_pcie_refclk]
   connect_bd_intf_net -intf_net Conn2 [get_bd_intf_pins cips/PCIE1_GT] [get_bd_intf_pins gt_pciea1]
-  connect_bd_intf_net -intf_net Conn3 [get_bd_intf_pins base_logic/smbus_rpu] [get_bd_intf_pins smbus_0]
   connect_bd_intf_net -intf_net Conn4 [get_bd_intf_pins cips/CPM_PCIE_NOC_0] [get_bd_intf_pins CPM_PCIE_NOC_0]
   connect_bd_intf_net -intf_net Conn5 [get_bd_intf_pins cips/CPM_PCIE_NOC_1] [get_bd_intf_pins CPM_PCIE_NOC_1]
   connect_bd_intf_net -intf_net Conn6 [get_bd_intf_pins cips/PMC_NOC_AXI_0] [get_bd_intf_pins PMC_NOC_AXI_0]
@@ -1795,8 +1778,6 @@ proc create_hier_cell_aved { parentCell nameHier } {
   connect_bd_intf_net -intf_net cips_pcie1_cfg_ext [get_bd_intf_pins cips/pcie1_cfg_ext] [get_bd_intf_pins base_logic/pcie_cfg_ext]
 
   # Create port connections
-  connect_bd_net -net base_logic_irq_axi_smbus_rpu  [get_bd_pins base_logic/irq_axi_smbus_rpu] \
-  [get_bd_pins cips/pl_ps_irq1]
   connect_bd_net -net base_logic_irq_gcq_m2r  [get_bd_pins base_logic/irq_gcq_m2r] \
   [get_bd_pins cips/pl_ps_irq0]
   connect_bd_net -net cips_cpm_pcie_noc_axi0_clk  [get_bd_pins cips/cpm_pcie_noc_axi0_clk] \
@@ -3015,7 +2996,6 @@ proc create_hier_cell_static_region { parentCell nameHier } {
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 gt_pcie_refclk
 
-  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 smbus_0
 
   create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 gt_pciea1
 
@@ -3850,7 +3830,6 @@ PRESENT 0} RID {WIDTH 0 PRESENT 0} RDATA {WIDTH 256 PRESENT 1} RRESP {WIDTH 2 PR
   connect_bd_intf_net -intf_net Conn70 [get_bd_intf_pins dfx_decoupler_0/rp_intf_63] [get_bd_intf_pins rp_intf_63]
   connect_bd_intf_net -intf_net Conn71 [get_bd_intf_pins noc/hbm_ref_clk_1] [get_bd_intf_pins hbm_ref_clk_1]
   connect_bd_intf_net -intf_net Conn72 [get_bd_intf_pins aved/gt_pcie_refclk] [get_bd_intf_pins gt_pcie_refclk]
-  connect_bd_intf_net -intf_net Conn73 [get_bd_intf_pins aved/smbus_0] [get_bd_intf_pins smbus_0]
   connect_bd_intf_net -intf_net Conn74 [get_bd_intf_pins aved/gt_pciea1] [get_bd_intf_pins gt_pciea1]
   connect_bd_intf_net -intf_net Conn75 [get_bd_intf_pins noc/S00_INI] [get_bd_intf_pins S00_INI]
   connect_bd_intf_net -intf_net Conn76 [get_bd_intf_pins noc/S01_INI] [get_bd_intf_pins S01_INI]
@@ -4242,7 +4221,6 @@ proc create_root_design { parentCell } {
 
   set gt_pciea1 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gt_rtl:1.0 gt_pciea1 ]
 
-  set smbus_0 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 smbus_0 ]
 
   set qsfp0_322mhz [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:diff_clock_rtl:1.0 qsfp0_322mhz ]
   set_property -dict [ list \
@@ -4543,7 +4521,6 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net static_region_CH0_DDR4_0_0 [get_bd_intf_ports CH0_DDR4_0_0] [get_bd_intf_pins static_region/CH0_DDR4_0_0]
   connect_bd_intf_net -intf_net static_region_CH0_DDR4_0_1 [get_bd_intf_ports CH0_DDR4_0_1] [get_bd_intf_pins static_region/CH0_DDR4_0_1]
   connect_bd_intf_net -intf_net static_region_gt_pciea1 [get_bd_intf_ports gt_pciea1] [get_bd_intf_pins static_region/gt_pciea1]
-  connect_bd_intf_net -intf_net static_region_smbus_0 [get_bd_intf_ports smbus_0] [get_bd_intf_pins static_region/smbus_0]
   connect_bd_intf_net -intf_net sys_clk0_0_1 [get_bd_intf_ports sys_clk0_0] [get_bd_intf_pins static_region/sys_clk0_0]
   connect_bd_intf_net -intf_net sys_clk0_1_1 [get_bd_intf_ports sys_clk0_1] [get_bd_intf_pins static_region/sys_clk0_1]
 
@@ -5219,7 +5196,6 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020200580000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/traffic_virt_4/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020101001000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/base_logic/uuid_rom/S_AXI/reg0] -force
   assign_bd_address -offset 0x00000000 -range 0x80000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/LPD_AXI_NOC_0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
-  assign_bd_address -offset 0x80044000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs static_region/aved/base_logic/axi_smbus_rpu/S_AXI/Reg] -force
   assign_bd_address -offset 0x80010000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs static_region/aved/base_logic/gcq_m2r/S01_AXI/S01_AXI_Reg] -force
   assign_bd_address -offset 0x050080000000 -range 0x80000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/PMC_NOC_AXI_0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_0/S00_INI/C0_DDR_CH1] -force
   assign_bd_address -offset 0x00000000 -range 0x80000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/PMC_NOC_AXI_0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
