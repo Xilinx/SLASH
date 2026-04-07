@@ -22,6 +22,29 @@
 
 set -euo pipefail
 
+CLEAN_ONLY=false
+
+# Parse long options
+while [[ $# -gt 0 && "$1" == --* ]]; do
+    case "$1" in
+        --clean)
+            CLEAN_ONLY=true
+            shift
+            ;;
+        *)
+            echo "ERROR: Unknown option '$1'"
+            echo "Usage: $0 [--clean]"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ $# -gt 0 ]]; then
+    echo "ERROR: Unexpected argument '$1'"
+    echo "Usage: $0 [--clean]"
+    exit 1
+fi
+
 # SLASH root
 cd "$(dirname "$0")/.."
 
@@ -183,6 +206,14 @@ elif [[ "${PKG_TYPE}" == "rpm" ]]; then
     mapfile -t RPMS < <(find "${ARTIFACTS_DIR}" -maxdepth 1 -name '*.rpm' \
         ! -name '*.src.rpm' ! -name '*-debuginfo-*' ! -name '*-debugsource-*')
     dnf install -y "${RPMS[@]}"
+fi
+
+if [[ "${CLEAN_ONLY}" == "true" ]]; then
+    echo ""
+    echo "========================================================================"
+    echo "  --clean enabled: skipping Stage 3 verification"
+    echo "========================================================================"
+    exit 0
 fi
 
 # =========================================================================
