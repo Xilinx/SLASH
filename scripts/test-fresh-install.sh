@@ -24,6 +24,13 @@ set -euo pipefail
 
 CLEAN_ONLY=false
 
+usage() {
+    echo "Usage: $0 [--clean]"
+    echo ""
+    echo "  --clean   Remove installed SLASH packages only (skip install and verification)"
+    exit 1
+}
+
 # Parse long options
 while [[ $# -gt 0 && "$1" == --* ]]; do
     case "$1" in
@@ -33,16 +40,14 @@ while [[ $# -gt 0 && "$1" == --* ]]; do
             ;;
         *)
             echo "ERROR: Unknown option '$1'"
-            echo "Usage: $0 [--clean]"
-            exit 1
+            usage
             ;;
     esac
 done
 
 if [[ $# -gt 0 ]]; then
     echo "ERROR: Unexpected argument '$1'"
-    echo "Usage: $0 [--clean]"
-    exit 1
+    usage
 fi
 
 # SLASH root
@@ -130,14 +135,6 @@ RPM_PACKAGES=(
 # =========================================================================
 
 if [[ "${PKG_TYPE}" == "deb" ]]; then
-    ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/deb}"
-
-    if [[ ! -d "${ARTIFACTS_DIR}" ]]; then
-        echo "ERROR: DEB artifacts directory not found: ${ARTIFACTS_DIR}"
-        echo "       Run scripts/package-deb.sh first."
-        exit 1
-    fi
-
     echo ""
     echo "========================================================================"
     echo "  Stage 1: Purge existing SLASH packages (DEB)"
@@ -158,6 +155,22 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
         echo "No SLASH packages currently installed."
     fi
 
+    if [[ "${CLEAN_ONLY}" == "true" ]]; then
+        echo ""
+        echo "========================================================================"
+        echo "  --clean enabled: stopping after Stage 1 purge"
+        echo "========================================================================"
+        exit 0
+    fi
+
+    ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/deb}"
+
+    if [[ ! -d "${ARTIFACTS_DIR}" ]]; then
+        echo "ERROR: DEB artifacts directory not found: ${ARTIFACTS_DIR}"
+        echo "       Run scripts/package-deb.sh first."
+        exit 1
+    fi
+
     echo ""
     echo "========================================================================"
     echo "  Stage 2: Install SLASH packages from ${ARTIFACTS_DIR}"
@@ -170,14 +183,6 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
 # =========================================================================
 
 elif [[ "${PKG_TYPE}" == "rpm" ]]; then
-    ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/rpm}"
-
-    if [[ ! -d "${ARTIFACTS_DIR}" ]]; then
-        echo "ERROR: RPM artifacts directory not found: ${ARTIFACTS_DIR}"
-        echo "       Run scripts/package-rpm.sh first."
-        exit 1
-    fi
-
     echo ""
     echo "========================================================================"
     echo "  Stage 1: Remove existing SLASH packages (RPM)"
@@ -197,6 +202,22 @@ elif [[ "${PKG_TYPE}" == "rpm" ]]; then
         echo "No SLASH packages currently installed."
     fi
 
+    if [[ "${CLEAN_ONLY}" == "true" ]]; then
+        echo ""
+        echo "========================================================================"
+        echo "  --clean enabled: stopping after Stage 1 removal"
+        echo "========================================================================"
+        exit 0
+    fi
+
+    ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/rpm}"
+
+    if [[ ! -d "${ARTIFACTS_DIR}" ]]; then
+        echo "ERROR: RPM artifacts directory not found: ${ARTIFACTS_DIR}"
+        echo "       Run scripts/package-rpm.sh first."
+        exit 1
+    fi
+
     echo ""
     echo "========================================================================"
     echo "  Stage 2: Install SLASH packages from ${ARTIFACTS_DIR}"
@@ -206,14 +227,6 @@ elif [[ "${PKG_TYPE}" == "rpm" ]]; then
     mapfile -t RPMS < <(find "${ARTIFACTS_DIR}" -maxdepth 1 -name '*.rpm' \
         ! -name '*.src.rpm' ! -name '*-debuginfo-*' ! -name '*-debugsource-*')
     dnf install -y "${RPMS[@]}"
-fi
-
-if [[ "${CLEAN_ONLY}" == "true" ]]; then
-    echo ""
-    echo "========================================================================"
-    echo "  --clean enabled: skipping Stage 3 verification"
-    echo "========================================================================"
-    exit 0
 fi
 
 # =========================================================================
