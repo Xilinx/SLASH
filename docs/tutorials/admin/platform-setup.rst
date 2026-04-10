@@ -109,11 +109,43 @@ required on the build machine, not on every target:
    (``Packages`` / ``repodata/``) so that hosting the output directory as a
    repository avoids this limitation.
 
+Abstract Shell
+==============
+
+The *abstract shell* is the pre-built FPGA platform base that ships inside
+the ``v80++`` package. It contains the fixed platform infrastructure —
+including the SMBus controller IP used for board management — that every
+hardware vrtbin is linked against.
+
+Building it requires **Vivado 2025.1** and **Vitis 2025.1**, plus a
+**Vivado Enterprise license** (the SMBus IP is not available under the
+standard tier). Source both tools before running the package build:
+
+.. code-block:: bash
+
+   source <path-to-vivado>/settings64.sh
+   source <path-to-vitis>/settings64.sh
+
+For ``csh``/``tcsh`` users:
+
+.. code-block:: csh
+
+   source <path-to-vivado>/settings64.csh
+   source <path-to-vitis>/settings64.csh
+
+.. note::
+
+   Vivado Enterprise license configuration is site-specific. Contact your
+   license administrator if you are unsure how licenses are served at your
+   site.
+
 Build the Packages
 ==================
 
 All packages — including the AMI driver package — are produced by a single
-script run from the repository root:
+script run from the repository root. The abstract shell is built
+automatically as part of this step. **Expect the build to take several
+hours** while Vivado synthesises and implements the platform design.
 
 .. tab-set::
 

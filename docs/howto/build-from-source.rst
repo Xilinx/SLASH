@@ -126,6 +126,45 @@ Install:
 
    sudo cmake --install build
 
+v80++ (Linker) — Abstract Shell
+================================
+
+After installing ``v80-smi``, the linker's abstract shell must be built
+before hardware vrtbins can be linked. The abstract shell is the pre-built
+FPGA platform base that every hardware vrtbin is linked against. It contains
+platform IP — including the SMBus controller used for board management —
+that requires a **Vivado Enterprise license** to build.
+
+Source Vivado **2025.1** and Vitis **2025.1** and ensure a Vivado Enterprise
+license is configured for your site:
+
+.. code-block:: bash
+
+   source <path-to-vivado>/settings64.sh
+   source <path-to-vitis>/settings64.sh
+
+For ``csh``/``tcsh`` users:
+
+.. code-block:: csh
+
+   source <path-to-vivado>/settings64.csh
+   source <path-to-vitis>/settings64.csh
+
+.. note::
+
+   Vivado Enterprise license configuration is site-specific. Contact your
+   license administrator if you are unsure how licenses are served at your
+   site.
+
+Then run the linker install script from the repository root:
+
+.. code-block:: bash
+
+   bash scripts/root-design-build.sh
+
+**This step takes several hours** — it runs full Vivado synthesis and
+implementation to produce the abstract shell artifacts.
+
 Examples
 ========
 
