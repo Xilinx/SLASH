@@ -7,7 +7,7 @@ CC       ?= gcc
 CFLAGS   ?= -Wall -Werror -O2
 CFLAGS   += -I../libslash/include
 
-TESTS    := test_smoke test_qdma_basic
+TESTS    := test_slash_qdma
 
 all: $(TESTS)
 

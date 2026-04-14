@@ -31,6 +31,12 @@ endif
 
 SLASH_QDMA_OP_DEBUG ?= 0
 
+# Set GCOV=1 to instrument the module for kernel gcov coverage.
+# Not set by default — never enable this in production builds.
+ifdef GCOV
+GCOV_PROFILE := y
+endif
+
 obj-m          := $(MODULE).o
 $(MODULE)-objs := $(MODULE)_main.o $(MODULE)_ctldev.o $(MODULE)_pcie.o $(MODULE)_dmabuf.o $(MODULE)_hotplug.o $(MODULE)_qdma.o
 ccflags-y += \
