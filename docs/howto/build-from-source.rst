@@ -126,11 +126,11 @@ Install:
 
    sudo cmake --install build
 
-v80++ (Linker) — Abstract Shell
-================================
+v80++ (Linker) — Static Shell
+==============================
 
-After installing ``v80-smi``, the linker's abstract shell must be built
-before hardware vrtbins can be linked. The abstract shell is the pre-built
+After installing ``v80-smi``, the linker's static shell must be built
+before hardware vrtbins can be linked. The static shell is the pre-built
 FPGA platform base that every hardware vrtbin is linked against. It contains
 platform IP — including the SMBus controller used for board management —
 that requires a **Vivado Enterprise license** to build.
@@ -163,7 +163,7 @@ Then run the linker install script from the repository root:
    bash scripts/root-design-build.sh
 
 **This step takes several hours** — it runs full Vivado synthesis and
-implementation to produce the abstract shell artifacts.
+implementation to produce the static shell artifacts.
 
 Examples
 ========

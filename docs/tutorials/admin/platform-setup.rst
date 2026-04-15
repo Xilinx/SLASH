@@ -109,10 +109,10 @@ required on the build machine, not on every target:
    (``Packages`` / ``repodata/``) so that hosting the output directory as a
    repository avoids this limitation.
 
-Abstract Shell
-==============
+Static Shell
+============
 
-The *abstract shell* is the pre-built FPGA platform base that ships inside
+The *static shell* is the pre-built FPGA platform base that ships inside
 the ``v80++`` package. It contains the fixed platform infrastructure —
 including the SMBus controller IP used for board management — that every
 hardware vrtbin is linked against.
@@ -143,7 +143,7 @@ Build the Packages
 ==================
 
 All packages — including the AMI driver package — are produced by a single
-script run from the repository root. The abstract shell is built
+script run from the repository root. The static shell is built
 automatically as part of this step. **Expect the build to take several
 hours** while Vivado synthesises and implements the platform design.
 
@@ -314,10 +314,10 @@ Program the Board
 =================
 
 After installing the packages, the board's flash memory must be programmed
-with the abstract shell before the system can be used. This step is required:
+with the static shell before the system can be used. This step is required:
 
 - on the **first install** of SLASH, and
-- when **upgrading** to a version that changes the abstract shell (noted in
+- when **upgrading** to a version that changes the static shell (noted in
   the release notes).
 
 It is **not** required after crashes, daemon restarts, or other normal
