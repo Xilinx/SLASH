@@ -311,10 +311,10 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
 
     /*
      * Step 9: Wait for the FPGA to complete reconfiguration and re-train
-     * the PCIe link.  10 seconds is a conservative estimate that accounts for
+     * the PCIe link.  5 seconds is a conservative estimate that accounts for
      * bitstream loading time and link training, mentioned in a AVED sw comment.
      */
-    usleep(10000000);
+    usleep(5000000);
 
     /*
      * Step 10-12: Rescan the PCI bus and verify the device reappears.
