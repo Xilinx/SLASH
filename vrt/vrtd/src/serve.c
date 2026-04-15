@@ -104,6 +104,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -229,6 +230,15 @@ static uint16_t client_handle_request_buffer_open(
     int *out_fd,
     bool *have_out_fd
 );
+static uint16_t client_handle_request_buffer_open_raw(
+    struct client *client,
+    const struct vrtd_req_buffer_open_raw *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_buffer_open_raw *resp_body,
+    uint16_t *resp_size,
+    int *out_fd,
+    bool *have_out_fd
+);
 static uint16_t client_handle_request_buffer_close(
     struct client *client,
     const struct vrtd_req_buffer_close *req_body,
@@ -265,7 +275,7 @@ static uint16_t client_handle_request_get_sensor_info(
     uint16_t *resp_size
 );
 
-static uint16_t device_refresh_pf2_after_design_write(const struct device *d);
+static uint16_t device_refresh_pf2_after_design_write(struct device *d);
 static void cleanup_client_buffers(struct client *client);
 
 /* ---- Helper: opcode / hotplug-op to human-readable string --------------- */
@@ -330,7 +340,7 @@ static const char *vrtd_hotplug_op_to_string(uint32_t op)
  * @param d  The device whose PF2 should be refreshed.
  * @return   VRTD_RET_OK on success, or an appropriate VRTD_RET_* error code.
  */
-static uint16_t device_refresh_pf2_after_design_write(const struct device *d)
+static uint16_t device_refresh_pf2_after_design_write(struct device *d)
 {
     char pf2_bdf[VRTD_PCI_BDF_LEN] = {0};
     if (pci_bdf_set_function(d->pci_info.bdf, 2, pf2_bdf) != 0) {
@@ -359,6 +369,85 @@ static uint16_t device_refresh_pf2_after_design_write(const struct device *d)
 
     if (slash_hotplug_close(hotplug) != 0) {
         return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    /*
+     * The BAR dma-buf fds in d->bar_files[] were opened against the pre-PDI
+     * PF2.  After partial reconfiguration the AXI fabric behind PF2's BAR
+     * has changed; clients that mmap the old fd will hit an unresponsive AXI
+     * slave and trigger a fatal PCIe completion timeout.  Close the stale
+     * fds and reopen them against the freshly-probed PF2 so that subsequent
+     * GET_BAR_FD requests return a valid mapping.
+     */
+    for (size_t i = 0; i < SIZEOF_ARRAY(d->bar_files); i++) {
+        if (d->bar_files[i] != NULL) {
+            (void) slash_bar_file_close(d->bar_files[i]);
+            d->bar_files[i] = NULL;
+        }
+        if (d->bar_info[i] != NULL) {
+            slash_bar_info_free(d->bar_info[i]);
+            d->bar_info[i] = NULL;
+        }
+    }
+
+    /*
+     * The /dev/slash_ctlN suffix is assigned by an incrementing kernel counter
+     * and changes after each hotplug remove+rescan.  d->path still holds the
+     * path from daemon startup (e.g. /dev/slash_ctl0); that node no longer
+     * exists.  Resolve the new path via the stable sysfs name
+     * /sys/class/misc/slash_ctl_<bdf>/uevent and update d->path in-place so
+     * that subsequent GET_BAR_FD and devices_discover_and_open deduplication
+     * both see the current path.
+     */
+    _cleanup_(cleanup_free) char *new_ctl_path = NULL;
+    if (find_slash_ctl_dev_path_by_bdf(pf2_bdf, &new_ctl_path) != 0 || new_ctl_path == NULL) {
+        LOG(LOG_ERR, "device_refresh_pf2: cannot find slash_ctl device for %s in sysfs", pf2_bdf);
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    LOG(LOG_INFO, "device_refresh_pf2: new slash_ctl path for %s is %s", pf2_bdf, new_ctl_path);
+
+    slash_ctldev_close(d->ctl);
+    free(d->path);
+    d->path = new_ctl_path;
+    new_ctl_path = NULL; /* ownership transferred — prevent cleanup_free from freeing */
+
+    /*
+     * After a hotplug rescan the kernel creates the device node immediately
+     * but udev sets ownership (vrtd:vrtd) asynchronously.  Opening the node
+     * before udev acts yields EACCES.  Retry with a short backoff to let udev
+     * catch up; any other error is fatal immediately.
+     */
+    #define CTL_OPEN_RETRIES    10
+    #define CTL_OPEN_RETRY_US   500000  /* 500 ms per attempt, 5 s total */
+    for (int attempt = 1; attempt <= CTL_OPEN_RETRIES; attempt++) {
+        d->ctl = slash_ctldev_open(d->path);
+        if (d->ctl != NULL)
+            break;
+        if (errno != EACCES) {
+            LOG(LOG_ERR, "device_refresh_pf2: failed to reopen ctl device %s: %m", d->path);
+            return VRTD_RET_INTERNAL_ERROR;
+        }
+        LOG(LOG_INFO, "device_refresh_pf2: waiting for udev to set permissions on %s "
+            "(attempt %d/%d)", d->path, attempt, CTL_OPEN_RETRIES);
+        usleep(CTL_OPEN_RETRY_US);
+    }
+    if (d->ctl == NULL) {
+        LOG(LOG_ERR, "device_refresh_pf2: timed out waiting for permissions on %s: %m", d->path);
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+    #undef CTL_OPEN_RETRIES
+    #undef CTL_OPEN_RETRY_US
+
+    for (size_t i = 0; i < SIZEOF_ARRAY(d->bar_info); i++) {
+        d->bar_info[i] = slash_bar_info_read(d->ctl, i);
+        if (d->bar_info[i] != NULL && d->bar_info[i]->usable) {
+            d->bar_files[i] = slash_bar_file_open(d->ctl, i, O_CLOEXEC);
+            if (d->bar_files[i] == NULL) {
+                LOG(LOG_ERR, "device_refresh_pf2: failed to reopen bar_file %zu on %s: %m",
+                    i, d->path);
+            }
+        }
     }
 
     return VRTD_RET_OK;
@@ -1009,6 +1098,18 @@ static int client_handle_request(struct client *client)
                 &client->have_out_fd
             );
         break;
+    case VRTD_REQ_BUFFER_OPEN_RAW:
+        resp_header->ret =
+            client_handle_request_buffer_open_raw(
+                client,
+                CLIENT_IN_BODY(*client, vrtd_req_buffer_open_raw),
+                req_header->size,
+                CLIENT_OUT_BODY(*client, vrtd_resp_buffer_open_raw),
+                &size,
+                &client->out_fd,
+                &client->have_out_fd
+            );
+        break;
     case VRTD_REQ_BUFFER_CLOSE:
         resp_header->ret =
             client_handle_request_buffer_close(
@@ -1157,7 +1258,7 @@ static int client_finalize_pending_design_write(struct client *client)
     /* Build the deferred response now that the async write has finished. */
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
-       // design_write_ret = device_refresh_pf2_after_design_write(d);
+        design_write_ret = device_refresh_pf2_after_design_write(d);
         LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
             (unsigned int)client->uid, (unsigned long long)client->conn_id);
     } else {
@@ -1931,6 +2032,115 @@ static uint16_t client_handle_request_buffer_open(
 
     LOG(LOG_INFO, "Buffer opened size=%llu phys_addr=0x%llx dev=%u uid=%u conn_id=%llu",
         (unsigned long long)real_size, (unsigned long long)phys_addr,
+        (unsigned int)req_body->dev_number,
+        (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+    return VRTD_RET_OK;
+}
+
+/* ---- BUFFER_OPEN_RAW ---------------------------------------------------- */
+
+/**
+ * Handles VRTD_REQ_BUFFER_OPEN_RAW -- creates a QDMA qpair at a caller-specified
+ * device address, bypassing the allocator entirely.
+ *
+ * The caller is responsible for ensuring the address is valid and not in use.
+ * Requires the raw-mem-access permission.  The qpair fd is returned to the client
+ * via SCM_RIGHTS.  The buffer is tracked in the device's buffer list so the qpair
+ * is torn down automatically if the client disconnects.
+ *
+ * Auth: auth_request_buffer_open_raw.
+ * FD passing: outbound -- the qpair fd is sent via SCM_RIGHTS.
+ *
+ * Wire format:
+ *   Request body:  vrtd_req_buffer_open_raw { uint32_t dev_number,
+ *                                             uint32_t alloc_dir,
+ *                                             uint64_t phys_addr,
+ *                                             uint64_t size }
+ *   Response body: vrtd_resp_buffer_open_raw { uint8_t zero }
+ *                  + SCM_RIGHTS fd
+ *
+ * @return VRTD_RET_OK on success, error code otherwise.
+ */
+static uint16_t client_handle_request_buffer_open_raw(
+    struct client *client,
+    const struct vrtd_req_buffer_open_raw *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_buffer_open_raw *resp_body,
+    uint16_t *resp_size,
+    int *out_fd,
+    bool *have_out_fd
+)
+{
+    int ret = auth_request_buffer_open_raw(client, req_body);
+    if (ret == -1) {
+        char pwbuf[1024];
+        LOG(LOG_WARNING, "Failed to authorize raw buffer open request for uid %u(%s): %m",
+            (unsigned int) client->uid, uid_to_username(client->uid, pwbuf, sizeof(pwbuf)));
+        return VRTD_RET_INTERNAL_ERROR;
+    } else if (ret == 0) {
+        return VRTD_RET_AUTH_ERROR;
+    }
+
+    *resp_size = 0;
+    *have_out_fd = false;
+
+    if (req_size < sizeof(*req_body)) {
+        LOG(LOG_WARNING, "Received malformed raw buffer open request");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    if (req_body->dev_number >= client->state->devices.len) {
+        LOG(LOG_WARNING, "Received raw buffer open request for non-existent device");
+        return VRTD_RET_NOEXIST;
+    }
+
+    if (req_body->size == 0) {
+        LOG(LOG_WARNING, "Received raw buffer open request with zero size");
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
+    struct device *d = client->state->devices.d[req_body->dev_number];
+    if (d == NULL || d->qdma == NULL) {
+        LOG(LOG_WARNING, "Received raw buffer open request for non-existent or non-functional device");
+        return VRTD_RET_NOEXIST;
+    }
+
+    _cleanup_(cleanup_bufferp)
+    struct buffer *buf = buffer_create_raw(
+        d->qdma,
+        req_body->phys_addr,
+        req_body->size,
+        (enum vrtd_alloc_dir) req_body->alloc_dir
+    );
+    if (buf == NULL) {
+        if (errno == EINVAL) {
+            LOG(LOG_WARNING, "buffer_open_raw: invalid arguments for device %u", (unsigned int)req_body->dev_number);
+            return VRTD_RET_INVALID_ARGUMENT;
+        }
+        LOG(LOG_ERR, "Failed to create raw buffer: %m");
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    if (buf->fd < 0) {
+        LOG(LOG_ERR, "Raw buffer created without valid fd");
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    int fd = buf->fd;
+
+    if (buffer_ptr_array_push_move(&d->buffers, &buf) != 0) {
+        LOG(LOG_ERR, "Failed to add raw buffer to device buffer list");
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    resp_body->zero = 0;
+    *out_fd = fd;
+    *have_out_fd = true;
+    *resp_size = sizeof(*resp_body);
+
+    LOG(LOG_WARNING, "Raw buffer opened phys_addr=0x%llx size=%llu dev=%u uid=%u conn_id=%llu",
+        (unsigned long long)req_body->phys_addr, (unsigned long long)req_body->size,
         (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 

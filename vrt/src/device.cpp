@@ -29,11 +29,13 @@
 
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <thread>
 #include <vrtd/bar.hpp>
 
 #include <vrt/utils/filesystem_cache.hpp>
@@ -241,6 +243,10 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
             programDevice();
         }
         parseSystemMap();
+        if (program && !kernels.empty()) {
+            sleep(1); // wait for device to be ready after programming before accessing BAR
+
+        }
         if (vrtdDevice.has_value()) {
             if (clockFreq > CLOCK_MAX_FREQ) {
                 utils::Logger::log(utils::LogLevel::WARN, __PRETTY_FUNCTION__,
@@ -304,6 +310,7 @@ void Device::parseSystemMap() {
         std::optional<vrtd::Bar> barHandle = vrtdDevice->getBar(bar);
         for (auto& kernel : kernels) {
             kernel.second.setVrtdBar(barHandle);
+            kernel.second.setPlatform(platform);
         }
     }
     this->qdmaConnections = parser.getQdmaConnections();

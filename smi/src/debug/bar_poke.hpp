@@ -18,36 +18,40 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef SMI_VALIDATE_HPP
-#define SMI_VALIDATE_HPP
+/// @file debug/bar_poke.hpp
+/// @brief Declaration of the BarPoke debug command.
 
-/// @file validate.hpp
-/// @brief Declaration of the Validate command.
-///
-/// The Validate command resets a V80 board and then exercises DDR and HBM
-/// memory via PCIe by running data integrity checks followed by parallel
-/// bandwidth measurements.
+#ifndef SMI_DEBUG_BAR_POKE_HPP
+#define SMI_DEBUG_BAR_POKE_HPP
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
-/// @brief Static entry-point for the validate command.
+/// @brief Static entry-point for the debug bar-poke command.
 ///
-/// This class is not instantiable; it groups the command's option
-/// struct and its run() entry-point.
-class Validate {
-    Validate() = delete;
+/// This class is not instantiable; it groups the command options and
+/// its run() entry-point.
+class BarPoke {
+    BarPoke() = delete;
 public:
-    /// @brief Options parsed from the CLI for the validate command.
+    /// @brief Options parsed from the CLI for the bar-poke command.
     struct Options {
-        std::string bdf;           ///< BDF (Bus:Device.Function) address of the target device.
-        unsigned threads = 8;      ///< Number of parallel buffers/threads (1-64).
-        bool noReset = false;      ///< Skip the device reset step before running memory tests.
+        std::string bdf;                        ///< Target board address.
+        unsigned bar{};                         ///< BAR number (0-5).
+        bool readMode{};                        ///< True for read operations.
+        bool writeMode{};                       ///< True for write operations.
+        bool hexMode{};                         ///< True for hex-formatted read output.
+        unsigned wordSize = 4;                  ///< Access width in bytes: 1, 2, 4, or 8.
+        uint64_t count = 1;                     ///< Number of words to read (must be 1 for write).
+        std::string addressText;                ///< Raw address argument from CLI.
+        std::optional<std::string> valueText;   ///< Optional raw value argument from CLI.
     };
 
-    /// @brief Executes the validate command.
+    /// @brief Executes the bar-poke command.
     /// @param options Populated options struct.
     /// @return Exit code (0 on success).
     static int run(const Options& options);
 };
 
-#endif // SMI_VALIDATE_HPP
+#endif // SMI_DEBUG_BAR_POKE_HPP

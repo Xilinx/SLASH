@@ -22,6 +22,10 @@
 
 set -euxo pipefail
 
+# Ensure directories created during packaging have standard permissions.
+# dpkg-deb requires the control directory to be >=0755 and <=0775.
+umask 0022
+
 # SLASH root
 cd "$(dirname "$0")/.."
 
@@ -45,7 +49,11 @@ sed -i "s/DIST_RPM = \[DIST_ID_CENTOS, DIST_ID_REDHAT, DIST_ID_REDHAT2, DIST_ID_
 sed -i "s/DIST_ID_CENTOS, DIST_ID_REDHAT, DIST_ID_REDHAT2, DIST_ID_RHEL\]/DIST_ID_CENTOS, DIST_ID_REDHAT, DIST_ID_REDHAT2, DIST_ID_RHEL, DIST_ID_ROCKY]/" "${GEN_PKG_PY}"
 
 cd "${AMI_DIR}"
-python3 scripts/gen_package.py -o "${AMI_BUILD_DIR}"
+# --no_driver skips a pre-flight driver compilation check (build+clean) only;
+# it does NOT affect which files are included in the package.
+# We skip it here so the packaging can run in environments (eg. containers)
+# that may not have linux-headers available to compile the driver.
+python3 scripts/gen_package.py --no_driver -o "${AMI_BUILD_DIR}"
 
 # Copy only the package files to the artifacts directory
 cp "${AMI_BUILD_DIR}"/*.rpm "${ARTIFACTS_DIR}/" 2>/dev/null || \

@@ -33,5 +33,6 @@ EOF
 
 systemctl daemon-reload
 systemctl restart vrtd
+systemctl enable --now vrtd
 
 echo "vrtd debug logging enabled. View with: journalctl -u vrtd -f"

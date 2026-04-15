@@ -342,6 +342,32 @@ enum vrtd_ret vrtd_buffer_open(
 );
 
 /**
+ * @brief Open a raw buffer (QDMA qpair at caller-specified device address) via vrtd.
+ *
+ * Bypasses the allocator entirely — the caller is responsible for ensuring the
+ * address is valid and not in use.  Requires the @c raw-mem-access permission.
+ *
+ * @param fd          Connected vrtd socket file descriptor.
+ * @param dev         Device index (0‑based).
+ * @param phys_addr   Caller-specified device physical address.
+ * @param size        Size in bytes.
+ * @param alloc_dir   One of #vrtd_alloc_dir.
+ * @param buffer_out  Output parameter set to the new buffer handle on success.
+ *
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ * @pre @p buffer_out must not be NULL.
+ * @note The returned buffer must be released with @c vrtd_buffer_destroy().
+ */
+enum vrtd_ret vrtd_buffer_open_raw(
+    int fd,
+    uint32_t dev,
+    uint64_t phys_addr,
+    uint64_t size,
+    uint32_t alloc_dir,
+    struct vrtd_buffer **buffer_out
+);
+
+/**
  * @brief Close a buffer (release allocation + QDMA qpair) via vrtd.
  *
  * On success or failure, the local buffer is destroyed and must not be used.

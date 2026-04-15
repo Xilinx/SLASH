@@ -248,10 +248,10 @@ Program the Board
 ==================
 
 After installing the packages, the board's flash memory must be programmed
-with the abstract shell before the system can be used. This step is required:
+with the static shell before the system can be used. This step is required:
 
 - on the **first install** of SLASH, and
-- when **upgrading** to a version that changes the abstract shell (noted in
+- when **upgrading** to a version that changes the static shell (noted in
   the release notes).
 
 It is **not** required after crashes, daemon restarts, or other normal
@@ -385,7 +385,7 @@ Upgrade and Removal
 
 .. note::
 
-   If the new version changes the abstract shell, re-program the board flash
+   If the new version changes the static shell, re-program the board flash
    after upgrading the packages. See `Program the Board`_ above.
 
 .. tab-set::

@@ -517,6 +517,60 @@ enum vrtd_ret vrtd_buffer_open(
     return VRTD_RET_OK;
 }
 
+enum vrtd_ret vrtd_buffer_open_raw(
+    int fd,
+    uint32_t dev,
+    uint64_t phys_addr,
+    uint64_t size,
+    uint32_t alloc_dir,
+    struct vrtd_buffer **buffer_out
+)
+{
+    if (buffer_out == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+    *buffer_out = NULL;
+
+    struct vrtd_req_buffer_open_raw req = {
+        .dev_number = dev,
+        .alloc_dir = alloc_dir,
+        .phys_addr = phys_addr,
+        .size = size,
+    };
+    struct vrtd_resp_buffer_open_raw resp = {0};
+
+    int qpair_fd = -1;
+    int ret = vrtd_raw_request(fd, VRTD_REQ_BUFFER_OPEN_RAW,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               &qpair_fd, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    if (qpair_fd < 0) {
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    ret = vrtd_buffer_create_raw(
+        fd,
+        dev,
+        0,           /* alloc_type: not used for raw buffers */
+        alloc_dir,
+        0,           /* alloc_arg: not used for raw buffers */
+        size,
+        phys_addr,
+        qpair_fd,
+        buffer_out
+    );
+    if (ret != VRTD_RET_OK) {
+        (void) close(qpair_fd);
+        return ret;
+    }
+
+    return VRTD_RET_OK;
+}
+
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,

@@ -84,6 +84,7 @@ enum auth_subsystem {
     AUTH_SUBSYSTEM_DESIGN_WRITE,
     AUTH_SUBSYSTEM_CLOCK,
     AUTH_SUBSYSTEM_PCIE_HOTPLUG,
+    AUTH_SUBSYSTEM_RAW_MEM_ACCESS,
 };
 
 /**
@@ -97,8 +98,9 @@ static const char *auth_subsystem_name(enum auth_subsystem subsystem)
     case AUTH_SUBSYSTEM_BUFFER:       return "buffer";
     case AUTH_SUBSYSTEM_DESIGN_WRITE: return "design-write";
     case AUTH_SUBSYSTEM_CLOCK:        return "clock";
-    case AUTH_SUBSYSTEM_PCIE_HOTPLUG: return "pcie-hotplug";
-    default:                          return "unknown";
+    case AUTH_SUBSYSTEM_PCIE_HOTPLUG:  return "pcie-hotplug";
+    case AUTH_SUBSYSTEM_RAW_MEM_ACCESS: return "raw-mem-access";
+    default:                           return "unknown";
     }
 }
 
@@ -113,8 +115,9 @@ static bool device_policy_check(const struct device_policy *dp, enum auth_subsys
     case AUTH_SUBSYSTEM_BUFFER:       return dp->buffer;
     case AUTH_SUBSYSTEM_DESIGN_WRITE: return dp->design_write;
     case AUTH_SUBSYSTEM_CLOCK:        return dp->clock;
-    case AUTH_SUBSYSTEM_PCIE_HOTPLUG: return dp->pcie_hotplug;
-    default:                          return false;
+    case AUTH_SUBSYSTEM_PCIE_HOTPLUG:  return dp->pcie_hotplug;
+    case AUTH_SUBSYSTEM_RAW_MEM_ACCESS: return dp->raw_mem_access;
+    default:                           return false;
     }
 }
 
@@ -633,6 +636,31 @@ int auth_request_buffer_open(
 
     return auth_check_device_permission(
         client, req_body->dev_number, AUTH_SUBSYSTEM_BUFFER, "buffer_open"
+    );
+}
+
+/**
+ * @brief Authorize a buffer_open_raw request (open a raw DMA buffer, bypassing the allocator).
+ *
+ * Requires: query + raw-mem-access permission on the target device.
+ *
+ * @param client    The requesting client.
+ * @param req_body  The request payload.
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_buffer_open_raw(
+    struct client *client,
+    const struct vrtd_req_buffer_open_raw *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    return auth_check_device_permission(
+        client, req_body->dev_number, AUTH_SUBSYSTEM_RAW_MEM_ACCESS, "buffer_open_raw"
     );
 }
 

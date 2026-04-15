@@ -18,36 +18,35 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef SMI_VALIDATE_HPP
-#define SMI_VALIDATE_HPP
+/// @file debug/clockwiz.hpp
+/// @brief Declaration of the Clockwiz debug command.
 
-/// @file validate.hpp
-/// @brief Declaration of the Validate command.
-///
-/// The Validate command resets a V80 board and then exercises DDR and HBM
-/// memory via PCIe by running data integrity checks followed by parallel
-/// bandwidth measurements.
+#ifndef SMI_DEBUG_CLOCKWIZ_HPP
+#define SMI_DEBUG_CLOCKWIZ_HPP
 
+#include <optional>
 #include <string>
 
-/// @brief Static entry-point for the validate command.
+/// @brief Static entry-point for the debug clockwiz command.
 ///
-/// This class is not instantiable; it groups the command's option
-/// struct and its run() entry-point.
-class Validate {
-    Validate() = delete;
+/// This class is not instantiable; it groups the command options and
+/// its run() entry-point.
+class Clockwiz {
+    Clockwiz() = delete;
 public:
-    /// @brief Options parsed from the CLI for the validate command.
+    /// @brief Options parsed from the CLI for the clockwiz command.
     struct Options {
-        std::string bdf;           ///< BDF (Bus:Device.Function) address of the target device.
-        unsigned threads = 8;      ///< Number of parallel buffers/threads (1-64).
-        bool noReset = false;      ///< Skip the device reset step before running memory tests.
+        std::string bdf;                            ///< Target board address.
+        bool getMode{};                             ///< True to read a clock rate.
+        std::optional<std::string> setRateText;     ///< Optional set-rate argument (Hz).
+        std::string regionText = "user";            ///< Clock region selector: user or service.
+        bool hexMode{};                             ///< True for hex-formatted --get output.
     };
 
-    /// @brief Executes the validate command.
+    /// @brief Executes the clockwiz command.
     /// @param options Populated options struct.
     /// @return Exit code (0 on success).
     static int run(const Options& options);
 };
 
-#endif // SMI_VALIDATE_HPP
+#endif // SMI_DEBUG_CLOCKWIZ_HPP
