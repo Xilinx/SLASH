@@ -46,4 +46,5 @@ target_link_libraries(
     PRIVATE
 
     vrt::vrt
+    CLI11::CLI11
 )
