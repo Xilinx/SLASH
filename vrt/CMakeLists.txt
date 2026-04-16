@@ -131,6 +131,11 @@ target_link_libraries(vrt
     PkgConfig::PC_ZMQ
 )
 
+# Testing
+add_subdirectory(tests)
+
+# Installation
+
 set_target_properties(vrt PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 install(
