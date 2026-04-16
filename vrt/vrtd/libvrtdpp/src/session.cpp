@@ -135,6 +135,9 @@ Device Session::getDevice(size_t i) const {
         [&](const Device& device, BufferAllocType type, uint64_t size, uint64_t arg, BufferAllocDir dir) {
             return openBuffer(device, type, size, arg, dir);
         },
+        [&](const Device& device, uint64_t phys_addr, uint64_t size, BufferAllocDir dir) {
+            return openBufferRaw(device, phys_addr, size, dir);
+        },
         [&](const Device& device, HotplugOp op, uint8_t function) { return hotplugOp(device, op, function); },
         [&](const Device& device, int input_fd) { return designWrite(device, input_fd); },
         [&](const Device& device, std::string_view path) { return designWriteFile(device, path); },
@@ -196,6 +199,9 @@ Device Session::getDeviceByBdf(std::string_view bdf) const {
         [&](const Device& device, const slash_qdma_qpair_add& cfg) { return createQdmaQpair(device, cfg); },
         [&](const Device& device, BufferAllocType type, uint64_t size, uint64_t arg, BufferAllocDir dir) {
             return openBuffer(device, type, size, arg, dir);
+        },
+        [&](const Device& device, uint64_t phys_addr, uint64_t size, BufferAllocDir dir) {
+            return openBufferRaw(device, phys_addr, size, dir);
         },
         [&](const Device& device, HotplugOp op, uint8_t function) { return hotplugOp(device, op, function); },
         [&](const Device& device, int input_fd) { return designWrite(device, input_fd); },
@@ -298,6 +304,37 @@ Buffer Session::openBuffer(
         static_cast<uint32_t>(allocDir),
         allocArg,
         size,
+        &raw
+    );
+    if (ret != VRTD_RET_OK) {
+        throw Error(ret);
+    }
+
+    if (raw == nullptr) {
+        throw Error(VRTD_RET_INTERNAL_ERROR);
+    }
+
+    return Buffer(raw);
+}
+
+Buffer Session::openBufferRaw(
+    const Device& device,
+    uint64_t phys_addr,
+    uint64_t size,
+    BufferAllocDir allocDir
+) const {
+    if (isClosed()) {
+        throw Error(VRTD_RET_BAD_LIB_CALL);
+    }
+    std::lock_guard<std::mutex> lk(*m);
+
+    struct vrtd_buffer *raw = nullptr;
+    auto ret = vrtd_buffer_open_raw(
+        fd,
+        device.getNum(),
+        phys_addr,
+        size,
+        static_cast<uint32_t>(allocDir),
         &raw
     );
     if (ret != VRTD_RET_OK) {

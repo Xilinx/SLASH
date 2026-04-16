@@ -202,6 +202,23 @@ private:
     ) const;
 
     /**
+     * @internal Open a raw buffer (QDMA qpair at caller-specified device address).
+     *
+     * @param device    Device on which to create the qpair.
+     * @param phys_addr Caller-specified device physical address (bypasses allocator).
+     * @param size      Size in bytes.
+     * @param allocDir  QDMA transfer direction.
+     * @return An owning @c Buffer.
+     * @throws vrtd::Error on error.
+     */
+    Buffer openBufferRaw(
+        const Device& device,
+        uint64_t phys_addr,
+        uint64_t size,
+        BufferAllocDir allocDir
+    ) const;
+
+    /**
      * @internal Perform a PCIe hotplug operation.
      *
      * For board-level operations (Rescan, ResetSequence), @p function is ignored.

@@ -200,6 +200,21 @@ int auth_request_buffer_open(
 );
 
 /**
+ * @brief Authorize a BUFFER_OPEN_RAW request.
+ *
+ * Checks that the client's role permits opening a raw DMA buffer
+ * (bypassing the allocator) on the specified device.
+ *
+ * @param client   The requesting client.
+ * @param req_body The parsed request body containing device index and address.
+ * @return 0 if authorized, non-zero if denied.
+ */
+int auth_request_buffer_open_raw(
+    struct client *client,
+    const struct vrtd_req_buffer_open_raw *req_body
+);
+
+/**
  * @brief Authorize a BUFFER_CLOSE request.
  *
  * Checks that the client's role permits deallocating a DMA buffer

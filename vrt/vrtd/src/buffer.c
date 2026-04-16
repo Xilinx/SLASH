@@ -252,6 +252,99 @@ struct buffer *buffer_create(struct slash_qdma *qdma,
 }
 
 /**
+ * Allocate a buffer at a caller-specified device address, bypassing the allocator.
+ *
+ * Skips device_memory_map_allocate() and goes directly to QDMA queue pair creation
+ * with the provided address and size.  Sets allocation_valid=false so cleanup_buffer()
+ * will not attempt to free anything from the memory map.
+ *
+ * @return Heap-allocated buffer on success, NULL on failure (errno set).
+ */
+struct buffer *buffer_create_raw(struct slash_qdma *qdma,
+                                 uint64_t phys_addr,
+                                 uint64_t size,
+                                 enum vrtd_alloc_dir alloc_dir)
+{
+    if (qdma == NULL || size == 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    uint32_t dir_mask = 0;
+    switch (alloc_dir) {
+    case VRTD_ALLOC_DIR_BIDIRECTIONAL:
+        dir_mask = VRTD_QDMA_DIR_H2C | VRTD_QDMA_DIR_C2H;
+        break;
+    case VRTD_ALLOC_DIR_HOST_TO_DEVICE:
+        dir_mask = VRTD_QDMA_DIR_H2C;
+        break;
+    case VRTD_ALLOC_DIR_DEVICE_TO_HOST:
+        dir_mask = VRTD_QDMA_DIR_C2H;
+        break;
+    default:
+        errno = EINVAL;
+        LOG(LOG_ERR, "buffer_create_raw: invalid allocation direction %u", (unsigned int)alloc_dir);
+        return NULL;
+    }
+
+    struct buffer *buf = calloc(1, sizeof(*buf));
+    if (buf == NULL) {
+        LOG(LOG_ERR, "buffer_create_raw: failed to allocate buffer struct: %m");
+        return NULL;
+    }
+
+    *buf = (struct buffer) {
+        .qdma = qdma,
+        .map = NULL,
+        .alloc_type = 0,
+        .alloc_arg = 0,
+        .alloc_dir = alloc_dir,
+        .client_id = 0,
+        .addr = phys_addr,
+        .size = size,
+        .qid = 0,
+        .fd = -1,
+        .allocation_valid = false, /* no allocator reservation to free */
+        .qpair_created = false,
+    };
+
+    struct slash_qdma_qpair_add qpair = {0};
+    qpair.mode = VRTD_QDMA_Q_MODE_MM;
+    qpair.h2c_ring_sz = VRTD_QDMA_RING_SZ_IDX;
+    qpair.c2h_ring_sz = VRTD_QDMA_RING_SZ_IDX;
+    qpair.cmpt_ring_sz = VRTD_QDMA_RING_SZ_IDX;
+    qpair.dir_mask = dir_mask;
+    qpair.size = sizeof(qpair);
+
+    if (slash_qdma_qpair_add(qdma, &qpair) != 0) {
+        LOG(LOG_ERR, "buffer_create_raw: failed to add qpair: %m");
+        free(buf);
+        return NULL;
+    }
+
+    buf->qid = qpair.qid;
+    buf->qpair_created = true;
+
+    if (slash_qdma_qpair_start(qdma, buf->qid) != 0) {
+        LOG(LOG_ERR, "buffer_create_raw: failed to start qpair %u: %m", buf->qid);
+        cleanup_buffer(buf);
+        return NULL;
+    }
+
+    int fd = slash_qdma_qpair_get_fd(qdma, buf->qid, O_CLOEXEC);
+    if (fd < 0) {
+        LOG(LOG_ERR, "buffer_create_raw: failed to get fd for qpair %u: %m", buf->qid);
+        cleanup_buffer(buf);
+        return NULL;
+    }
+    buf->fd = fd;
+
+    LOG(LOG_DEBUG, "Raw buffer created phys_addr=0x%llx size=%llu qid=%u",
+        (unsigned long long)phys_addr, (unsigned long long)size, buf->qid);
+    return buf;
+}
+
+/**
  * Tear down a buffer and release all associated resources.
  *
  * Resources are released in reverse acquisition order:

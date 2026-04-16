@@ -164,3 +164,146 @@ subsystems.
 .. option:: -j, --threads <N>
 
    Number of parallel buffers/threads for the validation test (1–64, default 8).
+
+debug
+-----
+
+Low-level troubleshooting commands.
+
+debug bar-poke
+^^^^^^^^^^^^^^
+
+Read or write BAR words.
+
+.. code-block:: text
+
+   v80-smi debug bar-poke -d <BDF> -b <BAR> (-r|--read | -w|--write) [-x|--hex] [-W|--word-size <N>] [-c|--count <N>] <address> [value]
+
+.. option:: -d, --device <BDF>
+
+   Board address. **Required.**
+
+.. option:: -b, --bar <BAR>
+
+   BAR number (0-5). **Required.**
+
+.. option:: -r, --read
+
+   Read mode.
+
+.. option:: -w, --write
+
+   Write mode.
+
+.. option:: -x, --hex
+
+   Print read output in hexadecimal.
+
+.. option:: -W, --word-size <N>
+
+   Access width in bytes: 1, 2, 4, or 8 (default 4).
+
+.. option:: -c, --count <N>
+
+   Number of words to read (default 1; must be 1 for write).
+
+Rules:
+
+- Exactly one of ``--read`` or ``--write`` must be provided.
+- ``value`` is required for write and forbidden for read.
+- ``address`` is a BAR-relative byte offset.
+
+debug mem-poke
+^^^^^^^^^^^^^^
+
+Read or write device memory at a raw physical address. This bypasses the
+allocator and requires raw-mem-access permission in vrtd.
+
+.. code-block:: text
+
+   v80-smi debug mem-poke -d <BDF> (-r|--read | -w|--write) [-x|--hex] [-W|--word-size <N>] [-c|--count <N>] <address> [value] [-f|--file <path>]
+
+.. option:: -d, --device <BDF>
+
+   Board address. **Required.**
+
+.. option:: -r, --read
+
+   Read mode.
+
+.. option:: -w, --write
+
+   Write mode.
+
+.. option:: -x, --hex
+
+   Hex mode.
+
+   - Read-to-stdout: prints values in hexadecimal.
+   - With ``--file``: treats file payload as hex text/hexdump format.
+
+.. option:: -W, --word-size <N>
+
+   Access width in bytes: 1, 2, 4, or 8 (default 4).
+
+.. option:: -c, --count <N>
+
+   Number of words to transfer (default 1).
+
+.. option:: -f, --file <path>
+
+   File mode transfer path.
+
+   - In read mode: destination file.
+   - In write mode: source file.
+
+Rules:
+
+- Exactly one of ``--read`` or ``--write`` must be provided.
+- ``address`` is a device physical address.
+- ``word-size`` must be 1, 2, 4, or 8.
+- ``count`` must be greater than zero.
+- Scalar mode (no ``--file``):
+  - write requires ``value`` and forces ``count == 1``
+  - read forbids ``value``
+  - address must be aligned to word-size
+- File mode (``--file`` present):
+  - ``value`` is forbidden
+  - transfer size is exactly ``word-size * count`` bytes
+  - with ``--hex`` file is text hex/hexdump; without ``--hex`` file is raw binary
+
+debug clockwiz
+^^^^^^^^^^^^^^
+
+Read or set clock rate for a device clock region using vrtd clock-op.
+
+.. code-block:: text
+
+   v80-smi debug clockwiz -d <BDF> (--get | --set <rate_hz>) [--region <user|service>] [-x|--hex]
+
+.. option:: -d, --device <BDF>
+
+   Board address. **Required.**
+
+.. option:: --get
+
+   Read current clock rate for selected region.
+
+.. option:: --set <rate_hz>
+
+   Set requested clock rate in Hz for selected region.
+
+.. option:: --region <user|service>
+
+   Clock region selector (default: ``user``).
+
+.. option:: -x, --hex
+
+   Print ``--get`` output in hexadecimal.
+
+Rules:
+
+- Exactly one of ``--get`` or ``--set`` must be provided.
+- ``--set`` value is in Hz and must be greater than zero.
+- ``--hex`` is valid only with ``--get``.
+- ``--set`` prints requested and achieved frequencies.

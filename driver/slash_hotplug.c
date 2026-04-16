@@ -71,8 +71,15 @@
  */
 static int slash_hotplug_copy_request(unsigned long arg, struct slash_hotplug_device_request *req)
 {
-    if (copy_from_user(req, (void __user *)arg, sizeof(*req)))
+    pr_debug("slash_hotplug: copy_request: copying %zu bytes from userspace\n", sizeof(*req));
+
+    if (copy_from_user(req, (void __user *)arg, sizeof(*req))) {
+        pr_err("slash_hotplug: copy_request: copy_from_user failed\n");
         return -EFAULT;
+    }
+
+    pr_debug("slash_hotplug: copy_request: size=%u bdf='%.*s'\n",
+             req->size, (int)(SLASH_HOTPLUG_BDF_LEN - 1), req->bdf);
 
     if (req->size && req->size < sizeof(*req)) {
         pr_err("slash_hotplug: request size %u too small (expected %zu)\n",
@@ -92,6 +99,7 @@ static int slash_hotplug_copy_request(unsigned long arg, struct slash_hotplug_de
         return -EINVAL;
     }
 
+    pr_debug("slash_hotplug: copy_request: sanitized BDF='%s'\n", req->bdf);
     return 0;
 }
 
@@ -114,12 +122,16 @@ static int slash_hotplug_get_pci_dev(const char *bdf, struct pci_dev **pdev_out)
         return -EINVAL;
     }
 
+    pr_info("slash_hotplug: get_pci_dev: looking up %s (domain=%04x bus=%02x slot=%02x func=%x)\n",
+            bdf, domain, bus, slot, func);
+
     pdev = pci_get_domain_bus_and_slot(domain, bus, PCI_DEVFN(slot, func));
     if (!pdev) {
         pr_err("slash_hotplug: device %s not present in PCI subsystem\n", bdf);
         return -ENODEV;
     }
 
+    pr_info("slash_hotplug: get_pci_dev: found %s\n", pci_name(pdev));
     *pdev_out = pdev;
     return 0;
 }
@@ -134,11 +146,20 @@ static int slash_hotplug_get_pci_dev(const char *bdf, struct pci_dev **pdev_out)
 static int slash_hotplug_handle_rescan(void)
 {
     struct pci_bus *bus;
+    int bus_count = 0;
 
+    pr_info("slash_hotplug: rescan: acquiring pci_lock_rescan_remove\n");
     pci_lock_rescan_remove();
-    list_for_each_entry(bus, &pci_root_buses, node)
+
+    list_for_each_entry(bus, &pci_root_buses, node) {
+        pr_info("slash_hotplug: rescan: scanning root bus %04x:%02x\n",
+                pci_domain_nr(bus), bus->number);
         pci_rescan_bus(bus);
+        bus_count++;
+    }
+
     pci_unlock_rescan_remove();
+    pr_info("slash_hotplug: rescan: complete (%d root bus(es) scanned)\n", bus_count);
 
     return 0;
 }
@@ -156,8 +177,11 @@ static int slash_hotplug_handle_rescan(void)
 static int slash_hotplug_handle_remove(const char *bdf)
 {
     struct pci_dev *pdev;
-    int ret = slash_hotplug_get_pci_dev(bdf, &pdev);
+    int ret;
 
+    pr_info("slash_hotplug: remove: starting for BDF %s\n", bdf);
+
+    ret = slash_hotplug_get_pci_dev(bdf, &pdev);
     if (ret) {
         pr_err("slash_hotplug: remove: BDF %s unavailable (%d)\n", bdf, ret);
         return ret;
@@ -166,15 +190,22 @@ static int slash_hotplug_handle_remove(const char *bdf)
     if (pdev->bus && pdev->bus->self) {
         u16 bridge_ctrl;
         pci_read_config_word(pdev->bus->self, PCI_BRIDGE_CONTROL, &bridge_ctrl);
-        pr_info("slash_hotplug: remove: %s bridge_ctrl=0x%04x before remove\n",
-                pci_name(pdev), bridge_ctrl);
+        pr_info("slash_hotplug: remove: %s upstream bridge=%s bridge_ctrl=0x%04x before remove\n",
+                pci_name(pdev), pci_name(pdev->bus->self), bridge_ctrl);
     }
 
+    pr_info("slash_hotplug: remove: acquiring pci_lock_rescan_remove\n");
     pci_lock_rescan_remove();
+
+    pr_info("slash_hotplug: remove: clearing bus master for %s\n", pci_name(pdev));
     pci_clear_master(pdev);
-    pr_info("slash_hotplug: removing %s\n", pci_name(pdev));
-    pci_stop_and_remove_bus_device_locked(pdev);
+
+    pr_info("slash_hotplug: remove: calling pci_stop_and_remove_bus_device for %s\n", pci_name(pdev));
+    pci_stop_and_remove_bus_device(pdev);
+
     pci_unlock_rescan_remove();
+    pr_info("slash_hotplug: remove: released pci_lock_rescan_remove\n");
+
     pci_dev_put(pdev);
     pr_info("slash_hotplug: remove: %s complete\n", bdf);
 
@@ -211,93 +242,73 @@ static int slash_hotplug_handle_toggle_sbr(const char *bdf)
     struct pci_dev *bridge;
     int domain, bus_nr, slot, func;
     int ret;
-    u16 ctrl;
+
+    pr_info("slash_hotplug: toggle_sbr: starting for BDF %s\n", bdf);
 
     if (sscanf(bdf, "%x:%x:%x.%x", &domain, &bus_nr, &slot, &func) != 4) {
         pr_err("slash_hotplug: toggle_sbr: malformed BDF '%s'\n", bdf);
         return -EINVAL;
     }
 
+    /*
+     * Hold pci_lock_rescan_remove() across the pci_find_bus() + pci_dev_get()
+     * pair.  pci_find_bus() does not pin the returned pci_bus; without the
+     * lock, a concurrent bus removal could free ep_bus between the lookup and
+     * the dev_get, turning ep_bus->self into a use-after-free.  The lock is
+     * dropped before pci_bridge_secondary_bus_reset() to avoid deadlocking
+     * with the PCI slot lock that the reset function acquires internally.
+     */
+    pr_info("slash_hotplug: toggle_sbr: looking up bus (domain=%04x bus=%02x)\n",
+            domain, bus_nr);
+    pci_lock_rescan_remove();
     ep_bus = pci_find_bus(domain, bus_nr);
     if (!ep_bus || !ep_bus->self) {
+        pci_unlock_rescan_remove();
         pr_err("slash_hotplug: toggle_sbr: no upstream bridge for %s\n", bdf);
         return -ENODEV;
     }
-
     bridge = pci_dev_get(ep_bus->self);
+    pci_unlock_rescan_remove();
+
     pr_info("slash_hotplug: toggle_sbr: bridge=%s bus=%02x\n",
             pci_name(bridge), bus_nr);
 
     /*
-     * Try the kernel's official SBR API first.  It saves and restores
-     * bridge config space (memory windows, bus numbers, ACS, ARI) and
-     * holds the proper PCI slot lock.  This is critical for root ports
-     * whose memory-window configuration would otherwise be lost after
-     * a manual SBR toggle, causing BAR reads to return garbage.
+     * pci_bridge_secondary_bus_reset() saves and restores bridge config
+     * space (memory windows, bus numbers, ACS, ARI) and holds the proper
+     * PCI slot lock.  This is essential for root ports whose memory-window
+     * configuration would otherwise be lost after an SBR.
+     *
+     * Available since kernel 5.9; guaranteed present on our minimum targets
+     * (RHEL 9 / Ubuntu 22.04, both ship kernel >= 5.14).
      */
     ret = pci_bridge_secondary_bus_reset(bridge);
-    if (!ret) {
-        pr_info("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset OK\n");
-    } else {
-        /*
-         * Kernel API failed (may not be supported for this bridge type).
-         * Fall back to manual SBR register toggle.
-         */
-        pr_info("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset "
-                "failed (%d), falling back to manual SBR\n", ret);
-
-        /* Read current bridge control state. */
-        ret = pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &ctrl);
-        if (ret) {
-            pr_err("slash_hotplug: toggle_sbr: read control failed (%d)\n", ret);
-            goto out_put;
-        }
-        pr_info("slash_hotplug: toggle_sbr: ctrl=0x%04x before assert\n", ctrl);
-
-        /* Assert SBR. */
-        ret = pci_write_config_word(bridge, PCI_BRIDGE_CONTROL,
-                                    ctrl | PCI_BRIDGE_CTL_BUS_RESET);
-        if (ret) {
-            pr_err("slash_hotplug: toggle_sbr: assert SBR failed (%d)\n", ret);
-            goto out_put;
-        }
-        pr_info("slash_hotplug: toggle_sbr: SBR asserted\n");
-
-        /* PCIe spec requires at least 1 ms reset hold; we use 2 ms for margin. */
-        msleep(2);
-
-        /* Deassert SBR. */
-        ret = pci_write_config_word(bridge, PCI_BRIDGE_CONTROL,
-                                    ctrl & ~PCI_BRIDGE_CTL_BUS_RESET);
-        if (ret)
-            pr_err("slash_hotplug: toggle_sbr: deassert SBR failed (%d)\n", ret);
-
-        /* Re-read bridge control to verify SBR was actually cleared. */
-        {
-            u16 ctrl_after;
-
-            pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &ctrl_after);
-            pr_info("slash_hotplug: toggle_sbr: ctrl=0x%04x after deassert\n",
-                    ctrl_after);
-        }
+    if (ret) {
+        pr_err("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset failed (%d)\n", ret);
+        goto out_put;
     }
+    pr_info("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset OK\n");
 
     /*
      * Post-SBR link training delay.  The PCIe spec requires at minimum
      * 100 ms for link training after SBR deassertion; real FPGA hardware
-     * can take longer.  300 ms matches the old driver and provides margin.
+     * can take longer.  1000 ms provides margin for link instability seen
+     * on repeated resets where 300 ms was insufficient.
      * Without this delay, config-space reads on root ports return 0xFFFF
      * because the link is not yet trained.
      *
      * Userspace adds its own ~5 s wait for full FPGA re-initialisation;
-     * this 300 ms covers the kernel-internal window between SBR
+     * this 1000 ms covers the kernel-internal window between SBR
      * deassertion and ioctl return.
      */
-    msleep(300);
-    pr_info("slash_hotplug: toggle_sbr: post-SBR settle complete (300 ms)\n");
+    pr_info("slash_hotplug: toggle_sbr: waiting 1000 ms for PCIe link training\n");
+    msleep(1000);
+    pr_info("slash_hotplug: toggle_sbr: post-SBR settle complete (1000 ms)\n");
 
 out_put:
     pci_dev_put(bridge);
+    if (!ret)
+        pr_info("slash_hotplug: toggle_sbr: %s complete\n", bdf);
     return ret;
 }
 
@@ -322,6 +333,8 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
     struct pci_bus *bus;
     int ret;
 
+    pr_info("slash_hotplug: hotplug: starting for BDF %s\n", bdf);
+
     ret = slash_hotplug_get_pci_dev(bdf, &pdev);
     if (ret) {
         pr_err("slash_hotplug: hotplug: BDF %s unavailable (%d)\n", bdf, ret);
@@ -335,15 +348,26 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
         return -ENODEV;
     }
 
+    pr_info("slash_hotplug: hotplug: parent bus %04x:%02x\n",
+            pci_domain_nr(bus), bus->number);
+
+    pr_info("slash_hotplug: hotplug: acquiring pci_lock_rescan_remove\n");
     pci_lock_rescan_remove();
+
+    pr_info("slash_hotplug: hotplug: clearing bus master for %s\n", pci_name(pdev));
     pci_clear_master(pdev);
-    dev_info(&pdev->dev, "slash_hotplug: removing device for hotplug cycle\n");
-    pci_stop_and_remove_bus_device_locked(pdev);
+
+    pr_info("slash_hotplug: hotplug: calling pci_stop_and_remove_bus_device for %s\n", pci_name(pdev));
+    pci_stop_and_remove_bus_device(pdev);
     pci_dev_put(pdev);
 
-    /* Rescan the device's bus to re-discover it. */
+    pr_info("slash_hotplug: hotplug: device removed, rescanning bus %04x:%02x\n",
+            pci_domain_nr(bus), bus->number);
     pci_rescan_bus(bus);
+
     pci_unlock_rescan_remove();
+    pr_info("slash_hotplug: hotplug: released pci_lock_rescan_remove\n");
+    pr_info("slash_hotplug: hotplug: %s complete\n", bdf);
 
     return 0;
 }
@@ -361,11 +385,17 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
     struct slash_hotplug_device_request req = {0};
     int ret;
 
+    pr_info("slash_hotplug: ioctl: received cmd=0x%x\n", cmd);
+
     switch (cmd) {
     case SLASH_HOTPLUG_IOCTL_RESCAN:
+        pr_info("slash_hotplug: ioctl: dispatching RESCAN\n");
         ret = slash_hotplug_handle_rescan();
+        if (!ret)
+            pr_info("slash_hotplug: ioctl: RESCAN succeeded\n");
         break;
     case SLASH_HOTPLUG_IOCTL_REMOVE:
+        pr_info("slash_hotplug: ioctl: dispatching REMOVE\n");
         ret = slash_hotplug_copy_request(arg, &req);
         if (ret) {
             pr_err("slash_hotplug: remove: copy_request failed (%d)\n", ret);
@@ -373,8 +403,11 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
         }
         pr_info("slash_hotplug: remove: BDF %s\n", req.bdf);
         ret = slash_hotplug_handle_remove(req.bdf);
+        if (!ret)
+            pr_info("slash_hotplug: ioctl: REMOVE succeeded\n");
         break;
     case SLASH_HOTPLUG_IOCTL_TOGGLE_SBR:
+        pr_info("slash_hotplug: ioctl: dispatching TOGGLE_SBR\n");
         ret = slash_hotplug_copy_request(arg, &req);
         if (ret) {
             pr_err("slash_hotplug: toggle_sbr: copy_request failed (%d)\n", ret);
@@ -382,8 +415,11 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
         }
         pr_info("slash_hotplug: toggle_sbr: BDF %s\n", req.bdf);
         ret = slash_hotplug_handle_toggle_sbr(req.bdf);
+        if (!ret)
+            pr_info("slash_hotplug: ioctl: TOGGLE_SBR succeeded\n");
         break;
     case SLASH_HOTPLUG_IOCTL_HOTPLUG:
+        pr_info("slash_hotplug: ioctl: dispatching HOTPLUG\n");
         ret = slash_hotplug_copy_request(arg, &req);
         if (ret) {
             pr_err("slash_hotplug: hotplug: copy_request failed (%d)\n", ret);
@@ -391,6 +427,8 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
         }
         pr_info("slash_hotplug: hotplug: BDF %s\n", req.bdf);
         ret = slash_hotplug_handle_hotplug(req.bdf);
+        if (!ret)
+            pr_info("slash_hotplug: ioctl: HOTPLUG succeeded\n");
         break;
     default:
         pr_err("slash_hotplug: unknown ioctl cmd 0x%x\n", cmd);
@@ -415,6 +453,7 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
  */
 static long slash_hotplug_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+    pr_info("slash_hotplug: compat_ioctl: cmd=0x%x (32-bit userspace)\n", cmd);
     return slash_hotplug_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
 }
 #endif
@@ -446,11 +485,14 @@ int slash_hotplug_init(void)
         return ret;
     }
 
+    pr_info("slash_hotplug: misc device registered as /dev/%s (minor %d)\n",
+            slash_hotplug_misc.name, slash_hotplug_misc.minor);
     return 0;
 }
 
 void slash_hotplug_exit(void)
 {
+    pr_info("slash_hotplug: deregistering misc device\n");
     misc_deregister(&slash_hotplug_misc);
     pr_info("slash_hotplug: misc device unregistered\n");
 }

@@ -32,6 +32,7 @@ Device::Device(uint32_t num,
                std::function<Bar(const Device&, uint8_t)> fGetBar,
                std::function<QdmaQpair(const Device&, const struct slash_qdma_qpair_add&)> fCreateQdmaQpair,
                std::function<Buffer(const Device&, BufferAllocType, uint64_t, uint64_t, BufferAllocDir)> fOpenBuffer,
+               std::function<Buffer(const Device&, uint64_t, uint64_t, BufferAllocDir)> fOpenBufferRaw,
                std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
                std::function<void(const Device&, int)> fDesignWrite,
                std::function<void(const Device&, std::string_view)> fDesignWriteFile,
@@ -48,6 +49,7 @@ Device::Device(uint32_t num,
     this->fGetBar = fGetBar;
     this->fCreateQdmaQpair = fCreateQdmaQpair;
     this->fOpenBuffer = fOpenBuffer;
+    this->fOpenBufferRaw = fOpenBufferRaw;
     this->fHotplugOp = fHotplugOp;
     this->fDesignWrite = fDesignWrite;
     this->fDesignWriteFile = fDesignWriteFile;
@@ -97,6 +99,12 @@ Buffer Device::openBuffer(BufferAllocType allocType,
                           uint64_t allocArg,
                           BufferAllocDir allocDir) const {
     return fOpenBuffer(*this, allocType, size, allocArg, allocDir);
+}
+
+Buffer Device::openRawBuffer(uint64_t phys_addr,
+                             uint64_t size,
+                             BufferAllocDir allocDir) const {
+    return fOpenBufferRaw(*this, phys_addr, size, allocDir);
 }
 
 void Device::hotplugOp(HotplugOp op, uint8_t function) const {

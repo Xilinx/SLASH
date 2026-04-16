@@ -109,6 +109,25 @@ struct buffer *buffer_create(struct slash_qdma *qdma,
                              const struct slash_qdma_qpair_add *qpair_params);
 
 /**
+ * @brief Allocate a new DMA buffer at a caller-specified device address (bypasses allocator).
+ *
+ * Creates a QDMA queue pair at the given physical address without consulting the
+ * allocator.  The caller is responsible for ensuring the address is valid and not
+ * in use.  @c allocation_valid is set to false so cleanup_buffer() will not
+ * attempt to release anything from the memory map.
+ *
+ * @param qdma       QDMA subsystem handle (borrowed).
+ * @param phys_addr  Caller-specified device physical address.
+ * @param size       Size in bytes.
+ * @param alloc_dir  DMA transfer direction.
+ * @return Heap-allocated buffer on success, NULL on failure (errno set).
+ */
+struct buffer *buffer_create_raw(struct slash_qdma *qdma,
+                                 uint64_t phys_addr,
+                                 uint64_t size,
+                                 enum vrtd_alloc_dir alloc_dir);
+
+/**
  * @brief Release all resources owned by a buffer.
  *
  * Stops and deletes the QDMA queue pair, frees the address-space reservation,

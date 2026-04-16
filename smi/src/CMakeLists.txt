@@ -21,6 +21,9 @@
 add_executable(
     v80-smi
     
+    debug/bar_poke.cpp
+    debug/clockwiz.cpp
+    debug/mem_poke.cpp
     inspect.cpp
     list.cpp
     program.cpp
@@ -46,4 +49,5 @@ target_link_libraries(
     PRIVATE
 
     vrt::vrt
+    CLI11::CLI11
 )
