@@ -55,6 +55,15 @@ if(ENABLE_SANITIZERS)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
+option(ENABLE_COVERAGE "Build with gcov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+  if(ENABLE_SANITIZERS)
+    message(FATAL_ERROR "ENABLE_COVERAGE and ENABLE_SANITIZERS cannot be used together")
+  endif()
+  add_compile_options(--coverage -fno-inline)
+  add_link_options(--coverage)
+endif()
+
 # Generate the header
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/vrt_version.hpp.in"

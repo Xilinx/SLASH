@@ -45,13 +45,31 @@ jobs:
           sudo apt upgrade -y
           sudo apt install -y cmake pkg-config ninja-build \
           libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
-          libsystemd-dev libinih-dev libcli11-dev
+          libsystemd-dev libinih-dev libcli11-dev lcov
 
       - name: Build and run VRT unit tests
         run: |
           mkdir vrt/build
           cd vrt/build
-          cmake -DVRT_INCLUDE_VRTD=1 -DVRTD_INCLUDE_LIBSLASH=1 ..
+          cmake -DVRT_INCLUDE_VRTD=1 -DVRTD_INCLUDE_LIBSLASH=1 -DENABLE_COVERAGE=1 ..
           make unit_tests -j$(nproc)
           cd tests && ctest --output-on-failure
+
+      - name: Generate coverage report
+        run: |
+          cd vrt/build
+          lcov --capture --directory . --output-file coverage.info \
+            --ignore-errors mismatch
+          lcov --remove coverage.info \
+            '/usr/*' '*/build/_deps/*' '*/vrtd/*' '*/tests/*' \
+            --output-file coverage.filtered.info \
+            --ignore-errors unused
+          genhtml coverage.filtered.info --output-directory coverage-report
+          lcov --list coverage.filtered.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrt-coverage-report
+          path: vrt/build/coverage-report/
           
