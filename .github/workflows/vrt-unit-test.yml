@@ -52,6 +52,6 @@ jobs:
           mkdir vrt/build
           cd vrt/build
           cmake -DVRT_INCLUDE_VRTD=1 -DVRTD_INCLUDE_LIBSLASH=1 ..
-          make hello_test
-          ./tests/hello_test
+          make unit_tests -j$(nproc)
+          cd tests && ctest --output-on-failure
           
