@@ -35,10 +35,10 @@ if [ -z "$(cat /boot/config-$(uname -r) | grep CONFIG_GCOV_KERNEL=y)" ]; then
 fi
 
 # Build the module with gcov enabled
-make GCOV=1
+make -C .. GCOV=1
 
 # Build the test suite
-make -C tests/ all
+make all
 
 # Remove the current kernel module (if currently running)
 remove_slash_module
@@ -47,11 +47,11 @@ remove_slash_module
 echo 1 | sudo tee /sys/kernel/debug/gcov/reset > /dev/null
 
 # Load the module
-sudo insmod ./slash.ko
+sudo insmod ../slash.ko
 echo 1 | sudo tee /sys/bus/pci/rescan > /dev/null
 
 # Run the tests
-sudo make -C tests/ run
+sudo make run
 
 # Remove the module again
 remove_slash_module

@@ -24,6 +24,7 @@
 
 #define QDMA_CTL_DEV   "/dev/slash_qdma_ctl0"
 #define TRANSFER_SIZE  4096
+#define DDR_BASE_ADDRESS 0x60000000000ULL
 
 /* ---------- helpers ---------- */
 
@@ -32,7 +33,7 @@ static uint64_t get_dma_addr(void)
 	const char *val = getenv("SLASH_TEST_DMA_ADDR");
 
 	if (val)
-		return strtoull(val, NULL, 0);
+		return strtoull(val, NULL, DDR_BASE_ADDRESS);
 	return 0;
 }
 
