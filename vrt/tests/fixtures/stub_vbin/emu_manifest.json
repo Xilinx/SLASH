@@ -1,0 +1,30 @@
+{
+  "kernels": [
+    {
+      "instance": "vadd",
+      "call_args": [
+        {"arg": "arg0", "kind": "buffer"},
+        {"arg": "arg1", "kind": "buffer"},
+        {"arg": "arg2", "kind": "buffer"},
+        {"arg": "arg3", "kind": "scalar"}
+      ]
+    },
+    {
+      "instance": "passthrough",
+      "call_args": [
+        {"arg": "arg0", "kind": "scalar"}
+      ]
+    }
+  ],
+  "fetch": {
+    "scalar": [
+      {
+        "function": "vadd",
+        "arg": "size",
+        "source": {
+          "register_offset": 40
+        }
+      }
+    ]
+  }
+}

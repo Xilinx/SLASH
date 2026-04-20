@@ -62,6 +62,7 @@ Thumbs.db
 
 __pycache__/
 *.pyc
+.venv/
 
 # Build files for package
 /pbuild/

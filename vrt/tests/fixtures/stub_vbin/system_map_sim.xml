@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Simulation</Platform>
+  <ClockFrequency>100000000</ClockFrequency>
+
+  <Kernel>
+    <Name>vadd</Name>
+    <BaseAddress>0x10000</BaseAddress>
+    <Range>0x1000</Range>
+    <register offset="0x00" name="CTRL" access="RW" description="Control register" range="32"/>
+    <functional_args>
+      <arg idx="0" name="in1_r" type="buffer" offset="0x10" range="64" r="0" w="1" port="m_axi_gmem0"/>
+      <arg idx="1" name="in2_r" type="buffer" offset="0x18" range="64" r="0" w="1" port="m_axi_gmem1"/>
+      <arg idx="2" name="out_r" type="buffer" offset="0x20" range="64" r="0" w="1" port="m_axi_gmem2"/>
+      <arg idx="3" name="size" type="scalar" offset="0x28" range="32" r="0" w="1" port=""/>
+    </functional_args>
+    <connection port="m_axi_gmem0" target="HBM0"/>
+    <connection port="m_axi_gmem1" target="DDR"/>
+    <connection port="m_axi_gmem2" target="MEM"/>
+  </Kernel>
+
+  <Kernel>
+    <Name>passthrough</Name>
+    <BaseAddress>0x20000</BaseAddress>
+    <Range>0x1000</Range>
+    <register offset="0x00" name="CTRL" access="RW" description="Control register" range="32"/>
+    <functional_args>
+      <arg idx="0" name="value" type="scalar" offset="0x10" range="32" r="0" w="1" port=""/>
+    </functional_args>
+  </Kernel>
+
+  <Qdma>
+    <kernel>vadd</kernel>
+    <interface>axis_in</interface>
+    <direction>HostToDevice</direction>
+    <qid>0</qid>
+  </Qdma>
+
+  <Qdma>
+    <kernel>vadd</kernel>
+    <interface>axis_out</interface>
+    <direction>DeviceToHost</direction>
+    <qid>1</qid>
+  </Qdma>
+</SystemMap>
