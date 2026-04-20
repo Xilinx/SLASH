@@ -59,7 +59,7 @@ jobs:
         run: |
           cd vrt/build
           lcov --capture --directory . --output-file coverage.info \
-            --ignore-errors mismatch
+            --ignore-errors mismatch --ignore-errors negative
           lcov --remove coverage.info \
             '/usr/*' '*/build/_deps/*' '*/vrtd/*' '*/tests/*' \
             --output-file coverage.filtered.info \
