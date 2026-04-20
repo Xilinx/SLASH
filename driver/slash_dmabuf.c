@@ -45,6 +45,7 @@
 #include <linux/pci.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
+#include <linux/version.h>
 
 /**
  * struct slash_bar_dmabuf_data - Private data attached to each BAR dma-buf.
@@ -180,8 +181,13 @@ static int slash_bar_dmabuf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *
      * VM_DONTCOPY  — do not inherit across fork(); BAR register
      *                mappings should not be silently shared with children.
      */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+    vm_flags_set(vma, VM_PFNMAP | VM_IO | VM_DONTDUMP |
+                      VM_DONTEXPAND | VM_DONTCOPY);
+#else
     vma->vm_flags |= VM_PFNMAP | VM_IO | VM_DONTDUMP |
                      VM_DONTEXPAND | VM_DONTCOPY;
+#endif
 
     wc = !!(pci_resource_flags(priv->pdev, priv->bar_number) & IORESOURCE_PREFETCH);
     vma->vm_page_prot = wc ? pgprot_writecombine(vma->vm_page_prot)

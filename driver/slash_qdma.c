@@ -819,7 +819,7 @@ err_exit_libqdma:
  * (which triggers slash_qdma_remove() for each probed device) and then
  * shuts down the libqdma library.
  */
-void __exit slash_qdma_exit(void)
+void slash_qdma_exit(void)
 {
     SLASH_QDMA_OP_LOG("exit start\n");
 

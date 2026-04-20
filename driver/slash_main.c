@@ -49,6 +49,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/printk.h>
+#include <linux/version.h>
 
 #include "slash_pcie.h"
 #include "slash_hotplug_driver.h"
@@ -126,4 +127,8 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AMD Inc.");
 MODULE_DESCRIPTION("SLASH/VRT module");
 MODULE_VERSION("1.0");
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif

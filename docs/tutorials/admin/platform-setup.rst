@@ -139,6 +139,19 @@ For ``csh``/``tcsh`` users:
    license administrator if you are unsure how licenses are served at your
    site.
 
+The SMBus IP (``xilinx.com:ip:smbus:1.1``) used for board management is
+**not included** in this repository and is not bundled with Vivado. It must
+be downloaded separately from the AMD member portal and placed into the
+local IP repository before building:
+
+1. Download the SMBus IP from https://www.xilinx.com/member/v80.html
+   (AMD account required).
+2. Copy the downloaded IP directory into ``linker/resources/base/iprepo/``
+   so that Vivado can locate it during synthesis.
+
+See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for
+additional details.
+
 Build the Packages
 ==================
 

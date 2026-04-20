@@ -59,6 +59,6 @@ int __init slash_qdma_init(unsigned int num_threads, char *debugfs);
  * Must be called after slash_pcie_exit() to ensure the control
  * function is cleaned up before the QDMA function.
  */
-void __exit slash_qdma_exit(void);
+void slash_qdma_exit(void);
 
 #endif /* SLASH_QDMA_H */
