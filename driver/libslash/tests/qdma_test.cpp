@@ -33,26 +33,26 @@ static constexpr uint64_t DDR_BASE_ADDRESS = 0x60000000000ULL;
 
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
 
-TEST(QdmaOpenTest, NullPathFails) {
+TEST(QdmaNullTest, Open) {
     errno = 0;
     EXPECT_EQ(slash_qdma_open(nullptr), nullptr);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaCloseTest, NullHandle) {
+TEST(QdmaNullTest, Close) {
     errno = 0;
     EXPECT_EQ(slash_qdma_close(nullptr), -1);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaInfoReadTest, NullHandle) {
+TEST(QdmaNullTest, NullInfoRead) {
     struct slash_qdma_info info{};
     errno = 0;
     EXPECT_EQ(slash_qdma_info_read(nullptr, &info), -1);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaInfoReadTest, NullInfo) {
+TEST(QdmaNullTest, FakeInfoRead) {
     /* Construct a minimal fake handle — we only need errno set by the NULL info check. */
     struct slash_qdma fake{};
     fake.fd = -1;
@@ -61,14 +61,14 @@ TEST(QdmaInfoReadTest, NullInfo) {
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaQpairAddTest, NullHandle) {
+TEST(QdmaNullTest, NullQpairAdd) {
     struct slash_qdma_qpair_add req{};
     errno = 0;
     EXPECT_EQ(slash_qdma_qpair_add(nullptr, &req), -1);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaQpairAddTest, NullReq) {
+TEST(QdmaNullTest, FakeQpairAdd) {
     struct slash_qdma fake{};
     fake.fd = -1;
     errno = 0;
@@ -76,25 +76,25 @@ TEST(QdmaQpairAddTest, NullReq) {
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaQpairStartTest, NullHandle) {
+TEST(QdmaNullTest, QpairStart) {
     errno = 0;
     EXPECT_EQ(slash_qdma_qpair_start(nullptr, 0), -1);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaQpairStopTest, NullHandle) {
+TEST(QdmaNullTest, QpairStop) {
     errno = 0;
     EXPECT_EQ(slash_qdma_qpair_stop(nullptr, 0), -1);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaQpairDelTest, NullHandle) {
+TEST(QdmaNullTest, QpairDel) {
     errno = 0;
     EXPECT_EQ(slash_qdma_qpair_del(nullptr, 0), -1);
     EXPECT_EQ(errno, EINVAL);
 }
 
-TEST(QdmaQpairGetFdTest, NullHandle) {
+TEST(QdmaNullTest, QpaiGetFd) {
     errno = 0;
     EXPECT_EQ(slash_qdma_qpair_get_fd(nullptr, 0, 0), -1);
     EXPECT_EQ(errno, EINVAL);
@@ -102,12 +102,18 @@ TEST(QdmaQpairGetFdTest, NullHandle) {
 
 // ─── Real device tests (requires /dev/slash_qdma_ctl0) ───────────────────────
 
-class RealQdmaTest : public ::testing::Test {
+class ParametrizedQdmaTest : public ::testing::TestWithParam<bool> {
    protected:
     void SetUp() override {
-        qdma_ = slash_qdma_open(REAL_QDMA_PATH);
-        if (!qdma_) {
-            GTEST_SKIP() << REAL_QDMA_PATH << " not available (errno=" << errno << ")";
+        bool mock = GetParam();
+        if (mock) {
+            qdma_ = slash_qdma_open("@mock");
+            EXPECT_NE(qdma_, nullptr);
+        } else {
+            qdma_ = slash_qdma_open(REAL_QDMA_PATH);
+            if (!qdma_) {
+                GTEST_SKIP() << REAL_QDMA_PATH << " not available (errno=" << errno << ")";
+            }
         }
     }
 
@@ -121,17 +127,17 @@ class RealQdmaTest : public ::testing::Test {
     struct slash_qdma *qdma_ = nullptr;
 };
 
-TEST_F(RealQdmaTest, OpenSucceeds) {
+TEST_P(ParametrizedQdmaTest, OpenSucceeds) {
     EXPECT_GE(qdma_->fd, 0);
     EXPECT_FALSE(qdma_->mock);
 }
 
-TEST_F(RealQdmaTest, InfoRead) {
+TEST_P(ParametrizedQdmaTest, InfoRead) {
     struct slash_qdma_info info{};
     EXPECT_EQ(slash_qdma_info_read(qdma_, &info), 0);
 }
 
-TEST_F(RealQdmaTest, QueueDmaTransfer) {
+TEST_P(ParametrizedQdmaTest, QueueDmaTransfer) {
     static constexpr size_t XFER_SIZE = 4096;
 
     // Add a Memory-Mapped queue pair with both H2C and C2H enabled.
@@ -170,7 +176,9 @@ TEST_F(RealQdmaTest, QueueDmaTransfer) {
     EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
 }
 
-TEST_F(RealQdmaTest, CloseSucceeds) {
+TEST_P(ParametrizedQdmaTest, CloseSucceeds) {
     EXPECT_EQ(slash_qdma_close(qdma_), 0);
     qdma_ = nullptr;
 }
+
+INSTANTIATE_TEST_SUITE_P(QdmaTest, ParametrizedQdmaTest, testing::Values(true, false));
