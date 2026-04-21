@@ -144,10 +144,16 @@ static inline uint64_t bit_ceil_u64(uint64_t n) {
  * Dispatches to bit_ceil_u32 or bit_ceil_u64 based on the argument type.
  */
 /* ---- generic front-end ---- */
+#ifdef __cplusplus
+#define bit_ceil(n) \
+    (sizeof(n) <= sizeof(uint32_t) ? bit_ceil_u32(static_cast<uint32_t>(n)) \
+                                   : bit_ceil_u64(static_cast<uint64_t>(n)))
+#else
 #define bit_ceil(n) _Generic((n), \
     uint32_t:               bit_ceil_u32, \
     uint64_t:               bit_ceil_u64  \
 )(n)
+#endif
 
 /**
  * @brief Type-safe maximum of two values (GCC statement expression).
