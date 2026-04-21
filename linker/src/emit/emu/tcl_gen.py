@@ -28,11 +28,7 @@ from emit.render import render_template
 from emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from emit.hw.user_region.addr_ctx import build_axilite_address_context
 from emit.emu.tb_ctx import build_tb_context
-from emit.hls_meta import infer_hls_json_from_component_xml
 from core.command_config import LinkerConfiguration
-
-from parser.component_parser import parse_component_xml
-from parser.config_parser import parse_connectivity_file, apply_config_to_instances
 
 logger = logging.getLogger(__name__)
 
