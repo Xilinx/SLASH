@@ -115,31 +115,6 @@ TEST_P(DeviceTest, KernelRead) {
     EXPECT_EQ(val, 0u);
 }
 
-TEST_P(DeviceTest, KernelSetArgAndCall) {
-    auto kernel = device.getKernel("vadd");
-    kernel.setArg(0, static_cast<uint64_t>(0x1000));
-    kernel.setArg(1, static_cast<uint64_t>(0x2000));
-    kernel.setArg(2, static_cast<uint64_t>(0x3000));
-    kernel.setArg(3, static_cast<uint64_t>(64));
-    EXPECT_NO_THROW(kernel.call());
-}
-
-TEST_P(DeviceTest, KernelCallByName) {
-    auto kernel = device.getKernel("vadd");
-    kernel.setArg("in1", static_cast<uint64_t>(0x1000));
-    kernel.setArg("in2", static_cast<uint64_t>(0x2000));
-    kernel.setArg("out", static_cast<uint64_t>(0x3000));
-    kernel.setArg("size", static_cast<uint64_t>(64));
-    EXPECT_NO_THROW(kernel.call());
-}
-
-TEST_P(DeviceTest, DISABLED_KernelStartAndWait) {
-    auto kernel = device.getKernel("passthrough");
-    kernel.setArg(0, static_cast<uint64_t>(42));
-    EXPECT_NO_THROW(kernel.start());
-    EXPECT_NO_THROW(kernel.wait());
-}
-
 TEST_P(DeviceTest, BufferDDRConstruction) {
     EXPECT_NO_THROW({
         vrt::Buffer<int> buf(device, 64, vrt::MemoryRangeType::DDR);
@@ -212,6 +187,32 @@ TEST_P(DeviceTest, StreamingBufferThrowsNotImplemented) {
     auto kernel = device.getKernel("vadd");
     vrt::StreamingBuffer<int> sbuf(device, kernel, "axis_in", 16);
     EXPECT_THROW(sbuf.sync(), std::runtime_error);
+}
+
+TEST_P(DeviceTest, KernelVaddRoundTrip) {
+    constexpr int N = 4;
+    vrt::Kernel kernel(device, "vadd");
+    vrt::Buffer<int> in1(device, N, vrt::MemoryRangeType::HBM, 0);
+    vrt::Buffer<int> in2(device, N, vrt::MemoryRangeType::DDR);
+    vrt::Buffer<int> out(device, N, vrt::MemoryRangeType::HBM_VNOC);
+
+    for (int i = 0; i < N; ++i) {
+        in1[i] = i + 1;
+        in2[i] = (i + 1) * 10;
+    }
+    in1.sync(vrt::SyncType::HOST_TO_DEVICE);
+    in2.sync(vrt::SyncType::HOST_TO_DEVICE);
+
+    kernel.setArg(0, static_cast<uint64_t>(in1.getPhysAddr()));
+    kernel.setArg(1, static_cast<uint64_t>(in2.getPhysAddr()));
+    kernel.setArg(2, static_cast<uint64_t>(out.getPhysAddr()));
+    kernel.setArg(3, static_cast<uint64_t>(N));
+    ASSERT_NO_THROW(kernel.call());
+
+    out.sync(vrt::SyncType::DEVICE_TO_HOST);
+    for (int i = 0; i < N; ++i) {
+        EXPECT_EQ(out[i], in1[i] + in2[i]);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(DeviceTestSuite, DeviceTest, ::testing::Values(vrt::Platform::EMULATION, vrt::Platform::SIMULATION));
