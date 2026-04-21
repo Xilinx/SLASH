@@ -25,6 +25,7 @@ on:
     branches:
     - main
     - dev
+    - feature/vrtd_unit_tests
   pull_request:
 
 jobs:
