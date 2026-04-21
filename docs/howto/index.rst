@@ -20,3 +20,4 @@ Task-oriented recipes for common operations.
    use-cmake-modules
    inspect-vrtbin-metadata
    use-mock-mode
+   migrate-from-xrt
