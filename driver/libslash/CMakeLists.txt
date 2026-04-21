@@ -34,16 +34,32 @@ message(STATUS "LIBSLASH version: ${LIBSLASH_VERSION} (${LIBSLASH_VERSION_MAJOR}
 
 project(libslash
   VERSION ${LIBSLASH_VERSION}
-  LANGUAGES C
+  LANGUAGES C CXX
 )
 
 # Allow user to choose shared vs static (standard CMake variable)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
+option(ENABLE_SANITIZERS "Build with AddressSanitizer and UBSan" OFF)
+if(ENABLE_SANITIZERS)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+option(ENABLE_COVERAGE "Build with gcov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+  if(ENABLE_SANITIZERS)
+    message(FATAL_ERROR "ENABLE_COVERAGE and ENABLE_SANITIZERS cannot be used together")
+  endif()
+  add_compile_options(--coverage -fno-inline)
+  add_link_options(--coverage)
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 add_subdirectory(src)
+add_subdirectory(tests)
 
 # -------- Installation: headers and library --------
 # Public headers are under include/  (layout: include/slash/*.h)
