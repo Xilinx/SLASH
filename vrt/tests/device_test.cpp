@@ -191,7 +191,7 @@ TEST_P(DeviceTest, StreamingBufferThrowsNotImplemented) {
 
 TEST_P(DeviceTest, KernelVaddRoundTrip) {
     constexpr int N = 4;
-    vrt::Kernel kernel(device, "vadd");
+    vrt::Kernel kernel = device.getKernel("vadd");
     vrt::Buffer<int> in1(device, N, vrt::MemoryRangeType::HBM, 0);
     vrt::Buffer<int> in2(device, N, vrt::MemoryRangeType::DDR);
     vrt::Buffer<int> out(device, N, vrt::MemoryRangeType::HBM_VNOC);

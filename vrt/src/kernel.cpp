@@ -139,6 +139,8 @@ uint32_t Kernel::read(uint32_t offset) {
 
 void Kernel::setVrtdBar(const std::optional<vrtd::Bar>& bar) { this->vrtdBar = bar; }
 
+void Kernel::setServer(std::shared_ptr<ZmqServer> server) { this->server = server; }
+
 void Kernel::setFunctionalArgs(const std::vector<FunctionalArg>& args) {
     functionalArgs = args;
     std::sort(functionalArgs.begin(), functionalArgs.end(),
