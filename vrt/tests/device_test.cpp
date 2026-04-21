@@ -18,6 +18,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <vrt/buffer.hpp>
 #include <vrt/device.hpp>
 #include <vrt/kernel.hpp>
@@ -29,16 +30,30 @@
 
 #include "test_helpers.hpp"
 
-class DeviceEmuTest : public ::testing::Test {
+using ::testing::Contains;
+
+class DeviceTest : public ::testing::Test, public ::testing::WithParamInterface<vrt::Platform> {
    protected:
     std::filesystem::path tmpDir;
     ScopedEnv* envCache = nullptr;
+    vrt::Platform platform;
     vrt::Device device;
 
     void SetUp() override {
-        tmpDir = makeTempDir("device-emu-test");
+        tmpDir = makeTempDir("device-test");
         envCache = new ScopedEnv("SLASH_CACHE_PATH", tmpDir.string());
-        device = vrt::Device("0000:00:00", STUB_EMU_VBIN_PATH, false);
+
+        platform = GetParam();
+        std::array<vrt::Platform,2> supported_platforms{vrt::Platform::EMULATION, vrt::Platform::SIMULATION};
+        EXPECT_THAT(supported_platforms, Contains(platform));
+
+        std::string vbin_path;
+        if (platform == vrt::Platform::EMULATION) {
+            vbin_path = STUB_EMU_VBIN_PATH;
+        } else {
+            vbin_path = STUB_SIM_VBIN_PATH;
+        }
+        device = vrt::Device("0000:00:00", vbin_path, false);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
@@ -49,35 +64,35 @@ class DeviceEmuTest : public ::testing::Test {
     }
 };
 
-TEST_F(DeviceEmuTest, Construction) {
+TEST_P(DeviceTest, Construction) {
     SUCCEED();
 }
 
-TEST_F(DeviceEmuTest, GetPlatform) {
-    EXPECT_EQ(device.getPlatform(), vrt::Platform::EMULATION);
+TEST_P(DeviceTest, GetPlatform) {
+    EXPECT_EQ(device.getPlatform(), platform);
 }
 
-TEST_F(DeviceEmuTest, GetFrequency) {
+TEST_P(DeviceTest, GetFrequency) {
     EXPECT_EQ(device.getFrequency(), 0u);
 }
 
-TEST_F(DeviceEmuTest, GetKernelVadd) {
+TEST_P(DeviceTest, GetKernelVadd) {
     auto kernel = device.getKernel("vadd");
     EXPECT_EQ(kernel.getName(), "vadd");
     EXPECT_EQ(kernel.getPhysAddr(), 0x10000u);
 }
 
-TEST_F(DeviceEmuTest, GetKernelPassthrough) {
+TEST_P(DeviceTest, GetKernelPassthrough) {
     auto kernel = device.getKernel("passthrough");
     EXPECT_EQ(kernel.getName(), "passthrough");
     EXPECT_EQ(kernel.getPhysAddr(), 0x20000u);
 }
 
-TEST_F(DeviceEmuTest, GetKernelUnknownThrows) {
+TEST_P(DeviceTest, GetKernelUnknownThrows) {
     EXPECT_THROW(device.getKernel("nonexistent"), std::runtime_error);
 }
 
-TEST_F(DeviceEmuTest, GetQdmaConnections) {
+TEST_P(DeviceTest, GetQdmaConnections) {
     auto conns = device.getHandle()->getQdmaConnections();
     ASSERT_EQ(conns.size(), 2u);
     EXPECT_EQ(conns[0].getKernel(), "vadd");
@@ -89,7 +104,18 @@ TEST_F(DeviceEmuTest, GetQdmaConnections) {
     EXPECT_EQ(conns[1].getQid(), 1u);
 }
 
-TEST_F(DeviceEmuTest, KernelSetArgAndCall) {
+TEST_P(DeviceTest, KernelWrite) {
+    auto kernel = device.getKernel("vadd");
+    EXPECT_NO_THROW(kernel.write(0x10, 0xDEAD));
+}
+
+TEST_P(DeviceTest, KernelRead) {
+    auto kernel = device.getKernel("vadd");
+    uint32_t val = kernel.read(0x10);
+    EXPECT_EQ(val, 0u);
+}
+
+TEST_P(DeviceTest, KernelSetArgAndCall) {
     auto kernel = device.getKernel("vadd");
     kernel.setArg(0, static_cast<uint64_t>(0x1000));
     kernel.setArg(1, static_cast<uint64_t>(0x2000));
@@ -98,7 +124,7 @@ TEST_F(DeviceEmuTest, KernelSetArgAndCall) {
     EXPECT_NO_THROW(kernel.call());
 }
 
-TEST_F(DeviceEmuTest, KernelCallByName) {
+TEST_P(DeviceTest, KernelCallByName) {
     auto kernel = device.getKernel("vadd");
     kernel.setArg("in1", static_cast<uint64_t>(0x1000));
     kernel.setArg("in2", static_cast<uint64_t>(0x2000));
@@ -107,38 +133,32 @@ TEST_F(DeviceEmuTest, KernelCallByName) {
     EXPECT_NO_THROW(kernel.call());
 }
 
-TEST_F(DeviceEmuTest, DISABLED_KernelStartAndWait) {
+TEST_P(DeviceTest, DISABLED_KernelStartAndWait) {
     auto kernel = device.getKernel("passthrough");
     kernel.setArg(0, static_cast<uint64_t>(42));
     EXPECT_NO_THROW(kernel.start());
     EXPECT_NO_THROW(kernel.wait());
 }
 
-TEST_F(DeviceEmuTest, KernelRead) {
-    auto kernel = device.getKernel("vadd");
-    uint32_t val = kernel.read(0x00);
-    EXPECT_EQ(val, 0u);
-}
-
-TEST_F(DeviceEmuTest, BufferDDRConstruction) {
+TEST_P(DeviceTest, BufferDDRConstruction) {
     EXPECT_NO_THROW({
         vrt::Buffer<int> buf(device, 64, vrt::MemoryRangeType::DDR);
     });
 }
 
-TEST_F(DeviceEmuTest, BufferHBMWithPort) {
+TEST_P(DeviceTest, BufferHBMWithPort) {
     EXPECT_NO_THROW({
         vrt::Buffer<int> buf(device, 64, vrt::MemoryRangeType::HBM, 0);
     });
 }
 
-TEST_F(DeviceEmuTest, BufferHBMVnoc) {
+TEST_P(DeviceTest, BufferHBMVnoc) {
     EXPECT_NO_THROW({
         vrt::Buffer<int> buf(device, 64, vrt::MemoryRangeType::HBM_VNOC);
     });
 }
 
-TEST_F(DeviceEmuTest, BufferSyncRoundTrip) {
+TEST_P(DeviceTest, BufferSyncRoundTrip) {
     vrt::Buffer<int> buf(device, 4, vrt::MemoryRangeType::DDR);
     buf[0] = 10;
     buf[1] = 20;
@@ -156,22 +176,42 @@ TEST_F(DeviceEmuTest, BufferSyncRoundTrip) {
     EXPECT_EQ(buf[3], 40);
 }
 
-TEST_F(DeviceEmuTest, StreamingBufferH2D) {
+TEST_P(DeviceTest, StreamingBufferH2D) {
+    if (platform == vrt::Platform::SIMULATION) {
+        GTEST_SKIP();
+    }
     auto kernel = device.getKernel("vadd");
     vrt::StreamingBuffer<int> sbuf(device, kernel, "axis_in", 16);
     sbuf[0] = 42;
     EXPECT_NO_THROW(sbuf.sync());
 }
 
-TEST_F(DeviceEmuTest, StreamingBufferD2H) {
+TEST_P(DeviceTest, StreamingBufferD2H) {
+    if (platform == vrt::Platform::SIMULATION) {
+        GTEST_SKIP();
+    }
     auto kernel = device.getKernel("vadd");
     vrt::StreamingBuffer<int> sbuf(device, kernel, "axis_out", 16);
     EXPECT_NO_THROW(sbuf.sync());
 }
 
-TEST_F(DeviceEmuTest, StreamingBufferWrongPortThrows) {
+TEST_P(DeviceTest, StreamingBufferWrongPortThrows) {
+    if (platform == vrt::Platform::SIMULATION) {
+        GTEST_SKIP();
+    }
     auto kernel = device.getKernel("vadd");
     EXPECT_THROW(
         vrt::StreamingBuffer<int>(device, kernel, "nonexistent_port", 16),
         std::runtime_error);
 }
+
+TEST_P(DeviceTest, StreamingBufferThrowsNotImplemented) {
+    if (platform != vrt::Platform::SIMULATION) {
+        GTEST_SKIP();
+    }
+    auto kernel = device.getKernel("vadd");
+    vrt::StreamingBuffer<int> sbuf(device, kernel, "axis_in", 16);
+    EXPECT_THROW(sbuf.sync(), std::runtime_error);
+}
+
+INSTANTIATE_TEST_SUITE_P(DeviceTestSuite, DeviceTest, ::testing::Values(vrt::Platform::EMULATION, vrt::Platform::SIMULATION));

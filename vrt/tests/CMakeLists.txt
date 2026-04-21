@@ -13,7 +13,7 @@ add_custom_target(unit_tests)
 
 macro(add_vrt_test test_name test_source)
   add_executable(${test_name} ${test_source})
-  target_link_libraries(${test_name} PRIVATE GTest::gtest_main vrt::vrt)
+  target_link_libraries(${test_name} PRIVATE GTest::gtest_main GTest::gmock vrt::vrt)
   gtest_discover_tests(${test_name})
   add_dependencies(unit_tests ${test_name})
 endmacro()
@@ -79,7 +79,7 @@ add_custom_target(stub_vbins DEPENDS ${STUB_EMU_VBIN} ${STUB_SIM_VBIN})
 
 macro(add_vrt_vbin_test test_name test_source)
   add_executable(${test_name} ${test_source})
-  target_link_libraries(${test_name} PRIVATE GTest::gtest_main vrt::vrt)
+  target_link_libraries(${test_name} PRIVATE GTest::gtest_main GTest::gmock vrt::vrt)
   target_compile_definitions(${test_name} PRIVATE
     STUB_EMU_VBIN_PATH="${STUB_EMU_VBIN}"
     STUB_SIM_VBIN_PATH="${STUB_SIM_VBIN}")
@@ -89,5 +89,4 @@ macro(add_vrt_vbin_test test_name test_source)
 endmacro()
 
 add_vrt_vbin_test(vrtbin_integration_test vrtbin_integration_test.cpp)
-add_vrt_vbin_test(device_emu_test device_emu_test.cpp)
-add_vrt_vbin_test(device_sim_test device_sim_test.cpp)
+add_vrt_vbin_test(device_test device_test.cpp)
