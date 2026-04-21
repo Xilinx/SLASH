@@ -18,7 +18,6 @@ macro(add_vrt_test test_name test_source)
   add_dependencies(unit_tests ${test_name})
 endmacro()
 
-add_vrt_test(hello_test hello_test.cpp)
 add_vrt_test(register_test register_test.cpp)
 add_vrt_test(qdma_connection_test qdma_connection_test.cpp)
 add_vrt_test(logger_test logger_test.cpp)
