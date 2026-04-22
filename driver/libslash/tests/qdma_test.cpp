@@ -130,8 +130,8 @@ class ParametrizedQdmaTest : public ::testing::TestWithParam<bool> {
 };
 
 TEST_P(ParametrizedQdmaTest, OpenSucceeds) {
-    EXPECT_GE(qdma_->fd, 0);
-    EXPECT_EQ(qdma_->mock, mock);
+    EXPECT_GE(qdma_->fd, mock ? -1 : 0);
+    EXPECT_EQ(qdma_->priv != nullptr, mock);
 }
 
 TEST_P(ParametrizedQdmaTest, InfoRead) {
