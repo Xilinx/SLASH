@@ -104,8 +104,10 @@ TEST(QdmaNullTest, QpaiGetFd) {
 
 class ParametrizedQdmaTest : public ::testing::TestWithParam<bool> {
    protected:
+    bool mock;
+
     void SetUp() override {
-        bool mock = GetParam();
+        mock = GetParam();
         if (mock) {
             qdma_ = slash_qdma_open("@mock");
             EXPECT_NE(qdma_, nullptr);
@@ -129,7 +131,7 @@ class ParametrizedQdmaTest : public ::testing::TestWithParam<bool> {
 
 TEST_P(ParametrizedQdmaTest, OpenSucceeds) {
     EXPECT_GE(qdma_->fd, 0);
-    EXPECT_FALSE(qdma_->mock);
+    EXPECT_EQ(qdma_->mock, mock);
 }
 
 TEST_P(ParametrizedQdmaTest, InfoRead) {
