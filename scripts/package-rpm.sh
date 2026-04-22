@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-set -euxo pipefail
+set -euo pipefail
 
 # SLASH root
 cd "$(dirname "$0")/.."
@@ -29,7 +29,48 @@ VERSION="$(tr -d '[:space:]' < packaging/version)"
 TOPDIR="$(pwd)/rpmbuild"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/rpm}"
 
-rm -rf "${TOPDIR}" "${ARTIFACTS_DIR}"
+# Warn before overwriting an existing build
+if { [[ -d "${TOPDIR}" ]] || [[ -d "${ARTIFACTS_DIR}" ]] || [[ -d pbuild ]]; } && [[ -t 0 ]]; then
+    echo "WARNING: A previous .rpm build already exists." >&2
+    echo "Proceeding will remove the following directories and restart the build from scratch:" >&2
+    [[ -d "${TOPDIR}" ]]        && echo "  ${TOPDIR}  (rpmbuild tree)" >&2
+    [[ -d "${ARTIFACTS_DIR}" ]] && echo "  ${ARTIFACTS_DIR}  (built .rpm packages)" >&2
+    [[ -d pbuild ]]             && echo "  pbuild/  (CMake build tree)" >&2
+    echo "  linker/src/install.prj" >&2
+    echo "  linker/resources/abstract_shell" >&2
+    echo "This includes the static shell, which can take several hours to rebuild." >&2
+    read -r -p "Overwrite existing build and start from scratch? [y/N] " _answer </dev/tty
+    case "${_answer}" in
+        [yY]|[yY][eE][sS]) ;;
+        *) echo "Aborted." >&2; exit 1 ;;
+    esac
+fi
+
+# Check build prerequisites
+_prereq_ok=1
+
+if ! command -v v++ > /dev/null 2>&1; then
+    echo "ERROR: v++ not found in PATH. Source Vitis 2025.1 before building:" >&2
+    echo "  source <path-to-vitis>/settings64.sh" >&2
+    echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
+    _prereq_ok=0
+fi
+
+if ! compgen -G 'linker/resources/base/iprepo/smbus*/' > /dev/null 2>&1; then
+    echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/resources/base/iprepo/." >&2
+    echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
+    echo "directory into linker/resources/base/iprepo/ before building." >&2
+    echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
+    _prereq_ok=0
+fi
+
+if [[ "${_prereq_ok}" -eq 0 ]]; then
+    exit 1
+fi
+
+set -x
+
+rm -rf "${TOPDIR}" "${ARTIFACTS_DIR}" pbuild
 mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 mkdir -p "${ARTIFACTS_DIR}"
 
