@@ -22,6 +22,14 @@
 
 set -euo pipefail
 
+NONINTERACTIVE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --noninteractive) NONINTERACTIVE=1; shift ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
 # SLASH root
 cd "$(dirname "$0")/.."
 
@@ -32,7 +40,7 @@ export DPKG_ARCH="$(dpkg --print-architecture)"
 export DPKG_PARSED_VERSION="$(dpkg-parsechangelog -SVersion)"
 
 # Warn before overwriting an existing build
-if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]]; then
+if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]] && [[ "${NONINTERACTIVE}" -eq 0 ]]; then
     echo "WARNING: A previous .deb build already exists." >&2
     echo "Proceeding will remove the following directories and restart the build from scratch:" >&2
     echo "  ${ARTIFACTS_DIR}  (built .deb packages)" >&2

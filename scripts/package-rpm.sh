@@ -22,6 +22,14 @@
 
 set -euo pipefail
 
+NONINTERACTIVE=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --noninteractive) NONINTERACTIVE=1; shift ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
 # SLASH root
 cd "$(dirname "$0")/.."
 
@@ -30,7 +38,7 @@ TOPDIR="$(pwd)/rpmbuild"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/rpm}"
 
 # Warn before overwriting an existing build
-if { [[ -d "${TOPDIR}" ]] || [[ -d "${ARTIFACTS_DIR}" ]] || [[ -d pbuild ]]; } && [[ -t 0 ]]; then
+if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]] && [[ "${NONINTERACTIVE}" -eq 0 ]]; then
     echo "WARNING: A previous .rpm build already exists." >&2
     echo "Proceeding will remove the following directories and restart the build from scratch:" >&2
     [[ -d "${TOPDIR}" ]]        && echo "  ${TOPDIR}  (rpmbuild tree)" >&2
