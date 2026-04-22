@@ -26,9 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from parser.component_parser import parse_component_xml, _int
-from core.port import BusType
-from emit.hls_meta import load_hls_metadata, parse_hls_args
+from v80pp.parser.component_parser import parse_component_xml, _int
+from v80pp.core.port import BusType
+from v80pp.emit.hls_meta import load_hls_metadata, parse_hls_args
 
 
 # ---------------------------------------------------------------------------
