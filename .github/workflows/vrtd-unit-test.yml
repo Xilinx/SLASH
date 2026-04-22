@@ -49,8 +49,9 @@ jobs:
         run: |
           mkdir vrt/vrtd/build
           cd vrt/vrtd/build
-          cmake -DVRTD_INCLUDE_LIBSLASH=1 -DENABLE_COVERAGE=1 ..
+          cmake -DVRTD_BUILD_TESTS=1 -DVRTD_INCLUDE_LIBSLASH=1 -DENABLE_COVERAGE=1 ..
           make unit_tests -j$(nproc)
+          export LD_LIBRARY_PATH=$(pwd)/libslash/src/:$LD_LIBRARY_PATH
           cd tests && ctest --output-on-failure
 
       - name: Generate coverage report
