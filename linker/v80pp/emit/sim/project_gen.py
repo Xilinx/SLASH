@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import importlib.resources as resources
 import logging
 import os
 import shutil
@@ -87,11 +88,11 @@ def build_sim_project(config: LinkerConfiguration) -> None:
         shutil.rmtree(xsim_build_dir, ignore_errors=True)
     shutil.copytree(xsim_dir / "xsim.dir", xsim_build_dir)
 
-    sim_src_dir = config.resources_dir / "sim"
-
-    subprocess.run(["cmake", str(sim_src_dir)], cwd=str(build_dir), check=True)
-    jobs = str(os.cpu_count() or 8)
-    subprocess.run(["make", "-j", jobs], cwd=str(build_dir), check=True)
+    with resources.path("v80pp.resources", "sim") as sim_src_dir:
+        subprocess.run(["cmake", str(sim_src_dir)],
+                       cwd=str(build_dir), check=True)
+        jobs = str(os.cpu_count() or 8)
+        subprocess.run(["make", "-j", jobs], cwd=str(build_dir), check=True)
 
     vpp_sim_path = build_dir / "vpp_sim"
     if not vpp_sim_path.exists():

@@ -25,6 +25,7 @@ import os
 import shutil
 import argparse
 import sys
+import importlib.resources as resources
 
 from v80pp.core.bd_ports import load_bd_ports_from_file, BlockDesignPorts
 from v80pp.core.kernel import Kernel, KernelInstance
@@ -74,40 +75,6 @@ class CommandConfiguration(object):
     def __init__(self, args: argparse.Namespace):
         self._args = args
 
-        def valid_resource_directory(candidate: Path) -> bool:
-            return (candidate / "slash.tcl").is_file()
-
-        def find_resource_directory() -> Path:
-            # Find the resource directory
-            env_resource_dir = os.getenv("V80PP_RESOURCE_DIR")
-            if env_resource_dir is not None:
-                env_resource_dir = Path(
-                    env_resource_dir).expanduser().resolve()
-                if valid_resource_directory(env_resource_dir):
-                    return env_resource_dir
-                else:
-                    raise RuntimeError(
-                        f"The requested resource directory in V80PP_RESOURCE_DIR='{env_resource_dir}' does not exist!")
-
-            # Assumes that this class is defined in core/linker_config.py and the resource directory is in resources/
-            repo_root_dir = Path(__file__).parent.parent.resolve()
-
-            candidates = [
-                repo_root_dir / "resources",
-                Path("~/.local/share/v80++/").expanduser().resolve(),
-                Path("/usr/local/share/v80++/"),
-                Path("/usr/share/v80++/")
-            ]
-            resource_dir = next(
-                filter(valid_resource_directory, candidates), None)
-            if resource_dir is None:
-                raise RuntimeError(
-                    f"Unable to find the resource directory! Evaluated candidates are: {[str(path) for path in candidates]}")
-            else:
-                return resource_dir
-
-        self._resource_dir = find_resource_directory()
-
         # Resolve, if necessary find, and verify the Vivado binary
         self._vivado_bin: Path = args.vivado if args.vivado is not None else Path(
             shutil.which("vivado"))
@@ -129,14 +96,6 @@ class CommandConfiguration(object):
     @property
     def build_dir(self) -> Path:
         raise NotImplementedError()
-
-    @property
-    def resources_dir(self) -> Path:
-        return self._resource_dir
-
-    @property
-    def abstract_shell_dir(self) -> Path:
-        return self.resources_dir / "abstract_shell"
 
     @property
     def ip_repository(self) -> Path:
@@ -300,8 +259,9 @@ class LinkerConfiguration(CommandConfiguration):
         # =======================
         # Argument interpretation
         # =======================
-        self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
-            self.resources_dir / "bd_ports.txt")
+        with resources.path("v80pp.resources", "bd_ports.txt") as bd_ports_path:
+            self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
+                bd_ports_path)
 
         self._kernels: List[Kernel] = [parse_component_xml(
             kfile) for kfile in self.kernel_component_paths]

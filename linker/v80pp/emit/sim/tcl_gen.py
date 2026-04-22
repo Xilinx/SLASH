@@ -24,6 +24,7 @@ from pathlib import Path
 import logging
 import xml.etree.ElementTree as ET
 from typing import List, Tuple
+import importlib.resources as resources
 
 from v80pp.emit.render import render_template
 from v80pp.emit.hw.user_region.addr_ctx import build_axilite_address_context
@@ -321,20 +322,15 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
         })
 
     # 5) Render sim_prj.tcl template
-    sim_template = config.resources_dir / "sim" / "sim_prj.tcl"
     sim_out = config.build_dir / "run_pre.tcl"
 
-    sim_mem_src = config.resources_dir / "sim" / "sim_mem.v"
+    sim_mem_src = resources.read_text(
+        "v80pp.resources.sim", "sim_mem.v", encoding="utf-8")
     sim_mem_dst = config.build_dir / "sim_mem.v"
-    if sim_mem_src.exists():
-        sim_mem_dst.write_text(sim_mem_src.read_text(
-            encoding="utf-8"), encoding="utf-8")
-    else:
-        raise FileNotFoundError(f"sim_mem.v not found: {sim_mem_src}")
+    sim_mem_dst.write_text(sim_mem_src)
 
     render_template(
-        template_dir=sim_template.parent,
-        template_name=sim_template.name,
+        template="sim/sim_prj.tcl",
         out_path=sim_out,
         context={
             "sim_root": config.build_dir,
@@ -367,11 +363,9 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
         kernel_hls_by_type=kernel_hls_by_type,
         network=getattr(cfg, "network", None),
     )
-    system_map_template = config.resources_dir / "system_map.xml"
     system_map_out = config.build_dir / "system_map.xml"
     render_template(
-        template_dir=system_map_template.parent,
-        template_name=system_map_template.name,
+        template="system_map.xml",
         out_path=system_map_out,
         context=system_map_ctx,
     )

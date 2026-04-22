@@ -21,7 +21,7 @@
 from __future__ import annotations
 from typing import Set, Dict, Any, List
 from dataclasses import dataclass
-from v80pp.core.command_config import CommandConfiguration
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -48,11 +48,10 @@ def build_service_layer_context(net) -> dict:
     }
 
 
-def compute_paths(config: CommandConfiguration) -> Dict[str, Any]:
+def dcmac_paths(dcmac_dir: Path) -> Dict[str, Any]:
     """
     Resolve absolute paths for service-layer assets regardless of CWD.
     """
-    dcmac_dir = config.resources_dir / "dcmac"
     dcmac_tcl = dcmac_dir / "tcl" / "dcmac.tcl"
     dcmac_hdl = dcmac_dir / "hdl"
 

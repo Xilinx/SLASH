@@ -47,12 +47,10 @@ def generate_emu_tcl(config: LinkerConfiguration) -> None:
         tb_ctx["emu_manifest"]["project"] = config._project_name
 
     # 4.1) Render tb.cpp
-    tb_template_path = config.resources_dir / "sw_emu" / "tb.cpp"
     tb_path = config.build_dir / "tb.cpp"
     tb_path.parent.mkdir(parents=True, exist_ok=True)
     render_template(
-        template_dir=tb_template_path.parent,
-        template_name=tb_template_path.name,
+        template="sw_emu/tb.cpp",
         out_path=tb_path,
         context=tb_ctx,
     )
@@ -81,11 +79,9 @@ def generate_emu_tcl(config: LinkerConfiguration) -> None:
         network=getattr(cfg, "network", None),
     )
 
-    system_map_template_path = config.resources_dir / "system_map.xml"
     system_map_path = config.build_dir / "system_map.xml"
     render_template(
-        template_dir=system_map_template_path.parent,
-        template_name=system_map_template_path.name,
+        template="system_map.xml",
         out_path=system_map_path,
         context=system_map_ctx,
     )

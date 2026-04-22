@@ -20,6 +20,7 @@
 
 import logging
 import re
+import importlib.resources as resources
 
 from v80pp.emit.render import render_template
 from v80pp.emit.hw.user_region.kernel_ctx import build_kernel_add_context
@@ -302,11 +303,9 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     ctx.update(axilite_ctx)
     ctx["project_name"] = config.project_name
     ctx["slash_bd_name"] = f"slash_{config.project_name}"
-    template_path = config.resources_dir / "slash.tcl"   # resources/slash.tcl
     out_path = config.build_dir / "slash.tcl"  # slash.tcl
     render_template(
-        template_dir=template_path.parent,
-        template_name=template_path.name,
+        template="slash.tcl",
         out_path=out_path,
         context=ctx,
     )
@@ -321,35 +320,32 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         kernel_hls_by_type=kernel_hls_by_type,
         network=getattr(cfg, "network", None),
     )
-    system_map_template = config.resources_dir / "system_map.xml"
     system_map_out = config.build_dir / "system_map.xml"
     render_template(
-        template_dir=system_map_template.parent,
-        template_name=system_map_template.name,
+        template="system_map.xml",
         out_path=system_map_out,
         context=system_map_ctx,
     )
     logger.info("Rendered system map to %s", system_map_out)
 
-    paths_ctx = compute_paths(config)
     svc_ctx = {}
     svc_ctx.update(build_service_layer_context(cfg.net))
     svc_ctx.update(build_service_axilite_ctx(cfg.net)
                    )    # SmartConnect + MI targets
     svc_ctx.update(build_service_noc_axis_ctx(cfg.net))
-    # absolute paths for dcmac sources
-    svc_ctx.update(paths_ctx)
 
     svc_ctx["project_name"] = config.project_name
     svc_ctx["service_layer_bd_name"] = f"service_layer_{config.project_name}"
+
     # --- Render service-layer Tcl ---
-    svc_template = config.resources_dir / "service_layer.tcl"
     svc_out = config.build_dir / "service_layer.tcl"
-    render_template(
-        template_dir=svc_template.parent,
-        template_name=svc_template.name,
-        out_path=svc_out,
-        context=svc_ctx,
-    )
+
+    with resources.path("v80pp.resources", "dcmac") as dcmac_dir:
+        svc_ctx.update(dcmac_paths(dcmac_dir))
+        render_template(
+            template="service_layer.tcl",
+            out_path=svc_out,
+            context=svc_ctx,
+        )
 
     logger.info("Rendered service layer Tcl to %s", svc_out)

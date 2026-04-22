@@ -19,20 +19,20 @@
 # ##################################################################################################
 
 from __future__ import annotations
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from jinja2 import Environment, PackageLoader, StrictUndefined
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "vendor"))
 
 
-def render_template(template_dir: str | Path, template_name: str, out_path: str | Path, context: dict) -> None:
+def render_template(template: str | Path, out_path: str | Path, context: dict) -> None:
     env = Environment(
-        loader=FileSystemLoader(str(template_dir)),
+        loader=PackageLoader("v80pp", "resources"),
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
     )
     env.filters["zip"] = lambda a, b: zip(a, b)
-    tmpl = env.get_template(template_name)
+    tmpl = env.get_template(template)
     Path(out_path).write_text(tmpl.render(**context), encoding="utf-8")
