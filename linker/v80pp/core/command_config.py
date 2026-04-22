@@ -170,10 +170,6 @@ Example:
   {sys.argv[0]} link -c config.cfg -k kernels/ip/accumulate/component.xml \\
     kernels/ip/increment/component.xml -o accelerator.vbin -p hw
 
-Resource Directory:
-  The linker uses resources from a resource directory. See top-level help
-  ({sys.argv[0]} --help) for resource directory resolution.
-
 Build Artifacts:
   A project directory (<output>.prj) will be created alongside the output
   VBIN archive, containing TCL scripts, Vivado projects, and build logs.
@@ -345,10 +341,6 @@ What It Does:
 
   WARNING: This operation involves full Vivado synthesis and implementation,
   which takes significant time (multiple hours depending on the system).
-
-Resource Directory:
-  The 'install' subcommand uses resources from a resource directory. See
-  top-level help ({sys.argv[0]} --help) for resource directory resolution.
 
 Build Artifacts:
   The build directory (--build-dir) will contain Vivado projects, checkpoints,

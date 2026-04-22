@@ -152,18 +152,8 @@ Typical Workflow:
   an emulation, simulation, or hardware build image.
 
   The 'install' subcommand is only used during the installation of the linker.
-  It prepares an abstract shell definition, which is later used by the 'link'
+  It prepares an static shell definition, which is later used by the 'link'
   subcommand to create hardware images.
-
-Resource Directory:
-  All subcommands use resources from a resource directory. The resource
-  directory is identified according to the following precedence:
-
-    1. V80PP_RESOURCE_DIR environment variable (if set)
-    2. <linker_root>/resources (relative to linker source base, useful for testing)
-    3. ~/.local/share/v80++/
-    4. /usr/local/share/v80++/
-    5. /usr/share/v80++/
 """
 
 
