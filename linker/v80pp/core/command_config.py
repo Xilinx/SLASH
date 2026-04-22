@@ -89,8 +89,8 @@ class CommandConfiguration(object):
                     raise RuntimeError(
                         f"The requested resource directory in V80PP_RESOURCE_DIR='{env_resource_dir}' does not exist!")
 
-            # Assumes that this class is defined in linker/src/core/linker_config.py
-            repo_root_dir = Path(__file__).parent.parent.parent.resolve()
+            # Assumes that this class is defined in core/linker_config.py and the resource directory is in resources/
+            repo_root_dir = Path(__file__).parent.parent.resolve()
 
             candidates = [
                 repo_root_dir / "resources",
