@@ -39,6 +39,7 @@ project(vrtd
 
 # Optionally build examples
 option(VRTD_BUILD_EXAMPLES "Build example executables" OFF)
+option(VRTD_BUILD_TESTS "Build unit tests" OFF)
 option(VRTD_INCLUDE_LIBSLASH "Include libslash subdirectory instead of building from system" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
@@ -83,7 +84,9 @@ add_subdirectory(src)
 add_subdirectory(libvrtd)
 add_subdirectory(libvrtdpp)
 
-add_subdirectory(tests)
+if(VRTD_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
 
 #if(VRTD_BUILD_EXAMPLES)
 #  add_subdirectory(examples)

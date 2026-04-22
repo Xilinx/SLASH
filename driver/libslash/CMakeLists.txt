@@ -39,6 +39,7 @@ project(libslash
 
 # Allow user to choose shared vs static (standard CMake variable)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(LIBSLASH_BUILD_TESTS "Build unit tests" OFF)
 
 option(ENABLE_SANITIZERS "Build with AddressSanitizer and UBSan" OFF)
 if(ENABLE_SANITIZERS)
@@ -59,7 +60,10 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 add_subdirectory(src)
-add_subdirectory(tests)
+
+if(LIBSLASH_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
 
 # -------- Installation: headers and library --------
 # Public headers are under include/  (layout: include/slash/*.h)
