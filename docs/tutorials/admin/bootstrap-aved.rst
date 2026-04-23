@@ -64,8 +64,6 @@ are located under ``flash_setup/``:
      - Initialization PDI loaded over JTAG before flashing OSPI.
    * - ``flash_setup/fpt_setup_<vbnv>_<release>.pdi``
      - Flash Partition Table setup PDI written to OSPI.
-   * - ``design.pdi``
-     - The AVED base design PDI.
 
 Switch the V80 to JTAG Boot Mode
 ================================
