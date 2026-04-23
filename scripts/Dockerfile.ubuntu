@@ -1,0 +1,44 @@
+# Build environment for the SLASH .deb packages, targeting Ubuntu 22.04.
+# Build the image from the repository root:
+#     docker build -t slash-build-ubuntu -f scripts/Dockerfile.ubuntu .
+# Then run a build by mounting the working tree:
+#     docker run --rm -v "$PWD:/work" -w /work slash-build-ubuntu \
+#         bash scripts/package-deb.sh
+# TODO: Add note for Vivado!
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        bash \
+        build-essential \
+        ca-certificates \
+        cmake \
+        debhelper \
+        devscripts \
+        dkms \
+        apt-utils \
+        git \
+        libcli11-dev \
+        libinih-dev \
+        libjsoncpp-dev \
+        libsystemd-dev \
+        libxml2-dev \
+        libzmq3-dev \
+        ninja-build \
+        pkg-config \
+        python3.10 \
+        python3-venv \
+        python3-jinja2 \
+        python3-pip \
+        python3-setuptools \
+        python3-wheel \
+        rsync \
+        zlib1g-dev
+
+RUN useradd -m -U -u 50102781 slash
+USER slash
+
+WORKDIR /home/slash

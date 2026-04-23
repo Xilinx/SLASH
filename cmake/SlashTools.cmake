@@ -44,15 +44,14 @@ endif()
 if(NOT DEFINED SLASH_REPO_ROOT)
   # Try to detect if we are in the source tree
   get_filename_component(_slash_tools_candidate_root "${CMAKE_CURRENT_LIST_DIR}/.." REALPATH)
-  if(EXISTS "${_slash_tools_candidate_root}/linker/src/main.py")
+  if(EXISTS "${_slash_tools_candidate_root}/linker/v80pp/__main__.py")
     set(SLASH_REPO_ROOT "${_slash_tools_candidate_root}")
   endif()
 endif()
 
-if(DEFINED SLASH_REPO_ROOT AND EXISTS "${SLASH_REPO_ROOT}/linker/src/main.py")
+if(DEFINED SLASH_REPO_ROOT AND EXISTS "${SLASH_REPO_ROOT}/linker/v80pp/__main__.py")
   set(_SLASH_TOOLS_USE_REPO TRUE)
-  set(SLASH_LINKER_DIR "${SLASH_REPO_ROOT}/linker/")
-  set(SLASH_MAIN_PY "${SLASH_LINKER_DIR}/src/main.py")
+  set(SLASH_LINKER_DIR "${SLASH_REPO_ROOT}/linker")
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   message(STATUS "SlashTools: Found SLASH repo at ${SLASH_REPO_ROOT}")
 endif()
@@ -80,7 +79,8 @@ function(add_vbin)
     set(SLASH_VBIN_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SLASH_VBIN_TARGET}.vbin")
 
     if(_SLASH_TOOLS_USE_REPO)
-        # Source-tree mode: invoke main.py directly
+        # Source-tree mode: invoke the v80pp package as a module from the
+        # linker directory so that `import v80pp` resolves to ./v80pp/.
         if(DEFINED Python3_EXECUTABLE AND NOT "${Python3_EXECUTABLE}" STREQUAL "")
             set(_py "${Python3_EXECUTABLE}")
         else()
@@ -89,7 +89,7 @@ function(add_vbin)
 
         add_custom_command(
             OUTPUT "${SLASH_VBIN_FILE}"
-            COMMAND "${_py}" "${SLASH_MAIN_PY}" "link"
+            COMMAND "${_py}" "-m" "v80pp" "link"
                 "-c" "${SLASH_VBIN_CFG}"
                 "-p" "${SLASH_VBIN_PLATFORM}"
                 "-o" "${SLASH_VBIN_FILE}"
@@ -97,7 +97,7 @@ function(add_vbin)
                 "--vivado" "${VIVADO_BINARY}"
             BYPRODUCTS "${SLASH_VBIN_FILE}.prj"
             DEPENDS "${SLASH_VBIN_CFG}" "${SLASH_VBIN_KERNELS}"
-            WORKING_DIRECTORY "${SLASH_LINKER_DIR}/src"
+            WORKING_DIRECTORY "${SLASH_LINKER_DIR}"
         )
     else()
         # Installed mode: invoke the v80++ wrapper

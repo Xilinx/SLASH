@@ -19,6 +19,6 @@
 # ##################################################################################################
 
 usr/bin/v80++
-usr/lib/v80++/
+usr/lib/python3.10/dist-packages/v80pp/
+usr/lib/python3.10/dist-packages/v80pp-*.dist-info/
 usr/lib/*/cmake/SlashTools/
-usr/share/v80++/

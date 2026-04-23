@@ -47,7 +47,12 @@ BuildRequires:  systemd-devel
 BuildRequires:  zeromq-devel
 BuildRequires:  zlib-devel
 BuildRequires:  rsync
-BuildRequires:  ((python3 >= 3.10 and python3-pip) or (python3.11 and python3.11-pip) or (python3.12 and python3.12-pip) or (python3.13 and python3.13-pip))
+BuildRequires:  python3
+BuildRequires:  python3-devel
+BuildRequires:  python3-jinja2
+BuildRequires:  python3-pip
+BuildRequires:  python3-setuptools
+BuildRequires:  python3-wheel
 BuildRequires:  systemd-rpm-macros
 
 # ---- Metapackages ----
@@ -158,7 +163,8 @@ V80 System Management Interface
 
 %package -n     v80++
 Summary:        SLASH Linker
-Requires:       (python3 >= 3.10 or python3.11 or python3.12 or python3.13)
+Requires:       python3
+Requires:       python3-jinja2
 
 %description -n v80++
 SLASH Linker
@@ -174,7 +180,7 @@ bash scripts/pconfigure.sh %{_lib}
 bash scripts/pbuild.sh
 
 %install
-bash scripts/pinstall.sh %{buildroot} /usr/libexec
+bash scripts/pinstall.sh %{buildroot}
 
 # systemd units (mirrors debian/rules rsync lines)
 install -D -m 0644 vrt/vrtd/systemd/vrtd.service \
@@ -296,9 +302,9 @@ udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 
 %files -n v80++
 %{_bindir}/v80++
-%{_prefix}/libexec/v80++/
+%{python3_sitelib}/v80pp/
+%{python3_sitelib}/v80pp-*.dist-info/
 %{_libdir}/cmake/SlashTools/
-%{_datadir}/v80++/
 
 # ---- Scriptlets ----
 

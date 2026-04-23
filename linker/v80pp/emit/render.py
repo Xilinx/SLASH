@@ -20,10 +20,7 @@
 
 from __future__ import annotations
 from jinja2 import Environment, PackageLoader, StrictUndefined
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "vendor"))
 
 
 def render_template(template: str | Path, out_path: str | Path, context: dict) -> None:

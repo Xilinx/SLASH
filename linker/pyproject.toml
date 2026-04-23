@@ -11,7 +11,7 @@ requires-python = ">=3.9"
 dependencies = ["jinja2>=2.11.3"]
 
 [project.scripts]
-v80pp = "v80pp.__main__:main"
+"v80++" = "v80pp.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["v80pp*"]
