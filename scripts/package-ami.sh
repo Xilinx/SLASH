@@ -31,7 +31,7 @@ cd "$(dirname "$0")/.."
 
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/ami}"
 AMI_BUILD_DIR="$(pwd)/ami-build"
-AVED_DIR="$(pwd)/linker/resources/submodules/AVED"
+AVED_DIR="$(pwd)/linker/v80pp/resources/submodules/AVED"
 AMI_DIR="${AVED_DIR}/sw/AMI"
 PKG_PY="${AMI_DIR}/scripts/package_data/pkg.py"
 GEN_PKG_PY="${AMI_DIR}/scripts/gen_package.py"

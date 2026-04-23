@@ -284,6 +284,9 @@ def install_abstract_shell(config: InstallerConfiguration) -> None:
     abstract_shell_dir = resources_dir / "abstract_shell"
     abstract_shell_dir.mkdir(parents=True, exist_ok=True)
 
+    if not resources.is_resource("v80pp.resources.submodules.AVED", "README.md"):
+        raise FileNotFoundError("The AVED repository is missing. Have you executed `git submodule update --init`?")
+
     create_build_project(config)
 
     impl_dir = config.build_dir / "slash.runs" / "impl_1"

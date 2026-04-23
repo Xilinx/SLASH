@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-set(AMI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../linker/resources/submodules/AVED/sw/AMI")
+set(AMI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../linker/v80pp/resources/submodules/AVED")
 set(AMI_API_DIR "${AMI_DIR}/api")
 set(AMI_API_SRC_DIR "${AMI_API_DIR}/src")
 set(AMI_API_INCLUDE_DIR "${AMI_API_DIR}/include")
