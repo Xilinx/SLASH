@@ -347,7 +347,7 @@ Build Artifacts:
   and logs. This directory can be removed after successful installation.
 
 Example:
-  {sys.argv[0]} install --build-dir ./install.prj --jobs 16
+  {sys.argv[0]} install --build-dir ./install.prj --jobs 16 --out-dir linker/v80pp/resources
 """
 
 
@@ -357,8 +357,15 @@ class InstallerConfiguration(CommandConfiguration):
         super().populate_argument_parser(ap)
         ap.description = "Build and install base images for hardware builds."
         ap.epilog = INSTALL_HELP_EPILOG
-        ap.add_argument("--build-dir", required=False, type=Optional[Path], default=Path(
-            "./install.prj"), help="The build directory for the installer. Default: ./install_build")
+        ap.add_argument("--build-dir", required=False, type=Path, default=Path(
+            "./install.prj"), help="The build directory for the installer. Default: ./install_prj")
+        ap.add_argument("--aved-repo", required=False, type=str, default="https://github.com/Xilinx/AVED.git",
+                        help="The AVED git repository to check out. Default: https://github.com/Xilinx/AVED.git")
+        ap.add_argument("--aved-ref", required=False, type=str, default="amd_v80_gen5x8_25.1_xbtest_20251113",
+                        help="The AVED git ref to check out. Default: amd_v80_gen5x8_25.1_xbtest_20251113")
+        ap.add_argument("--out-dir", required=True, type=Path,
+                        help="The resource directory to install the artifacts to. "
+                        + "If you have checked out the SLASH repository, this would be linker/v80pp/resources")
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
@@ -368,10 +375,29 @@ class InstallerConfiguration(CommandConfiguration):
             shutil.rmtree(self._build_dir)
         self._build_dir.mkdir(parents=True)
 
+        self._aved_repo: str = args.aved_repo
+        self._aved_ref: str = args.aved_ref
+
+        self._out_dir: Path = args.out_dir.expanduser().resolve()
+        if not self._out_dir.is_dir():
+            raise FileNotFoundError(self._out_dir)
+
     @property
-    def project_name(self):
+    def project_name(self) -> str:
         return "slash_install"
 
     @property
-    def build_dir(self):
+    def build_dir(self) -> Path:
         return self._build_dir
+
+    @property
+    def aved_repo(self) -> str:
+        return self._aved_repo
+
+    @property
+    def aved_ref(self) -> str:
+        return self._aved_ref
+
+    @property
+    def out_dir(self) -> Path:
+        return self._out_dir

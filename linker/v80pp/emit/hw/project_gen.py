@@ -115,19 +115,11 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
 def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
     aved_dir = config.build_dir / "AVED"
 
-    with resources.path("v80pp.resources.submodules", "AVED") as aved_reference_dir:
-        if not aved_reference_dir.is_dir():
-            raise FileNotFoundError(aved_reference_dir)
-        if aved_dir.is_dir():
-            shutil.rmtree(aved_dir)
-        shutil.copytree(aved_reference_dir, aved_dir)
-
     aved_hw_dir = aved_dir / "hw" / AVED_DESIGN_NAME
     aved_build_dir = aved_hw_dir / "build"
     aved_fpt_dir = aved_hw_dir / "fpt"
     aved_fw_profile_dir = aved_dir / "fw" / "AMC" / \
         "src" / "profiles" / "v80"
-
 
     logger.info("Starting AVED base build for %s", config.project_name)
     aved_build_dir.mkdir(parents=True, exist_ok=True)
@@ -274,18 +266,18 @@ def build_slash_rm(config: LinkerConfiguration) -> None:
 
 
 def install_abstract_shell(config: InstallerConfiguration) -> None:
-    # Assuming that this file is v80pp/emit/hw/project_gen.py
-    resources_dir = (Path(__file__).parent.parent.parent /
-                     "resources").resolve()
-    if not resources_dir.is_dir():
-        raise FileNotFoundError(
-            f"{resources_dir}. Has v80pp/emit/hw/project_gen.py been renamed?")
-
-    abstract_shell_dir = resources_dir / "abstract_shell"
+    abstract_shell_dir = config.out_dir / "abstract_shell"
     abstract_shell_dir.mkdir(parents=True, exist_ok=True)
 
-    if not resources.is_resource("v80pp.resources.submodules.AVED", "README.md"):
-        raise FileNotFoundError("The AVED repository is missing. Have you executed `git submodule update --init`?")
+    # Cloning the AVED repository into the build directory
+    # We're doing this early so that errors are caught *before* the 10-hour Vivado run!
+    subprocess.run([
+        "git", "clone",
+        "--recurse-submodules",
+        "-b", config.aved_ref,
+        config.aved_repo,
+        config.build_dir / "AVED"
+    ], check=True)
 
     create_build_project(config)
 

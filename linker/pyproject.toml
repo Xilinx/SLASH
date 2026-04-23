@@ -19,6 +19,3 @@ exclude = ["test*"]
 
 [tool.setuptools.package-data]
 "v80pp" = ["resources/**/*"]
-
-[tool.setuptools.exclude-package-data]
-"v80pp" = ["resources/submodules/**/*"]
