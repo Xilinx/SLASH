@@ -47,8 +47,14 @@ if [ -z $SLASH_XILINX_ROOT ]; then
     SLASH_XILINX_ROOT=$SLASH_XILINX_PATH
 fi
 
+if [ -z $SLASH_LICENSE_PATH ]; then
+    echo "Please set SLASH_LICENSE_PATH to the path of your licenses (.e.g. /proj/xbuilds/licenses)" 2>&2
+    exit 1
+fi
+
 docker build --build-arg USER_ID=$(id -u) -t "slash-build-$DISTRO" -f "scripts/Dockerfile.$DISTRO" .
 docker run --rm \
     -v "$PWD:/home/slash/SLASH" -v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT -w /home/slash/SLASH \
+    -v "$SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH" -e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH \
     "slash-build-$DISTRO" \
     sh -c "source $SLASH_XILINX_PATH/2025.1/Vitis/settings64.sh && $BUILD_SCRIPT"

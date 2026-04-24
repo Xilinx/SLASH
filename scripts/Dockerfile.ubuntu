@@ -16,7 +16,6 @@ RUN apt-get update -qq && \
 ENV TZ="Europe/Dublin"
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 ENV LC_ALL=en_US.utf-8
-RUN locale-gen "en_US.UTF-8"
 
 # Adding the slash user
 RUN useradd -m -U -u $USER_ID slash
