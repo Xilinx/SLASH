@@ -52,9 +52,9 @@ if [ -z $SLASH_LICENSE_PATH ]; then
     exit 1
 fi
 
-docker build --build-arg USER_ID=$(id -u) -t "slash-build-$DISTRO" -f "scripts/Dockerfile.build-$DISTRO" .
-docker run --rm \
+docker build --build-arg USER_ID=$(id -u) -t "slash-run-$DISTRO" -f "scripts/Dockerfile.run-$DISTRO" .
+docker run --rm -it \
     -v "$PWD:/home/slash/SLASH" -v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT -w /home/slash/SLASH \
     -v "$SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH" -e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH \
-    "slash-build-$DISTRO" \
-    bash -c "source $SLASH_XILINX_PATH/2025.1/Vitis/settings64.sh && $BUILD_SCRIPT"
+    "slash-run-$DISTRO" \
+    bash

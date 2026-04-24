@@ -165,6 +165,7 @@ V80 System Management Interface
 Summary:        SLASH Linker
 Requires:       python3
 Requires:       python3-jinja2
+Requires:       cppzmq-devel
 
 %description -n v80++
 SLASH Linker
