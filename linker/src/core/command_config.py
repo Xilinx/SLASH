@@ -28,10 +28,9 @@ import sys
 
 from core.bd_ports import load_bd_ports_from_file, BlockDesignPorts
 from core.kernel import Kernel, KernelInstance
-from core.connectivity import StreamConnect, ConnectivityConfig
+from core.connectivity import ConnectivityConfig
 from parser.config_parser import parse_connectivity_file, apply_config_to_instances
 from parser.component_parser import parse_component_xml
-from emit.hls_meta import infer_hls_json_from_component_xml
 
 
 class Platform(Enum):

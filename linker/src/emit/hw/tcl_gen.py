@@ -18,7 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-from pathlib import Path
 import logging
 import re
 
@@ -41,11 +40,6 @@ from emit.hw.user_region.addr_ctx import build_axilite_address_context
 from emit.hw.user_region.param_ctx import build_data_width_param_context
 from emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from emit.hw.service_region.service_layer_ctx import *
-from emit.hls_meta import infer_hls_json_from_component_xml
-
-from parser.component_parser import parse_component_xml
-from parser.config_parser import parse_connectivity_file, apply_config_to_instances
-from core.bd_ports import load_bd_ports_from_file
 
 from core.command_config import LinkerConfiguration
 
