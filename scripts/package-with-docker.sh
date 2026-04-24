@@ -57,4 +57,4 @@ docker run --rm \
     -v "$PWD:/home/slash/SLASH" -v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT -w /home/slash/SLASH \
     -v "$SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH" -e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH \
     "slash-build-$DISTRO" \
-    sh -c "source $SLASH_XILINX_PATH/2025.1/Vitis/settings64.sh && $BUILD_SCRIPT"
+    bash -c "source $SLASH_XILINX_PATH/2025.1/Vitis/settings64.sh && $BUILD_SCRIPT"
