@@ -43,6 +43,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VRT_INCLUDE_VRTD "Include vrtd subdirectory instead of building from system" OFF)
+option(VRT_BUILD_TESTS "Build unit tests" OFF)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -141,7 +142,9 @@ target_link_libraries(vrt
 )
 
 # Testing
-add_subdirectory(tests)
+if(VRT_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
 
 # Installation
 
