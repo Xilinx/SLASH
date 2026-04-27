@@ -19,6 +19,7 @@
 # ##################################################################################################
 from __future__ import annotations
 
+import os
 from enum import Enum
 from pathlib import Path
 import logging
@@ -182,7 +183,15 @@ def create_build_project(
         if action:
             cmd.append(action)
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True)
+        # Workaround for a weird issue when running Vivado in a container. Details:
+        # https://adaptivesupport.amd.com/s/question/0D54U00005Sgst2SAB/failed-batch-mode-execution-in-linux-docker-running-under-windows-host?language=en_US
+        # https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
+        env_vars = dict(os.environ)
+        libudev_path = Path("/lib/x86_64-linux-gnu/libudev.so.1")
+        if libudev_path.is_file():
+            env_vars["LD_PRELOAD"] = libudev_path
+
+        subprocess.run(cmd, cwd=str(config.build_dir), check=True, env=env_vars)
 
 
 class RM_KIND(Enum):
@@ -278,7 +287,15 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             )
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True)
+        # Workaround for a weird issue when running Vivado in a container. Details:
+        # https://adaptivesupport.amd.com/s/question/0D54U00005Sgst2SAB/failed-batch-mode-execution-in-linux-docker-running-under-windows-host?language=en_US
+        # https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
+        env_vars = dict(os.environ)
+        libudev_path = Path("/lib/x86_64-linux-gnu/libudev.so.1")
+        if libudev_path.is_file():
+            env_vars["LD_PRELOAD"] = libudev_path
+
+        subprocess.run(cmd, cwd=str(config.build_dir), check=True, env=env_vars)
 
     if rm_kind == RM_KIND.SLASH_PROJECT:
         pdi_out_path = image_out_dir / \
