@@ -22,7 +22,9 @@ import logging
 import re
 import importlib.resources as resources
 
-from v80pp.emit.render import render_template
+import v80pp.resources.dcmac
+
+from v80pp.emit.render import render_template, export_package
 from v80pp.emit.hw.user_region.kernel_ctx import build_kernel_add_context
 from v80pp.emit.hw.user_region.smartconnect_ctx import build_axilite_smartconnect_context
 from v80pp.emit.hw.user_region.hbm_ctx import build_hbm_smartconnect_context
@@ -340,12 +342,14 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     # --- Render service-layer Tcl ---
     svc_out = config.build_dir / "service_layer.tcl"
 
-    with resources.path("v80pp.resources", "dcmac") as dcmac_dir:
-        svc_ctx.update(dcmac_paths(dcmac_dir))
-        render_template(
-            template="service_layer.tcl",
-            out_path=svc_out,
-            context=svc_ctx,
-        )
+    dcmac_dir = config.build_dir / "dcmac"
+    export_package(v80pp.resources.dcmac, dcmac_dir)
+
+    svc_ctx.update(dcmac_paths(dcmac_dir))
+    render_template(
+        template="service_layer.tcl",
+        out_path=svc_out,
+        context=svc_ctx,
+    )
 
     logger.info("Rendered service layer Tcl to %s", svc_out)
