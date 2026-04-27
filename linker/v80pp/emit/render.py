@@ -21,7 +21,9 @@
 from __future__ import annotations
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from pathlib import Path
-
+from importlib.abc import Traversable
+from importlib import resources
+import shutil
 
 def render_template(template: str | Path, out_path: str | Path, context: dict) -> None:
     env = Environment(
@@ -33,3 +35,15 @@ def render_template(template: str | Path, out_path: str | Path, context: dict) -
     env.filters["zip"] = lambda a, b: zip(a, b)
     tmpl = env.get_template(template)
     Path(out_path).write_text(tmpl.render(**context), encoding="utf-8")
+
+def export_package(package, out_dir: str | Path) -> None:
+    def impl(traversable: Traversable, out_path: Path) -> None:
+        if traversable.is_file():
+            with resources.as_file(traversable) as in_path:
+                shutil.copy(in_path, out_path)
+        elif traversable.is_dir():
+            out_path.mkdir()
+            for sub_traversable in traversable.iterdir():
+                impl(sub_traversable, out_path / sub_traversable.name)
+    
+    impl(resources.files(package), out_dir)

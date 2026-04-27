@@ -28,6 +28,8 @@ import subprocess
 import tarfile
 
 from v80pp.core.command_config import LinkerConfiguration
+from v80pp.emit.render import export_package
+import v80pp.resources.sim
 
 logger = logging.getLogger(__name__)
 
@@ -80,21 +82,23 @@ def build_sim_project(config: LinkerConfiguration) -> None:
     subprocess.run(["./compile.sh"], cwd=str(xsim_dir), check=True)
     subprocess.run(["./elaborate.sh"], cwd=str(xsim_dir), check=True)
 
-    build_dir = config.build_dir / "build"
+    cmake_build_dir = config.build_dir / "build"
 
     # Copy xsim.dir into build dir for sim executable
-    xsim_build_dir = build_dir / "xsim.dir"
+    xsim_build_dir = cmake_build_dir / "xsim.dir"
     if xsim_build_dir.exists():
         shutil.rmtree(xsim_build_dir, ignore_errors=True)
     shutil.copytree(xsim_dir / "xsim.dir", xsim_build_dir)
 
-    with resources.path("v80pp.resources", "sim") as sim_src_dir:
-        subprocess.run(["cmake", str(sim_src_dir)],
-                       cwd=str(build_dir), check=True)
-        jobs = str(os.cpu_count() or 8)
-        subprocess.run(["make", "-j", jobs], cwd=str(build_dir), check=True)
+    sim_src_dir = config.build_dir / "sim_src"
+    export_package(v80pp.resources.sim, sim_src_dir)
 
-    vpp_sim_path = build_dir / "vpp_sim"
+    subprocess.run(["cmake", str(sim_src_dir)],
+                    cwd=str(cmake_build_dir), check=True)
+    jobs = str(os.cpu_count() or 8)
+    subprocess.run(["make", "-j", jobs], cwd=str(cmake_build_dir), check=True)
+
+    vpp_sim_path = cmake_build_dir / "vpp_sim"
     if not vpp_sim_path.exists():
         raise FileNotFoundError(f"vpp_sim not found: {vpp_sim_path}")
     shutil.copy2(vpp_sim_path, config.build_dir / "vpp_sim")

@@ -27,6 +27,7 @@ import argparse
 import sys
 import importlib.resources as resources
 
+import v80pp.resources
 from v80pp.core.bd_ports import load_bd_ports_from_file, BlockDesignPorts
 from v80pp.core.kernel import Kernel, KernelInstance
 from v80pp.core.connectivity import ConnectivityConfig
@@ -255,7 +256,7 @@ class LinkerConfiguration(CommandConfiguration):
         # =======================
         # Argument interpretation
         # =======================
-        with resources.path("v80pp.resources", "bd_ports.txt") as bd_ports_path:
+        with resources.path(v80pp.resources, "bd_ports.txt") as bd_ports_path:
             self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
                 bd_ports_path)
 
