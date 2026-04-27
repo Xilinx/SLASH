@@ -94,7 +94,7 @@ def build_sim_project(config: LinkerConfiguration) -> None:
     export_package(v80pp.resources.sim, sim_src_dir)
 
     subprocess.run(["cmake", str(sim_src_dir)],
-                    cwd=str(cmake_build_dir), check=True)
+                   cwd=str(cmake_build_dir), check=True)
     jobs = str(os.cpu_count() or 8)
     subprocess.run(["make", "-j", jobs], cwd=str(cmake_build_dir), check=True)
 

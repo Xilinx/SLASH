@@ -19,7 +19,7 @@
 # ##################################################################################################
 
 proc _slash_usage {} {
-    return "Expected -tclargs: --project-name <name> --ip-repo <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --util-report-file <path> --resources-dir <path> --jobs <n> --pre-synth-tcl <path> ..."
+    return "Expected -tclargs: --project-name <name> --ip-repo <path> --abs-shell-dcp <path> --base-bd <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --util-report-file <path> --jobs <n> --pre-synth-tcl <path> ..."
 }
 
 proc _require_file {path label} {
@@ -37,7 +37,8 @@ proc _require_dir {path label} {
 array set opts {
     --project-name ""
     --ip-repo ""
-    --resources-dir ""
+    --abs-shell-dcp ""
+    --base-bd ""
     --linker-results-dir ""
     --rm-work-dir ""
     --artifact-out-dir ""
@@ -74,7 +75,7 @@ while {$idx < [llength $argv]} {
     incr idx
 }
 
-foreach req {--project-name --ip-repo --resources-dir --linker-results-dir --rm-work-dir --artifact-out-dir --util-report-file} {
+foreach req {--project-name --ip-repo --abs-shell-dcp --base-bd --linker-results-dir --rm-work-dir --artifact-out-dir --util-report-file} {
     if {$opts($req) eq ""} {
         error "Missing required argument '$req'. [_slash_usage]"
     }
@@ -82,7 +83,8 @@ foreach req {--project-name --ip-repo --resources-dir --linker-results-dir --rm-
 
 set proj_name $opts(--project-name)
 set ip_repo [file normalize $opts(--ip-repo)]
-set resources_dir [file normalize $opts(--resources-dir)]
+set abs_shell_dcp [file normalize $opts(--abs-shell-dcp)]
+set base_bd [file normalize $opts(--base-bd)]
 set linker_results_dir [file normalize $opts(--linker-results-dir)]
 set rm_work_dir $opts(--rm-work-dir)
 set artifact_out_dir $opts(--artifact-out-dir)
@@ -98,14 +100,9 @@ set util_report_file [file normalize $util_report_file]
 set timing_report_file [file join $rm_work_dir "report_timing_${proj_name}.txt"]
 set ltx_file [file join $artifact_out_dir "top_i_slash_slash_${proj_name}_inst_0_hw_probes.ltx"]
 
-set abs_shell_dcp [file join $resources_dir "abstract_shell" "abs_shell_slash.dcp"]
-set base_bd [file join $resources_dir "abstract_shell" "slash_base" "slash_base.bd"]
 set generated_bd_tcl [file join $linker_results_dir "slash.tcl"]
-set base_ip_repo [file join $resources_dir "base" "iprepo"]
 
-_require_dir $ip_repo "IP repository directory"
-_require_dir $resources_dir "resources directory"
-_require_dir $base_ip_repo "base IP repository directory"
+_require_file $ip_repo "IP repository directory"
 _require_file $abs_shell_dcp "abstract shell DCP"
 _require_file $base_bd "installed slash_base BD"
 _require_file $generated_bd_tcl "generated slash BD Tcl"
@@ -115,9 +112,7 @@ foreach pre_synth_tcl $pre_synth_tcls {
 
 puts "PROJECT NAME:      $proj_name"
 puts "IP REPO:           $ip_repo"
-puts "RESOURCES DIR:     $resources_dir"
 puts "LINKER RESULTS:    $linker_results_dir"
-puts "BASE IP REPO:      $base_ip_repo"
 puts "RM WORK DIR:       $rm_work_dir"
 puts "ARTIFACT OUT DIR:  $artifact_out_dir"
 puts "UTIL REPORT FILE:  $util_report_file"
@@ -131,7 +126,7 @@ set slash_rm_name "${slash_proj_name}_rm"
 
 create_project $slash_proj_name $rm_work_dir -part xcv80-lsva4737-2MHP-e-S -force
 
-set_property ip_repo_paths [list $base_ip_repo $ip_repo] [current_project]
+set_property ip_repo_paths [list $ip_repo] [current_project]
 update_ip_catalog
 add_files $abs_shell_dcp
 import_files $base_bd
