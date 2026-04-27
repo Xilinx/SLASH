@@ -33,8 +33,6 @@ from contextlib import ExitStack
 import v80pp.resources.aved
 import v80pp.resources.base.scripts
 import v80pp.resources.base.iprepo
-import v80pp.resources.abstract_shell.slash_base
-import v80pp.resources.abstract_shell.service_layer
 import v80pp.resources.base.constraints.service_layer.eth
 from v80pp.emit.metadata.report_util import convert_report_utilization_to_xml
 from v80pp.emit.render import export_package
@@ -218,6 +216,12 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     image_out_dir.mkdir(parents=True, exist_ok=True)
     rm_work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Importing the abstract shell resources here and not at the top of the file
+    # since they may not exist when the installation process is running.
+    import v80pp.resources.abstract_shell
+    import v80pp.resources.abstract_shell.slash_base
+    import v80pp.resources.abstract_shell.service_layer
 
     if rm_kind == RM_KIND.SERVICE_LAYER:
         tcl_name = "service_layer_build.tcl"
