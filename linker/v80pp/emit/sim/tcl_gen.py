@@ -330,7 +330,7 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
     sim_mem_dst.write_text(sim_mem_src)
 
     render_template(
-        template="sim/sim_prj.tcl",
+        template="sim_prj.tcl",
         out_path=sim_out,
         context={
             "sim_root": config.build_dir,

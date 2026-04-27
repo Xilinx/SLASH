@@ -50,7 +50,7 @@ def generate_emu_tcl(config: LinkerConfiguration) -> None:
     tb_path = config.build_dir / "tb.cpp"
     tb_path.parent.mkdir(parents=True, exist_ok=True)
     render_template(
-        template="sw_emu/tb.cpp",
+        template="sw_emu_tb.cpp",
         out_path=tb_path,
         context=tb_ctx,
     )

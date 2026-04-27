@@ -25,7 +25,7 @@ from pathlib import Path
 
 def render_template(template: str | Path, out_path: str | Path, context: dict) -> None:
     env = Environment(
-        loader=PackageLoader("v80pp", "resources"),
+        loader=PackageLoader("v80pp.resources"),
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
