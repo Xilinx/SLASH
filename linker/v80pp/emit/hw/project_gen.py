@@ -132,7 +132,7 @@ def _environment_with_udev_ld_preload() -> Dict[str, str]:
     existing_paths = [str(path) for path in possible_paths if path.is_file()]
     env = dict(os.environ)
     if len(existing_paths) > 0:
-        env["LD_PRELOAD"] = ":".join(str(existing_paths))
+        env["LD_PRELOAD"] = ":".join(existing_paths)
     return env
 
 
@@ -361,6 +361,9 @@ def install_abstract_shell(config: InstallerConfiguration) -> None:
         raise FileNotFoundError(
             f"Expected AVED PDI not found in results/base: {aved_pdi_path}")
     _copy_files([aved_pdi_path], abstract_shell_dir)
+
+    for (dirpath, _, _) in abstract_shell_dir.walk():
+        (dirpath / "__init__.py").touch()
 
 
 def generate_util_report(config: CommandConfiguration) -> None:
