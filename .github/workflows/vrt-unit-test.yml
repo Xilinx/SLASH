@@ -50,7 +50,7 @@ jobs:
         run: |
           mkdir vrt/build
           cd vrt/build
-          cmake -DVRT_INCLUDE_VRTD=1 -DVRTD_INCLUDE_LIBSLASH=1 -DENABLE_COVERAGE=1 ..
+          cmake -DVRT_INCLUDE_VRTD=1 -DVRTD_INCLUDE_LIBSLASH=1 -DVRT_BUILD_TESTS=1 -DENABLE_COVERAGE=1 ..
           make unit_tests -j$(nproc)
           cd tests && ctest --output-on-failure
 
