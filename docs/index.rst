@@ -19,6 +19,7 @@ management, and memory operations.
    tutorials/user/buffers-and-memory
    tutorials/user/emulation-and-simulation
    tutorials/admin/platform-setup
+   tutorials/admin/bootstrap-aved
    tutorials/admin/device-management
    tutorials/admin/vrtd-configuration
 
