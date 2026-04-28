@@ -306,12 +306,16 @@ void Device::parseSystemMap() {
     clockFreq = parser.getClockFrequency();
     this->platform = parser.getPlatform();
     kernels = parser.getKernels();
+
+    std::optional<vrtd::Bar> barHandle = std::nullopt;
     if (platform == Platform::HARDWARE && vrtdDevice.has_value()) {
-        std::optional<vrtd::Bar> barHandle = vrtdDevice->getBar(bar);
-        for (auto& kernel : kernels) {
-            kernel.second.setVrtdBar(barHandle);
-            kernel.second.setPlatform(platform);
-        }
+        barHandle = vrtdDevice->getBar(bar);
+    }
+
+    for (auto&kernel : kernels) {
+        kernel.second.setPlatform(platform);
+        kernel.second.setVrtdBar(barHandle);
+        kernel.second.setServer(zmqServer);
     }
     this->qdmaConnections = parser.getQdmaConnections();
 }
