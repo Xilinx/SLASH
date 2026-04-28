@@ -32,6 +32,19 @@
 
 using ::testing::Contains;
 
+// The vbin integration tests launch a Python ZeroMQ stub server
+// (tests/fixtures/stub_vbin/vrt_stub_server.py) to emulate the FPGA runtime, which requires
+// pyzmq. This meta-test verifies the dependency is present and fails fast with a clear
+// diagnostic if it is missing.
+TEST(PythonEnvTest, PyzmqIsImportable) {
+    int rc = std::system("python3 -c 'import zmq' >/dev/null 2>&1");
+    int exit_status = WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+    ASSERT_EQ(exit_status, 0)
+        << "pyzmq is not importable in the active Python environment.\n"
+        << "It is required by the Python stub server used by the VRT vbin integration tests.\n"
+        << "Install it with:  pip install pyzmq";
+}
+
 class DeviceTest : public ::testing::Test, public ::testing::WithParamInterface<vrt::Platform> {
    protected:
     std::filesystem::path tmpDir;
