@@ -27,7 +27,7 @@ import re
 import shutil
 import subprocess
 import importlib.resources as resources
-from typing import Optional
+from typing import Optional, Dict
 from contextlib import ExitStack
 
 import v80pp.resources.aved
@@ -119,6 +119,22 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
             f"Expected bootgen output not found: {output_pdi}")
     return output_pdi
 
+def _environment_with_udev_ld_preload() -> Dict[str, str]:
+    """
+    Create a dictionary of environment variables (based on the current one),
+    that works around a weird issue when running Vivado in a container.
+    
+    Details:
+    https://adaptivesupport.amd.com/s/question/0D54U00005Sgst2SAB/failed-batch-mode-execution-in-linux-docker-running-under-windows-host?language=en_US
+    https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
+    """
+    possible_paths = [Path("/lib/x86_64-linux-gnu/libudev.so.1"), Path("/lib64/libudev.so.1")]
+    existing_paths = [str(path) for path in possible_paths if path.is_file()]
+    env = dict(os.environ)
+    if len(existing_paths) > 0:
+        env["LD_PRELOAD"] = ":".join(str(existing_paths))
+    return env
+
 
 def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
     aved_dir = config.build_dir / "AVED"
@@ -181,15 +197,7 @@ def create_build_project(
         if action:
             cmd.append(action)
 
-        # Workaround for a weird issue when running Vivado in a container. Details:
-        # https://adaptivesupport.amd.com/s/question/0D54U00005Sgst2SAB/failed-batch-mode-execution-in-linux-docker-running-under-windows-host?language=en_US
-        # https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
-        env_vars = dict(os.environ)
-        libudev_path = Path("/lib/x86_64-linux-gnu/libudev.so.1")
-        if libudev_path.is_file():
-            env_vars["LD_PRELOAD"] = libudev_path
-
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True, env=env_vars)
+        subprocess.run(cmd, cwd=str(config.build_dir), check=True, env=_environment_with_udev_ld_preload())
 
 
 class RM_KIND(Enum):
@@ -291,15 +299,7 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             )
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
-        # Workaround for a weird issue when running Vivado in a container. Details:
-        # https://adaptivesupport.amd.com/s/question/0D54U00005Sgst2SAB/failed-batch-mode-execution-in-linux-docker-running-under-windows-host?language=en_US
-        # https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
-        env_vars = dict(os.environ)
-        libudev_path = Path("/lib/x86_64-linux-gnu/libudev.so.1")
-        if libudev_path.is_file():
-            env_vars["LD_PRELOAD"] = libudev_path
-
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True, env=env_vars)
+        subprocess.run(cmd, cwd=str(config.build_dir), check=True, env=_environment_with_udev_ld_preload())
 
     if rm_kind == RM_KIND.SLASH_PROJECT:
         pdi_out_path = image_out_dir / \
