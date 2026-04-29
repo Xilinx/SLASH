@@ -22,12 +22,46 @@
 
 set -euxo pipefail
 
-if [ $# -ne 1 ]; then
-    echo "Usage: <ubuntu|rocky>" 2>&1
+if [ $# -ne 2 ]; then
+    echo "Usage: <run|build> <ubuntu|rocky>" 2>&1
     exit 1
 fi
 
-DISTRO=$1
+DOCKER_RUN_ARGS=" "
+DOCKER_RUN_ARGS+="--rm "
+
+# Using the current working directory in the container
+DOCKER_RUN_ARGS+="-v $PWD:$PWD "
+DOCKER_RUN_ARGS+="-w $PWD "
+
+# Mounting the Xilinx toolchain in the container
+if [ -z $SLASH_XILINX_PATH ]; then
+    echo "Please set SLASH_XILINX_PATH to the path of your Xilinx tools installation (e.g. /opt/Xilinx)" 2&1
+    exit 1
+fi
+
+if [ -z $SLASH_XILINX_ROOT ]; then
+    SLASH_XILINX_ROOT=$SLASH_XILINX_PATH
+fi
+
+DOCKER_RUN_ARGS+="-v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT "
+
+# Mounting the license file for synthesis and implementation
+if [ -z $SLASH_LICENSE_PATH ]; then
+    echo "Please set SLASH_LICENSE_PATH to the path of your licenses (.e.g. /proj/xbuilds/licenses)" 2>&2
+    exit 1
+fi
+
+DOCKER_RUN_ARGS+="-v $SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH "
+DOCKER_RUN_ARGS+="-e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH "
+
+# If set, add the skip-root-build flag
+if [ -n $SLASH_PKG_SKIP_ROOT_DESIGN_BUILD ]; then
+    DOCKER_RUN_ARGS+="-e SLASH_PKG_SKIP_ROOT_DESIGN_BUILD=$SLASH_PKG_SKIP_ROOT_DESIGN_BUILD "
+fi
+
+CONTAINER=$1
+DISTRO=$2
 
 if [ $DISTRO = "ubuntu" ]; then
     BUILD_SCRIPT="./scripts/package-deb.sh"
@@ -38,23 +72,19 @@ else
     exit 1
 fi
 
-if [ -z $SLASH_XILINX_PATH ]; then
-    echo "Please set SLASH_XILINX_PATH to the path of your Xilinx tools installation (e.g. /opt/Xilinx)" 2&1
+DOCKER_COMMAND="source $SLASH_XILINX_PATH/2025.1/Vivado/settings64.sh "
+DOCKER_COMMAND+="&& export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$SLASH_XILINX_PATH/2025.1/Vivado/lib/lnx64.0 "
+if [ $CONTAINER = "build" ]; then
+    DOCKER_COMMAND+="&& $BUILD_SCRIPT "
+elif [ $CONTAINER = "run" ]; then
+    DOCKER_COMMAND+="&& bash"
+    DOCKER_RUN_ARGS+="-it "
+else
+    echo "Unknown container definition $CONTAINER" 2>&1
     exit 1
 fi
 
-if [ -z $SLASH_XILINX_ROOT ]; then
-    SLASH_XILINX_ROOT=$SLASH_XILINX_PATH
-fi
-
-if [ -z $SLASH_LICENSE_PATH ]; then
-    echo "Please set SLASH_LICENSE_PATH to the path of your licenses (.e.g. /proj/xbuilds/licenses)" 2>&2
-    exit 1
-fi
-
-docker build --build-arg USER_ID=$(id -u) -t "slash-run-$DISTRO" -f "scripts/Dockerfile.run-$DISTRO" .
-docker run --rm -it \
-    -v "$PWD:/home/slash/SLASH" -v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT -w /home/slash/SLASH \
-    -v "$SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH" -e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH \
-    "slash-run-$DISTRO" \
-    bash
+docker build --build-arg USER_ID=$(id -u) -t "slash-$CONTAINER-$DISTRO" -f "scripts/Dockerfile.$CONTAINER-$DISTRO" .
+docker run $DOCKER_RUN_ARGS \
+    "slash-$CONTAINER-$DISTRO" \
+    bash -c "$DOCKER_COMMAND"
