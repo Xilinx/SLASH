@@ -94,5 +94,5 @@ Description: V80 System Management Interface
 
 Package: v80++
 Architecture: any
-Depends: python3, python3-jinja2, ${misc:Depends}
+Depends: python3, python3-jinja2, libzmq3-dev, ${misc:Depends}
 Description: SLASH Linker
