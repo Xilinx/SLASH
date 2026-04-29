@@ -29,7 +29,6 @@ import tarfile
 
 from v80pp.core.command_config import LinkerConfiguration
 from v80pp.emit.render import export_package
-import v80pp.resources.sim
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +90,7 @@ def build_sim_project(config: LinkerConfiguration) -> None:
     shutil.copytree(xsim_dir / "xsim.dir", xsim_build_dir)
 
     sim_src_dir = config.build_dir / "sim_src"
-    export_package(v80pp.resources.sim, sim_src_dir)
+    export_package("v80pp.resources.sim", sim_src_dir)
 
     subprocess.run(["cmake", str(sim_src_dir)],
                    cwd=str(cmake_build_dir), check=True)

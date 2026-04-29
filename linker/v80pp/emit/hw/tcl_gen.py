@@ -20,9 +20,6 @@
 
 import logging
 import re
-import importlib.resources as resources
-
-import v80pp.resources.dcmac
 
 from v80pp.emit.render import render_template, export_package
 from v80pp.emit.hw.user_region.kernel_ctx import build_kernel_add_context
@@ -343,7 +340,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     svc_out = config.build_dir / "service_layer.tcl"
 
     dcmac_dir = config.build_dir / "dcmac"
-    export_package(v80pp.resources.dcmac, dcmac_dir)
+    export_package("v80pp.resources.dcmac", dcmac_dir)
 
     svc_ctx.update(dcmac_paths(dcmac_dir))
     render_template(

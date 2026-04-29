@@ -30,10 +30,6 @@ import importlib.resources as resources
 from typing import Optional, Dict
 from contextlib import ExitStack
 
-import v80pp.resources.aved
-import v80pp.resources.base.scripts
-import v80pp.resources.base.iprepo
-import v80pp.resources.base.constraints.service_layer.eth
 from v80pp.emit.metadata.report_util import convert_report_utilization_to_xml
 from v80pp.emit.render import export_package
 from v80pp.core.command_config import LinkerConfiguration, InstallerConfiguration, CommandConfiguration
@@ -158,7 +154,7 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
                      ("pdi_combine.bif", aved_fpt_dir), (f"{AVED_DESIGN_NAME}.xsa", aved_build_dir)]
 
     for (file_name, target_dir) in files_to_copy:
-        with resources.path(v80pp.resources.aved, file_name) as in_path:
+        with resources.path("v80pp.resources.aved", file_name) as in_path:
             _copy_checked(in_path, target_dir / file_name)
 
     logger.info("Running AVED build script in %s", aved_hw_dir)
@@ -177,7 +173,7 @@ def create_build_project(
 ) -> None:
     log_path = config.build_dir / "vivado.log"
 
-    with resources.path(v80pp.resources.base.scripts, "create_project.tcl") as tcl_path:
+    with resources.path("v80pp.resources.base.scripts", "create_project.tcl") as tcl_path:
         if not tcl_path.exists():
             raise FileNotFoundError(
                 f"create_project.tcl not found: {tcl_path}")
@@ -208,7 +204,7 @@ class RM_KIND(Enum):
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     # Copy all base IP cores into the ip repository
     config.ip_repository.mkdir(parents=True)
-    export_package(v80pp.resources.base.iprepo,
+    export_package("v80pp.resources.base.iprepo",
                    config.ip_repository / "slash_base")
 
     if rm_kind == RM_KIND.SLASH_PROJECT:
@@ -225,31 +221,25 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     image_out_dir.mkdir(parents=True, exist_ok=True)
     rm_work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Importing the abstract shell resources here and not at the top of the file
-    # since they may not exist when the installation process is running.
-    import v80pp.resources.abstract_shell
-    import v80pp.resources.abstract_shell.slash_base
-    import v80pp.resources.abstract_shell.service_layer
-
     if rm_kind == RM_KIND.SERVICE_LAYER:
         tcl_name = "service_layer_build.tcl"
         abs_shell_dcp_name = "abs_shell_service_layer.dcp"
-        base_bd_package = v80pp.resources.abstract_shell.service_layer
+        base_bd_package = "v80pp.resources.abstract_shell.service_layer"
         base_bd_name = "service_layer.bd"
         log_path = logs_dir / "service_layer_build.log"
     else:
         tcl_name = "slash_project_build.tcl"
         abs_shell_dcp_name = "abs_shell_slash.dcp"
-        base_bd_package = v80pp.resources.abstract_shell.slash_base
+        base_bd_package = "v80pp.resources.abstract_shell.slash_base"
         base_bd_name = "slash_base.bd"
         log_path = logs_dir / "slash_project_build.log"
 
     with ExitStack() as stack:
         tcl_path = stack.enter_context(
-            resources.path(v80pp.resources.base.scripts, tcl_name)
+            resources.path("v80pp.resources.base.scripts", tcl_name)
         )
         abs_shell_dcp_path = stack.enter_context(
-            resources.path(v80pp.resources.abstract_shell,
+            resources.path("v80pp.resources.abstract_shell",
                            abs_shell_dcp_name)
         )
         base_bd_path = stack.enter_context(
@@ -295,7 +285,7 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
         if rm_kind == RM_KIND.SERVICE_LAYER:
             opt_post_tcl = stack.enter_context(
                 resources.path(
-                    v80pp.resources.base.constraints.service_layer.eth, "service_layer_eth.opt.post.tcl")
+                    "v80pp.resources.base.constraints.service_layer.eth", "service_layer_eth.opt.post.tcl")
             )
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
