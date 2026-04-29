@@ -362,8 +362,13 @@ def install_abstract_shell(config: InstallerConfiguration) -> None:
             f"Expected AVED PDI not found in results/base: {aved_pdi_path}")
     _copy_files([aved_pdi_path], abstract_shell_dir)
 
-    for (dirpath, _, _) in abstract_shell_dir.walk():
-        (dirpath / "__init__.py").touch()
+    def add_init_files(path: Path):
+        (path / "__init__.py").touch()
+        for sub_path in path.iterdir():
+            if not sub_path.is_dir():
+                continue
+            add_init_files(sub_path)
+    add_init_files(abstract_shell_dir)
 
 
 def generate_util_report(config: CommandConfiguration) -> None:
