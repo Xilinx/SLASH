@@ -21,7 +21,6 @@
 from __future__ import annotations
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from pathlib import Path
-from importlib.abc import Traversable
 from importlib import resources
 import shutil
 
@@ -39,7 +38,7 @@ def render_template(template: str | Path, out_path: str | Path, context: dict) -
 
 
 def export_package(package, out_dir: str | Path) -> None:
-    def impl(traversable: Traversable, out_path: Path) -> None:
+    def impl(traversable, out_path: Path) -> None:
         if traversable.is_file():
             with resources.as_file(traversable) as in_path:
                 shutil.copy(in_path, out_path)
