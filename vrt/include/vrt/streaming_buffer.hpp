@@ -23,7 +23,7 @@
 
 #include <regex>
 
-#include "api/device.hpp"
+#include "device.hpp"
 #include "qdma/qdma_connection.hpp"
 #include "qdma/qdma_intf.hpp"
 #include "utils/platform.hpp"
@@ -110,7 +110,7 @@ template <typename T>
 StreamingBuffer<T>::StreamingBuffer(Device device, Kernel kernel, const std::string& portName,
                                     size_t size)
     : device(device), size(size), kernel(kernel), portName(portName) {
-    std::vector<QdmaConnection> qdmaConnections = device.getQdmaConnections();
+    std::vector<QdmaConnection> qdmaConnections = device.getHandle()->getQdmaConnections();
     bool gotQdma = false;
     for (const auto& con : qdmaConnections) {
         if (con.getKernel() == kernel.getName() && portName == con.getInterface()) {
@@ -162,7 +162,7 @@ template <typename T>
 void StreamingBuffer<T>::sync() {
     Platform platform = device.getPlatform();
     if (platform == Platform::EMULATION) {
-        ZmqServer* server = device.getHandle()->getZmqServer();
+        auto server = device.getHandle()->getZmqServer();
         if (syncType == StreamDirection::HOST_TO_DEVICE) {
             std::vector<uint8_t> sendData;
             std::size_t dataSize = size * sizeof(T);

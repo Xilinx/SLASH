@@ -230,6 +230,12 @@ class Kernel {
     void setVrtdBar(const std::optional<vrtd::Bar>& bar);
 
     /**
+     * @brief Sets the ZeroMQ server for emulation and simulation.
+     * @param server The ZeroMQ server handle.
+     */
+    void setServer(std::shared_ptr<ZmqServer> server);
+
+    /**
      * @brief Writes a value to a register.
      * @param offset The offset of the register.
      * @param value The value to write.

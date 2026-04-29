@@ -326,6 +326,13 @@ The following table summarises what each package provides:
 Program the Board
 =================
 
+.. note::
+
+   This step assumes the AMI driver is already bound to PF0
+   (``10ee:50b4``). If your V80 has never been programmed with AVED — for
+   example, a brand-new board — first complete :doc:`bootstrap-aved` to
+   install AVED via JTAG.
+
 After installing the packages, the board's flash memory must be programmed
 with the static shell before the system can be used. This step is required:
 
