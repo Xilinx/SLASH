@@ -23,7 +23,7 @@
 set -euxo pipefail
 
 if [ $# -ne 2 ]; then
-    echo "Usage: <run|build> <ubuntu|rocky>" 2>&1
+    echo "Usage: <run|package> <ubuntu|rocky>" 2>&1
     exit 1
 fi
 
@@ -63,19 +63,24 @@ fi
 CONTAINER=$1
 DISTRO=$2
 
+# Check the distro argument and set the relevant packaging script
 if [ $DISTRO = "ubuntu" ]; then
-    BUILD_SCRIPT="./scripts/package-deb.sh"
+    PACKAGE_SCRIPT="./scripts/package-deb.sh"
 elif [ $DISTRO = "rocky" ]; then
-    BUILD_SCRIPT="./scripts/package-rpm.sh"
+    PACKAGE_SCRIPT="./scripts/package-rpm.sh"
 else
     echo "Unknown Linux distro $DISTRO" 2>&1
     exit 1
 fi
 
+# Build the script to run inside the container.
+# This script will load Vivado, set the LD_LIBRARY_PATH for simulation,
+# and then either run bash or the packaging script
+# This block also cks the container argument.
 DOCKER_COMMAND="source $SLASH_XILINX_PATH/2025.1/Vivado/settings64.sh "
 DOCKER_COMMAND+="&& export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$SLASH_XILINX_PATH/2025.1/Vivado/lib/lnx64.0 "
-if [ $CONTAINER = "build" ]; then
-    DOCKER_COMMAND+="&& $BUILD_SCRIPT "
+if [ $CONTAINER = "package" ]; then
+    DOCKER_COMMAND+="&& $PACKAGE_SCRIPT "
 elif [ $CONTAINER = "run" ]; then
     DOCKER_COMMAND+="&& bash"
     DOCKER_RUN_ARGS+="-it "
@@ -84,6 +89,7 @@ else
     exit 1
 fi
 
+# Build and run the container.
 docker build --build-arg USER_ID=$(id -u) -t "slash-$CONTAINER-$DISTRO" -f "scripts/Dockerfile.$CONTAINER-$DISTRO" .
 docker run $DOCKER_RUN_ARGS \
     "slash-$CONTAINER-$DISTRO" \
