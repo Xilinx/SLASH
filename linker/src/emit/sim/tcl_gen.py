@@ -231,7 +231,6 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
         kernel.name: kernel.hls_data_path for kernel in config.kernels}
 
     kernel_sim_meta: dict[str, dict] = {}
-    kernel_hls_by_type: dict[str, Path] = {}
     for kernel in config.kernels:
         kpath = kernel.component_xml_path
 
