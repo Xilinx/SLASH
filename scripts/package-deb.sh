@@ -46,8 +46,8 @@ if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]] && [[ "${NONINTERACTIVE}" -eq 0 ]];
     echo "  ${ARTIFACTS_DIR}  (built .deb packages)" >&2
     echo "  pbuild/           (CMake build tree)" >&2
     echo "  debian/           (generated packaging metadata)" >&2
-    echo "  linker/src/install.prj" >&2
-    echo "  linker/resources/abstract_shell" >&2
+    echo "  linker/install.prj" >&2
+    echo "  linker/slashkit/resources/abstract_shell" >&2
     echo "This includes the static shell, which can take several hours to rebuild." >&2
     read -r -p "Overwrite existing build and start from scratch? [y/N] " _answer </dev/tty
     case "${_answer}" in
@@ -66,10 +66,10 @@ if ! command -v v++ > /dev/null 2>&1; then
     _prereq_ok=0
 fi
 
-if ! compgen -G 'linker/resources/base/iprepo/smbus*/' > /dev/null 2>&1; then
-    echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/resources/base/iprepo/." >&2
+if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' > /dev/null 2>&1; then
+    echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/iprepo/." >&2
     echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
-    echo "directory into linker/resources/base/iprepo/ before building." >&2
+    echo "directory into linker/slashkit/resources/base/iprepo/ before building." >&2
     echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
     _prereq_ok=0
 fi

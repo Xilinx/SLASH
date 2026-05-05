@@ -163,7 +163,7 @@ local IP repository before building:
 
 1. Download the SMBus IP from https://www.xilinx.com/member/v80.html
    (AMD account required).
-2. Copy the downloaded IP directory into ``linker/resources/base/iprepo/``
+2. Copy the downloaded IP directory into ``linker/slashkit/resources/base/iprepo/``
    so that Vivado can locate it during synthesis.
 
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for

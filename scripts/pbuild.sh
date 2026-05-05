@@ -33,6 +33,7 @@ if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
 fi
 
 rm -rf linker/dist linker/build linker/slashkit.egg-info
+rm -rf .venv
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
