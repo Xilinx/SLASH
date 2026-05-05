@@ -25,8 +25,8 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
-make -C linker/v80pp/resources/base/iprepo
+make -C linker/slashkit/resources/base/iprepo
 
 pushd linker
-python3 -m v80pp install --out-dir v80pp/resources
+python3 -m slashkit install --out-dir slashkit/resources
 popd

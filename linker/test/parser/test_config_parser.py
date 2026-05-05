@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from v80pp.parser.config_parser import (
+from slashkit.parser.config_parser import (
     _parse_target,
     _parse_nk_value,
     _parse_stream_connect_value,
@@ -35,9 +35,9 @@ from v80pp.parser.config_parser import (
     parse_connectivity_file,
     apply_config_to_instances,
 )
-from v80pp.core.kernel import Kernel
-from v80pp.core.port import BusType, Port
-from v80pp.core.connectivity import (
+from slashkit.core.kernel import Kernel
+from slashkit.core.port import BusType, Port
+from slashkit.core.connectivity import (
     ConnectivityConfig,
     NKSpec,
     ClockSpec,

@@ -25,7 +25,7 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
-make -C linker/v80pp/resources/base/iprepo clean
+make -C linker/slashkit/resources/base/iprepo clean
 
-rm -rf linker/v80pp/install.prj
-rm -rf linker/v80pp/resources/abstract_shell
+rm -rf linker/slashkit/install.prj
+rm -rf linker/slashkit/resources/abstract_shell

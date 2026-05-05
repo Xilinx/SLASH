@@ -8,7 +8,7 @@ Key components:
 
 - **VRT** (V80 RunTime) — C++17 API for kernel execution, buffer management, and device control
 - **v80-smi** — command-line tool for board management, programming, and diagnostics
-- **v80++** — Python-based linker that packages HLS kernels into deployable *vrtbin* archives
+- **slashkit** — Python-based linker that packages HLS kernels into deployable *vrtbin* archives
 - **slash** — Linux kernel module and driver stack
 
 ## Architecture
@@ -39,7 +39,7 @@ and communicates with adjacent layers through well-defined interfaces.
 Two additional components sit alongside the stack:
 
 - **v80-smi** — CLI for listing, programming, resetting, and validating V80 boards.
-- **v80++ (linker)** — links HLS kernels into *vrtbin* archives for deployment.
+- **slashkit** — links HLS kernels into *vrtbin* archives for deployment.
 
 ## Repository Layout
 
@@ -48,7 +48,7 @@ Two additional components sit alongside the stack:
 | [`vrt/`](vrt/) | VRT | C++17 runtime library — [README](vrt/README.md) |
 | [`driver/`](driver/) | Kernel module + libslash | Linux driver and C wrapper — [README](driver/libslash/README.md) |
 | [`smi/`](smi/) | v80-smi | CLI management tool — [README](smi/README.md) |
-| [`linker/`](linker/) | v80++ | Python-based kernel linker |
+| [`linker/`](linker/) | slashkit | Python-based kernel linker |
 | [`cmake/`](cmake/) | CMake modules | Build system integration — [README](cmake/README.md) |
 | [`examples/`](examples/) | Examples | Demo projects — [README](examples/README.md) |
 | [`docs/`](docs/) | Documentation | Sphinx / ReadTheDocs site |

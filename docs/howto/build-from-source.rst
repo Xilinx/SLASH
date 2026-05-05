@@ -126,7 +126,7 @@ Install:
 
    sudo cmake --install build
 
-v80++ (Linker) — Static Shell
+slashkit — Static Shell
 ==============================
 
 After installing ``v80-smi``, the linker's static shell must be built

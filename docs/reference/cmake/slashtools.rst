@@ -72,7 +72,7 @@ Operating Modes
 ``add_vbin()`` supports two modes for locating the SLASH linker:
 
 **Installed mode** (preferred)
-   If ``v80++`` is found on ``PATH``, the function invokes it directly.
+   If ``slashkit`` is found on ``PATH``, the function invokes it directly.
 
 **Source-tree mode**
    If ``SLASH_REPO_ROOT`` is set (or auto-detected from the module's location),
@@ -87,8 +87,8 @@ Configuration Variables
    Path to the SLASH repository root. Auto-detected when the CMake module is
    located inside the repository tree.
 
-``V80PP_EXECUTABLE``
-   Path to the installed ``v80++`` linker. Auto-detected via ``find_program()``.
+``SLASHKIT_EXECUTABLE``
+   Path to the installed ``slashkit`` linker. Auto-detected via ``find_program()``.
 
 Example
 =======

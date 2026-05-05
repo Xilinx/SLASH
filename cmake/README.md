@@ -56,20 +56,20 @@ add_vbin(
 
 **Linker detection** (two modes, tried in order):
 
-1. **Installed** &mdash; finds `v80++` on PATH
+1. **Installed** &mdash; finds `slashkit` on PATH
 2. **Source tree** &mdash; uses `SLASH_REPO_ROOT` (or auto-detects from
    `../linker/src/main.py` relative to this directory).  Requires
    Python 3.
 
 Variables set after loading:
 
-| Variable           | Description                               |
-|--------------------|-------------------------------------------|
-| `SLASH_FOUND`      | `TRUE` when SlashTools is ready           |
-| `V80PP_EXECUTABLE` | Path to `v80++` (installed mode)          |
-| `SLASH_REPO_ROOT`  | Path to SLASH repo root (source mode)     |
-| `VIVADO_BINARY`    | Path to `vivado` (from FindVivado)        |
-| `VITIS_ROOT_DIR`   | Path to Vitis root (from FindVitis)       |
+| Variable              | Description                               |
+|-----------------------|-------------------------------------------|
+| `SLASH_FOUND`         | `TRUE` when SlashTools is ready           |
+| `SLASHKIT_EXECUTABLE` | Path to `slashkit` (installed mode)       |
+| `SLASH_REPO_ROOT`     | Path to SLASH repo root (source mode)     |
+| `VIVADO_BINARY`       | Path to `vivado` (from FindVivado)        |
+| `VITIS_ROOT_DIR`      | Path to Vitis root (from FindVitis)       |
 
 ### BuildHLS &mdash; `build_hls()`, `build_hls_dir()`, `build_hls_clean()`
 

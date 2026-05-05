@@ -36,8 +36,8 @@ DESTDIR="$1" cmake --build pbuild/smi --target install
 # Install CMake toolchain modules (SlashTools)
 DESTDIR="$1" cmake --build pbuild/cmake-tools --target install
 
-python3 -m pip install --no-deps --root $1 linker/dist/v80pp-*.whl
-if [ -f $1/usr/local/bin/v80++ ]; then
-    mv $1/usr/local/bin/v80++ $1/usr/bin/
+python3 -m pip install --no-deps --root $1 linker/dist/slashkit-*.whl
+if [ -f $1/usr/local/bin/slashkit ]; then
+    mv $1/usr/local/bin/slashkit $1/usr/bin/
     mv $1/usr/local/lib/python3* $1/usr/lib/
 fi

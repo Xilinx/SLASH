@@ -14,7 +14,7 @@ Overview
 ========
 
 A vrtbin is a **gzip-compressed tar archive** produced by the SLASH linker
-(``v80++``) via the ``add_vbin()`` CMake function. VRT extracts the archive
+(``slashkit``) via the ``add_vbin()`` CMake function. VRT extracts the archive
 at runtime when you construct a ``vrt::Device``.
 
 .. code-block:: text
@@ -180,7 +180,7 @@ reference.
 Creating a Vrtbin
 =================
 
-Vrtbin archives are produced by the SLASH linker (``v80++``) through the
+Vrtbin archives are produced by the SLASH linker (``slashkit``) through the
 CMake ``add_vbin()`` function:
 
 .. code-block:: cmake

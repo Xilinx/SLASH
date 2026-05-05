@@ -108,7 +108,7 @@ DEB_PACKAGES=(
     libvrt
     libvrt-dev
     v80-smi
-    v80++
+    slashkit
     ami
 )
 
@@ -126,7 +126,7 @@ RPM_PACKAGES=(
     libvrt
     libvrt-devel
     v80-smi
-    v80++
+    slashkit
     ami
 )
 

@@ -13,7 +13,7 @@ COPY deb/*.deb /tmp
 RUN apt install -y /tmp/slash-dev_*.deb \
   /tmp/slash-sim-emu-dev_*.deb \
   /tmp/slash-sim-emu_*.deb \
-  /tmp/v80++_*.deb \
+  /tmp/slashkit_*.deb \
   /tmp/libslash-dev_*.deb \
   /tmp/libslash_*.deb \
   /tmp/libvrtd-dev_*.deb \

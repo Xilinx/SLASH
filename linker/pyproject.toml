@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "v80pp"
+name = "slashkit"
 version = "0.1.0"
 description = "Utility to link VRT binaries (VBINs) from user IP cores"
 license = "MIT"
@@ -11,11 +11,11 @@ requires-python = ">=3.9"
 dependencies = ["jinja2>=2.11.3"]
 
 [project.scripts]
-"v80++" = "v80pp.__main__:main"
+"slashkit" = "slashkit.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["v80pp*"]
+include = ["slashkit*"]
 exclude = ["test*"]
 
 [tool.setuptools.package-data]
-"v80pp" = ["resources/**/*"]
+"slashkit" = ["resources/**/*"]

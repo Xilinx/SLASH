@@ -81,7 +81,7 @@ SLASH/VRT System for simulation and emulation
 %package -n     slash-sim-emu-devel
 Summary:        SLASH/VRT System for simulation and emulation (development files)
 Requires:       slash-sim-emu = %{version}-%{release}
-Requires:       v80++ = %{version}-%{release}
+Requires:       slashkit = %{version}-%{release}
 Requires:       libvrt-devel = %{version}-%{release}
 BuildArch:      noarch
 
@@ -161,13 +161,13 @@ Requires:       libvrt = %{version}-%{release}
 %description -n v80-smi
 V80 System Management Interface
 
-%package -n     v80++
+%package -n     slashkit
 Summary:        SLASH Linker
 Requires:       python3
 Requires:       python3-jinja2
 Requires:       cppzmq-devel
 
-%description -n v80++
+%description -n slashkit
 SLASH Linker
 
 # ---- Build ----
@@ -301,10 +301,10 @@ udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 %files -n v80-smi
 %{_bindir}/v80-smi
 
-%files -n v80++
-%{_bindir}/v80++
-%{python3_sitelib}/v80pp/
-%{python3_sitelib}/v80pp-*.dist-info/
+%files -n slashkit
+%{_bindir}/slashkit
+%{python3_sitelib}/slashkit/
+%{python3_sitelib}/slashkit-*.dist-info/
 %{_libdir}/cmake/SlashTools/
 
 # ---- Scriptlets ----

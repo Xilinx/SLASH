@@ -188,7 +188,7 @@ available, and also locates Vivado and Vitis automatically.
 expects ``<name>.cpp`` and ``<name>.cfg`` file pairs for each kernel listed in
 ``KERNELS``. The compiled IP paths are stored in ``_KERNELS``.
 
-``add_vbin()`` invokes the SLASH linker (``v80++``) to produce a ``.vbin``
+``add_vbin()`` invokes the SLASH linker (``slashkit``) to produce a ``.vbin``
 archive from the compiled kernels and the connectivity configuration. One
 target is created per platform (``hw``, ``emu``, ``sim``).
 

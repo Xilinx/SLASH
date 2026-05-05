@@ -71,7 +71,7 @@ Using the ``00_axilite`` example:
    cmake --build build --target hls                 # compile HLS kernels (requires Vitis HLS)
    cmake --build build --target axilite_emu         # link into an emulation vrtbin
 
-The ``axilite_emu`` target invokes the SLASH linker (``v80++``) with
+The ``axilite_emu`` target invokes the SLASH linker (``slashkit``) with
 ``PLATFORM "emu"``. The resulting ``.vbin`` file contains:
 
 - ``system_map.xml`` with ``<Platform>Emulation</Platform>``
