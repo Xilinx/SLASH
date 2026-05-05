@@ -49,4 +49,4 @@ jobs:
         run: cd linker && pytest
 
       - name: Check formatting
-        run: cd linker && autopep8 -r --diff --exit-code --exclude v80pp/resources/ v80pp/ test/
+        run: cd linker && autopep8 -r --diff --exit-code --exclude=v80pp/resources/ v80pp/ test/
