@@ -271,11 +271,11 @@ from ``v80-smi list``, e.g. ``03:00``):
 
    # For Ubuntu 22.04
    sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-      -i /usr/lib/python3.10/dist-packages/slashkit/resources/abstract_shell/amd_v80_gen5x8_25.1.pdi
+      -i /usr/lib/python3.10/dist-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
       
    # For Rocky 9
    sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-      -i /usr/lib/python3.9/site-packages/slashkit/resources/abstract_shell/amd_v80_gen5x8_25.1.pdi
+      -i /usr/lib/python3.9/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
 
 After programming completes, reboot the system for the new flash contents
 to take effect:

@@ -19,7 +19,7 @@
 # ##################################################################################################
 
 proc _slash_usage {} {
-    return "Expected -tclargs: --project-name <name> --ip-repo <path> --abs-shell-dcp <path> --base-bd <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --util-report-file <path> --jobs <n> --pre-synth-tcl <path> ..."
+    return "Expected -tclargs: --project-name <name> --ip-repo <path> --static-shell-dcp <path> --base-bd <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --util-report-file <path> --jobs <n> --pre-synth-tcl <path> ..."
 }
 
 proc _require_file {path label} {
@@ -37,7 +37,7 @@ proc _require_dir {path label} {
 array set opts {
     --project-name ""
     --ip-repo ""
-    --abs-shell-dcp ""
+    --static-shell-dcp ""
     --base-bd ""
     --linker-results-dir ""
     --rm-work-dir ""
@@ -75,7 +75,7 @@ while {$idx < [llength $argv]} {
     incr idx
 }
 
-foreach req {--project-name --ip-repo --abs-shell-dcp --base-bd --linker-results-dir --rm-work-dir --artifact-out-dir --util-report-file} {
+foreach req {--project-name --ip-repo --static-shell-dcp --base-bd --linker-results-dir --rm-work-dir --artifact-out-dir --util-report-file} {
     if {$opts($req) eq ""} {
         error "Missing required argument '$req'. [_slash_usage]"
     }
@@ -83,7 +83,7 @@ foreach req {--project-name --ip-repo --abs-shell-dcp --base-bd --linker-results
 
 set proj_name $opts(--project-name)
 set ip_repo [file normalize $opts(--ip-repo)]
-set abs_shell_dcp [file normalize $opts(--abs-shell-dcp)]
+set static_shell_dcp [file normalize $opts(--static-shell-dcp)]
 set base_bd [file normalize $opts(--base-bd)]
 set linker_results_dir [file normalize $opts(--linker-results-dir)]
 set rm_work_dir $opts(--rm-work-dir)
@@ -103,7 +103,7 @@ set ltx_file [file join $artifact_out_dir "top_i_slash_slash_${proj_name}_inst_0
 set generated_bd_tcl [file join $linker_results_dir "slash.tcl"]
 
 _require_file $ip_repo "IP repository directory"
-_require_file $abs_shell_dcp "abstract shell DCP"
+_require_file $static_shell_dcp "static shell DCP"
 _require_file $base_bd "installed slash_base BD"
 _require_file $generated_bd_tcl "generated slash BD Tcl"
 foreach pre_synth_tcl $pre_synth_tcls {
@@ -128,7 +128,7 @@ create_project $slash_proj_name $rm_work_dir -part xcv80-lsva4737-2MHP-e-S -forc
 
 set_property ip_repo_paths [list $ip_repo] [current_project]
 update_ip_catalog
-add_files $abs_shell_dcp
+add_files $static_shell_dcp
 import_files $base_bd
 set_property PR_FLOW 1 [current_project]
 set_property DESIGN_MODE GateLvl [current_fileset]

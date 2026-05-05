@@ -29,7 +29,7 @@ from slashkit.emit.hw.project_gen import (
     build_service_layer_rm,
     build_slash_rm,
     generate_util_report,
-    install_abstract_shell,
+    install_static_shell,
 )
 from slashkit.emit.sim.tcl_gen import generate_sim_tcl
 from slashkit.emit.emu.tcl_gen import generate_emu_tcl
@@ -174,7 +174,7 @@ def main():
     install_parser = sub_parsers.add_parser("install")
     InstallerConfiguration.populate_argument_parser(install_parser)
     install_parser.set_defaults(
-        config_class=InstallerConfiguration, operation=install_abstract_shell)
+        config_class=InstallerConfiguration, operation=install_static_shell)
 
     args = ap.parse_args()
 

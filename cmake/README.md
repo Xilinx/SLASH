@@ -197,8 +197,8 @@ include(CheckSlashInstall)
 Checks for four required files in `INSTALL_DIR` (default
 `/opt/amd/slash`):
 
-- `abs_shell_service_layer.dcp`
-- `abs_shell_slash.dcp`
+- `static_shell_service_layer.dcp`
+- `static_shell_slash.dcp`
 - `amd_v80_gen5x8_25.1.pdi`
 - `top_wrapper_routed_bb.dcp`
 

@@ -47,7 +47,7 @@ if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]] && [[ "${NONINTERACTIVE}" -eq 0 ]];
     echo "  pbuild/           (CMake build tree)" >&2
     echo "  debian/           (generated packaging metadata)" >&2
     echo "  linker/install.prj" >&2
-    echo "  linker/slashkit/resources/abstract_shell" >&2
+    echo "  linker/slashkit/resources/static_shell" >&2
     echo "This includes the static shell, which can take several hours to rebuild." >&2
     read -r -p "Overwrite existing build and start from scratch? [y/N] " _answer </dev/tty
     case "${_answer}" in

@@ -19,7 +19,7 @@
 # ##################################################################################################
 
 proc _service_usage {} {
-    return "Expected -tclargs: --project-name <name> --ip-repo <path> --abs-shell-dcp <path> --base-bd <path> --opt-post-tcl <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --jobs <n>"
+    return "Expected -tclargs: --project-name <name> --ip-repo <path> --static-shell-dcp <path> --base-bd <path> --opt-post-tcl <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --jobs <n>"
 }
 
 proc _require_file {path label} {
@@ -37,7 +37,7 @@ proc _require_dir {path label} {
 array set opts {
     --project-name ""
     --ip-repo ""
-    --abs-shell-dcp ""
+    --static-shell-dcp ""
     --base-bd ""
     --opt-post-tcl ""
     --linker-results-dir ""
@@ -60,7 +60,7 @@ while {$idx < [llength $argv]} {
     incr idx
 }
 
-foreach req {--project-name --ip-repo --abs-shell-dcp --base-bd --opt-post-tcl --linker-results-dir --rm-work-dir --artifact-out-dir} {
+foreach req {--project-name --ip-repo --static-shell-dcp --base-bd --opt-post-tcl --linker-results-dir --rm-work-dir --artifact-out-dir} {
     if {$opts($req) eq ""} {
         error "Missing required argument '$req'. [_service_usage]"
     }
@@ -68,7 +68,7 @@ foreach req {--project-name --ip-repo --abs-shell-dcp --base-bd --opt-post-tcl -
 
 set proj_name $opts(--project-name)
 set ip_repo [file normalize $opts(--ip-repo)]
-set abs_shell_dcp [file normalize $opts(--abs-shell-dcp)]
+set static_shell_dcp [file normalize $opts(--static-shell-dcp)]
 set base_bd [file normalize $opts(--base-bd)]
 set opt_post_tcl [file normalize $opts(--opt-post-tcl)]
 set linker_results_dir [file normalize $opts(--linker-results-dir)]
@@ -84,7 +84,7 @@ set artifact_out_dir [file normalize $artifact_out_dir]
 set generated_bd_tcl [file join $linker_results_dir "service_layer.tcl"]
 
 _require_dir $ip_repo "IP repository directory"
-_require_file $abs_shell_dcp "abstract shell DCP"
+_require_file $static_shell_dcp "static shell DCP"
 _require_file $base_bd "installed service_layer BD"
 _require_file $generated_bd_tcl "generated service_layer BD Tcl"
 _require_file $opt_post_tcl "service_layer eth opt.post Tcl"
@@ -104,7 +104,7 @@ create_project $rm_proj_name $rm_work_dir -part xcv80-lsva4737-2MHP-e-S -force
 
 set_property ip_repo_paths [list $ip_repo] [current_project]
 update_ip_catalog
-add_files $abs_shell_dcp
+add_files $static_shell_dcp
 import_files $base_bd
 set_property PR_FLOW 1 [current_project]
 set_property DESIGN_MODE GateLvl [current_fileset]

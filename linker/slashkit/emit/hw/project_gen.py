@@ -226,14 +226,14 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
 
     if rm_kind == RM_KIND.SERVICE_LAYER:
         tcl_name = "service_layer_build.tcl"
-        abs_shell_dcp_name = "abs_shell_service_layer.dcp"
-        base_bd_package = "slashkit.resources.abstract_shell.service_layer"
+        stat_shell_dcp_name = "stat_shell_service_layer.dcp"
+        base_bd_package = "slashkit.resources.static_shell.service_layer"
         base_bd_name = "service_layer.bd"
         log_path = logs_dir / "service_layer_build.log"
     else:
         tcl_name = "slash_project_build.tcl"
-        abs_shell_dcp_name = "abs_shell_slash.dcp"
-        base_bd_package = "slashkit.resources.abstract_shell.slash_base"
+        stat_shell_dcp_name = "stat_shell_slash.dcp"
+        base_bd_package = "slashkit.resources.static_shell.slash_base"
         base_bd_name = "slash_base.bd"
         log_path = logs_dir / "slash_project_build.log"
 
@@ -241,9 +241,9 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
         tcl_path = stack.enter_context(
             resources.path("slashkit.resources.base.scripts", tcl_name)
         )
-        abs_shell_dcp_path = stack.enter_context(
-            resources.path("slashkit.resources.abstract_shell",
-                           abs_shell_dcp_name)
+        stat_shell_dcp_path = stack.enter_context(
+            resources.path("slashkit.resources.static_shell",
+                           stat_shell_dcp_name)
         )
         base_bd_path = stack.enter_context(
             resources.path(base_bd_package, base_bd_name)
@@ -263,8 +263,8 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             config.project_name,
             "--ip-repo",
             str(config.ip_repository),
-            "--abs-shell-dcp",
-            str(abs_shell_dcp_path),
+            "--stat-shell-dcp",
+            str(stat_shell_dcp_path),
             "--base-bd",
             str(base_bd_path),
             "--linker-results-dir",
@@ -315,9 +315,9 @@ def build_slash_rm(config: LinkerConfiguration) -> None:
     _run_rm_build(config, RM_KIND.SLASH_PROJECT)
 
 
-def install_abstract_shell(config: InstallerConfiguration) -> None:
-    abstract_shell_dir = config.out_dir / "abstract_shell"
-    abstract_shell_dir.mkdir(parents=True, exist_ok=True)
+def install_static_shell(config: InstallerConfiguration) -> None:
+    static_shell_dir = config.out_dir / "static_shell"
+    static_shell_dir.mkdir(parents=True, exist_ok=True)
 
     # Cloning the AVED repository into the build directory
     # We're doing this early so that errors are caught *before* the 10-hour Vivado run!
@@ -334,27 +334,27 @@ def install_abstract_shell(config: InstallerConfiguration) -> None:
     impl_dir = config.build_dir / "slash.runs" / "impl_1"
     dcp_sources = (
         impl_dir / "top_wrapper_routed_bb.dcp",
-        impl_dir / "abs_shell_slash.dcp",
-        impl_dir / "abs_shell_service_layer.dcp",
+        impl_dir / "stat_shell_slash.dcp",
+        impl_dir / "stat_shell_service_layer.dcp",
     )
     for src in dcp_sources:
         if not src.exists():
             raise FileNotFoundError(
                 f"Expected install artifact not found: {src}")
-    _copy_files(list(dcp_sources), abstract_shell_dir)
+    _copy_files(list(dcp_sources), static_shell_dir)
 
     src_dirs = config.build_dir / "slash.srcs" / "sources_1" / "bd"
     for src_dir in (src_dirs / "slash_base", src_dirs / "service_layer"):
         if not src_dir.is_dir():
             raise FileNotFoundError(
                 f"Expected install BD directory not found: {src_dir}")
-        _copy_tree(src_dir, abstract_shell_dir)
+        _copy_tree(src_dir, static_shell_dir)
 
     aved_pdi_path = generate_base_pdi_with_aved(config)
     if not aved_pdi_path.exists():
         raise FileNotFoundError(
             f"Expected AVED PDI not found in results/base: {aved_pdi_path}")
-    _copy_files([aved_pdi_path], abstract_shell_dir)
+    _copy_files([aved_pdi_path], static_shell_dir)
 
     def add_init_files(path: Path):
         (path / "__init__.py").touch()
@@ -362,7 +362,7 @@ def install_abstract_shell(config: InstallerConfiguration) -> None:
             if not sub_path.is_dir():
                 continue
             add_init_files(sub_path)
-    add_init_files(abstract_shell_dir)
+    add_init_files(static_shell_dir)
 
 
 def generate_util_report(config: CommandConfiguration) -> None:
