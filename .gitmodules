@@ -2,5 +2,5 @@
 	path = submodules/qdma_drv
 	url = https://github.com/Xilinx/dma_ip_drivers.git
 [submodule "AVED"]
-	path = linker/resources/submodules/AVED
+	path = submodules/AVED
 	url = https://github.com/Xilinx/AVED.git

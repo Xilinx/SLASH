@@ -63,7 +63,7 @@ Development packages (required when building applications or HLS kernels):
      - Headers and CMake targets for ``libvrtd`` / ``libvrtdpp``.
    * - ``libvrt-dev``
      - Headers and CMake targets for ``libvrt``.
-   * - ``v80++``
+   * - ``slashkit``
      - Python-based kernel linker that packages compiled HLS IP into
        ``.vbin`` archives. Provides the ``build_hls_dir()`` and
        ``add_vbin()`` CMake functions via the ``SlashTools`` module.
@@ -194,7 +194,7 @@ single transaction:
            ./deb/libvrtd_<version>_amd64.deb \
            ./deb/libvrt_<version>_amd64.deb \
            ./deb/v80-smi_<version>_amd64.deb \
-           ./deb/v80++_<version>_amd64.deb
+           ./deb/slashkit_<version>_amd64.deb
 
    .. tab-item:: RHEL / Rocky / Fedora
 
@@ -207,7 +207,7 @@ single transaction:
            ./rpm/libvrtd-<version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrt-<version>-1.<dist>.x86_64.rpm \
            ./rpm/v80-smi-<version>-1.<dist>.x86_64.rpm \
-           ./rpm/v80++-<version>-1.<dist>.x86_64.rpm
+           ./rpm/slashkit-<version>-1.<dist>.x86_64.rpm
 
 .. note::
 
@@ -269,8 +269,13 @@ from ``v80-smi list``, e.g. ``03:00``):
 
 .. code-block:: bash
 
+   # For Ubuntu 22.04
    sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-       -i /usr/share/v80++/abstract_shell/amd_v80_gen5x8_25.1.pdi
+      -i /usr/lib/python3.10/dist-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
+      
+   # For Rocky 9
+   sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
+      -i /usr/lib/python3.9/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
 
 After programming completes, reboot the system for the new flash contents
 to take effect:
@@ -295,7 +300,7 @@ kernels, install the development metapackage:
            ./deb/libslash-dev_<version>_amd64.deb \
            ./deb/libvrtd-dev_<version>_amd64.deb \
            ./deb/libvrt-dev_<version>_amd64.deb \
-           ./deb/v80++_<version>_amd64.deb
+           ./deb/slashkit_<version>_amd64.deb
 
    .. tab-item:: RHEL / Rocky / Fedora
 
@@ -305,14 +310,14 @@ kernels, install the development metapackage:
            ./rpm/libslash-devel-<version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrtd-devel-<version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrt-devel-<version>-1.<dist>.x86_64.rpm \
-           ./rpm/v80++-<version>-1.<dist>.x86_64.rpm
+           ./rpm/slashkit-<version>-1.<dist>.x86_64.rpm
 
 This installs:
 
 - C++ headers under ``/usr/include/vrt/``, ``/usr/include/vrtd/``, and
   ``/usr/include/slash/``
 - CMake package files under ``/usr/lib/cmake/``
-- The ``v80++`` linker and the ``SlashTools`` CMake module
+- The ``slashkit`` linker and the ``SlashTools`` CMake module
 
 CMake projects can then discover VRT with:
 
@@ -360,7 +365,7 @@ V80 board, install the ``slash-sim-emu`` subset:
            ./deb/libslash-dev_<version>_amd64.deb \
            ./deb/libvrtd-dev_<version>_amd64.deb \
            ./deb/libvrt-dev_<version>_amd64.deb \
-           ./deb/v80++_<version>_amd64.deb
+           ./deb/slashkit_<version>_amd64.deb
 
    .. tab-item:: RHEL / Rocky / Fedora
 
@@ -379,7 +384,7 @@ V80 board, install the ``slash-sim-emu`` subset:
            ./rpm/libslash-devel-<version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrtd-devel-<version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrt-devel-<version>-1.<dist>.x86_64.rpm \
-           ./rpm/v80++-<version>-1.<dist>.x86_64.rpm
+           ./rpm/slashkit-<version>-1.<dist>.x86_64.rpm
 
 No board and no kernel module are required on emulation/simulation hosts.
 The daemon is still needed if any component connects to ``vrtd``, but you
@@ -413,14 +418,14 @@ Upgrade and Removal
            ./deb/libvrtd_<new-version>_amd64.deb \
            ./deb/libvrt_<new-version>_amd64.deb \
            ./deb/v80-smi_<new-version>_amd64.deb \
-           ./deb/v80++_<new-version>_amd64.deb
+           ./deb/slashkit_<new-version>_amd64.deb
 
       To remove all SLASH and AMI packages:
 
       .. code-block:: bash
 
          sudo apt remove ami slash-dkms libslash libvrtd libvrt \
-                         v80-smi v80++ vrtd
+                         v80-smi slashkit vrtd
          sudo apt autoremove
 
    .. tab-item:: RHEL / Rocky / Fedora
@@ -437,13 +442,13 @@ Upgrade and Removal
            ./rpm/libvrtd-<new-version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrt-<new-version>-1.<dist>.x86_64.rpm \
            ./rpm/v80-smi-<new-version>-1.<dist>.x86_64.rpm \
-           ./rpm/v80++-<new-version>-1.<dist>.x86_64.rpm
+           ./rpm/slashkit-<new-version>-1.<dist>.x86_64.rpm
 
       To remove:
 
       .. code-block:: bash
 
-         sudo dnf remove ami slash-dkms libslash libvrtd libvrt v80-smi v80++ vrtd
+         sudo dnf remove ami slash-dkms libslash libvrtd libvrt v80-smi slashkit vrtd
 
 .. note::
 

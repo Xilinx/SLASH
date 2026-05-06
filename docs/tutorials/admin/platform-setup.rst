@@ -113,7 +113,7 @@ Static Shell
 ============
 
 The *static shell* is the pre-built FPGA platform base that ships inside
-the ``v80++`` package. It contains the fixed platform infrastructure —
+the ``slashkit`` package. It contains the fixed platform infrastructure —
 including the SMBus controller IP used for board management — that every
 hardware vrtbin is linked against.
 
@@ -146,7 +146,7 @@ local IP repository before building:
 
 1. Download the SMBus IP from https://www.xilinx.com/member/v80.html
    (AMD account required).
-2. Copy the downloaded IP directory into ``linker/resources/base/iprepo/``
+2. Copy the downloaded IP directory into ``linker/slashkit/resources/base/iprepo/``
    so that Vivado can locate it during synthesis.
 
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for
@@ -236,7 +236,7 @@ Install the full runtime stack in one command by listing all packages:
            ./deb/libvrtd_<version>_amd64.deb \
            ./deb/libvrt_<version>_amd64.deb \
            ./deb/v80-smi_<version>_amd64.deb \
-           ./deb/v80++_<version>_amd64.deb
+           ./deb/slashkit_<version>_amd64.deb
 
    .. tab-item:: RHEL / Rocky Linux / AlmaLinux (.rpm)
 
@@ -249,7 +249,7 @@ Install the full runtime stack in one command by listing all packages:
            ./rpm/libvrtd-<version>-1.<dist>.x86_64.rpm \
            ./rpm/libvrt-<version>-1.<dist>.x86_64.rpm \
            ./rpm/v80-smi-<version>-1.<dist>.x86_64.rpm \
-           ./rpm/v80++-<version>-1.<dist>.x86_64.rpm
+           ./rpm/slashkit-<version>-1.<dist>.x86_64.rpm
 
 .. note::
 
@@ -276,7 +276,7 @@ Install the full runtime stack in one command by listing all packages:
               ./rpm/libvrtd-devel-<version>-1.<dist>.x86_64.rpm \
               ./rpm/libvrt-devel-<version>-1.<dist>.x86_64.rpm
 
-   This installs ``v80++`` (the kernel linker) and development headers.
+   This installs ``slashkit`` (the kernel linker) and development headers.
 
 Package Overview
 ----------------
@@ -310,7 +310,7 @@ The following table summarises what each package provides:
      - Development headers and CMake modules for ``libvrt``.
    * - ``v80-smi``
      - Board management CLI tool.
-   * - ``v80++``
+   * - ``slashkit``
      - Python-based kernel linker for producing ``.vbin`` artefacts.
    * - ``slash``
      - Metapackage: pulls in all runtime packages.
@@ -349,7 +349,7 @@ from ``lspci -d 10ee:``, e.g. ``03:00``):
 .. code-block:: bash
 
    sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-       -i /usr/share/v80++/abstract_shell/amd_v80_gen5x8_25.1.pdi
+       -i /usr/share/slashkit/static_shell/amd_v80_gen5x8_25.1.pdi
 
 After programming completes, reboot the system for the new flash contents
 to take effect:

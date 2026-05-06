@@ -30,29 +30,28 @@ find_package(Vivado REQUIRED)
 
 # --- Locate the SLASH linker ---
 # Two modes:
-#   1. Installed: v80++ executable on PATH (preferred)
+#   1. Installed: slashkit executable on PATH (preferred)
 #   2. Source tree: SLASH_REPO_ROOT points to the repository root
 set(_SLASH_TOOLS_USE_INSTALLED FALSE)
 set(_SLASH_TOOLS_USE_REPO FALSE)
 
-find_program(V80PP_EXECUTABLE NAMES v80++)
-if(V80PP_EXECUTABLE)
+find_program(SLASHKIT_EXECUTABLE NAMES slashkit)
+if(SLASHKIT_EXECUTABLE)
   set(_SLASH_TOOLS_USE_INSTALLED TRUE)
-  message(STATUS "SlashTools: Found installed v80++ at ${V80PP_EXECUTABLE}")
+  message(STATUS "SlashTools: Found installed slashkit at ${SLASHKIT_EXECUTABLE}")
 endif()
 
 if(NOT DEFINED SLASH_REPO_ROOT)
   # Try to detect if we are in the source tree
   get_filename_component(_slash_tools_candidate_root "${CMAKE_CURRENT_LIST_DIR}/.." REALPATH)
-  if(EXISTS "${_slash_tools_candidate_root}/linker/src/main.py")
+  if(EXISTS "${_slash_tools_candidate_root}/linker/slashkit/__main__.py")
     set(SLASH_REPO_ROOT "${_slash_tools_candidate_root}")
   endif()
 endif()
 
-if(DEFINED SLASH_REPO_ROOT AND EXISTS "${SLASH_REPO_ROOT}/linker/src/main.py")
+if(DEFINED SLASH_REPO_ROOT AND EXISTS "${SLASH_REPO_ROOT}/linker/slashkit/__main__.py")
   set(_SLASH_TOOLS_USE_REPO TRUE)
-  set(SLASH_LINKER_DIR "${SLASH_REPO_ROOT}/linker/")
-  set(SLASH_MAIN_PY "${SLASH_LINKER_DIR}/src/main.py")
+  set(SLASH_LINKER_DIR "${SLASH_REPO_ROOT}/linker")
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   message(STATUS "SlashTools: Found SLASH repo at ${SLASH_REPO_ROOT}")
 endif()
@@ -60,7 +59,7 @@ endif()
 if(NOT _SLASH_TOOLS_USE_INSTALLED AND NOT _SLASH_TOOLS_USE_REPO)
   message(FATAL_ERROR
     "SlashTools: Cannot find the SLASH linker. Either:\n"
-    "  - Install the v80++ package (provides /usr/bin/v80++), or\n"
+    "  - Install the slashkit package (provides /usr/bin/slashkit), or\n"
     "  - Set SLASH_REPO_ROOT to the SLASH repository root.")
 endif()
 
@@ -80,7 +79,8 @@ function(add_vbin)
     set(SLASH_VBIN_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SLASH_VBIN_TARGET}.vbin")
 
     if(_SLASH_TOOLS_USE_REPO)
-        # Source-tree mode: invoke main.py directly
+        # Source-tree mode: invoke the slashkit package as a module from the
+        # linker directory so that `import slashkit` resolves to ./slashkit/.
         if(DEFINED Python3_EXECUTABLE AND NOT "${Python3_EXECUTABLE}" STREQUAL "")
             set(_py "${Python3_EXECUTABLE}")
         else()
@@ -89,7 +89,7 @@ function(add_vbin)
 
         add_custom_command(
             OUTPUT "${SLASH_VBIN_FILE}"
-            COMMAND "${_py}" "${SLASH_MAIN_PY}" "link"
+            COMMAND "${_py}" "-m" "slashkit" "link"
                 "-c" "${SLASH_VBIN_CFG}"
                 "-p" "${SLASH_VBIN_PLATFORM}"
                 "-o" "${SLASH_VBIN_FILE}"
@@ -97,13 +97,13 @@ function(add_vbin)
                 "--vivado" "${VIVADO_BINARY}"
             BYPRODUCTS "${SLASH_VBIN_FILE}.prj"
             DEPENDS "${SLASH_VBIN_CFG}" "${SLASH_VBIN_KERNELS}"
-            WORKING_DIRECTORY "${SLASH_LINKER_DIR}/src"
+            WORKING_DIRECTORY "${SLASH_LINKER_DIR}"
         )
     else()
-        # Installed mode: invoke the v80++ wrapper
+        # Installed mode: invoke the slashkit wrapper
         add_custom_command(
             OUTPUT "${SLASH_VBIN_FILE}"
-            COMMAND "${V80PP_EXECUTABLE}" "link"
+            COMMAND "${SLASHKIT_EXECUTABLE}" "link"
                 "-c" "${SLASH_VBIN_CFG}"
                 "-p" "${SLASH_VBIN_PLATFORM}"
                 "-o" "${SLASH_VBIN_FILE}"

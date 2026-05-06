@@ -25,49 +25,19 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
-if [[ $# -ne 2 ]]; then
-    echo "Must provide one argument: DESTDIR APP_FILES_PREFIX" 1>&2
+if [[ $# -ne 1 ]]; then
+    echo "Must provide one argument: DESTDIR" 1>&2
     exit 1
 fi
 
 # Install smi, vrt, vrtd, libvrt*, libslash
 DESTDIR="$1" cmake --build pbuild/smi --target install
 
-# Install the linker (src only)
-mkdir -p "$1$2/v80++"
-rsync --delete -a --exclude='__pycache__' --exclude='*.pyc' --exclude='install.prj' linker/src/ "$1$2/v80++/"
-cat <<EOF >"$1/usr/bin/v80++"
-#!/bin/sh
-
-find_python() {
-    if command -v python3 > /dev/null 2>&1; then
-        ver=\$(python3 -c 'import sys; print(sys.version_info.minor)')
-        if [ "\$ver" -ge 10 ] 2>/dev/null; then
-            echo python3
-            return
-        fi
-    fi
-    for minor in 13 12 11 10; do
-        if command -v "python3.\${minor}" > /dev/null 2>&1; then
-            echo "python3.\${minor}"
-            return
-        fi
-    done
-    echo "ERROR: v80++ requires Python >= 3.10" >&2
-    exit 1
-}
-
-PYTHON=\$(find_python)
-exec "\$PYTHON" $2/v80++/main.py "\$@"
-EOF
-chmod 0755 "$1/usr/bin/v80++"
-
-# Install linker resources
-mkdir -p "$1/usr/share/v80++"
-rsync --delete -a \
-    --exclude='submodules' \
-    --exclude='aved' \
-    linker/resources/ "$1/usr/share/v80++/"
-
 # Install CMake toolchain modules (SlashTools)
 DESTDIR="$1" cmake --build pbuild/cmake-tools --target install
+
+python3 -m pip install --no-deps --root $1 linker/dist/slashkit-*.whl
+if [ -f $1/usr/local/bin/slashkit ]; then
+    mv $1/usr/local/bin/slashkit $1/usr/bin/
+    mv $1/usr/local/lib/python3* $1/usr/lib/
+fi

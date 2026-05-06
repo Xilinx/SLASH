@@ -47,7 +47,12 @@ BuildRequires:  systemd-devel
 BuildRequires:  zeromq-devel
 BuildRequires:  zlib-devel
 BuildRequires:  rsync
-BuildRequires:  ((python3 >= 3.10 and python3-pip) or (python3.11 and python3.11-pip) or (python3.12 and python3.12-pip) or (python3.13 and python3.13-pip))
+BuildRequires:  python3
+BuildRequires:  python3-devel
+BuildRequires:  python3-jinja2
+BuildRequires:  python3-pip
+BuildRequires:  python3-setuptools
+BuildRequires:  python3-wheel
 BuildRequires:  systemd-rpm-macros
 
 # ---- Metapackages ----
@@ -76,7 +81,7 @@ SLASH/VRT System for simulation and emulation
 %package -n     slash-sim-emu-devel
 Summary:        SLASH/VRT System for simulation and emulation (development files)
 Requires:       slash-sim-emu = %{version}-%{release}
-Requires:       v80++ = %{version}-%{release}
+Requires:       slashkit = %{version}-%{release}
 Requires:       libvrt-devel = %{version}-%{release}
 BuildArch:      noarch
 
@@ -156,11 +161,13 @@ Requires:       libvrt = %{version}-%{release}
 %description -n v80-smi
 V80 System Management Interface
 
-%package -n     v80++
+%package -n     slashkit
 Summary:        SLASH Linker
-Requires:       (python3 >= 3.10 or python3.11 or python3.12 or python3.13)
+Requires:       python3
+Requires:       python3-jinja2
+Requires:       cppzmq-devel
 
-%description -n v80++
+%description -n slashkit
 SLASH Linker
 
 # ---- Build ----
@@ -174,7 +181,7 @@ bash scripts/pconfigure.sh %{_lib}
 bash scripts/pbuild.sh
 
 %install
-bash scripts/pinstall.sh %{buildroot} /usr/libexec
+bash scripts/pinstall.sh %{buildroot}
 
 # systemd units (mirrors debian/rules rsync lines)
 install -D -m 0644 vrt/vrtd/systemd/vrtd.service \
@@ -294,11 +301,11 @@ udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 %files -n v80-smi
 %{_bindir}/v80-smi
 
-%files -n v80++
-%{_bindir}/v80++
-%{_prefix}/libexec/v80++/
+%files -n slashkit
+%{_bindir}/slashkit
+%{python3_sitelib}/slashkit/
+%{python3_sitelib}/slashkit-*.dist-info/
 %{_libdir}/cmake/SlashTools/
-%{_datadir}/v80++/
 
 # ---- Scriptlets ----
 

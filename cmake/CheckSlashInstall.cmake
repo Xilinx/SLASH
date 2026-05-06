@@ -23,8 +23,8 @@ if(NOT DEFINED INSTALL_DIR OR "${INSTALL_DIR}" STREQUAL "")
 endif()
 
 set(_required_files
-  "abs_shell_service_layer.dcp"
-  "abs_shell_slash.dcp"
+  "static_shell_service_layer.dcp"
+  "static_shell_slash.dcp"
   "amd_v80_gen5x8_25.1.pdi"
   "top_wrapper_routed_bb.dcp"
 )

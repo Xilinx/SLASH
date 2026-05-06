@@ -25,28 +25,8 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
-make -C linker/resources/base/iprepo
+make -C linker/slashkit/resources/base/iprepo
 
-find_python() {
-    if command -v python3 > /dev/null 2>&1; then
-        ver=$(python3 -c 'import sys; print(sys.version_info.minor)')
-        if [ "$ver" -ge 10 ] 2>/dev/null; then
-            echo python3
-            return
-        fi
-    fi
-    for minor in 13 12 11 10; do
-        if command -v "python3.${minor}" > /dev/null 2>&1; then
-            echo "python3.${minor}"
-            return
-        fi
-    done
-    echo "ERROR: root-design-build requires Python >= 3.10" >&2
-    exit 1
-}
-
-PYTHON=$(find_python)
-
-pushd linker/src
-"$PYTHON" main.py install
+pushd linker
+python3 -m slashkit install --out-dir slashkit/resources
 popd

@@ -36,7 +36,7 @@ Two additional components sit alongside the stack:
 
 - **v80-smi** — command-line system management interface for listing, programming,
   resetting, and validating V80 boards.
-- **v80++ (linker)** — Python-based toolchain that links HLS kernels into
+- **slashkit** — Python-based toolchain that links HLS kernels into
   *vrtbin* archives for deployment.
 
 Layer Descriptions

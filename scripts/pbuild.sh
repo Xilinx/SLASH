@@ -25,35 +25,16 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
-if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
-    bash scripts/root-design-clean.sh
-fi
-
-# Vendor jinja2 + markupsafe into linker/src/vendor/ (always, even when
-# root-design-build is skipped — the linker package needs these at runtime).
-find_python() {
-    if command -v python3 > /dev/null 2>&1; then
-        ver=$(python3 -c 'import sys; print(sys.version_info.minor)')
-        if [ "$ver" -ge 10 ] 2>/dev/null; then
-            echo python3
-            return
-        fi
-    fi
-    for minor in 13 12 11 10; do
-        if command -v "python3.${minor}" > /dev/null 2>&1; then
-            echo "python3.${minor}"
-            return
-        fi
-    done
-    echo "ERROR: pbuild requires Python >= 3.10" >&2
-    exit 1
-}
-PYTHON=$(find_python)
-rm -rf linker/src/vendor/jinja2 linker/src/vendor/markupsafe
-"$PYTHON" -m pip install jinja2 markupsafe --target=linker/src/vendor/ --no-deps
-
 cmake --build pbuild/smi
 
 if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
+    bash scripts/root-design-clean.sh
     bash scripts/root-design-build.sh
 fi
+
+rm -rf linker/dist linker/build linker/slashkit.egg-info
+rm -rf .venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip wheel --no-deps --wheel-dir ./linker/dist ./linker/
