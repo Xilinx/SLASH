@@ -45,7 +45,6 @@
 
 #include "uapi/slash_interface.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -55,11 +54,13 @@ extern "C" {
 /**
  * @brief Handle to an open QDMA device.
  *
- * \@mock is reserved for future use and is always set to false.
+ * \@priv is NULL for real hardware handles.  When slash_qdma_open() is
+ * called with "\@mock", it points to an internal slash_qdma_mock context;
+ * callers should treat it as opaque.
  */
 struct slash_qdma {
-    int fd;    /**< File descriptor for the QDMA character device. */
-    bool mock; /**< Reserved for mock support. */
+    int fd;     /**< File descriptor for the QDMA character device (-1 in mock mode). */
+    void *priv; /**< Opaque mock context, or NULL for real hardware. */
 };
 
 /**

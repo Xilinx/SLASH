@@ -39,8 +39,24 @@ project(vrtd
 
 # Optionally build examples
 option(VRTD_BUILD_EXAMPLES "Build example executables" OFF)
+option(VRTD_BUILD_TESTS "Build unit tests" OFF)
 option(VRTD_INCLUDE_LIBSLASH "Include libslash subdirectory instead of building from system" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+
+option(ENABLE_SANITIZERS "Build with AddressSanitizer and UBSan" OFF)
+if(ENABLE_SANITIZERS)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+option(ENABLE_COVERAGE "Build with gcov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+  if(ENABLE_SANITIZERS)
+    message(FATAL_ERROR "ENABLE_COVERAGE and ENABLE_SANITIZERS cannot be used together")
+  endif()
+  add_compile_options(--coverage -fno-inline)
+  add_link_options(--coverage)
+endif()
 
 
 include(GNUInstallDirs)
@@ -67,6 +83,10 @@ add_subdirectory(src)
 
 add_subdirectory(libvrtd)
 add_subdirectory(libvrtdpp)
+
+if(VRTD_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
 
 #if(VRTD_BUILD_EXAMPLES)
 #  add_subdirectory(examples)
