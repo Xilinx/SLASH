@@ -21,3 +21,4 @@ Task-oriented recipes for common operations.
    inspect-vrtbin-metadata
    use-mock-mode
    migrate-from-xrt
+   use-rtl-kernels
