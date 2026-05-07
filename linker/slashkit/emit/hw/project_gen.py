@@ -23,7 +23,6 @@ import os
 from enum import Enum
 from pathlib import Path
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -58,7 +57,8 @@ _CROSS_BUILD_ENV_BLOCKLIST = (
 
 
 def _clean_cross_build_env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in _CROSS_BUILD_ENV_BLOCKLIST}
+    env = {k: v for k, v in os.environ.items()
+           if k not in _CROSS_BUILD_ENV_BLOCKLIST}
     return {k: v for k, v in env.items() if not k.startswith("DEB_")}
 
 
