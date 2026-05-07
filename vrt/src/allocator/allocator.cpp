@@ -25,6 +25,9 @@
 
 #include <vrt/allocator/allocator.hpp>
 
+#include <cstdlib>
+
+#include <vrt/utils/logger.hpp>
 #include <vrtd/device.hpp>
 
 namespace vrt {
@@ -193,7 +196,9 @@ LargeBlockSuperblock::LargeBlockSuperblock(vrtd::Device& device, BufferAllocType
 
 LargeBlockSuperblock::~LargeBlockSuperblock() {
     if (!isFree()) {
-        throw std::runtime_error("Cannot destroy LargeBlockSuperblock: not all memory has been deallocated");
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+            "LargeBlockSuperblock destroyed while not all memory was deallocated");
+        std::abort();
     }
 }
 
@@ -220,7 +225,9 @@ MediumBlockSuperblock::MediumBlockSuperblock(LargeBlockSuperblock *backingSuperb
 
 MediumBlockSuperblock::~MediumBlockSuperblock() {
     if (!isFree()) {
-        throw std::runtime_error("Cannot destroy MediumBlockSuperblock: not all memory has been deallocated");
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+            "MediumBlockSuperblock destroyed while not all memory was deallocated");
+        std::abort();
     }
 }
 
