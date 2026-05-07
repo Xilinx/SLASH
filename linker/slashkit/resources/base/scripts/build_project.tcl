@@ -44,8 +44,8 @@ proc build_project {{proj_name "user"}} {
   open_run impl_1
   
   set impl_output_dir [get_property DIRECTORY [current_run]]
-  write_abstract_shell -cell top_i/slash -force [file join $impl_output_dir "abs_shell_slash.dcp"]
-  write_abstract_shell -cell top_i/service_layer -force [file join $impl_output_dir "abs_shell_service_layer.dcp"]
+  write_abstract_shell -cell top_i/slash -force [file join $impl_output_dir "static_shell_slash.dcp"]
+  write_abstract_shell -cell top_i/service_layer -force [file join $impl_output_dir "static_shell_service_layer.dcp"]
 
   puts "INFO: Implementation complete for run 'impl_1'."
 }

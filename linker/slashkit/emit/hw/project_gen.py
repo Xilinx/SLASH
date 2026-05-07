@@ -226,13 +226,13 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
 
     if rm_kind == RM_KIND.SERVICE_LAYER:
         tcl_name = "service_layer_build.tcl"
-        stat_shell_dcp_name = "stat_shell_service_layer.dcp"
+        static_shell_dcp_name = "static_shell_service_layer.dcp"
         base_bd_package = "slashkit.resources.static_shell.service_layer"
         base_bd_name = "service_layer.bd"
         log_path = logs_dir / "service_layer_build.log"
     else:
         tcl_name = "slash_project_build.tcl"
-        stat_shell_dcp_name = "stat_shell_slash.dcp"
+        static_shell_dcp_name = "static_shell_slash.dcp"
         base_bd_package = "slashkit.resources.static_shell.slash_base"
         base_bd_name = "slash_base.bd"
         log_path = logs_dir / "slash_project_build.log"
@@ -241,9 +241,9 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
         tcl_path = stack.enter_context(
             resources.path("slashkit.resources.base.scripts", tcl_name)
         )
-        stat_shell_dcp_path = stack.enter_context(
+        static_shell_dcp_path = stack.enter_context(
             resources.path("slashkit.resources.static_shell",
-                           stat_shell_dcp_name)
+                           static_shell_dcp_name)
         )
         base_bd_path = stack.enter_context(
             resources.path(base_bd_package, base_bd_name)
@@ -263,8 +263,8 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             config.project_name,
             "--ip-repo",
             str(config.ip_repository),
-            "--stat-shell-dcp",
-            str(stat_shell_dcp_path),
+            "--static-shell-dcp",
+            str(static_shell_dcp_path),
             "--base-bd",
             str(base_bd_path),
             "--linker-results-dir",
@@ -334,8 +334,8 @@ def install_static_shell(config: InstallerConfiguration) -> None:
     impl_dir = config.build_dir / "slash.runs" / "impl_1"
     dcp_sources = (
         impl_dir / "top_wrapper_routed_bb.dcp",
-        impl_dir / "stat_shell_slash.dcp",
-        impl_dir / "stat_shell_service_layer.dcp",
+        impl_dir / "static_shell_slash.dcp",
+        impl_dir / "static_shell_service_layer.dcp",
     )
     for src in dcp_sources:
         if not src.exists():
