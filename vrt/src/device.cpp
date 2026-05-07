@@ -267,7 +267,13 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
         }
 
         const std::string emuCommand = makeExecFromBinaryDirCommand(emulationExecPath);
-        runtimeThread = std::thread([emuCommand]() { std::system(emuCommand.c_str()); });
+        runtimeThread = std::thread([emuCommand]() {
+            int rc = std::system(emuCommand.c_str());
+            if (rc != 0) {
+                utils::Logger::log(utils::LogLevel::WARN, __PRETTY_FUNCTION__,
+                    "Emulation process exited with code {}", rc);
+            }
+        });
 
     } else {
         parseSystemMap();
@@ -281,7 +287,13 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
         }
 
         const std::string simCommand = makeExecFromBinaryDirCommand(simulationExecPath);
-        runtimeThread = std::thread([simCommand]() { std::system(simCommand.c_str()); });
+        runtimeThread = std::thread([simCommand]() {
+            int rc = std::system(simCommand.c_str());
+            if (rc != 0) {
+                utils::Logger::log(utils::LogLevel::WARN, __PRETTY_FUNCTION__,
+                    "Simulation process exited with code {}", rc);
+            }
+        });
         Json::Value command;
         command["command"] = "start";
         zmqServer->sendCommand(command);

@@ -1643,10 +1643,13 @@ static uint16_t client_handle_request_qdma_get_info(
         return VRTD_RET_NOEXIST;
     }
 
-    if (slash_qdma_info_read(d->qdma, &resp_body->info) != 0) {
+    /* resp_body is packed; libslash expects a normally-aligned pointer. */
+    struct slash_qdma_info info;
+    if (slash_qdma_info_read(d->qdma, &info) != 0) {
         LOG(LOG_WARNING, "qdma_get_info: failed to read info for device %u: %m", (unsigned int)req_body->dev_number);
         return VRTD_RET_INTERNAL_ERROR;
     }
+    memcpy(&resp_body->info, &info, sizeof(info));
 
     *resp_size = sizeof(*resp_body);
 
@@ -1710,18 +1713,19 @@ static uint16_t client_handle_request_qdma_qpair_add(
         return VRTD_RET_NOEXIST;
     }
 
-    /* Copy request parameters into resp_body->add; the kernel fills in qid. */
-    resp_body->add = req_body->add;
+    /* resp_body is packed; libslash expects a normally-aligned pointer. */
+    struct slash_qdma_qpair_add add = req_body->add;
 
-    if (slash_qdma_qpair_add(d->qdma, &resp_body->add) != 0) {
+    if (slash_qdma_qpair_add(d->qdma, &add) != 0) {
         LOG(LOG_WARNING, "qdma_qpair_add: failed for device %u: %m", (unsigned int)req_body->dev_number);
         return VRTD_RET_INTERNAL_ERROR;
     }
+    memcpy(&resp_body->add, &add, sizeof(add));
 
     *resp_size = sizeof(*resp_body);
 
     LOG(LOG_DEBUG, "qdma_qpair_add: dev=%u qid=%u uid=%u conn_id=%llu",
-        (unsigned int)req_body->dev_number, (unsigned int)resp_body->add.qid,
+        (unsigned int)req_body->dev_number, (unsigned int)add.qid,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     return VRTD_RET_OK;
