@@ -117,7 +117,7 @@ fi
 # and then either run bash or the packaging script
 # This block also cks the container argument.
 DOCKER_COMMAND="source $SLASH_XILINX_PATH/2025.1/Vivado/settings64.sh "
-DOCKER_COMMAND+="&& export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$SLASH_XILINX_PATH/2025.1/Vivado/lib/lnx64.0 "
+DOCKER_COMMAND+="&& export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$SLASH_XILINX_PATH/2025.1/Vivado/lib/lnx64.o "
 if [ $CONTAINER = "package" ]; then
     DOCKER_COMMAND+="&& $PACKAGE_SCRIPT "
 elif [ $CONTAINER = "run" ]; then
