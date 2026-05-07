@@ -39,6 +39,29 @@ logger = logging.getLogger(__name__)
 AVED_DESIGN_NAME = "amd_v80_gen5x8_25.1"
 
 
+# Host toolchain flags injected by dpkg-buildpackage (e.g. -mno-omit-leaf-frame-pointer,
+# -fcf-protection, -fstack-clash-protection) are not understood by the arm-xilinx-eabi
+# cross-compiler used for the AVED AMC firmware. Strip them before shelling out.
+_CROSS_BUILD_ENV_BLOCKLIST = (
+    "CFLAGS",
+    "CXXFLAGS",
+    "CPPFLAGS",
+    "LDFLAGS",
+    "FFLAGS",
+    "FCFLAGS",
+    "OBJCFLAGS",
+    "OBJCXXFLAGS",
+    "GCJFLAGS",
+    "ASFLAGS",
+)
+
+
+def _clean_cross_build_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items()
+           if k not in _CROSS_BUILD_ENV_BLOCKLIST}
+    return {k: v for k, v in env.items() if not k.startswith("DEB_")}
+
+
 def _copy_checked(src: Path, dest: Path) -> None:
     if not src.exists():
         raise FileNotFoundError(f"Expected file not found: {src}")
@@ -160,7 +183,12 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
             _copy_checked(in_path, target_dir / file_name)
 
     logger.info("Running AVED build script in %s", aved_hw_dir)
-    subprocess.run(["bash", "build_all.sh"], cwd=str(aved_hw_dir), check=True)
+    subprocess.run(
+        ["bash", "build_all.sh"],
+        cwd=str(aved_hw_dir),
+        env=_clean_cross_build_env(),
+        check=True,
+    )
 
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
     if not aved_pdi.exists():
