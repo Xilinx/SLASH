@@ -19,7 +19,10 @@
 # ##################################################################################################
 
 cmake_minimum_required(VERSION 3.20)
-project(06_dcmac LANGUAGES NONE)
+project(06_dcmac LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(SLASH_USE_REPO "Build against the local repo tree instead of installed packages" OFF)
 
@@ -27,8 +30,14 @@ if(SLASH_USE_REPO)
   get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." REALPATH)
   list(APPEND CMAKE_MODULE_PATH "${REPO_ROOT}/cmake")
   include(SlashTools)
+  add_subdirectory(${REPO_ROOT}/vrt ${CMAKE_CURRENT_BINARY_DIR}/vrt)
+  set(_VRT_INCLUDES "")
+  set(_VRT_LIBS vrt)
 else()
   find_package(SlashTools REQUIRED)
+  find_package(vrt REQUIRED CONFIG)
+  set(_VRT_INCLUDES "")
+  set(_VRT_LIBS vrt::vrt)
 endif()
 
 # --- HLS kernels ---
@@ -48,3 +57,8 @@ set(CFG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/config.cfg")
 add_vbin(TARGET "dcmac_hw"  PLATFORM "hw"  CFG "${CFG_FILE}" KERNELS ${_KERNELS})
 add_vbin(TARGET "dcmac_sim" PLATFORM "sim" CFG "${CFG_FILE}" KERNELS ${_KERNELS})
 add_vbin(TARGET "dcmac_emu" PLATFORM "emu" CFG "${CFG_FILE}" KERNELS ${_KERNELS})
+
+# --- Executable ---
+add_executable(${PROJECT_NAME} 06_dcmac.cpp)
+target_include_directories(${PROJECT_NAME} PRIVATE ${_VRT_INCLUDES})
+target_link_libraries(${PROJECT_NAME} PRIVATE ${_VRT_LIBS})
