@@ -117,29 +117,71 @@ card across remove+rescan cycles.
 Usage
 -----
 
-TODO: Also cover information queries
+Querying Device Information
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-BAR Access Setup and Teardown
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Each PCIe BAR is accessed through a dma-buf fd obtained from ``SLASH_CTLDEV_IOCTL_GET_BAR_FD``.
-The fd is then mapped with ``mmap()`` to obtain a pointer for direct MMIO register reads and
-writes. The BAR length to pass to ``mmap()`` is returned by the ioctl in ``req.length``.
+Before accessing BARs, callers typically identify the card and enumerate its available BARs using
+``SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO`` and ``SLASH_CTLDEV_IOCTL_GET_BAR_INFO``. The device info
+ioctl returns the BDF string and PCI IDs, which correlate this control device with the matching
+QDMA device at the same BDF (function 1). The BAR info ioctl reports per-BAR metadata: whether
+the BAR is present and usable for MMIO, its physical address, and its size.
 
 .. code-block:: c
 
-    /* Get BAR fd — return value is the fd, not 0 */
+    /* Query PCI identity */
+    struct slash_ioctl_device_info dev_info = { .size = sizeof(dev_info) };
+    ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &dev_info);
+    /* dev_info.bdf → e.g. "0000:61:00.2" */
+    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50B6 */
+
+    /* Enumerate all six BARs */
+    for (int i = 0; i < 6; i++) {
+        struct slash_ioctl_bar_info bar_info = {
+            .size       = sizeof(bar_info),
+            .bar_number = i,
+        };
+        ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_BAR_INFO, &bar_info);
+        if (bar_info.usable)
+            printf("BAR%d: addr=0x%016llx length=0x%llx\n",
+                   i, bar_info.start_address, bar_info.length);
+    }
+
+BAR Access and MMIO
+~~~~~~~~~~~~~~~~~~~
+
+Each PCIe BAR is accessed through a dma-buf fd obtained from ``SLASH_CTLDEV_IOCTL_GET_BAR_FD``.
+The fd is mapped with ``mmap()`` to obtain a pointer for direct MMIO register access. All reads
+and writes through that pointer must be bracketed with ``DMA_BUF_IOCTL_SYNC`` calls on the
+dma-buf fd to ensure correct memory ordering.
+
+.. code-block:: c
+
+    #include <linux/dma-buf.h>
+
+    /* Obtain a dma-buf fd for BAR 0 — return value is the fd, not 0 */
     struct slash_ioctl_bar_fd_request req = {
         .size       = sizeof(req),
         .bar_number = 0,
         .flags      = O_CLOEXEC,
     };
     int bar_fd = ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_BAR_FD, &req);
-    /* req.length is now filled with BAR size */
+    /* req.length is now filled with the BAR size */
 
     void *mmio = mmap(NULL, req.length, PROT_READ | PROT_WRITE, MAP_SHARED, bar_fd, 0);
 
-    /* ... MMIO accesses bracketed with DMA_BUF_IOCTL_SYNC (see Section 1.1.2) ... */
+    /* MMIO write: bracket with SYNC_WRITE */
+    struct dma_buf_sync sync = { .flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE };
+    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
+    /* ... MMIO writes via mmio pointer ... */
+    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE;
+    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
+
+    /* MMIO read: same pattern with SYNC_READ */
+    sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
+    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
+    /* ... MMIO reads via mmio pointer ... */
+    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
 
     /* Teardown */
     munmap(mmio, req.length);
@@ -153,36 +195,9 @@ writes. The BAR length to pass to ``mmap()`` is returned by the ioctl in ``req.l
 BAR mapping is **not inherited across** ``fork()``. Each child process that needs MMIO access must
 obtain its own dma-buf fd via ``GET_BAR_FD``.
 
-After ``pci_stop_and_remove_bus_device()``, the VMA remains valid at the virtual address level.
-Any physical accesses return ``0xFFFFFFFF`` (PCIe completion timeout). This is intended degraded
-behavior. (TODO: Reword, way to technical with non-introduced abbreviations)
-
-BAR MMIO Accesses
-~~~~~~~~~~~~~~~~~
-
-All MMIO accesses through the mapped BAR region must be bracketed with ``DMA_BUF_IOCTL_SYNC``
-calls on the dma-buf fd:
-
-.. code-block:: c
-
-    #include <linux/dma-buf.h>
-
-    /* Before writing to the BAR */
-    struct dma_buf_sync sync = { .flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE };
-    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
-
-    /* ... MMIO writes via mmio pointer ... */
-
-    /* After writing */
-    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE;
-    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
-
-    /* For reads: */
-    sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
-    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
-    /* ... MMIO reads ... */
-    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
-    ioctl(bar_fd, DMA_BUF_IOCTL_SYNC, &sync);
+After a device is removed from the PCI hierarchy, mapped BAR regions remain accessible in virtual
+memory. However, all physical accesses will return ``0xFFFFFFFF`` (PCIe completion timeout) and
+writes are silently discarded.
 
 IOCTL Reference
 ---------------
