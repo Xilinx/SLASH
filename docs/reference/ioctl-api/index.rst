@@ -46,9 +46,6 @@ older struct does not include are zero-filled. The response is written back for
 ``min(user_size, kernel_size)`` bytes; if ``user_size > kernel_size``, the kernel zero-fills the
 extra tail via ``clear_user()``. This allows the driver and library to evolve independently.
 
-**Exception:** ``SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO`` treats ``size == 0`` as
-``size = sizeof(struct slash_ioctl_device_info)`` and always writes back the full struct.
-
 Error Handling
 --------------
 
@@ -219,15 +216,15 @@ MMIO access along with its physical address and size.
 
 **Preconditions:**
 
-- ``size`` must cover at least ``bar_number`` (minimum size enforced by kernel)
+- ``size`` must cover at least ``length``
 - ``bar_number`` must be in ``[0, 5]``
 
 **Postconditions:**
 
 - ``usable`` = 1 if the BAR has a non-zero start address and is ``IORESOURCE_MEM`` (MMIO type)
 - ``in_use`` = 0 (reserved for future use; never set in current implementation)
-- ``start_address`` = physical bus address (0 if not usable)
-- ``length`` = BAR size in bytes (0 if not usable)
+- ``start_address`` = physical bus address
+- ``length`` = BAR size in bytes
 
 **Return values:**
 
@@ -262,7 +259,7 @@ returned as the ``ioctl()`` return value; see `fd-as-Return-Value Ioctls`_.
 
 **Preconditions:**
 
-- ``size`` must cover at least ``flags``
+- ``size`` must cover at least ``length``
 - ``bar_number`` in ``[0, 5]``
 - ``flags & ~O_CLOEXEC == 0`` (any other flag bits cause ``-EINVAL``)
 - The specified BAR must be a usable MMIO BAR (must have an active dma-buf exporter)
@@ -306,8 +303,7 @@ fd with a physical board and with the matching QDMA control device.
 
 **Direction:** ``_IOWR`` — userspace writes ``size``; the kernel writes back all output fields.
 
-**Preconditions:** None. ``size == 0`` is explicitly accepted and treated as
-``sizeof(struct slash_ioctl_device_info)``.
+**Preconditions:** None.
 
 **Postconditions:**
 
@@ -818,8 +814,7 @@ struct:
     };
 
 The BDF format is ``DDDD:BB:SS.F`` with full domain prefix. Leading and trailing whitespace are
-trimmed before parsing. If ``bdf`` is empty, the only tracked device is targeted; the ioctl returns
-``-EOPNOTSUPP`` if multiple devices are tracked, or ``-ENODEV`` if none.
+trimmed before parsing.
 
 ``SLASH_HOTPLUG_IOCTL_RESCAN``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
