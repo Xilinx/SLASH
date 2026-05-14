@@ -17,17 +17,17 @@ usage guide and a formal reference for each ioctl operation. Every ioctl entry f
 structure: a top-level description, the C interface definition, the ioctl direction, preconditions
 on inputs, postconditions on outputs, and return values.
 
-The module uses the Linux ``miscdevice`` framework to create device files, which allocates dynamic
-minor numbers under major 10. Userspace discovers device nodes by path, not by major/minor number.
+The module uses the Linux ``miscdevice`` framework to create the following device files, which
+allocates dynamic minor numbers under major 10. Userspace discovers device nodes by path, not by
+major/minor number.
 
-``/dev/slash_ctl<N>``
-    One per card (``/dev/slash_ctl0``, ``/dev/slash_ctl1``, …). Provides BAR enumeration, MMIO
-    access, and PCI device identity. Associated with PF2 (device ID ``10EE:50B6``).
+``/dev/slash_ctl<N>`` / ``/sys/class/misc/slash_ctl_<BDF>/device``
+    Provides BAR enumeration, MMIO access, and PCI device identity. Associated with PF2 (device ID
+    ``10EE:50B6``).
 
-``/dev/slash_qdma_ctl<N>``
-    One per card (``/dev/slash_qdma_ctl0``, ``/dev/slash_qdma_ctl1``, …). Manages DMA queue pairs
-    for bulk data movement between host and card memory. Associated with PF1 (device ID
-    ``10EE:50B5``).
+``/dev/slash_qdma_ctl<N>`` / ``/sys/class/misc/slash_qdma_ctl_<BDF>/device``
+    Manages DMA queue pairs for bulk data movement between host and card memory, as well as
+    reconfiguration. Associated with PF1 (device ID ``10EE:50B5``).
 
 ``/dev/slash_hotplug``
     A single global instance created at module load. Provides privileged control over the PCIe
@@ -37,9 +37,14 @@ The suffix ``N`` is assigned by a module-lifetime BDF-to-number map. The first t
 probed, it is assigned the next available counter value; on hotplug remove and rescan, the same BDF
 is reassigned the same ``N``. The assignment is permanent for the module's lifetime — entries are
 never freed. This stability guarantee means ``/dev/slash_ctl0`` always refers to the same physical
-card across remove+rescan cycles.
+card across remove+rescan cycles. However, suffixes for one card are not guaranteed to be identical
+for ``/dev/slash_ctl<N>`` and ``/dev/slash_qdma_ctl<N>`` since they represent separate physical
+functions and thus BDFs.
 
-TODO: In general, suffixes are not identical between slash_ctl and slash_qdma_ctl.
+The files in the ``/sys/class/misc/`` directory are symlinks to the respective files in ``/dev``,
+and the placeholder ``<BDF>`` equates to the full, function-level BDF identifier of the physical
+function. For example, the physical function 2 of board ``0000:61:00`` may be available as
+``/sys/class/misc/slash_ctl_0000:61:00.2``.
 
 Data Conventions
 ================
