@@ -92,8 +92,8 @@ matching QDMA control device.
 
 TODO: Find out which BAR exposes the kernel control registers.
 
-- **Path pattern:** ``/dev/slash_ctl0``, ``/dev/slash_ctl1``, …
-- **sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``slash_ctl_0000:61:00.2``)
+- **Device file name:** ``/dev/slash_ctl<N>`` (e.g. ``/dev/slash_ctl0``)
+- **Sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``/sys/class/misc/slash_ctl_slash_ctl_0000:61:00.2``)
 - **Associated PCI function:** PF2, device ID ``10EE:50B6``
 - **Permissions:** ``0600`` (owner read/write)
 - **Creation:** one per card, created when PF2 is probed during module load or PCI rescan
@@ -173,11 +173,6 @@ dma-buf fd to ensure correct memory ordering.
     munmap(mmio, req.length);
     close(bar_fd);
 
-- **Protection:** ``PROT_READ | PROT_WRITE``
-- **Flags:** ``MAP_SHARED``
-- **Offset:** any page-aligned offset within ``[0, bar_length)`` is accepted
-- **Size:** taken from ``req.length`` filled by the kernel
-
 BAR mapping is **not inherited across** ``fork()``. Each child process that needs MMIO access must
 obtain its own dma-buf fd via ``GET_BAR_FD``.
 
@@ -238,7 +233,7 @@ MMIO access along with its physical address and size.
 
 Returns a new dma-buf file descriptor for the named BAR. The fd can be passed to ``mmap()`` to
 obtain a pointer for direct MMIO access. The BAR size is reported back in ``length``. The fd is
-returned as the ``ioctl()`` return value; see `fd-as-Return-Value Ioctls`_.
+returned as the ``ioctl()`` return value.
 
 **Interface:**
 
@@ -325,8 +320,8 @@ direction mask, then started before use. An anon-inode fd obtained from the queu
 the I/O channel: ``write()`` performs H2C transfers, ``read()`` performs C2H transfers, and the
 file position encodes the device-side physical address.
 
-- **Path pattern:** ``/dev/slash_qdma_ctl0``, ``/dev/slash_qdma_ctl1``, …
-- **sysfs name:** ``slash_qdma_ctl_<PCI-BDF>`` (e.g., ``slash_qdma_ctl_0000:61:00.1``)
+- **Device file name:** ``/dev/slash_qdma_ctl<N>`` (e.g. ``/dev/slash_qdma_ctl0``)
+- **Sysfs name:** ``slash_qdma_ctl_<PCI-BDF>`` (e.g. ``/sys/class/misc/slash_qdma_ctl_0000:61:00.1``)
 - **Associated PCI function:** PF1, device ID ``10EE:50B5``
 - **Permissions:** ``0600``
 - **Creation:** one per card, created when PF1 is probed
@@ -691,7 +686,7 @@ removed.
 Creates a new file descriptor for data transfer on an existing queue pair. The returned fd supports
 ``read``, ``write``, ``pread``, ``pwrite``, and ``lseek``; it does **not** support ``mmap``,
 ``poll``/``select``, or ``splice``. Multiple fds can be obtained for the same qpair via multiple
-calls. The fd is returned as the ``ioctl()`` return value; see `fd-as-Return-Value Ioctls`_.
+calls. The fd is returned as the ``ioctl()`` return value.
 
 **Interface:**
 
@@ -739,7 +734,7 @@ secondary bus reset (SBR) on the upstream bridge for a full hardware reset, and 
 remove-and-rescan operation. These operations are used after loading a new FPGA bitstream and when
 performing a full board reset.
 
-- **Path:** ``/dev/slash_hotplug`` (literal; ``SLASH_HOTPLUG_DEVICE_NAME``)
+- **Device file name:** ``/dev/slash_hotplug``
 - **Permissions:** ``0600``
 - **Creation:** exactly one instance, created at module load, destroyed at module unload
 - **File operations:** ``ioctl`` only (includes 32-bit compat path). No ``open``, ``release``,
