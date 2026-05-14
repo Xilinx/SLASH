@@ -645,9 +645,6 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
             return -EFAULT;
         }
 
-        if (!user_size || user_size > sizeof(info))
-            user_size = sizeof(info);
-
         memset(&info, 0, sizeof(info));
         info.size = sizeof(info);
 
@@ -661,6 +658,15 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
         if (copy_to_user((void __user *)arg, &info, copy_size)) {
             dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO copy_to_user failed\n");
             return -EFAULT;
+        }
+        if (user_size > sizeof(info)) {
+            size_t extra = user_size - sizeof(info);
+            void __user *dst = (void __user *)((unsigned long)arg + sizeof(info));
+
+            if (clear_user(dst, extra)) {
+                dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO clear_user failed\n");
+                return -EFAULT;
+            }
         }
 
         return 0;

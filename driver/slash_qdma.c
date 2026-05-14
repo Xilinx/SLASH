@@ -1338,10 +1338,6 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (!user_size || user_size > sizeof(info))
-        user_size = sizeof(info);
-
-
     memset(&info, 0, sizeof(info));
     info.size = sizeof(info);
 
@@ -1356,6 +1352,11 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
     copy_size = min_t(size_t, user_size, sizeof(info));
     if (copy_to_user(uarg, &info, copy_size))
         return -EFAULT;
+    if (user_size > sizeof(info)) {
+        if (clear_user((void __user *)((unsigned long)uarg + sizeof(info)),
+                       user_size - sizeof(info)))
+            return -EFAULT;
+    }
 
     return 0;
 }
@@ -1419,12 +1420,9 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (!user_size || user_size > sizeof(req))
-        user_size = sizeof(req);
-
     memset(&req, 0, sizeof(req));
 
-    if (copy_from_user(&req, uarg, user_size))
+    if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
     /* Validate direction mask: must be non-zero and contain only known bits. */
@@ -1464,6 +1462,11 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     copy_size = min_t(size_t, user_size, sizeof(req));
     if (copy_to_user(uarg, &req, copy_size))
         return -EFAULT;
+    if (user_size > sizeof(req)) {
+        if (clear_user((void __user *)((unsigned long)uarg + sizeof(req)),
+                       user_size - sizeof(req)))
+            return -EFAULT;
+    }
 
     return err;
 }
@@ -1756,12 +1759,9 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (!user_size || user_size > sizeof(req))
-        user_size = sizeof(req);
-
     memset(&req, 0, sizeof(req));
 
-    if (copy_from_user(&req, uarg, user_size))
+    if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
     if (req.op > SLASH_QDMA_QUEUE_OP_DEL)
@@ -1787,6 +1787,11 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
     copy_size = min_t(size_t, user_size, sizeof(req));
     if (copy_to_user(uarg, &req, copy_size))
         return -EFAULT;
+    if (user_size > sizeof(req)) {
+        if (clear_user((void __user *)((unsigned long)uarg + sizeof(req)),
+                       user_size - sizeof(req)))
+            return -EFAULT;
+    }
 
     return ret;
 }
@@ -2355,12 +2360,9 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (!user_size || user_size > sizeof(req))
-        user_size = sizeof(req);
-
     memset(&req, 0, sizeof(req));
 
-    if (copy_from_user(&req, uarg, user_size))
+    if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
     /* Only O_CLOEXEC is a valid flag. */
@@ -2430,6 +2432,14 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
         put_unused_fd(fd);
         fput(file); /* triggers slash_qdma_qpair_release -> drops entry/dev refs, frees ctx */
         return -EFAULT;
+    }
+    if (user_size > sizeof(req)) {
+        if (clear_user((void __user *)((unsigned long)uarg + sizeof(req)),
+                       user_size - sizeof(req))) {
+            put_unused_fd(fd);
+            fput(file);
+            return -EFAULT;
+        }
     }
 
     /*
