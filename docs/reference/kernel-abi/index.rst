@@ -2,9 +2,9 @@
    comment:: SPDX-License-Identifier: MIT
    comment:: Copyright (C) 2025 Advanced Micro Devices, Inc
 
-############
-Device Files
-############
+##########
+Kernel ABI
+##########
 
 The SLASH kernel module (``slash.ko``) exposes AMD Alveo V80 FPGA cards to userspace through a set
 of character devices. It drives two PCI physical functions per card and registers three categories
@@ -17,8 +17,8 @@ usage guide and a formal reference for each ioctl operation. Every ioctl entry f
 structure: a top-level description, the C interface definition, the ioctl direction, preconditions
 on inputs, postconditions on outputs, and return values.
 
-The module uses the Linux ``miscdevice`` framework, which allocates dynamic minor numbers under
-major 10. Userspace discovers device nodes by path, not by major/minor number.
+The module uses the Linux ``miscdevice`` framework to create device files, which allocates dynamic
+minor numbers under major 10. Userspace discovers device nodes by path, not by major/minor number.
 
 ``/dev/slash_ctl<N>``
     One per card (``/dev/slash_ctl0``, ``/dev/slash_ctl1``, …). Provides BAR enumeration, MMIO
@@ -32,6 +32,14 @@ major 10. Userspace discovers device nodes by path, not by major/minor number.
 ``/dev/slash_hotplug``
     A single global instance created at module load. Provides privileged control over the PCIe
     lifecycle of SLASH cards (remove, rescan, secondary bus reset).
+
+The suffix ``N`` is assigned by a module-lifetime BDF-to-number map. The first time a given BDF is
+probed, it is assigned the next available counter value; on hotplug remove and rescan, the same BDF
+is reassigned the same ``N``. The assignment is permanent for the module's lifetime — entries are
+never freed. This stability guarantee means ``/dev/slash_ctl0`` always refers to the same physical
+card across remove+rescan cycles.
+
+TODO: In general, suffixes are not identical between slash_ctl and slash_qdma_ctl.
 
 Data Conventions
 ================
@@ -49,25 +57,9 @@ extra tail via ``clear_user()``. This allows the driver and library to evolve in
 Error Handling
 --------------
 
-All ioctls return ``0`` on success or a negative errno on failure, except for two ioctls that use
+All ioctls return ``0`` on success or a negative errno on failure, except for some ioctls that use
 the return value as a file descriptor (described below). The standard errno values are documented
 under each ioctl. Unknown ioctl command numbers return ``-ENOTTY``.
-
-fd-as-Return-Value Ioctls
---------------------------
-
-Two ioctls return a new file descriptor as the ``ioctl()`` syscall return value rather than
-returning ``0``:
-
-- ``SLASH_CTLDEV_IOCTL_GET_BAR_FD`` — returns a dma-buf fd for BAR MMIO access
-- ``SLASH_QDMA_IOCTL_QPAIR_GET_FD`` — returns an anon-inode fd for QDMA queue I/O
-
-On success, the return value is a non-negative file descriptor number. On failure, the return value
-is a negative errno (not ``-1``; callers check ``ret < 0``). This is a non-standard convention
-that differs from all other ioctls in this interface, which return ``0`` on success.
-
-Both ioctls are declared ``_IOWR`` (read+write direction) even though the fd is carried in the
-return value rather than a struct field.
 
 Concurrency Model
 =================
@@ -84,14 +76,8 @@ TODO: To be expanded/specified: What may be concurrently accessed, what not?
   ``TOGGLE_SBR`` drops this lock before calling ``pci_bridge_secondary_bus_reset()`` to avoid
   deadlock with the PCI slot lock.
 
-Notifications
-=============
-
-No custom uevents or netlink notifications are emitted, and there is no poll-able event queue.
-Userspace must discover new nodes by watching ``/dev/`` via udev or polling.
-
-Device information and BARs: ``/dev/slash_ctl<N>``
-==================================================
+Card information and BARs: ``/dev/slash_ctl<N>``
+================================================
 
 The control device provides two services. First, BAR enumeration and access: callers query which
 of the card's PCIe BARs are present and usable, then obtain a dma-buf fd for each BAR they wish to
@@ -99,20 +85,15 @@ memory-map for direct MMIO register access. Second, device identity: callers rea
 BDF string and vendor/device IDs to correlate the control device with a physical board and with the
 matching QDMA control device.
 
+TODO: Find out which BAR exposes the kernel control registers.
+
 - **Path pattern:** ``/dev/slash_ctl0``, ``/dev/slash_ctl1``, …
 - **sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``slash_ctl_0000:61:00.2``)
 - **Associated PCI function:** PF2, device ID ``10EE:50B6``
 - **Permissions:** ``0600`` (owner read/write)
 - **Creation:** one per card, created when PF2 is probed during module load or PCI rescan
-- **File operations:** ``ioctl`` only — no ``open`` hook (miscdevice default), no ``read``,
-  ``write``, or ``mmap`` on this fd itself. MMIO access is through a dma-buf fd returned by an
-  ioctl.
-
-The suffix ``N`` is assigned by a module-lifetime BDF-to-number map. The first time a given BDF is
-probed, it is assigned the next available counter value; on hotplug remove and rescan, the same BDF
-is reassigned the same ``N``. The assignment is permanent for the module's lifetime — entries are
-never freed. This stability guarantee means ``/dev/slash_ctl0`` always refers to the same physical
-card across remove+rescan cycles.
+- **File operations:** ``ioctl`` only — no ``open`` hook, no ``read``, ``write``, or ``mmap``
+  on this fd itself. MMIO access is through a dma-buf fd returned by an ioctl.
 
 Usage
 -----

@@ -35,7 +35,7 @@ management, and memory operations.
 
    reference/vrt-api/index
    reference/libslash-api/index
-   reference/ioctl-api/index
+   reference/kernel-abi/index
    reference/libvrtd-api/index
    reference/libvrtdpp-api/index
    reference/vrtd/index
