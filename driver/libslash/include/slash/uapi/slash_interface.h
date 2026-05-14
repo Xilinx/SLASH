@@ -158,12 +158,12 @@ struct slash_qdma_info {
  *
  * \@mode must be one of:
  *   - QDMA_Q_MODE_MM (0) — AXI Memory Mapped mode.
- *   - QDMA_Q_MODE_ST (1) — AXI Streaming mode.
+ *   - QDMA_Q_MODE_ST (1) — AXI Streaming mode (not yet supported; returns -EOPNOTSUPP).
  *
  * \@dir_mask selects which directions to enable:
  *   - bit 0 (0x1) — H2C  (Host-to-Card).
  *   - bit 1 (0x2) — C2H  (Card-to-Host).
- *   - bit 2 (0x4) — CMPT (Completion queue).
+ *   - bit 2 (0x4) — CMPT (Completion queue; not yet supported, returns -EOPNOTSUPP).
  *
  * The ring size fields are hardware CSR table indices (valid range
  * 0–15), not byte or descriptor counts.  Each index selects a

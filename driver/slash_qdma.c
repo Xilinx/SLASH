@@ -1394,8 +1394,9 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc,
  * @uarg:     User-space pointer to a slash_qdma_qpair_add struct.
  *
  * Validates userspace inputs:
- *   - @dir_mask must contain only valid direction bits and be non-zero.
- *   - @mode must be MM or ST.
+ *   - @dir_mask must be non-zero, contain only known bits, and not include CMPT
+ *     (completion queues are not yet supported).
+ *   - @mode must be MM; streaming mode (ST) is not yet supported.
  *   - Ring size indices must be in [0, 15] (CSR table range).
  *
  * On success, the kernel-assigned @qid is written back to userspace.
@@ -1425,13 +1426,19 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
+    /* Completion queues are not yet supported. */
+    if (req.dir_mask & SLASH_QDMA_DIR_CMPT)
+        return -EOPNOTSUPP;
+
     /* Validate direction mask: must be non-zero and contain only known bits. */
     dir_mask = req.dir_mask & SLASH_QDMA_DIR_MASK;
     if (!dir_mask || dir_mask != req.dir_mask)
         return -EINVAL;
 
-    /* Only memory-mapped and streaming modes are supported. */
-    if (req.mode != QDMA_Q_MODE_MM && req.mode != QDMA_Q_MODE_ST)
+    /* Streaming mode is not yet supported; only memory-mapped mode is accepted. */
+    if (req.mode == QDMA_Q_MODE_ST)
+        return -EOPNOTSUPP;
+    if (req.mode != QDMA_Q_MODE_MM)
         return -EINVAL;
 
     /*

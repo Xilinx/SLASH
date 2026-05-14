@@ -90,8 +90,6 @@ memory-map for direct MMIO register access. Second, device identity: callers rea
 BDF string and vendor/device IDs to correlate the control device with a physical board and with the
 matching QDMA control device.
 
-TODO: Find out which BAR exposes the kernel control registers.
-
 - **Device file name:** ``/dev/slash_ctl<N>`` (e.g. ``/dev/slash_ctl0``)
 - **Sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``/sys/class/misc/slash_ctl_slash_ctl_0000:61:00.2``)
 - **Associated PCI function:** PF2, device ID ``10EE:50B6``
@@ -315,7 +313,7 @@ Memory transfers via QDMA: ``/dev/slash_qdma_ctl<N>``
 =====================================================
 
 The QDMA device manages DMA queue pairs for bulk data movement between host memory and the card's
-on-board memory (HBM or DDR). Each queue pair is allocated with a mode (MM or streaming) and a
+on-board memory (HBM or DDR). Each queue pair is allocated with a mode (currently only MM) and a
 direction mask, then started before use. An anon-inode fd obtained from the queue pair serves as
 the I/O channel: ``write()`` performs H2C transfers, ``read()`` performs C2H transfers, and the
 file position encodes the device-side physical address.
@@ -329,8 +327,6 @@ file position encodes the device-side physical address.
   per-qpair anon-inode fds returned by an ioctl.
 
 Same stable-``N`` mapping scheme as the control device, using a separate BDF-to-number map.
-
-TODO: Research support or non-support for streaming.
 
 Usage
 -----
@@ -394,8 +390,6 @@ Multiple fds can be obtained for the same qpair via multiple ``QPAIR_GET_FD`` ca
 concurrent ``read()``/``write()`` on the same qpair fd are not recommended; concurrent requests
 to the same hardware queue handle may race inside libqdma.
 
-TODO: Identify transfer size limitations.
-
 The following errno values can be returned by ``read()`` and ``write()`` on the I/O fd:
 
 .. list-table::
@@ -421,8 +415,11 @@ The following errno values can be returned by ``read()`` and ``write()`` on the 
 Device Address Map
 ~~~~~~~~~~~~~~~~~~
 
-The queue pair fd treats the file position as the device-side physical address. Three regions can
-be targeted by ``read()`` and ``write()``:
+The queue pair fd treats the file position as the device-side physical address in the
+`16 TB NoC Interconnect Address Map`_. Within this address map, there are three particular
+regions of interest:
+
+.. _16 TB NoC Interconnect Address Map: https://docs.amd.com/r/en-US/am011-versal-acap-trm/16-TB-NoC-Interconnect-Address-Map
 
 .. list-table::
    :header-rows: 1
@@ -431,10 +428,6 @@ be targeted by ``read()`` and ``write()``:
      - Base
      - End (exclusive)
      - Direction
-   * - Bitstream / PDI
-     - ``0x0000000102100000``
-     - ``0x0000000142100000``
-     - H2C only
    * - HBM (64 pseudo-channels)
      - ``0x0000004000000000``
      - ``0x0000004800000000``
@@ -443,56 +436,10 @@ be targeted by ``read()`` and ``write()``:
      - ``0x0000060000000000``
      - ``0x0000060800000000``
      - H2C and C2H
-
-TODO: Read up in AVED which other address regions exist, and/or link to it.
-
-Both HBM and DDR use the same two-level layout: 64 regions of 512 MiB, each subdivided into 8
-subregions of 64 MiB.
-
-.. list-table::
-   :header-rows: 1
-
-   * - Property
-     - HBM
-     - DDR
-   * - Base
-     - ``0x4000000000``
-     - ``0x60000000000``
-   * - Regions
-     - 64 (HBM0–HBM63)
-     - 64
-   * - Region size
-     - 512 MiB (``0x20000000``)
-     - 512 MiB (``0x20000000``)
-   * - Subregions per region
-     - 8
-     - 8
-   * - Subregion size
-     - 64 MiB (``0x4000000``)
-     - 64 MiB (``0x4000000``)
-
-Address of region N, subregion K (N ∈ [0, 63], K ∈ [0, 7])::
-
-    HBM: 0x4000000000  + N x 0x20000000 + K x 0x4000000
-    DDR: 0x60000000000 + N x 0x20000000 + K x 0x4000000
-
-Bitstream / PDI programming region:
-
-.. list-table::
-   :header-rows: 1
-
-   * - Field
-     - Value
-   * - Base address
+   * - Bitstream / PDI input region
      - ``0x0000000102100000``
-   * - Maximum size
-     - 1 GiB (``0x40000000``)
-   * - Direction
-     - H2C write-only
-   * - Host buffer alignment
-     - 4096 bytes
-
-TODO: DMA sync granularity and alignment constraints to be identified.
+     - ``0x0000000142100000``
+     - H2C only
 
 FPGA Programming
 ~~~~~~~~~~~~~~~~
@@ -560,7 +507,7 @@ is returned in the struct and is used for all subsequent operations on this queu
 
     struct slash_qdma_qpair_add {
         __u32 size;          /* [in/out] ABI version */
-        __u32 mode;          /* [in]  Queue mode: 0=MM (Memory Mapped), 1=ST (Streaming) */
+        __u32 mode;          /* [in]  Queue mode: 0=MM (Memory Mapped), 1=ST (Streaming, not yet supported) */
         __u32 dir_mask;      /* [in]  Direction bitmask (see below) */
         __u32 h2c_ring_sz;   /* [in]  H2C descriptor ring CSR table index: 0–15 */
         __u32 c2h_ring_sz;   /* [in]  C2H descriptor ring CSR table index: 0–15 */
@@ -584,20 +531,20 @@ Direction bitmask bits:
      - C2H (card-to-host, read)
    * - 2
      - ``0x4``
-     - CMPT (completion queue)
+     - CMPT (completion queue; not yet supported)
 
 Ring size fields are QDMA Control and Status Register (CSR) table indices (0–15), not raw
 descriptor counts. Index 0 maps to approximately 2049 descriptors; index 15 to approximately
-16385. The caller does not control the actual descriptor count directly. TODO: Find and reference QDMA
-documentation.
+16385. The caller does not control the actual descriptor count directly.
 
 **Direction:** ``_IOWR`` — userspace writes ``mode``, ``dir_mask``, and ring size indices; the
 kernel writes back ``qid``.
 
 **Preconditions:**
 
-- ``dir_mask`` must be non-zero and contain only bits ``[0, 2]``
-- ``mode`` must be 0 or 1
+- ``dir_mask`` must be non-zero and contain only bits ``[0, 1]``; bit 2 (CMPT) is not yet
+  supported
+- ``mode`` must be 0 (MM); streaming mode (1) is not yet supported
 - All ring size indices must be in ``[0, 15]``
 - At most 256 concurrent queue pairs per device
 
@@ -611,6 +558,7 @@ kernel writes back ``qid``.
 - ``0`` — success
 - ``-EFAULT`` — copy failure
 - ``-EINVAL`` — invalid ``dir_mask``, ``mode``, or ring size index
+- ``-EOPNOTSUPP`` — streaming mode or completion queue requested (not yet supported)
 - ``-ENOMEM`` — allocation failure
 - ``-EBUSY`` — all 256 qpair IDs in use
 - ``-ENODEV`` — device shutting down
