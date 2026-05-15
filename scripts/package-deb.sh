@@ -90,6 +90,11 @@ rsync -a packaging/debian/ ./debian/
 
 sed -i "1s/(UNRELEASED) UNRELEASED;/(${VERSION}) unstable;/" debian/changelog
 
+# Substitute the packaging version into DKMS metadata files.
+sed -i "s/@VERSION@/${VERSION}/g" \
+    debian/slash-dkms.dkms \
+    debian/slash-dkms.install
+
 rsync vrt/vrtd/systemd/vrtd.service debian/vrtd.service
 rsync vrt/vrtd/systemd/vrtd.socket  debian/vrtd.socket
 rsync vrt/vrtd/udev/99-vrtd.rules   debian/vrtd.udev

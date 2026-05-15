@@ -18,9 +18,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-driver/*.c            usr/src/slash-0.1/driver/
-driver/*.h            usr/src/slash-0.1/driver/
-driver/Makefile       usr/src/slash-0.1/driver/
-driver/libslash/include/slash/uapi  usr/src/slash-0.1/driver/libslash/include/slash/
+driver/*.c            usr/src/slash-@VERSION@/driver/
+driver/*.h            usr/src/slash-@VERSION@/driver/
+driver/Makefile       usr/src/slash-@VERSION@/driver/
+driver/libslash/include/slash/uapi  usr/src/slash-@VERSION@/driver/libslash/include/slash/
 
-submodules/qdma_drv/QDMA/linux-kernel/driver/libqdma/   usr/src/slash-0.1/driver/
+submodules/qdma_drv/QDMA/linux-kernel/driver/libqdma/   usr/src/slash-@VERSION@/driver/

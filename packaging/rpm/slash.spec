@@ -20,7 +20,7 @@
 
 %global debug_package %{nil}
 %global dkms_name slash
-%global dkms_version 0.1
+%global dkms_version %{version}
 
 Name:           slash
 Version:        %{_version}
@@ -218,15 +218,15 @@ cp -a submodules/qdma_drv/QDMA/linux-kernel/driver/libqdma \
 # DKMS config (equivalent to debian/slash-dkms.dkms)
 cat > %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/dkms.conf << 'EOF'
 PACKAGE_NAME="slash"
-PACKAGE_VERSION="0.1"
+PACKAGE_VERSION="%{dkms_version}"
 
 BUILT_MODULE_NAME[0]="slash"
 BUILT_MODULE_LOCATION[0]="driver"
 DEST_MODULE_LOCATION[0]="/updates/dkms"
 AUTOINSTALL="yes"
 
-MAKE[0]="make -C driver KERNELDIR=/lib/modules/${kernelver}/build"
-CLEAN="make -C driver clean"
+MAKE[0]="make -C driver KDIR=/lib/modules/${kernelver}/build SLASH_VERSION=${PACKAGE_VERSION}"
+CLEAN="make -C driver KDIR=/lib/modules/${kernelver}/build clean"
 EOF
 
 # ---- File lists ----
