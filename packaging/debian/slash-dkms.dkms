@@ -26,5 +26,5 @@ BUILT_MODULE_LOCATION[0]="driver"
 DEST_MODULE_LOCATION[0]="/updates/dkms"
 AUTOINSTALL="yes"
 
-MAKE[0]="make -C driver KERNELDIR=/lib/modules/${kernelver}/build SLASH_VERSION=${PACKAGE_VERSION}"
-CLEAN="make -C driver clean"
+MAKE[0]="make -C driver KDIR=/lib/modules/${kernelver}/build SLASH_VERSION=${PACKAGE_VERSION}"
+CLEAN="make -C driver KDIR=/lib/modules/${kernelver}/build clean"

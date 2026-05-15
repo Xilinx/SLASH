@@ -15,7 +15,11 @@
 
 MODULE      := slash
 
+ifneq ($(KERNELDIR),)
+KDIR        ?= $(KERNELDIR)
+else
 KDIR        ?= /lib/modules/$(shell uname -r)/build
+endif
 PWD         := $(shell pwd)
 
 # Driver version. Priority:
