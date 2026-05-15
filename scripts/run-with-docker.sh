@@ -26,9 +26,10 @@ set -exo pipefail
 #
 # Builds (if necessary) and runs one of the SLASH Docker containers defined by
 # scripts/Dockerfile.<run|package>-<ubuntu|rocky>. The current working
-# directory, the Xilinx tools install, and the Xilinx license file are mounted
-# into the container at the same paths they have on the host so that paths
-# generated inside the container are also valid outside of it.
+# directory and the Xilinx tools install (plus optionally a separate license
+# path) are mounted into the container at the same paths they have on the
+# host so that paths generated inside the container are also valid outside
+# of it.
 #
 # Modes:
 #   package   Run the matching distro's packaging script
@@ -43,14 +44,20 @@ set -exo pipefail
 #                       (e.g. /opt/Xilinx). Vivado is sourced from
 #                       $SLASH_XILINX_PATH/2025.1/Vivado/settings64.sh inside
 #                       the container.
-#   SLASH_LICENSE_PATH  Path to the Xilinx license file (or directory) on the
-#                       host. Mounted into the container and exported as
-#                       XILINXD_LICENSE_FILE.
 #
 # Optional environment variables:
 #   SLASH_XILINX_ROOT              Mount point for the Xilinx tools inside the
 #                                  container. Defaults to SLASH_XILINX_PATH so
 #                                  paths match host and container.
+#   SLASH_LICENSE_PATH             Path to the Xilinx license file (or
+#                                  directory) on the host. When set, it is
+#                                  mounted into the container and exported as
+#                                  XILINXD_LICENSE_FILE. When unset (typical
+#                                  for installs under /opt/Xilinx or
+#                                  /tools/Xilinx where the license lives
+#                                  inside the Xilinx tree already mounted via
+#                                  SLASH_XILINX_PATH), Vivado's default
+#                                  license discovery is used.
 #   SLASH_PKG_SKIP_ROOT_DESIGN_BUILD  If set, forwarded into the container so
 #                                     that pbuild.sh skips the (expensive)
 #                                     root-design build step.
@@ -85,14 +92,13 @@ fi
 
 DOCKER_RUN_ARGS+="-v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT "
 
-# Mounting the license file for synthesis and implementation
-if [ -z $SLASH_LICENSE_PATH ]; then
-    echo "Please set SLASH_LICENSE_PATH to the path of your licenses (.e.g. /proj/xbuilds/licenses)" 2>&2
-    exit 1
+# Mounting the license file for synthesis and implementation, if provided.
+# When unset, the license is assumed to be reachable via SLASH_XILINX_PATH
+# (already mounted above) and Vivado's default license discovery.
+if [ -n "$SLASH_LICENSE_PATH" ]; then
+    DOCKER_RUN_ARGS+="-v $SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH "
+    DOCKER_RUN_ARGS+="-e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH "
 fi
-
-DOCKER_RUN_ARGS+="-v $SLASH_LICENSE_PATH:$SLASH_LICENSE_PATH "
-DOCKER_RUN_ARGS+="-e XILINXD_LICENSE_FILE=$SLASH_LICENSE_PATH "
 
 # If set, add the skip-root-build flag
 if [ -n $SLASH_PKG_SKIP_ROOT_DESIGN_BUILD ]; then
