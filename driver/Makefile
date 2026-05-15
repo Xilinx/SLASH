@@ -18,6 +18,15 @@ MODULE      := slash
 KDIR        ?= /lib/modules/$(shell uname -r)/build
 PWD         := $(shell pwd)
 
+# Driver version. Priority:
+#   1. SLASH_VERSION passed in (e.g. from DKMS MAKE[0]).
+#   2. packaging/version file (in-tree builds).
+#   3. "unknown" fallback (DKMS install tree has no packaging/version).
+SLASH_VERSION ?= $(strip $(shell cat $(src)/../packaging/version 2>/dev/null))
+ifeq ($(SLASH_VERSION),)
+SLASH_VERSION := unknown
+endif
+
 # This exists when installed for dkms
 LIBQDMA_LOCAL_DIR := ./libqdma
 # This exists when building from tree
@@ -50,7 +59,8 @@ ccflags-y += \
 	-I$(src)/$(LIBQDMA_PATH)/qdma_access/qdma_soft_access \
 	\
 	-DTANDEM_BOOT_SUPPORTED=1 \
-	-DSLASH_QDMA_OP_DEBUG=$(SLASH_QDMA_OP_DEBUG)
+	-DSLASH_QDMA_OP_DEBUG=$(SLASH_QDMA_OP_DEBUG) \
+	-DSLASH_VERSION_STR=\"$(SLASH_VERSION)\"
 
 
 LIBQDMA_OBJS := \

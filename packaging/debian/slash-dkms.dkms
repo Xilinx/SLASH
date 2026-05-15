@@ -19,12 +19,12 @@
 # ##################################################################################################
 
 PACKAGE_NAME="slash"
-PACKAGE_VERSION="0.1"
+PACKAGE_VERSION="@VERSION@"
 
 BUILT_MODULE_NAME[0]="slash"
 BUILT_MODULE_LOCATION[0]="driver"
 DEST_MODULE_LOCATION[0]="/updates/dkms"
 AUTOINSTALL="yes"
 
-MAKE[0]="make -C driver KERNELDIR=/lib/modules/${kernelver}/build"
+MAKE[0]="make -C driver KERNELDIR=/lib/modules/${kernelver}/build SLASH_VERSION=${PACKAGE_VERSION}"
 CLEAN="make -C driver clean"

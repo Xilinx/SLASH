@@ -55,6 +55,10 @@
 #include "slash_hotplug_driver.h"
 #include "slash_qdma.h"
 
+#ifndef SLASH_VERSION_STR
+#define SLASH_VERSION_STR "unknown"
+#endif
+
 /** Number of worker threads for libqdma's internal processing. */
 static unsigned int qdma_num_threads = 8;
 /** Optional debugfs mount path for libqdma diagnostics (unused). */
@@ -126,7 +130,7 @@ MODULE_PARM_DESC(qdma_debugfs_path, "debugfs mount path for libqdma (default: di
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("AMD Inc.");
 MODULE_DESCRIPTION("SLASH/VRT module");
-MODULE_VERSION("1.0");
+MODULE_VERSION(SLASH_VERSION_STR);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
 MODULE_IMPORT_NS("DMA_BUF");
 #else
