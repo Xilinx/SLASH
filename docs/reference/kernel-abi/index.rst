@@ -23,23 +23,24 @@ major/minor number.
 
 ``/dev/slash_ctl<N>`` / ``/sys/class/misc/slash_ctl_<BDF>/device``
     Provides BAR enumeration, MMIO access, and PCI device identity. Associated with PF2 (device ID
-    ``10EE:50B6``).
+    ``10EE:50B6``). Examples: ``/dev/slash_ctl0``, ``/dev/slash_ctl1``,
+    ``/sys/class/misc/slash_ctl_0000:61:00.2/device``.
 
 ``/dev/slash_qdma_ctl<N>`` / ``/sys/class/misc/slash_qdma_ctl_<BDF>/device``
     Manages DMA queue pairs for bulk data movement between host and card memory, as well as
-    reconfiguration. Associated with PF1 (device ID ``10EE:50B5``).
+    reconfiguration. Associated with PF1 (device ID ``10EE:50B5``). Examples: ``/dev/slash_qdma_ctl0``,
+    ``/dev/slash_qdma_ctl1``, ``/sys/class/misc/slash_qdma_ctl_0000:61:00.0/device``.
 
 ``/dev/slash_hotplug``
     A single global instance created at module load. Provides privileged control over the PCIe
     lifecycle of SLASH cards (remove, rescan, secondary bus reset).
 
-The suffix ``N`` is assigned by a module-lifetime BDF-to-number map. The first time a given BDF is
-probed, it is assigned the next available counter value; on hotplug remove and rescan, the same BDF
-is reassigned the same ``N``. The assignment is permanent for the module's lifetime — entries are
-never freed. This stability guarantee means ``/dev/slash_ctl0`` always refers to the same physical
-card across remove+rescan cycles. However, suffixes for one card are not guaranteed to be identical
-for ``/dev/slash_ctl<N>`` and ``/dev/slash_qdma_ctl<N>`` since they represent separate physical
-functions and thus BDFs.
+The kernel module creates one ``slash_ctl`` and ``slash_qdma_ctl`` file for each card during discovery,
+which persist across reconfiguration, but will be removed and readded during a remove+rescan cycle.
+The mapping of one file path to a physical card is therefore not guaranteed across remove+rescan cycles
+and userspace should always verify the BDF identity of the accessed card. Also, suffixes for one card are
+not guaranteed to be identical for ``/dev/slash_ctl<N>`` and ``/dev/slash_qdma_ctl<N>``. For example, 
+the device files ``/dev/slash_ctl0`` and ``/dev/slash_qdma_ctl1`` may reference the same physical card.
 
 The files in the ``/sys/class/misc/`` directory are symlinks to the respective files in ``/dev``,
 and the placeholder ``<BDF>`` equates to the full, function-level BDF identifier of the physical
