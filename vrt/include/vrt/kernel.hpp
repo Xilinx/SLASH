@@ -74,13 +74,13 @@ struct FunctionalArg {
 class Kernel {
     uint8_t bar = 0;                                          ///< Base Address Register (BAR)
     std::string name;                                         ///< Name of the kernel
-    uint64_t baseAddr;                                        ///< Base address of the kernel
-    uint64_t range;                                           ///< Address range of the kernel
+    uint64_t baseAddr = 0;                                    ///< Base address of the kernel
+    uint64_t range = 0;                                       ///< Address range of the kernel
     std::vector<Register> registers;                          ///< List of registers in the kernel
     std::vector<FunctionalArg> functionalArgs;                ///< Parsed function arguments from system_map.xml
     size_t currentArgIndex = 0;                               ///< Current call argument index
     std::string deviceBdf;                     ///< BDF of the device
-    Platform platform;                         ///< Platform of the device
+    Platform platform = Platform::UNKNOWN;     ///< Platform of the device
     std::shared_ptr<ZmqServer> server;         ///< Pointer to ZeroMQ server for communication
     std::map<uint32_t, uint32_t> registerMap;  ///< Map of register offsets to values
     std::map<uint32_t, uint64_t> setArgValues; ///< Values assigned through setArg(idx/name, value)
