@@ -445,9 +445,7 @@ FPGA Programming
 ~~~~~~~~~~~~~~~~
 
 FPGA programming (loading a new bitstream/PDI) is performed as a DMA write to the bitstream
-programming region (``0x102100000``) over an H2C-only MM queue pair. After programming, the
-``slash_ctl`` device should be hotplugged because the new bitstream may present a different
-device identity or BAR layout. See `Hotplug Remove and Rescan`_ for details.
+programming region (``0x102100000``) over an H2C-only MM queue pair.
 
 IOCTL Reference
 ---------------
