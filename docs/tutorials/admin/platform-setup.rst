@@ -353,7 +353,7 @@ from ``lspci -d 10ee:``, e.g. ``03:00``):
       .. code-block:: bash
 
          sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-            -i /usr/lib/python3.10/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
+            -i /usr/lib/python3.10/dist-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
 
    .. tab-item:: RHEL 9 / Rocky Linux 9 / AlmaLinux 9
 
