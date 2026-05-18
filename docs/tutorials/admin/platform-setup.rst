@@ -346,10 +346,28 @@ operations — SLASH reads from flash but never writes to it during regular use.
 Program the primary flash partition (replace ``<BDF>`` with the bus address
 from ``lspci -d 10ee:``, e.g. ``03:00``):
 
-.. code-block:: bash
+.. tab-set::
 
-   sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-       -i /usr/share/slashkit/static_shell/amd_v80_gen5x8_25.1.pdi
+   .. tab-item:: Ubuntu
+
+      .. code-block:: bash
+
+         sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
+            -i /usr/lib/python3.10/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
+
+   .. tab-item:: RHEL 9 / Rocky Linux 9 / AlmaLinux 9
+
+      .. code-block:: bash
+
+         sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
+            -i /usr/lib/python3.9/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
+
+   .. tab-item:: RHEL 10 / Rocky Linux 10 / AlmaLinux 10
+
+      .. code-block:: bash
+
+         sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
+            -i /usr/lib/python3.12/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
 
 After programming completes, reboot the system for the new flash contents
 to take effect:
