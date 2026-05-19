@@ -7,9 +7,9 @@ import numpy as np
 BAR_SIZE = 128 * 1024 * 1024  # 256 MB
 
 
-def _get_bar_path(dev, debug=True):
+def _get_bar_path(dev, resource: int = 2, debug=True):
     """Generate BAR path based on the PCIe Bus ID"""
-    dev_path = f"/sys/bus/pci/devices/0000:{dev}:00.2/resource2"
+    dev_path = f"/sys/bus/pci/devices/0000:{dev}:00.2/resource{resource}"
     if debug:
         print(f"Using BDF: {dev_path}")
     return dev_path
@@ -17,10 +17,10 @@ def _get_bar_path(dev, debug=True):
 
 class PCIeMapBar:
     """Wrapper class to allows MMIO read and write operations from PCIe BAR"""
-    def __init__(self, device: str = 'e2', barsize: int = BAR_SIZE,
-                 debug: bool = True):
+    def __init__(self, device: str = 'e2', resource: int = 2,
+                 barsize: int = BAR_SIZE, debug: bool = True):
         self._bar = None
-        self._barpath = _get_bar_path(device, debug)
+        self._barpath = _get_bar_path(device, resource, debug)
         self._barsize = barsize
 
     def open(self):

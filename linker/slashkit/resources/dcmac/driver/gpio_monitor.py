@@ -24,10 +24,10 @@ def _get_shift_and_mask(key: str) -> tuple[int, int]:
 
 class AxiGPIOMonitor(AxiGpioMMIO):
 
-    def __init__(self, device: str = 'e2', base_offset: int = 0x0,
-                 gpio_index: int = 0):
+    def __init__(self, device: str = 'e2', resource: int = 2,
+                 base_offset: int = 0x0, gpio_index: int = 0):
         self._gpio_index = gpio_index
-        super().__init__(device, base_offset)
+        super().__init__(device, resource, base_offset)
 
     def _get(self, key: str, gpio: int = 0):
         shift, mask = _get_shift_and_mask(key)
@@ -49,7 +49,7 @@ class AxiGPIOMonitor(AxiGpioMMIO):
 
 def main(args):
     offset = get_ip_offset(0x204_0200, args.dcmac)
-    obj = AxiGPIOMonitor(args.dev, offset, gpio_index=0)
+    obj = AxiGPIOMonitor(args.dev, base_offset=offset, gpio_index=0)
 
     print(f'{obj.gt0_tx_reset_done=}')
     print(f'{obj.gt0_rx_reset_done=}')
