@@ -209,6 +209,8 @@ install -m 0644 driver/*.c      %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_versi
 install -m 0644 driver/*.h      %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/
 install -m 0644 driver/Makefile %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/
 
+cp -a driver/kcompat %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/
+
 cp -a driver/libslash/include/slash/uapi \
     %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/libslash/include/slash/
 
