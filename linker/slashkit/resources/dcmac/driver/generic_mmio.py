@@ -7,10 +7,10 @@ from utils import int_types, hex_or_int, add_common_args
 
 
 class GenericMMIO:
-    def __init__(self, device: str = 'e2', base_offset: int = 0x0,
-                 debug: bool = False):
+    def __init__(self, device: str = 'e2', resource: int = 2,
+                 base_offset: int = 0x0, debug: bool = False):
         self._base_offset = base_offset
-        self._pciemmio = PCIeMapBar(device, debug=debug)
+        self._pciemmio = PCIeMapBar(device, resource, debug=debug)
         self._pciemmio.open()
         if debug:
             print(f"Base address: {hex(self._base_offset)}")
@@ -38,7 +38,7 @@ class GenericMMIO:
 
 
 def main(args):
-    obj = GenericMMIO(args.dev, args.baseoffset)
+    obj = GenericMMIO(args.dev, base_offset=args.baseoffset)
 
     if args.write:
         obj.write(args.offset, args.value)

@@ -12,8 +12,9 @@ from utils import rshift, add_common_args, get_ip_offset
 class DCMAC(GenericMMIO):
     """"DCMAC MMIO Driver"""
 
-    def __init__(self, device: str = 'e2', base_offset: int = 0x0):
-        super().__init__(device, base_offset)
+    def __init__(self, device: str = 'e2', resource: int = 2,
+                 base_offset: int = 0x0):
+        super().__init__(device, resource, base_offset)
         self.set_pm_tick_trigger()
 
     def write(self, offset, value):
@@ -391,7 +392,7 @@ class DCMAC(GenericMMIO):
 
 def main(args):
     offset = get_ip_offset(0x200_0000, args.dcmac)
-    obj = DCMAC(args.dev, offset)
+    obj = DCMAC(args.dev, base_offset=offset)
 
     if args.tx:
         obj.reset_tx()

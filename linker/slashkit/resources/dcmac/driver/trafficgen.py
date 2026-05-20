@@ -44,7 +44,7 @@ class TrafficGenerator(DefaultIP):
 def main(args):
     intf = 0
     offset = get_ip_offset(0x400_0000, args.dcmac*2 +intf)
-    tgen = TrafficGenerator(args.dev, offset)
+    tgen = TrafficGenerator(args.dev, base_offset=offset)
 
     tgen.flits = args.flits
     tgen.dest = 0
