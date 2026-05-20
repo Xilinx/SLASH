@@ -1,6 +1,6 @@
 # ##################################################################################################
 #  The MIT License (MIT)
-#  Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+#  Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # 
 #  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
 #  and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -20,21 +20,52 @@
 
 cmake_minimum_required(VERSION 3.10)
 
-project(v80-smi)
+# Read version from packaging/version
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../packaging/version" SMI_VERSION)
+string(STRIP "${SMI_VERSION}" SMI_VERSION)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+# Parse into components
+string(REPLACE "." ";" VERSION_LIST "${SMI_VERSION}")
+list(GET VERSION_LIST 0 SMI_VERSION_MAJOR)
+list(GET VERSION_LIST 1 SMI_VERSION_MINOR)
+list(GET VERSION_LIST 2 SMI_VERSION_PATCH)
 
-include_directories(include /usr/include/ami/ /usr/include/libxml2 /usr/include/jsoncpp)
+message(STATUS "SMI version: ${SMI_VERSION} (${SMI_VERSION_MAJOR}.${SMI_VERSION_MINOR}.${SMI_VERSION_PATCH})")
 
-file(GLOB APP_SOURCES v80-smi.cpp src/*.cpp src/commands/*.cpp src/utils/*.cpp)
-
-set(SOURCES
-    ${APP_SOURCES}
+project(
+    v80-smi
+    
+    VERSION ${SMI_VERSION}
+    LANGUAGES C CXX
 )
 
-add_executable(v80-smi ${SOURCES})
+option(SMI_INCLUDE_VRT "Include vrtd as subdirectory instead of building from system" OFF)
 
-target_link_libraries(v80-smi ami jsoncpp xml2)
+include(GNUInstallDirs)
 
-install(TARGETS v80-smi DESTINATION /usr/local/bin)
+if (SMI_INCLUDE_VRT)
+  add_subdirectory(../vrt vrt)
+else()
+  find_package(vrt REQUIRED CONFIG)
+endif()
+
+if(NOT TARGET vrt::vrt)
+  message(FATAL_ERROR
+    "vrt package is missing target vrt::vrt. "
+    "Build and install vrt first (cmake --install), then configure smi again.")
+endif()
+
+find_package(CLI11 CONFIG REQUIRED)
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp"
+    @ONLY
+)
+
+add_subdirectory(src)
+
+install(
+    TARGETS v80-smi
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+)

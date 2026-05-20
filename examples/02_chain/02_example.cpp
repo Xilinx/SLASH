@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -20,10 +20,10 @@
 
 #include <iostream>
 #include <cstdint>
-#include <utils/logger.hpp>
-#include <api/device.hpp>
-#include <api/buffer.hpp>
-#include <api/kernel.hpp>
+#include <vrt/utils/logger.hpp>
+#include <vrt/device.hpp>
+#include <vrt/buffer.hpp>
+#include <vrt/kernel.hpp>
 
 int main(int argc, char* argv[]) {
     try {
@@ -33,34 +33,39 @@ int main(int argc, char* argv[]) {
         }
         std::string bdf = argv[1];
         std::string vrtbinFile = argv[2];
-        uint32_t size = 512 * 1024 * 1024;
+        uint32_t size = 1024*4;
         vrt::utils::Logger::setLogLevel(vrt::utils::LogLevel::DEBUG);
         vrt::Device device(bdf, vrtbinFile);
 
         vrt::Kernel dma_in(device, "dma_in_0");
         vrt::Kernel dma_out(device, "dma_out_0");
-        vrt::Buffer<uint64_t> buffer_in(device, size, vrt::MemoryRangeType::HBM);
-        vrt::Buffer<uint64_t> buffer_out(device, size, vrt::MemoryRangeType::HBM);
+        vrt::Buffer<uint64_t> buffer_in(device, size, dma_in.argMemoryConfig("in"));
+        vrt::Buffer<uint64_t> buffer_out(device, size, dma_out.argMemoryConfig("out"));
         for(uint32_t i = 0; i < size; i++) {
             buffer_in[i] = static_cast<uint64_t>(i);
         }
         buffer_in.sync(vrt::SyncType::HOST_TO_DEVICE);
-        dma_in.start(buffer_in.getPhysAddr(), size);
-        dma_out.start(size, buffer_out.getPhysAddr());
+        dma_in.setArg(0, buffer_in);
+        dma_in.setArg(1, size);
+        dma_out.setArg(0, size);
+        dma_out.setArg(1, buffer_out);
+        dma_in.start();
+        dma_out.start();
         dma_in.wait();
         dma_out.wait();
         buffer_out.sync(vrt::SyncType::DEVICE_TO_HOST);
         for(uint32_t i = 0; i < size; i++) {
             if(buffer_in[i] != buffer_out[i]) {
-                vrt::utils::Logger::log(vrt::utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Test failed");
+                vrt::utils::Logger::log(vrt::utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Test failed (accuracy)");
                 device.cleanup();
-                return 0;
+                return 2;
             }
         }
         vrt::utils::Logger::log(vrt::utils::LogLevel::INFO, __PRETTY_FUNCTION__, "Test passed");
         device.cleanup();
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
+        return 1;
     }
     return 0;
 }

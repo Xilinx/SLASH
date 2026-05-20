@@ -1,6 +1,6 @@
 [submodule "submodules/qdma_drv"]
 	path = submodules/qdma_drv
 	url = https://github.com/Xilinx/dma_ip_drivers.git
-[submodule "submodules/v80-vitis-flow/submodules/aved"]
-	path = submodules/v80-vitis-flow/submodules/aved
+[submodule "AVED"]
+	path = submodules/AVED
 	url = https://github.com/Xilinx/AVED.git

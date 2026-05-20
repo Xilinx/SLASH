@@ -1,3 +1,4 @@
 breathe
 sphinxcontrib-tikz
 sphinx-rtd-theme
+sphinx-design

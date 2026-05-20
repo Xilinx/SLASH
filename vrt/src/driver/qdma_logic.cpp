@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -18,12 +18,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "driver/qdma_logic.hpp"
+#include <vrt/driver/qdma_logic.hpp>
 
 namespace vrt {
 
-QdmaLogic::QdmaLogic(ami_device* device, const std::string& name, uint64_t baseAddr, uint64_t range)
-    : Kernel(device, name, baseAddr, range, std::vector<Register>{}) {}
+QdmaLogic::QdmaLogic(const std::string& name, uint64_t baseAddr, uint64_t range)
+    : Kernel(name, baseAddr, range, std::vector<Register>{}) {}
 
 void QdmaLogic::setValues(uint16_t qid, uint32_t length) {
     uint32_t regVal = 0;

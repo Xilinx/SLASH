@@ -53,5 +53,34 @@ Thumbs.db
 *~
 *.Xil
 !build_all.sh
+!build_bsp.sh
 
 .clang-format
+.cache
+**/linker_results/
+**/linker_results_*/
+
+__pycache__/
+*.pyc
+.venv/
+
+# Kernel module kcompat probe scratch (driver/kcompat/probe.sh)
+driver/kcompat/.scratch/
+
+# Build files for package
+/pbuild/
+/rpmbuild/
+/debian/
+
+# Output files for package
+/deb/
+/rpm/
+
+# VBIN build directories
+*.prj
+
+# Python virtual environment
+.venv
+
+# Python test coverage
+.coverage

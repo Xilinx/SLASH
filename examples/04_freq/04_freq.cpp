@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -21,9 +21,9 @@
 #include <iostream>
 #include <cstring>
 
-#include <api/device.hpp>
-#include <api/buffer.hpp>
-#include <api/kernel.hpp>
+#include <vrt/device.hpp>
+#include <vrt/buffer.hpp>
+#include <vrt/kernel.hpp>
 
 int main(int argc, char* argv[]) {
     try {
@@ -41,12 +41,13 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Current set frequency: "<< device.getFrequency() << " Hz" << std::endl;
         std::cout << "Max frequency: "<< device.getMaxFrequency() << " Hz" << std::endl;
-        device.setFrequency(500000000);
+
+        device.setFrequency(300000000);
         std::cout << "Current set frequency: "<< device.getFrequency() << " Hz" << std::endl;
 
-        vrt::Buffer<int> a(device, size, vrt::MemoryRangeType::HBM);
-        vrt::Buffer<int> b(device, size, vrt::MemoryRangeType::HBM);
-        vrt::Buffer<int> c(device, size, vrt::MemoryRangeType::HBM);
+        vrt::Buffer<int> a(device, size, vrt::MemoryRangeType::HBM, 0);
+        vrt::Buffer<int> b(device, size, vrt::MemoryRangeType::HBM, 1);
+        vrt::Buffer<int> c(device, size, vrt::MemoryRangeType::HBM, 2);
 
         for (int i = 0; i < size; i++) {
             a[i] = i;
@@ -54,14 +55,20 @@ int main(int argc, char* argv[]) {
         }
         a.sync(vrt::SyncType::HOST_TO_DEVICE);
         b.sync(vrt::SyncType::HOST_TO_DEVICE);
-        vadd_0.start(a.getPhysAddr(), b.getPhysAddr(), c.getPhysAddr(), size);
+        vadd_0.setArg(0, a);
+        vadd_0.setArg(1, b);
+        vadd_0.setArg(2, c);
+        vadd_0.setArg(3, size);
+        vadd_0.start();
+        //vadd_0.start(a, b, c, size);
         vadd_0.wait();
         c.sync(vrt::SyncType::DEVICE_TO_HOST);
         for (int i = 0; i < size; i++) {
             if (c[i] != a[i] + b[i]) {
+                std::cerr << "Test failed (accuracy)" << std::endl;
                 std::cerr << "Error: " << c[i] << " != " << a[i] << " + " << b[i] << std::endl;
                 device.cleanup();
-                return 1;
+                return 2;
             }
         }
         std::cout << "Test passed" << std::endl;

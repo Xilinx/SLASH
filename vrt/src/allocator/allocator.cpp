@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -18,247 +18,312 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "allocator/allocator.hpp"
+/**
+ * @file allocator.cpp
+ * @brief Memory allocator implementation.
+ */
+
+#include <vrt/allocator/allocator.hpp>
+
+#include <cstdlib>
+
+#include <vrt/utils/logger.hpp>
+#include <vrtd/device.hpp>
 
 namespace vrt {
-Superblock::Superblock(uint64_t startAddress, uint64_t size)
-    : startAddress(startAddress), size(size), offset(0) {}
+namespace {
 
-uint64_t Superblock::allocate(uint64_t size) {
-    if (!freeList.empty()) {
-        uint64_t addr = freeList.back();
-        freeList.pop_back();
-        return addr;
+bool matchesAllocation(const UntypedBuffer* buffer, BufferAllocType type, BufferAllocDir dir,
+                       HBMRegion region) {
+    if (buffer == nullptr) {
+        return false;
     }
-    if (offset + size > this->size) {
-        throw std::bad_alloc();
+
+    if (buffer->getAllocType() != type || buffer->getAllocDir() != dir) {
+        return false;
     }
-    uint64_t addr = startAddress + offset;
-    offset += size;
-    return addr;
+
+    // Region is meaningful only for explicit HBM allocations.
+    if (type == BufferAllocType::Hbm) {
+        return buffer->getHBMRegion() == region;
+    }
+
+    return true;
 }
 
-void Superblock::deallocate(uint64_t addr) {}
+}  // namespace
 
-MemoryRange::MemoryRange(uint64_t startAddress, uint64_t size)
-    : startAddress(startAddress), size(size), offset(0) {}
 
-Allocator::Allocator(uint64_t superblockSize) : superblockSize(superblockSize) {
-    addMemoryRange(MemoryRangeType::HBM, HBM_START, HBM_SIZE);
-    addMemoryRange(MemoryRangeType::DDR, DDR_START, DDR_SIZE);
+UntypedBuffer::UntypedBuffer(std::nullptr_t) noexcept
+    : backingBuffer(nullptr),
+      size(0),
+      offset(0)
+{}
+
+UntypedBuffer::UntypedBuffer(vrtd::Buffer* backingBuffer, uint64_t size, uint64_t offset)
+    : backingBuffer(backingBuffer),
+      // Default to full backing size when size is "max" sentinel.
+      size(size == std::numeric_limits<uint64_t>::max() ? backingBuffer->getSize() : size),
+      // Offset is relative to the backing buffer base.
+      offset(offset)
+{}
+
+UntypedBuffer::UntypedBuffer(const UntypedBuffer& parent, uint64_t size, uint64_t offset)
+    : backingBuffer(parent.backingBuffer),
+      // Size defaults to parent size when size is "max" sentinel.
+      size(size == std::numeric_limits<uint64_t>::max() ? parent.size : size),
+      // Child offsets are relative to the parent slice.
+      offset(parent.offset + offset)
+{}
+
+UntypedBuffer::~UntypedBuffer() {}
+
+BufferAllocType UntypedBuffer::getAllocType() const noexcept {
+    return backingBuffer->getAllocType();
 }
 
-void Allocator::addMemoryRange(MemoryRangeType type, uint64_t startAddress, uint64_t size) {
-    memoryRanges.emplace(type, MemoryRange(startAddress, size));
+BufferAllocDir UntypedBuffer::getAllocDir() const noexcept {
+    return backingBuffer->getAllocDir();
 }
 
-uint64_t Allocator::allocate(uint64_t size, MemoryRangeType type) {
-    if (type == MemoryRangeType::HBM) {
-        return allocate(size, type, 0);
+HBMRegion UntypedBuffer::getHBMRegion() const noexcept {
+    // Only HBM allocations encode a region in the alloc arg.
+    if (getAllocType() != BufferAllocType::Hbm) {
+        return HBMRegion::NON_HBM;
     }
-    auto it = memoryRanges.find(type);
-    if (it == memoryRanges.end()) {
-        throw std::out_of_range("Invalid memory range type");
+    return static_cast<HBMRegion>(backingBuffer->getAllocArg());
+}
+
+uint64_t UntypedBuffer::getSize() const noexcept {
+    return size;
+}
+
+uint64_t UntypedBuffer::getPhysAddr() const noexcept {
+    // Physical address is backing base + slice offset.
+    return backingBuffer->getPhysAddr() + offset;
+}
+
+void* UntypedBuffer::data() const noexcept {
+    // Host pointer is backing base + slice offset.
+    return static_cast<uint8_t*>(backingBuffer->data()) + offset;
+}
+
+void UntypedBuffer::syncToDevice(uint64_t offset, uint64_t size) {
+    // Clamp sync size and validate bounds against this slice.
+    uint64_t syncSize = (size == std::numeric_limits<uint64_t>::max()) ? this->size - offset : size;
+    if (offset + syncSize > this->size) {
+        throw std::out_of_range("Sync range exceeds buffer size");
+    }
+    // Forward to backing buffer with adjusted offset.
+    backingBuffer->syncToDevice(this->offset + offset, syncSize);
+}
+
+void UntypedBuffer::syncToHost(uint64_t offset, uint64_t size) {
+    // Clamp sync size and validate bounds against this slice.
+    uint64_t syncSize = (size == std::numeric_limits<uint64_t>::max()) ? this->size - offset : size;
+    if (offset + syncSize > this->size) {
+        throw std::out_of_range("Sync range exceeds buffer size");
+    }
+    // Forward to backing buffer with adjusted offset.
+    backingBuffer->syncFromDevice(this->offset + offset, syncSize);
+}
+
+bool UntypedBuffer::operator==(std::nullptr_t) const noexcept {
+    return backingBuffer == nullptr;
+}
+
+bool UntypedBuffer::operator!=(std::nullptr_t) const noexcept {
+    return backingBuffer != nullptr;
+}
+
+bool operator==(std::nullptr_t, const UntypedBuffer& buffer) noexcept {
+    return buffer.backingBuffer == nullptr;
+}
+
+bool operator!=(std::nullptr_t, const UntypedBuffer& buffer) noexcept {
+    return buffer.backingBuffer != nullptr;
+}
+
+Block::Block() = default;
+Block::~Block() = default;
+
+LargeBlock::LargeBlock(vrtd::Device& device, BufferAllocType type, BufferAllocDir dir, uint64_t size, HBMRegion region)
+    // Back large blocks with a dedicated device buffer.
+    : backingBuffer(std::make_unique<vrtd::Buffer>(
+          device.openBuffer(type, size, static_cast<uint64_t>(region), dir))),
+      untypedBuffer(std::make_unique<UntypedBuffer>(backingBuffer.get(), size)) {}
+
+LargeBlock::~LargeBlock() = default;
+
+UntypedBuffer *LargeBlock::getUntypedBuffer() const noexcept {
+    return untypedBuffer.get();
+}
+
+MediumBlock::MediumBlock(LargeBlockSuperblock *backingSuperblock, UntypedBuffer untypedBuffer)
+    // Medium blocks are carved out of a large-block superblock.
+    : backingBlockSuperblock(backingSuperblock),
+      untypedBuffer(std::make_unique<UntypedBuffer>(untypedBuffer)) {}
+
+MediumBlock::~MediumBlock() {
+    // Return the slice to the backing superblock.
+    backingBlockSuperblock->deallocate(*untypedBuffer);
+}
+
+UntypedBuffer *MediumBlock::getUntypedBuffer() const noexcept {
+    return untypedBuffer.get();
+}
+
+SmallBlock::SmallBlock(MediumBlockSuperblock *backingBlockSuperblock, UntypedBuffer untypedBuffer)
+    // Small blocks are carved out of a medium-block superblock.
+    : backingBlockSuperblock(backingBlockSuperblock),
+      untypedBuffer(std::make_unique<UntypedBuffer>(untypedBuffer)) {}
+
+SmallBlock::~SmallBlock() {
+    // Return the slice to the backing superblock.
+    backingBlockSuperblock->deallocate(*untypedBuffer);
+}
+
+UntypedBuffer *SmallBlock::getUntypedBuffer() const noexcept {
+    return untypedBuffer.get();
+}
+
+LargeBlockSuperblock::LargeBlockSuperblock(vrtd::Device& device, BufferAllocType type, BufferAllocDir dir, uint64_t size, HBMRegion region)
+    : LargeBlock(device, type, dir, size, region) {
+    Buddy::seed(*getUntypedBuffer(),
+                "Size too small for LargeBlockSuperblock",
+                "LargeBlockSuperblock size exceeds maximum bucket size");
+}
+
+LargeBlockSuperblock::~LargeBlockSuperblock() {
+    if (!isFree()) {
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+            "LargeBlockSuperblock destroyed while not all memory was deallocated");
+        std::abort();
+    }
+}
+
+UntypedBuffer LargeBlockSuperblock::allocate(uint64_t size) {
+    return Buddy::allocate(size, "Size too small for LargeBlockSuperblock");
+}
+
+void LargeBlockSuperblock::deallocate(UntypedBuffer buffer) {
+    Buddy::deallocate(*getUntypedBuffer(), buffer,
+                      "Size too small for LargeBlockSuperblock",
+                      "Buffer does not belong to this LargeBlockSuperblock");
+}
+
+bool LargeBlockSuperblock::isFree() const {
+    return Buddy::isFree(*getUntypedBuffer(), "Size too small for LargeBlockSuperblock");
+}
+
+MediumBlockSuperblock::MediumBlockSuperblock(LargeBlockSuperblock *backingSuperblock, UntypedBuffer untypedBuffer)
+    : MediumBlock(backingSuperblock, untypedBuffer) {
+    Buddy::seed(*getUntypedBuffer(),
+                "Size too small for MediumBlockSuperblock",
+                "MediumBlockSuperblock size exceeds maximum bucket size");
+}
+
+MediumBlockSuperblock::~MediumBlockSuperblock() {
+    if (!isFree()) {
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+            "MediumBlockSuperblock destroyed while not all memory was deallocated");
+        std::abort();
+    }
+}
+
+UntypedBuffer MediumBlockSuperblock::allocate(uint64_t size) {
+    return Buddy::allocate(size, "Size too small for MediumBlockSuperblock");
+}
+
+void MediumBlockSuperblock::deallocate(UntypedBuffer buffer) {
+    Buddy::deallocate(*getUntypedBuffer(), buffer,
+                      "Size too small for MediumBlockSuperblock",
+                      "Buffer does not belong to this MediumBlockSuperblock");
+}
+
+bool MediumBlockSuperblock::isFree() const {
+    return Buddy::isFree(*getUntypedBuffer(), "Size too small for MediumBlockSuperblock");
+}
+
+Allocator::Allocator() = default;
+Allocator::~Allocator() = default;
+
+std::unique_ptr<Block> Allocator::allocate(vrtd::Device& device, BufferAllocType type, BufferAllocDir dir, uint64_t size, HBMRegion region) {
+    if (size > LargeBlockSuperblock::MAX_SIZE) {
+        return std::make_unique<LargeBlock>(device, type, dir, size, region);
     }
 
-    MemoryRange& range = it->second;
-
-    if (size < superblockSize / 2) {
-        for (auto& superblock : range.superblocks) {
+    if (size > MediumBlockSuperblock::MAX_SIZE) {
+        for (auto& superblock : largeBlockSuperblocks) {
+            if (!matchesAllocation(superblock->getUntypedBuffer(), type, dir, region)) {
+                continue;
+            }
             try {
-                uint64_t addr = superblock.allocate(size);
-                addrToSuperblock[addr] = &superblock;
-                return addr;
+                UntypedBuffer buffer = superblock->allocate(size);
+                return std::make_unique<MediumBlock>(superblock.get(), buffer);
             } catch (const std::bad_alloc&) {
                 continue;
             }
         }
-        if (range.offset + superblockSize > range.size) {
-            throw std::bad_alloc();
-        }
-        range.superblocks.emplace_back(range.startAddress + range.offset, superblockSize);
-        range.offset += superblockSize;
-        uint64_t addr = range.superblocks.back().allocate(size);
-        addrToSuperblock[addr] = &range.superblocks.back();
-        return addr;
-    } else {
-        if (!range.freeList.empty()) {
-            uint64_t addr = range.freeList.back();
-            range.freeList.pop_back();
-            return addr;
-        }
-        if (range.offset + size > range.size) {
-            throw std::bad_alloc();
-        }
-        uint64_t addr = range.startAddress;
-        while (addr + size <= range.startAddress + range.size) {
-            bool isOccupied = std::any_of(
-                range.usedMemoryBlocks.begin(), range.usedMemoryBlocks.end(),
-                [addr, size](const std::pair<uint64_t, uint64_t>& block) {
-                    return (addr >= block.first && addr < block.first + block.second) ||
-                           (addr + size > block.first && addr + size <= block.first + block.second);
-                });
 
-            if (!isOccupied) {
-                range.usedMemoryBlocks.push_back({addr, size});
-                return addr;
-            }
-
-            addr += size;
-        }
-
-        throw std::bad_alloc();
+        largeBlockSuperblocks.emplace_back(
+            std::make_unique<LargeBlockSuperblock>(device, type, dir, LargeBlockSuperblock::MAX_SIZE, region));
+        UntypedBuffer buffer = largeBlockSuperblocks.back()->allocate(size);
+        return std::make_unique<MediumBlock>(largeBlockSuperblocks.back().get(), buffer);
     }
+
+    for (auto& superblock : mediumBlockSuperblocks) {
+        if (!matchesAllocation(superblock->getUntypedBuffer(), type, dir, region)) {
+            continue;
+        }
+        try {
+            UntypedBuffer buffer = superblock->allocate(size);
+            return std::make_unique<SmallBlock>(superblock.get(), buffer);
+        } catch (const std::bad_alloc&) {
+            continue;
+        }
+    }
+
+    for (auto& superblock : largeBlockSuperblocks) {
+        if (!matchesAllocation(superblock->getUntypedBuffer(), type, dir, region)) {
+            continue;
+        }
+        try {
+            UntypedBuffer backing = superblock->allocate(MediumBlockSuperblock::MAX_SIZE);
+            mediumBlockSuperblocks.emplace_back(
+                std::make_unique<MediumBlockSuperblock>(superblock.get(), backing));
+            UntypedBuffer buffer = mediumBlockSuperblocks.back()->allocate(size);
+            return std::make_unique<SmallBlock>(mediumBlockSuperblocks.back().get(), buffer);
+        } catch (const std::bad_alloc&) {
+            continue;
+        }
+    }
+
+    largeBlockSuperblocks.emplace_back(
+        std::make_unique<LargeBlockSuperblock>(device, type, dir, LargeBlockSuperblock::MAX_SIZE, region));
+    UntypedBuffer backing = largeBlockSuperblocks.back()->allocate(MediumBlockSuperblock::MAX_SIZE);
+    mediumBlockSuperblocks.emplace_back(
+        std::make_unique<MediumBlockSuperblock>(largeBlockSuperblocks.back().get(), backing));
+    UntypedBuffer buffer = mediumBlockSuperblocks.back()->allocate(size);
+    return std::make_unique<SmallBlock>(mediumBlockSuperblocks.back().get(), buffer);
 }
 
-void Allocator::deallocate(uint64_t addr) {
-    auto it = addrToSuperblock.find(addr);
-    if (it != addrToSuperblock.end()) {
-        it->second->deallocate(addr);
-        addrToSuperblock.erase(it);
-    } else {
-        for (auto& [type, range] : memoryRanges) {
-            if (addr >= range.startAddress && addr < range.startAddress + range.size) {
-                range.freeList.push_back(addr);
-                return;
-            }
-        }
-    }
-}
+void Allocator::deallocate(std::unique_ptr<Block> block) {
+    block.reset();
 
-uint64_t Allocator::allocate(uint64_t size, MemoryRangeType type, uint8_t port) {
-    auto it = memoryRanges.find(type);
-    if (it == memoryRanges.end()) {
-        throw std::out_of_range("Invalid memory range type");
-    }
+    mediumBlockSuperblocks.erase(
+        std::remove_if(mediumBlockSuperblocks.begin(), mediumBlockSuperblocks.end(),
+                       [](const std::unique_ptr<MediumBlockSuperblock>& superblock) {
+                           return superblock->isFree();
+                       }),
+        mediumBlockSuperblocks.end());
 
-    if (port > 31) {
-        throw std::out_of_range("Invalid port number");
-    }
-
-    if (type != MemoryRangeType::HBM) {
-        return allocate(size, type);
-    }
-
-    MemoryRange& range = it->second;
-    uint64_t portBaseAddress = HBM_START + port * HBM_PORT_SIZE;
-    uint64_t portEndAddress =
-        portBaseAddress + 2 * HBM_PORT_SIZE * 8;  // allow moving to next port (aligned at 64bit)
-
-    if (size < superblockSize / 2) {
-        for (auto& superblock : range.superblocks) {
-            if (superblock.startAddress < portBaseAddress ||
-                superblock.startAddress >= portBaseAddress + HBM_PORT_SIZE) {
-                continue;
-            }
-            try {
-                uint64_t addr = superblock.allocate(size);
-                addrToSuperblock[addr] = &superblock;
-                return addr;
-            } catch (const std::bad_alloc&) {
-                continue;
-            }
-        }
-        if (range.offset + superblockSize > range.size) {
-            throw std::bad_alloc();
-        }
-        uint64_t sbs = superblockSize;
-        // Check if the range is already occupied in usedMemoryBlocks
-        bool isOccupied =
-            std::any_of(range.usedMemoryBlocks.begin(), range.usedMemoryBlocks.end(),
-                        [portBaseAddress, sbs](const std::pair<uint64_t, uint64_t>& block) {
-                            return (portBaseAddress >= block.first &&
-                                    portBaseAddress < block.first + block.second) ||
-                                   (portBaseAddress + sbs > block.first &&
-                                    portBaseAddress + sbs <= block.first + block.second);
-                        });
-
-        if (!isOccupied) {
-            // Allocate a new superblock from portBaseAddress
-            range.superblocks.emplace_back(portBaseAddress, superblockSize);
-            uint64_t addr = range.superblocks.back().allocate(size);
-            addrToSuperblock[addr] = &range.superblocks.back();
-            range.usedMemoryBlocks.push_back({addr, superblockSize});
-            return addr;
-        } else {
-            // Find the next free block
-            uint64_t nextFreeAddress = portBaseAddress;
-            for (const auto& block : range.usedMemoryBlocks) {
-                if (nextFreeAddress >= block.first &&
-                    nextFreeAddress < block.first + block.second) {
-                    nextFreeAddress = block.first + block.second;
-                }
-            }
-
-            // Check if the next free block is within the range
-            if (nextFreeAddress + superblockSize <= range.startAddress + range.size) {
-                range.superblocks.emplace_back(nextFreeAddress, superblockSize);
-                uint64_t addr = range.superblocks.back().allocate(size);
-                addrToSuperblock[addr] = &range.superblocks.back();
-                range.usedMemoryBlocks.push_back({addr, size});
-                return addr;
-            } else {
-                throw std::bad_alloc();
-            }
-        }
-
-    } else {
-        if (!range.freeList.empty()) {
-            auto it =
-                std::find_if(range.freeList.begin(), range.freeList.end(),
-                             [portBaseAddress](uint64_t addr) { return addr > portBaseAddress; });
-
-            if (it != range.freeList.end()) {
-                uint64_t foundAddress = *it;
-                range.freeList.erase(it);  // Remove the allocated address from the free list
-                return foundAddress;
-            }
-        }
-        // Search in usedMemoryBlocks for the next free address within the port range
-        uint64_t nextFreeAddress = portBaseAddress;
-        for (const auto& block : range.usedMemoryBlocks) {
-            if (block.first + block.second >= portBaseAddress &&
-                block.first + block.second < portEndAddress) {
-                nextFreeAddress = block.first + block.second;
-            }
-        }
-
-        // Check if the next free block is within the port range
-        if (nextFreeAddress + size <= portEndAddress) {
-            range.usedMemoryBlocks.push_back(
-                {nextFreeAddress, size});  // Keep track of the used block
-            return nextFreeAddress;
-        }
-
-        // Allocate from portBaseAddress
-        uint64_t addr = portBaseAddress;
-        while (addr + size <= range.startAddress + range.size) {
-            // Check if the address range is occupied
-            bool isOccupied = std::any_of(
-                range.usedMemoryBlocks.begin(), range.usedMemoryBlocks.end(),
-                [addr, size](const std::pair<uint64_t, uint64_t>& block) {
-                    return (addr >= block.first && addr < block.first + block.second) ||
-                           (addr + size > block.first && addr + size <= block.first + block.second);
-                });
-
-            if (!isOccupied) {
-                range.usedMemoryBlocks.push_back({addr, size});  // Keep track of the used block
-                return addr;
-            }
-
-            addr += size;  // Move to the next block
-        }
-
-        throw std::bad_alloc();
-    }
-}
-
-uint64_t Allocator::getSize(MemoryRangeType type) const {
-    auto it = memoryRanges.find(type);
-    if (it == memoryRanges.end()) {
-        throw std::out_of_range("Invalid memory range type");
-    }
-    return it->second.size;
+    largeBlockSuperblocks.erase(
+        std::remove_if(largeBlockSuperblocks.begin(), largeBlockSuperblocks.end(),
+                       [](const std::unique_ptr<LargeBlockSuperblock>& superblock) {
+                           return superblock->isFree();
+                       }),
+        largeBlockSuperblocks.end());
 }
 
 }  // namespace vrt

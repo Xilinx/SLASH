@@ -1,0 +1,15 @@
+# Kernel module build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.cmd
+*.gcno
+Module.symvers
+modules.order
+compile_commands_driver.json
+
+# LCov coverage outputs
+coverage.info
+coverage

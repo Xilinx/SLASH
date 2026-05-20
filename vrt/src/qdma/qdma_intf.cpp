@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -18,81 +18,51 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "qdma/qdma_intf.hpp"
+#include <vrt/qdma/qdma_intf.hpp>
+
+#include <slash/qdma.h>
+#include <vrtd/device.hpp>
+
+namespace {
+constexpr uint32_t kQdmaModeSt = 1u;
+constexpr uint32_t kQdmaDirH2C = 1u << 0;
+constexpr uint32_t kQdmaDirC2H = 1u << 1;
+constexpr uint32_t kQdmaRingSzIdx = 0u;
+}
 
 namespace vrt {
 
-QdmaIntf::QdmaIntf(const std::string& bdf) {
-    this->queueIdx = 0;
-    this->bdf = bdf;
-    char* bus = strip(bdf.c_str());
+QdmaIntf::QdmaIntf(const vrtd::Device& device, const uint32_t queueIdx, StreamDirection direction)
+    : queueIdx(queueIdx) {
+    struct slash_qdma_qpair_add qpair_cfg = {0};
+    qpair_cfg.size = sizeof(qpair_cfg);
+    qpair_cfg.mode = kQdmaModeSt;
+    qpair_cfg.h2c_ring_sz = kQdmaRingSzIdx;
+    qpair_cfg.c2h_ring_sz = kQdmaRingSzIdx;
+    qpair_cfg.cmpt_ring_sz = kQdmaRingSzIdx;
+    qpair_cfg.dir_mask = (direction == StreamDirection::HOST_TO_DEVICE)
+        ? kQdmaDirH2C
+        : kQdmaDirC2H;
 
-    char formattedQueueName[256];
-    sprintf(formattedQueueName, QDMA_DEFAULT_QUEUE, bus);
-    queueName = std::string(formattedQueueName);
-    free(bus);
+    qpair = device.createQdmaQpair(qpair_cfg);
+    qpair->start();
+    qpairFd = qpair->fd(O_CLOEXEC);
 }
 
-QdmaIntf::QdmaIntf(const std::string& bdf, const uint32_t queueIdx) {
-    this->bdf = bdf;
-    char* bus = strip(bdf.c_str());
-
-    char formattedQueueName[256];
-    sprintf(formattedQueueName, QDMA_DEFAULT_ST_QUEUE, bus, queueIdx);
-    queueName = std::string(formattedQueueName);
-    free(bus);
-
-    this->queueIdx = queueIdx;
-}
-
-QdmaIntf::~QdmaIntf() {}
-
-char* QdmaIntf::strip(const char* bdf) {
-    char* output = (char*)malloc(3 * sizeof(char));
-    if (sscanf(bdf, "%2[^:]", output) == 1) {
-        output[2] = '\0';
+QdmaIntf::~QdmaIntf() {
+    if (qpairFd >= 0) {
+        close(qpairFd);
+        qpairFd = -1;
     }
-    return output;
-}
-
-char* QdmaIntf::create_qdma_queue(const char* bdf) {
-    char* id = strip(bdf);
-    char qdma_queue_name[12];
-    sprintf(qdma_queue_name, QDMA_QUEUE_NAME, id);
-    char cmd_add[256];
-    sprintf(cmd_add, "dma-ctl %s q add idx 0 mode mm dir bi > /dev/null", qdma_queue_name);
-    system(cmd_add);
-    usleep(1000);
-    char cmd_start[256];
-    sprintf(cmd_start, "dma-ctl %s q start idx 0 idx_ringsz 15 dir bi > /dev/null",
-            qdma_queue_name);
-    system(cmd_start);
-    usleep(1000);
-    char* output = (char*)malloc(256 * sizeof(char));
-    sprintf(output, QDMA_DEFAULT_QUEUE, id);
-    free(id);
-    return output;
-}
-
-int QdmaIntf::delete_qdma_queue(const char* bdf) {
-    usleep(100000);
-    char* id = strip(bdf);
-    char cmd_stop[256];
-    char qdma_queue_name[12];
-    sprintf(qdma_queue_name, QDMA_QUEUE_NAME, id);
-    sprintf(cmd_stop, "dma-ctl %s q stop idx 0 dir bi > /dev/null", qdma_queue_name);
-    system(cmd_stop);
-    usleep(1000);
-    char cmd_del[256];
-    sprintf(cmd_del, "dma-ctl %s q del idx 0 dir bi > /dev/null", qdma_queue_name);
-    system(cmd_del);
-    usleep(1000);
-    free(id);
-    return EXIT_SUCCESS;
 }
 
 ssize_t QdmaIntf::write_from_buffer(const char* fname, char* buffer, uint64_t size, uint64_t base) {
-    int fd = open(queueName.c_str(), O_WRONLY);
+    if (qpairFd < 0) {
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+                           "QDMA streaming not initialized");
+        return -EIO;
+    }
+    int fd = qpairFd;
     ssize_t rc;
     uint64_t count = 0;
     char* buf = buffer;
@@ -140,12 +110,16 @@ ssize_t QdmaIntf::write_from_buffer(const char* fname, char* buffer, uint64_t si
                            fname);
         return -EIO;
     }
-    close(fd);
     return count;
 }
 
 ssize_t QdmaIntf::read_to_buffer(const char* fname, char* buffer, uint64_t size, uint64_t base) {
-    int fd = open(queueName.c_str(), O_RDONLY);
+    if (qpairFd < 0) {
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+                           "QDMA streaming not initialized");
+        return -EIO;
+    }
+    int fd = qpairFd;
     ssize_t rc;
     uint64_t count = 0;
     char* buf = buffer;
@@ -193,22 +167,19 @@ ssize_t QdmaIntf::read_to_buffer(const char* fname, char* buffer, uint64_t size,
                            fname);
         return -EIO;
     }
-    close(fd);
     return count;
 }
 
 void QdmaIntf::write_buff(char* buffer, uint64_t start_addr, uint64_t size) {
     utils::Logger::log(utils::LogLevel::DEBUG, __PRETTY_FUNCTION__,
-                       "Writing buffer with size: {x} to {} at address {x}", size, queueName,
-                       start_addr);
-    write_from_buffer(queueName.c_str(), buffer, size, start_addr);
+                       "Writing buffer with size: {x} at address {x}", size, start_addr);
+    write_from_buffer("qdma-qpair", buffer, size, start_addr);
 }
 
 void QdmaIntf::read_buff(char* buffer, uint64_t start_addr, uint64_t size) {
     utils::Logger::log(utils::LogLevel::DEBUG, __PRETTY_FUNCTION__,
-                       "Reading buffer with size: {x} to {} at address {x}", size, queueName,
-                       start_addr);
-    read_to_buffer(queueName.c_str(), buffer, size, start_addr);
+                       "Reading buffer with size: {x} at address {x}", size, start_addr);
+    read_to_buffer("qdma-qpair", buffer, size, start_addr);
 }
 
 uint32_t QdmaIntf::getQueueIdx() { return queueIdx; }

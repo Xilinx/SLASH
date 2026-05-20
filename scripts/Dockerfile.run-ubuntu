@@ -1,0 +1,35 @@
+FROM ubuntu:22.04
+
+ARG USER_ID=1000
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        build-essential ca-certificates pkg-config git rsync bash cmake git ninja-build \
+        locales locales-all libtinfo5 libc6-dev-i386 libglib2.0-0 libsm6 libxext6 libxrender-dev libpixman-1-0 lsb-core
+
+COPY deb/*.deb /tmp
+RUN apt install -y /tmp/slash-dev_*.deb \
+  /tmp/slash-sim-emu-dev_*.deb \
+  /tmp/slash-sim-emu_*.deb \
+  /tmp/slashkit_*.deb \
+  /tmp/libslash-dev_*.deb \
+  /tmp/libslash_*.deb \
+  /tmp/libvrtd-dev_*.deb \
+  /tmp/libvrtd_*.deb \
+  /tmp/libvrt-dev_*.deb \
+  /tmp/libvrt_*.deb
+
+# Setting timezone and locale for Vivado
+ENV TZ="Europe/Dublin"
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+ENV LC_ALL=en_US.utf-8
+
+# Adding the slash user
+RUN useradd -m -U -u $USER_ID slash
+USER slash
+
+# Again, setting timezone and locale for Vivado
+ENV TZ="Europe/Dublin"
+ENV LC_ALL=en_US.utf-8

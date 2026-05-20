@@ -1,0 +1,26 @@
+FROM rockylinux:9
+
+ARG USER_ID=1000
+
+RUN dnf install -y epel-release
+RUN dnf config-manager --set-enabled crb
+RUN dnf distro-sync -y
+RUN dnf install -y git langpacks-en cmake gcc gcc-c++ pkg-config ninja-build rsync \
+    ncurses-compat-libs glib2 libXext libXrender-devel pixman lsb_release
+
+COPY rpm/*.rpm /tmp
+RUN dnf install -y /tmp/*.rpm
+
+# Setting timezone and locale for Vivado
+ENV TZ="Europe/Dublin"
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+ENV LC_ALL=en_US.utf-8
+
+# Adding the slash user
+RUN useradd -m -U -u $USER_ID slash
+USER slash
+
+# Again, setting timezone and locale for Vivado
+ENV TZ="Europe/Dublin"
+ENV LC_ALL=en_US.utf-8
+

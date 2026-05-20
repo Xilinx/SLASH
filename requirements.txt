@@ -1,0 +1,6 @@
+pyzmq
+jinja2
+pytest
+pytest-cov
+ruff
+autopep8

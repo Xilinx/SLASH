@@ -1,0 +1,98 @@
+# ##################################################################################################
+#  The MIT License (MIT)
+#  Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# 
+#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+#  and associated documentation files (the "Software"), to deal in the Software without restriction,
+#  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+#  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
+# 
+#  The above copyright notice and this permission notice shall be included in all copies or
+#  substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+# NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# ##################################################################################################
+
+Source: slash
+Section: utils
+Priority: optional
+Maintainer: Vlad-Gabriel Serbu <Vlad-Gabriel.Serbu@amd.com>
+Rules-Requires-Root: no
+Build-Depends: debhelper-compat (= 13), bash, build-essential, cmake, libcli11-dev, libinih-dev, libjsoncpp-dev, libsystemd-dev, libxml2-dev, libzmq3-dev, ninja-build, pkg-config, python3.10, python3-jinja2, python3-pip, python3-setuptools, python3-venv, python3-wheel, rsync, zlib1g-dev
+Standards-Version: 4.6.0.1
+
+Package: slash-dev
+Architecture: all
+Depends: slash-sim-emu-dev (= ${binary:Version}), libslash-dev (= ${binary:Version}), libvrtd-dev (= ${binary:Version})
+Description: SLASH/VRT System Full (development files)
+
+Package: slash
+Architecture: all
+Depends: slash-sim-emu (= ${binary:Version}), slash-dkms (= ${binary:Version}), libslash (= ${binary:Version}), vrtd (= ${binary:Version}), libvrtd (= ${binary:Version})
+Description: SLASH/VRT System Full
+
+Package: slash-sim-emu-dev
+Architecture: all
+Depends: slash-sim-emu (= ${binary:Version}), slashkit (= ${binary:Version}), libvrt-dev (= ${binary:Version})
+Description: SLASH/VRT System for simulation and emulation (development files)
+
+Package: slash-sim-emu
+Architecture: all
+Depends: libvrt (= ${binary:Version})
+Description: SLASH/VRT System for simulation and emulation
+
+Package: slash-dkms
+Architecture: all
+Depends: dkms, gcc, make, ${misc:Depends}
+Provides: slash-kernel-module
+Description: SLASH kernel module (DKMS)
+
+Package: libslash
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Library for interacting with the SLASH kernel module
+
+Package: libslash-dev
+Architecture: any
+Depends: libslash (= ${binary:Version}), ${misc:Depends}
+Description: Library for interacting with the SLASH kernel module (development files)
+
+Package: vrtd
+Architecture: any
+Depends: libslash (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: VRTd daemon for managing VRT devices
+
+Package: libvrtd
+Architecture: any
+Depends: libslash (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: Library for interacting with the VRTd daemon for managing VRT devices
+
+Package: libvrtd-dev
+Architecture: any
+Depends: libvrtd (= ${binary:Version}), libslash-dev (= ${binary:Version}), ${misc:Depends}
+Description: Library for interacting with the VRTd daemon for managing VRT devices (development files)
+
+Package: libvrt
+Architecture: any
+Depends: libvrtd (= ${binary:Version}), systemd-sysusers, ${shlibs:Depends}, ${misc:Depends}
+Description: VRT Runtime
+
+Package: libvrt-dev
+Architecture: any
+Depends: libvrt (= ${binary:Version}), libvrtd-dev (= ${binary:Version}), libjsoncpp-dev, libxml2-dev, libzmq3-dev, zlib1g-dev, ${misc:Depends}
+Description: VRT Runtime (development files)
+
+Package: v80-smi
+Architecture: any
+Depends: libvrt (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Description: V80 System Management Interface
+
+Package: slashkit
+Architecture: any
+Depends: python3, python3-jinja2, libzmq3-dev, ${misc:Depends}
+Description: SLASH Linker
