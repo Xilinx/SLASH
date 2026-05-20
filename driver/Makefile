@@ -44,6 +44,14 @@ endif
 
 SLASH_QDMA_OP_DEBUG ?= 0
 
+# Kcompat feature flags. Defaults are "n"; the all: recipe runs
+# driver/kcompat/probe.sh against $(KDIR) to detect the actual values
+# and passes them into the kbuild recursion. Each pair (modern API +
+# legacy fallback) is covered by one probe — if the modern form is
+# absent, the legacy form is the unconditional fallback in slash_compat.h.
+SLASH_HAVE_VM_FLAGS_SET ?= n
+SLASH_HAVE_MODULE_IMPORT_NS_TOKEN ?= n
+
 # Set GCOV=1 to instrument the module for kernel gcov coverage.
 # Not set by default — never enable this in production builds.
 ifdef GCOV
@@ -65,6 +73,14 @@ ccflags-y += \
 	-DTANDEM_BOOT_SUPPORTED=1 \
 	-DSLASH_QDMA_OP_DEBUG=$(SLASH_QDMA_OP_DEBUG) \
 	-DSLASH_VERSION_STR=\"$(SLASH_VERSION)\"
+
+ifeq ($(SLASH_HAVE_VM_FLAGS_SET),y)
+ccflags-y += -DSLASH_HAVE_VM_FLAGS_SET
+endif
+
+ifeq ($(SLASH_HAVE_MODULE_IMPORT_NS_TOKEN),y)
+ccflags-y += -DSLASH_HAVE_MODULE_IMPORT_NS_TOKEN
+endif
 
 
 LIBQDMA_OBJS := \
@@ -102,11 +118,16 @@ QDMA_ACCESS_OBJS := \
 $(MODULE)-objs += $(LIBQDMA_OBJS) $(QDMA_ACCESS_OBJS)
 
 
+KCOMPAT := "$(SHELL)" "$(PWD)/kcompat/probe.sh"
+
 all:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+	@flags="$$($(KCOMPAT) "$(KDIR)" | tr '\n' ' ')"; \
+	echo "slash: kcompat: $$flags"; \
+	$(MAKE) -C "$(KDIR)" M="$(PWD)" $$flags modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C "$(KDIR)" M="$(PWD)" clean
+	rm -rf "$(PWD)/kcompat/.scratch"
 
 install: all
 	sudo install -d -m 755 /lib/modules/$(shell uname -r)/extra

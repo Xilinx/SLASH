@@ -41,7 +41,6 @@
 #include <linux/stddef.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
-#include <linux/version.h>
 
 #include "slash.h"
 #include "slash_dmabuf.h"

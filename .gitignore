@@ -64,6 +64,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Kernel module kcompat probe scratch (driver/kcompat/probe.sh)
+driver/kcompat/.scratch/
+
 # Build files for package
 /pbuild/
 /rpmbuild/
