@@ -248,12 +248,13 @@ This ensures the buffer allocation always matches the linker configuration.
 
 | ID | Feature | Notes |
 |----|---------|-------|
-| 00 | Linking, AXI-Lite control | |
-| 01 | Kernels with AXI-MM interfaces | |
-| 02 | Freerunning streaming kernels | |
-| 03 | Controlling multiple V80s | Uses vrtbin from example 00 |
-| 04 | Frequency targets | |
-| 05 | Memory performance test | Instantiates maximum number of kernels |
+| 0 | Linking, AXI-Lite control | |
+| 1 | Kernels with AXI-MM interfaces | |
+| 2 | Freerunning streaming kernels | |
+| 3 | Controlling multiple V80s | Uses vrtbin from example 00 |
+| 4 | Frequency targets | |
+| 5 | Memory performance test | Instantiates maximum number of kernels |
+| 6 | Network interface test | Drives two network interfaces |
 
 See the [examples README](examples/README.md) for build and run instructions.
 

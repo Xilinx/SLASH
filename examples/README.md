@@ -10,6 +10,7 @@ This directory contains the example projects for VRT. Each example demonstrates 
 | 3 | Controlling multiple V80s | Uses vrtbin of example 0 |
 | 4 | Frequency targets | |
 | 5 | Memory performance test | Instantiates current maximum number of kernels |
+| 6 | Network interface test | Drives two network interfaces |
 
 ## How to run the examples
 
