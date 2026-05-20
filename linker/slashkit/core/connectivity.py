@@ -93,3 +93,4 @@ class ConnectivityConfig:
     user_region: UserRegionSpec = field(
         default_factory=lambda: UserRegionSpec(pre_synth_tcls=[]))
     debug: DebugSpec = field(default_factory=lambda: DebugSpec(nets=[]))
+    shell: str = "compute"

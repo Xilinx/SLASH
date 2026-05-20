@@ -37,7 +37,7 @@ from slashkit.emit.sim.project_gen import create_sim_project, build_sim_project
 from slashkit.emit.emu.project_gen import build_emu_project, package_emu_artifacts
 
 from slashkit.emit.metadata.prog_image import build_vbin
-from slashkit.core.command_config import LinkerConfiguration, Platform, InstallerConfiguration, CommandConfiguration
+from slashkit.core.command_config import LinkerConfiguration, Platform, InstallerConfiguration, CommandConfiguration, ShellType
 
 
 def _format_duration(seconds: float) -> str:
@@ -131,9 +131,7 @@ def link(config: LinkerConfiguration) -> None:
         build_emu_project(config)
     else:
         run_with_profiling("build_slash", lambda: build_slash_rm(config))
-        # Only build a service layer if ethernet is enabled
-        # Will be changed once more service layers become available
-        if config.networking_enabled:
+        if config.shell_type == ShellType.SERVICE and config.networking_enabled:
             run_with_profiling("build_service_layer",
                                lambda: build_service_layer_rm(config))
 
