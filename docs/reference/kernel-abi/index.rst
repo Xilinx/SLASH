@@ -70,8 +70,6 @@ under each ioctl. Unknown ioctl command numbers return ``-ENOTTY``.
 Concurrency Model
 =================
 
-TODO: To be expanded/specified: What may be concurrently accessed, what not?
-
 - Generally, all ioctl operations are safe.
 - Multiple concurrent ``read()``/``write()`` on the same qpair fd are not recommended and are not
   tested. Each call submits a synchronous libqdma request; concurrent requests to the same hardware
