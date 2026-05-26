@@ -42,11 +42,12 @@ static_assert(kHbmKernels + kMemKernels + kDdrKernels == kTotalKernels,
               "Kernel group counts must match config.cfg");
 
 constexpr std::uint32_t kPerfLength = 0x1000000u;
+constexpr std::uint32_t kRepetitions = 1;
 constexpr std::uint32_t kWriteMode = 0u;
 constexpr std::uint32_t kReadMode = 1u;
 
-constexpr std::uint32_t kOutAccDataOffset = 0x24u;
-constexpr std::uint32_t kOutAccCtrlOffset = 0x28u;
+constexpr std::uint32_t kOutAccDataOffset = 0x2cu;
+constexpr std::uint32_t kOutAccCtrlOffset = 0x30u;
 
 struct alignas(32) Word256 {
     std::uint32_t lane[8];
@@ -74,17 +75,6 @@ double gibPerSecond(std::uint64_t bytes, std::chrono::nanoseconds elapsed) {
     constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
     return (static_cast<double>(bytes) / kGiB) /
            (static_cast<double>(elapsed.count()) / 1'000'000'000.0);
-}
-
-vrt::Buffer<Word256> makePerfBuffer(vrt::Device& device, std::size_t kernelIdx) {
-    if (kernelIdx < kHbmKernels) {
-        return vrt::Buffer<Word256>(device, kPerfLength, vrt::MemoryRangeType::HBM,
-                                    static_cast<std::uint8_t>(kernelIdx));
-    }
-    if (kernelIdx < (kHbmKernels + kMemKernels)) {
-        return vrt::Buffer<Word256>(device, kPerfLength, vrt::MemoryRangeType::HBM_VNOC);
-    }
-    return vrt::Buffer<Word256>(device, kPerfLength, vrt::MemoryRangeType::DDR);
 }
 
 const char* memoryGroupName(std::size_t kernelIdx) {
@@ -160,7 +150,7 @@ int main(int argc, char* argv[]) {
                   << "Aggregate buffer footprint: " << bufferFootprintGiB << " GiB" << std::endl;
 
         vrt::Device device(bdf, vrtbinFile);
-        const bool isEmu = (device.getPlatform() == vrt::Platform::EMULATION);
+        const bool isEmu = (device.getPlatform() == vrt::Platform::EMULATION) || (device.getPlatform() == vrt::Platform::SIMULATION);
 
         std::vector<vrt::Kernel> kernels;
         std::vector<vrt::Buffer<Word256>> buffers;
@@ -196,6 +186,7 @@ int main(int argc, char* argv[]) {
                 }
                 kernels[i].setArg(0, buffers[i]);
                 kernels[i].setArg(1, wr);
+                kernels[i].setArg(2, kRepetitions);
                 kernels[i].start();
                 if (isEmu && kernelCount <= 4) {
                     std::cout << "  " << label << " start perf_" << kernelIndex << " returned" << std::endl;
@@ -208,7 +199,7 @@ int main(int argc, char* argv[]) {
             const auto elapsed =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(tEnd - tStart);
 
-            const std::uint64_t totalBytes = bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
+            const std::uint64_t totalBytes = kRepetitions * bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
             std::cout << label << " phase time: "
                       << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
                       << " ms";
@@ -254,7 +245,7 @@ int main(int argc, char* argv[]) {
         }
 
         const auto totalElapsed = writeElapsed + readElapsed;
-        const std::uint64_t totalBytes = 2ull * bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
+        const std::uint64_t totalBytes = 2ull * kRepetitions * bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
         std::cout << std::fixed << std::setprecision(2)
                   << "Combined read+write throughput: " << gibPerSecond(totalBytes, totalElapsed)
                   << " GiB/s aggregate" << std::endl;

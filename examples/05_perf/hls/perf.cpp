@@ -28,25 +28,29 @@ typedef ap_uint<DATA_WIDTH> uint256_t;
 void perf(
     uint256_t* hbm_ptr,
     ap_uint<32> wr,
+    ap_uint<32> reps,
     ap_uint<32>& out_acc
 ) {
 #pragma HLS INTERFACE m_axi port=hbm_ptr offset=slave bundle=gmem0 max_read_burst_length=64 max_write_burst_length=64 depth=536870912
 #pragma HLS INTERFACE s_axilite port=hbm_ptr   bundle=control
 #pragma HLS INTERFACE s_axilite port=wr        bundle=control
+#pragma HLS INTERFACE s_axilite port=reps      bundle=control
 #pragma HLS INTERFACE s_axilite port=out_acc        bundle=control
 #pragma HLS INTERFACE s_axilite port=return    bundle=control
 
     ap_uint<32> acc = 0;
     if (wr == 0) {
-        for (uint32_t i = 0; i < LENGTH; i++) {
+        for (uint32_t i = 0; i < LENGTH * reps; i++) {
         #pragma HLS PIPELINE II=1
-                hbm_ptr[i] = i;
+                hbm_ptr[i % LENGTH] = i % LENGTH;
         }
     } else {
-        for (uint32_t i = 0; i < LENGTH; i++) {
+        for (uint32_t i = 0; i < LENGTH * reps; i++) {
         #pragma HLS PIPELINE II=1
-            uint256_t val = hbm_ptr[i];
+            uint256_t val = hbm_ptr[i % LENGTH];
+            if (i < LENGTH) {
                 acc ^= val.range(31, 0);
+            }
         }
         out_acc = acc;
     }
