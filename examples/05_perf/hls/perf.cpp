@@ -25,7 +25,7 @@
 typedef ap_uint<DATA_WIDTH> uint256_t;
 #define LENGTH 0x1000000
 
-extern "C" void perf(
+void perf(
     uint256_t* hbm_ptr,
     ap_uint<32> wr,
     ap_uint<32>& out_acc
@@ -46,7 +46,7 @@ extern "C" void perf(
         for (uint32_t i = 0; i < LENGTH; i++) {
         #pragma HLS PIPELINE II=1
             uint256_t val = hbm_ptr[i];
-            acc ^= val.range(31, 0);
+                acc ^= val.range(31, 0);
         }
         out_acc = acc;
     }
