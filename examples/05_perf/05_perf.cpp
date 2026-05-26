@@ -100,28 +100,50 @@ const char* memoryGroupName(std::size_t kernelIdx) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc < 3 || argc > 4) {
-        std::cerr << "Usage: " << argv[0] << " <BDF> <vrtbin file> [kernel_count<=76]"
-                  << std::endl;
+    if (argc < 3 || argc > 5) {
+        std::cerr << "Usages: " << argv[0] << " <BDF> <vrtbin file>" << std::endl
+                  << "        " << argv[0] << " <BDF> <vrtbin file> <kernel count>" << std::endl
+                  << "        " << argv[0] << " <BDF> <vrtbin file> <lower kernel index> <upper kernel index>" << std::endl;
         return 1;
     }
 
     const std::string bdf = argv[1];
     const std::string vrtbinFile = argv[2];
 
-    std::size_t kernelCount = kDefaultKernels;
+    std::size_t lowerKernelIndex = 0;
+    std::size_t upperKernelIndex = kDefaultKernels;
     if (argc == 4) {
         try {
-            kernelCount = static_cast<std::size_t>(std::stoul(argv[3]));
+            upperKernelIndex = static_cast<std::size_t>(std::stoul(argv[3]));
         } catch (const std::exception&) {
-            std::cerr << "Invalid kernel_count: " << argv[3] << std::endl;
+            std::cerr << "Invalid kernel count: " << argv[3] << std::endl;
             return 1;
         }
-        if (kernelCount == 0 || kernelCount > kTotalKernels) {
-            std::cerr << "kernel_count must be in [1, " << kTotalKernels << "]" << std::endl;
+        if (upperKernelIndex == 0 || upperKernelIndex > kTotalKernels) {
+            std::cerr << "kernel count must be in [1, " << kTotalKernels << "]" << std::endl;
+            return 1;
+        }
+    } else if (argc == 5) {
+        try {
+            lowerKernelIndex = static_cast<std::size_t>(std::stoul(argv[3]));
+        } catch (const std::exception&) {
+            std::cerr << "Invalid lower kernel index: " << argv[3] << std::endl;
+        }
+        if (lowerKernelIndex > kTotalKernels) {
+            std::cerr << "kernel count must be in [0, " << kTotalKernels << ")" << std::endl;
+            return 1;
+        }
+        try {
+            upperKernelIndex = static_cast<std::size_t>(std::stoul(argv[4]));
+        } catch (const std::exception&) {
+            std::cerr << "Invalid upper kernel index: " << argv[4] << std::endl;
+        }
+        if (upperKernelIndex <= lowerKernelIndex || upperKernelIndex > kTotalKernels) {
+            std::cerr << "kernel count must be in (" << lowerKernelIndex << ", " << kTotalKernels << "]" << std::endl;
             return 1;
         }
     }
+    std::size_t kernelCount = upperKernelIndex - lowerKernelIndex;
 
     try {
         vrt::utils::Logger::setLogLevel(vrt::utils::LogLevel::INFO);
@@ -141,23 +163,22 @@ int main(int argc, char* argv[]) {
         const bool isEmu = (device.getPlatform() == vrt::Platform::EMULATION);
 
         std::vector<vrt::Kernel> kernels;
-        kernels.reserve(kernelCount);
-        for (std::size_t i = 0; i < kernelCount; ++i) {
-            kernels.emplace_back(device, "perf_" + std::to_string(i));
-        }
-
         std::vector<vrt::Buffer<Word256>> buffers;
+        kernels.reserve(kernelCount);
         buffers.reserve(kernelCount);
-        for (std::size_t i = 0; i < kernelCount; ++i) {
-            buffers.emplace_back(makePerfBuffer(device, i));
+        for (std::size_t i = lowerKernelIndex; i < upperKernelIndex; ++i) {
+            vrt::Kernel kernel(device, "perf_" + std::to_string(i));
+            kernels.emplace_back(kernel);
+            buffers.emplace_back(device, kPerfLength, kernel.argMemoryConfig("hbm_ptr"));
         }
 
         if (isEmu) {
             std::cout << "EMU pre-populating " << kernelCount
                       << " buffer(s) so tb.cpp has buffer mappings..." << std::endl;
             for (std::size_t i = 0; i < kernelCount; ++i) {
+                std::size_t kernelIndex = lowerKernelIndex + i;
                 if (kernelCount <= 4) {
-                    std::cout << "  populate perf_" << i << " (" << memoryGroupName(i) << ")"
+                    std::cout << "  populate perf_" << kernelIndex << " (" << memoryGroupName(kernelIndex) << ")"
                               << std::endl;
                 }
                 buffers[i].sync(vrt::SyncType::HOST_TO_DEVICE);
@@ -169,14 +190,15 @@ int main(int argc, char* argv[]) {
             std::cout << label << " phase: launching " << kernelCount << " kernel(s)" << std::endl;
             const auto tStart = std::chrono::high_resolution_clock::now();
             for (std::size_t i = 0; i < kernelCount; ++i) {
+                std::size_t kernelIndex = lowerKernelIndex + i;
                 if (isEmu && kernelCount <= 4) {
-                    std::cout << "  " << label << " start perf_" << i << "..." << std::endl;
+                    std::cout << "  " << label << " start perf_" << kernelIndex << "..." << std::endl;
                 }
                 kernels[i].setArg(0, buffers[i]);
                 kernels[i].setArg(1, wr);
                 kernels[i].start();
                 if (isEmu && kernelCount <= 4) {
-                    std::cout << "  " << label << " start perf_" << i << " returned" << std::endl;
+                    std::cout << "  " << label << " start perf_" << kernelIndex << " returned" << std::endl;
                 }
             }
             for (std::size_t i = 0; i < kernelCount; ++i) {
@@ -198,16 +220,31 @@ int main(int argc, char* argv[]) {
         const auto writeElapsed = runPhase(kWriteMode, "Write");
         const auto readElapsed = runPhase(kReadMode, "Read");
 
-        const std::uint32_t expectedAcc = xorZeroToN(kPerfLength - 1u);
         std::size_t failures = 0;
+
+        for (std::size_t i = 0; i < kernelCount; i++) {
+            std::size_t kernelIndex = lowerKernelIndex + i;
+            buffers[i].sync(vrt::SyncType::DEVICE_TO_HOST);
+            for (std::size_t j = 0; j < kPerfLength; j++) {
+                if (buffers[i][j].lane[0] != j) {
+                    std::cerr << "Kernel perf_" << kernelIndex << " (" << memoryGroupName(kernelIndex)
+                              << ") wrote incorrect data to memory" << std::endl;
+                    failures++;
+                    break; 
+                }
+            }
+        }
+        
+        const std::uint32_t expectedAcc = xorZeroToN(kPerfLength - 1u);
         for (std::size_t i = 0; i < kernelCount; ++i) {
+            std::size_t kernelIndex = lowerKernelIndex + i;
             const std::uint32_t outAcc = kernels[i].read(kOutAccDataOffset);
             const std::uint32_t outAccCtrl = kernels[i].read(kOutAccCtrlOffset);
             const bool valid = (outAccCtrl & 0x1u) != 0u;
 
             if (!valid || outAcc != expectedAcc) {
                 if (failures < 8) {
-                    std::cerr << "Kernel perf_" << i << " (" << memoryGroupName(i)
+                    std::cerr << "Kernel perf_" << kernelIndex << " (" << memoryGroupName(kernelIndex)
                               << ") failed: out_acc=0x" << std::hex << outAcc
                               << ", out_acc_ctrl=0x" << outAccCtrl
                               << ", expected=0x" << expectedAcc << std::dec << std::endl;
