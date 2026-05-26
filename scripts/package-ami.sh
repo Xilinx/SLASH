@@ -53,8 +53,44 @@ sed -i "s/DIST_ID_CENTOS, DIST_ID_REDHAT, DIST_ID_REDHAT2, DIST_ID_RHEL\]/DIST_I
 # void-arg form is also picked up on RHEL 9.5+, which is when Red Hat
 # backported the upstream 6.8 eventfd_signal() simplification into the
 # 5.14-based kernel.
+#
 # Stopgap: revert once upstream AVED carries an equivalent fix.
-sed -i 's@#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)$@#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0) || (defined(RHEL_RELEASE_CODE) \&\& RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(9, 5))@' "${AMI_PROGRAM_C}"
+patch --no-backup-if-mismatch -p1 -d "${AVED_DIR}" <<'EOF'
+--- a/sw/AMI/driver/ami_program.c
++++ b/sw/AMI/driver/ami_program.c
+@@ -94,7 +94,15 @@
+ 				#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+ 					eventfd_signal(efd_ctx);
+ 				#else
++				# ifdef RHEL_RELEASE_CODE
++				#  if RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(9, 5)
++					eventfd_signal(efd_ctx);
++				#  else
++					eventfd_signal(efd_ctx, bytes_to_write);
++				#  endif
++				# else
+ 					eventfd_signal(efd_ctx, bytes_to_write);
++				# endif
+ 				#endif
+ 			}
+ 		} else {
+@@ -153,7 +161,15 @@
+ 		#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 8, 0)
+ 			eventfd_signal(efd_ctx);
+ 		#else
++		# ifdef RHEL_RELEASE_CODE
++		#  if RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(9, 5)
++			eventfd_signal(efd_ctx);
++		#  else
++			eventfd_signal(efd_ctx, (PDI_CHUNK_SIZE * PDI_CHUNK_MULTIPLIER));
++		#  endif
++		# else
+ 			eventfd_signal(efd_ctx, (PDI_CHUNK_SIZE * PDI_CHUNK_MULTIPLIER));
++		# endif
+ 		#endif
+ 	}
+ 
+EOF
 
 cd "${AMI_DIR}"
 # --no_driver skips a pre-flight driver compilation check (build+clean) only;
