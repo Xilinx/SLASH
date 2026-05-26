@@ -70,15 +70,25 @@ under each ioctl. Unknown ioctl command numbers return ``-ENOTTY``.
 Concurrency Model
 =================
 
-- Generally, all ioctl operations are safe.
-- Multiple concurrent ``read()``/``write()`` on the same qpair fd are not recommended and are not
-  tested. Each call submits a synchronous libqdma request; concurrent requests to the same hardware
-  queue handle may race inside libqdma.
-- Multiple processes may each hold their own fd to the same qpair via separate calls to
-  ``QPAIR_GET_FD``.
-- Hotplug ioctls from multiple processes serialize on ``pci_lock_rescan_remove()``.
-  ``TOGGLE_SBR`` drops this lock before calling ``pci_bridge_secondary_bus_reset()`` to avoid
-  deadlock with the PCI slot lock.
+The intent is that all ioctls and ``read()``/``write()`` calls in this ABI are safe to invoke
+concurrently from multiple threads or processes, on the same fd or on different fds. Concurrent
+calls must never corrupt kernel state, and the kernel is expected to serialize internally where
+necessary.
+
+.. note::
+
+   The current kernel driver is not exhaustively tested for concurrent access and bugs in this
+   area may exist. Treat the safety property as an intent rather than a verified guarantee.
+
+Conceptually, a queue pair is a sequential resource: the hardware processes one ``read()`` or
+``write()`` on a given qpair at a time. The kernel serializes concurrent I/O on the same qpair,
+so issuing ``read()``/``write()`` from multiple threads, or via multiple ``QPAIR_GET_FD`` fds for
+the same qpair, is safe but offers no throughput benefit over a single-threaded caller. For
+parallel I/O, allocate multiple qpairs via ``QPAIR_ADD`` and distribute transfers across them.
+
+Hotplug ioctls from multiple processes serialize on ``pci_lock_rescan_remove()``.
+``TOGGLE_SBR`` drops this lock before calling ``pci_bridge_secondary_bus_reset()`` to avoid
+deadlock with the PCI slot lock.
 
 Card information and BARs: ``/dev/slash_ctl<N>``
 ================================================
@@ -385,9 +395,11 @@ All transfers are synchronous and block until the transfer completes or times ou
 **10 seconds**; after expiry the call returns ``-ETIME``. Partial transfers are possible; the
 return value is the number of bytes transferred, and the file position is advanced accordingly.
 
-Multiple fds can be obtained for the same qpair via multiple ``QPAIR_GET_FD`` calls. Multiple
-concurrent ``read()``/``write()`` on the same qpair fd are not recommended; concurrent requests
-to the same hardware queue handle may race inside libqdma.
+Multiple fds can be obtained for the same qpair via multiple ``QPAIR_GET_FD`` calls, including
+from different processes. Concurrent ``read()``/``write()`` calls on the same qpair (from any
+fd or thread) are serialized by the kernel and execute one at a time; for parallel I/O, allocate
+additional qpairs via ``QPAIR_ADD``. See the `Concurrency Model`_ section for the full safety
+contract and its current testing caveat.
 
 The following errno values can be returned by ``read()`` and ``write()`` on the I/O fd:
 
