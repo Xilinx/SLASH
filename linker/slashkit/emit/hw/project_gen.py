@@ -233,16 +233,19 @@ class RM_KIND(Enum):
 
 
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
-    # Copy all base IP cores into the ip repository
-    config.ip_repository.mkdir(parents=True)
-    export_package("slashkit.resources.base.iprepo",
-                   config.ip_repository / "slash_base")
-
     if rm_kind == RM_KIND.SLASH_PROJECT:
+        # Copy all base IP cores into the ip repository
+        config.ip_repository.mkdir(parents=True)
+        export_package("slashkit.resources.base.iprepo",
+                    config.ip_repository / "slash_base")
+        
         # Copy all user kernels into the ip repository
         for kernel in config.kernels:
             shutil.copytree(kernel.component_xml_path.parent,
                             config.ip_repository / kernel.name)
+    elif rm_kind == RM_KIND.SERVICE_LAYER and not config.ip_repository.is_dir():
+        raise RuntimeError("The IP repository is missing, the user region has to be built before the service layer.\n" \
+        "This is a bug, please report it at https://github.com/Xilinx/SLASH")
 
     logs_dir = config.build_dir / "logs"
     image_out_dir = config.build_dir / "images"
