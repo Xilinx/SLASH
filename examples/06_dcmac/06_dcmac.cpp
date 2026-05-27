@@ -425,10 +425,26 @@ int main(int argc, char* argv[]) {
 
         vrt::Kernel traffic_producer_0(device, "traffic_producer_0");
         vrt::Kernel traffic_producer_1(device, "traffic_producer_1");
+        vrt::Kernel traffic_consumer_0(device, "traffic_consumer_0");
+        vrt::Kernel traffic_consumer_1(device, "traffic_consumer_1");
+
+        traffic_consumer_0.start(100);
+        traffic_consumer_1.start(100);
         traffic_producer_0.start(100, 0);
+        traffic_producer_1.start(100, 0);
+
+        /*
+        traffic_consumer_0.wait();
+        std::cout << "traffic_consumer_0" << std::endl;
+        traffic_consumer_1.wait();
+        std::cout << "traffic_consumer_1" << std::endl;
         traffic_producer_0.wait();
-        traffic_producer_1.start(100, 1);
+        std::cout << "traffic_producer_0" << std::endl;
         traffic_producer_1.wait();
+        std::cout << "traffic_producer_1" << std::endl;
+        */
+
+        std::this_thread::sleep_for(std::chrono::seconds(10));
 
         dcmac0.txStats(0);
         dcmac0.rxStats(0);
