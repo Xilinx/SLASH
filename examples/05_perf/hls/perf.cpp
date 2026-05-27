@@ -23,35 +23,38 @@
 
 #define DATA_WIDTH 256
 typedef ap_uint<DATA_WIDTH> uint256_t;
-#define LENGTH 0x1000000
 
 void perf(
-    uint256_t* hbm_ptr,
-    ap_uint<32> wr,
+    uint256_t* mem_ptr,
     ap_uint<32> reps,
+    ap_uint<32> length,
+    ap_uint<32> wr,
     ap_uint<32>& out_acc
 ) {
-#pragma HLS INTERFACE m_axi port=hbm_ptr offset=slave bundle=gmem0 max_read_burst_length=64 max_write_burst_length=64 depth=536870912
-#pragma HLS INTERFACE s_axilite port=hbm_ptr   bundle=control
+#pragma HLS INTERFACE m_axi port=mem_ptr offset=slave bundle=gmem0 max_read_burst_length=64 max_write_burst_length=64 depth=536870912
+#pragma HLS INTERFACE s_axilite port=mem_ptr   bundle=control
 #pragma HLS INTERFACE s_axilite port=wr        bundle=control
 #pragma HLS INTERFACE s_axilite port=reps      bundle=control
-#pragma HLS INTERFACE s_axilite port=out_acc        bundle=control
+#pragma HLS INTERFACE s_axilite port=length    bundle=control
+#pragma HLS INTERFACE s_axilite port=out_acc   bundle=control
 #pragma HLS INTERFACE s_axilite port=return    bundle=control
 
     ap_uint<32> acc = 0;
-    if (wr == 0) {
-        for (uint32_t i = 0; i < LENGTH * reps; i++) {
+    for (uint32_t rep = 0; rep < reps; rep++) {
+        for (uint32_t i = 0; i < length; i++) {
         #pragma HLS PIPELINE II=1
-                hbm_ptr[i % LENGTH] = i % LENGTH;
-        }
-    } else {
-        for (uint32_t i = 0; i < LENGTH * reps; i++) {
-        #pragma HLS PIPELINE II=1
-            uint256_t val = hbm_ptr[i % LENGTH];
-            if (i < LENGTH) {
-                acc ^= val.range(31, 0);
+        #pragma HLS LOOP_FLATTEN
+            if (wr == 0) {
+                mem_ptr[i] = i;
+            } else {
+                uint256_t val = mem_ptr[i];
+                if (rep == 0) {
+                    acc ^= val.range(31, 0);
+                }
             }
         }
+    }
+    if (wr == 1) {
         out_acc = acc;
     }
 }

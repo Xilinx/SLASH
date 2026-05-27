@@ -18,8 +18,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <getopt.h>
+
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -41,13 +44,13 @@ constexpr std::size_t kDdrKernels = 4;
 static_assert(kHbmKernels + kMemKernels + kDdrKernels == kTotalKernels,
               "Kernel group counts must match config.cfg");
 
-constexpr std::uint32_t kPerfLength = 0x1000000u;
-constexpr std::uint32_t kRepetitions = 1;
+constexpr std::uint32_t kDefaultLength = 0x1000000u;
+constexpr std::uint32_t kDefaultRepetitions = 1u;
 constexpr std::uint32_t kWriteMode = 0u;
 constexpr std::uint32_t kReadMode = 1u;
 
-constexpr std::uint32_t kOutAccDataOffset = 0x2cu;
-constexpr std::uint32_t kOutAccCtrlOffset = 0x30u;
+constexpr std::uint32_t kOutAccDataOffset = 0x34u;
+constexpr std::uint32_t kOutAccCtrlOffset = 0x38u;
 
 struct alignas(32) Word256 {
     std::uint32_t lane[8];
@@ -90,62 +93,92 @@ const char* memoryGroupName(std::size_t kernelIdx) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc < 3 || argc > 5) {
-        std::cerr << "Usages: " << argv[0] << " <BDF> <vrtbin file>" << std::endl
-                  << "        " << argv[0] << " <BDF> <vrtbin file> <kernel count>" << std::endl
-                  << "        " << argv[0] << " <BDF> <vrtbin file> <lower kernel index> <upper kernel index>" << std::endl;
-        return 1;
-    }
-
-    const std::string bdf = argv[1];
-    const std::string vrtbinFile = argv[2];
-
     std::size_t lowerKernelIndex = 0;
     std::size_t upperKernelIndex = kDefaultKernels;
-    if (argc == 4) {
-        try {
-            upperKernelIndex = static_cast<std::size_t>(std::stoul(argv[3]));
-        } catch (const std::exception&) {
-            std::cerr << "Invalid kernel count: " << argv[3] << std::endl;
+    std::uint32_t perfLength = kDefaultLength;
+    std::uint32_t repetitions = kDefaultRepetitions;
+
+    auto printUsage = [&]() {
+        std::cerr << "Usage: " << argv[0]
+                  << " <BDF> <vrtbin file>"
+                     " [-b LO] [-e HI] [-l LEN] [-r REPS]\n"
+                     "  -b, --begin LO    first kernel index (default 0)\n"
+                     "  -e, --end   HI    one past last kernel index (default "
+                  << kDefaultKernels << ", max " << kTotalKernels << ")\n"
+                     "  -l, --length LEN  256-bit words per kernel buffer (default 0x"
+                  << std::hex << kDefaultLength << std::dec << ")\n"
+                     "  -r, --reps REPS   repetitions per phase (default "
+                  << kDefaultRepetitions << ")\n";
+    };
+
+    static const struct option longOpts[] = {
+        {"begin",  required_argument, nullptr, 'b'},
+        {"end",    required_argument, nullptr, 'e'},
+        {"length", required_argument, nullptr, 'l'},
+        {"reps",   required_argument, nullptr, 'r'},
+        {"help",   no_argument,       nullptr, 'h'},
+        {nullptr,  0,                 nullptr, 0},
+    };
+
+    int opt;
+    while ((opt = getopt_long(argc, argv, "b:e:l:r:h", longOpts, nullptr)) != -1) {
+        char* end = nullptr;
+        unsigned long long v = (opt == 'h') ? 0ull : std::strtoull(optarg, &end, 0);
+        if (opt != 'h' && (end == optarg || *end != '\0')) {
+            std::cerr << "Invalid value for -" << static_cast<char>(opt) << ": " << optarg << std::endl;
             return 1;
         }
-        if (upperKernelIndex == 0 || upperKernelIndex > kTotalKernels) {
-            std::cerr << "kernel count must be in [1, " << kTotalKernels << "]" << std::endl;
-            return 1;
+        switch (opt) {
+            case 'b': lowerKernelIndex = static_cast<std::size_t>(v); break;
+            case 'e': upperKernelIndex = static_cast<std::size_t>(v); break;
+            case 'l':
+                if (v == 0 || v > 0xFFFFFFFFull) {
+                    std::cerr << "--length must be in (0, 2^32)" << std::endl;
+                    return 1;
+                }
+                perfLength = static_cast<std::uint32_t>(v);
+                break;
+            case 'r':
+                if (v == 0 || v > 0xFFFFFFFFull) {
+                    std::cerr << "--reps must be in (0, 2^32)" << std::endl;
+                    return 1;
+                }
+                repetitions = static_cast<std::uint32_t>(v);
+                break;
+            case 'h':
+            default:
+                printUsage();
+                return (opt == 'h') ? 0 : 1;
         }
-    } else if (argc == 5) {
-        try {
-            lowerKernelIndex = static_cast<std::size_t>(std::stoul(argv[3]));
-        } catch (const std::exception&) {
-            std::cerr << "Invalid lower kernel index: " << argv[3] << std::endl;
-        }
-        if (lowerKernelIndex > kTotalKernels) {
-            std::cerr << "kernel count must be in [0, " << kTotalKernels << ")" << std::endl;
-            return 1;
-        }
-        try {
-            upperKernelIndex = static_cast<std::size_t>(std::stoul(argv[4]));
-        } catch (const std::exception&) {
-            std::cerr << "Invalid upper kernel index: " << argv[4] << std::endl;
-        }
-        if (upperKernelIndex <= lowerKernelIndex || upperKernelIndex > kTotalKernels) {
-            std::cerr << "kernel count must be in (" << lowerKernelIndex << ", " << kTotalKernels << "]" << std::endl;
-            return 1;
-        }
+    }
+
+    if (argc - optind != 2) {
+        printUsage();
+        return 1;
+    }
+    const std::string bdf = argv[optind];
+    const std::string vrtbinFile = argv[optind + 1];
+
+    if (lowerKernelIndex >= upperKernelIndex || upperKernelIndex > kTotalKernels) {
+        std::cerr << "kernel range must satisfy 0 <= begin < end <= " << kTotalKernels << std::endl;
+        return 1;
     }
     std::size_t kernelCount = upperKernelIndex - lowerKernelIndex;
 
     try {
         vrt::utils::Logger::setLogLevel(vrt::utils::LogLevel::INFO);
 
-        const std::uint64_t bytesPerKernel = static_cast<std::uint64_t>(kPerfLength) * sizeof(Word256);
+        const std::uint64_t bytesPerKernel = static_cast<std::uint64_t>(perfLength) * sizeof(Word256);
         const double bufferFootprintGiB =
             (static_cast<double>(bytesPerKernel) * static_cast<double>(kernelCount)) /
             (1024.0 * 1024.0 * 1024.0);
 
         std::cout << "VRT Version: " << vrt::getVersion() << std::endl;
-        std::cout << "Launching " << kernelCount << " perf kernels" << std::endl;
-        std::cout << "Per-kernel buffer size: " << (bytesPerKernel >> 20) << " MiB" << std::endl;
+        std::cout << "Launching " << kernelCount << " perf kernels (indices ["
+                  << lowerKernelIndex << ", " << upperKernelIndex << "))" << std::endl;
+        std::cout << "Length: " << perfLength << " words ("
+                  << (bytesPerKernel >> 20) << " MiB per kernel)"
+                  << ", reps: " << repetitions << std::endl;
         std::cout << std::fixed << std::setprecision(2)
                   << "Aggregate buffer footprint: " << bufferFootprintGiB << " GiB" << std::endl;
 
@@ -159,7 +192,7 @@ int main(int argc, char* argv[]) {
         for (std::size_t i = lowerKernelIndex; i < upperKernelIndex; ++i) {
             vrt::Kernel kernel(device, "perf_" + std::to_string(i));
             kernels.emplace_back(kernel);
-            buffers.emplace_back(device, kPerfLength, kernel.argMemoryConfig("hbm_ptr"));
+            buffers.emplace_back(device, perfLength, kernel.argMemoryConfig("mem_ptr"));
         }
 
         if (isEmu) {
@@ -185,8 +218,9 @@ int main(int argc, char* argv[]) {
                     std::cout << "  " << label << " start perf_" << kernelIndex << "..." << std::endl;
                 }
                 kernels[i].setArg(0, buffers[i]);
-                kernels[i].setArg(1, wr);
-                kernels[i].setArg(2, kRepetitions);
+                kernels[i].setArg(1, repetitions);
+                kernels[i].setArg(2, perfLength);
+                kernels[i].setArg(3, wr);
                 kernels[i].start();
                 if (isEmu && kernelCount <= 4) {
                     std::cout << "  " << label << " start perf_" << kernelIndex << " returned" << std::endl;
@@ -199,7 +233,9 @@ int main(int argc, char* argv[]) {
             const auto elapsed =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(tEnd - tStart);
 
-            const std::uint64_t totalBytes = kRepetitions * bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
+            const std::uint64_t totalBytes = static_cast<std::uint64_t>(repetitions) *
+                                             bytesPerKernel *
+                                             static_cast<std::uint64_t>(kernelCount);
             std::cout << label << " phase time: "
                       << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
                       << " ms";
@@ -216,7 +252,7 @@ int main(int argc, char* argv[]) {
         for (std::size_t i = 0; i < kernelCount; i++) {
             std::size_t kernelIndex = lowerKernelIndex + i;
             buffers[i].sync(vrt::SyncType::DEVICE_TO_HOST);
-            for (std::size_t j = 0; j < kPerfLength; j++) {
+            for (std::size_t j = 0; j < perfLength; j++) {
                 if (buffers[i][j].lane[0] != j) {
                     std::cerr << "Kernel perf_" << kernelIndex << " (" << memoryGroupName(kernelIndex)
                               << ") wrote incorrect data to memory" << std::endl;
@@ -226,7 +262,7 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        const std::uint32_t expectedAcc = xorZeroToN(kPerfLength - 1u);
+        const std::uint32_t expectedAcc = xorZeroToN(perfLength - 1u);
         for (std::size_t i = 0; i < kernelCount; ++i) {
             std::size_t kernelIndex = lowerKernelIndex + i;
             const std::uint32_t outAcc = kernels[i].read(kOutAccDataOffset);
@@ -245,7 +281,8 @@ int main(int argc, char* argv[]) {
         }
 
         const auto totalElapsed = writeElapsed + readElapsed;
-        const std::uint64_t totalBytes = 2ull * kRepetitions * bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
+        const std::uint64_t totalBytes = 2ull * static_cast<std::uint64_t>(repetitions) *
+                                         bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
         std::cout << std::fixed << std::setprecision(2)
                   << "Combined read+write throughput: " << gibPerSecond(totalBytes, totalElapsed)
                   << " GiB/s aggregate" << std::endl;
@@ -261,8 +298,8 @@ int main(int argc, char* argv[]) {
         return 0;
     } catch (const std::bad_alloc& e) {
         std::cerr << "Allocation failed: " << e.what() << std::endl;
-        std::cerr << "Try a smaller optional kernel_count (1-" << kTotalKernels
-                  << ") to reduce host/device memory usage." << std::endl;
+        std::cerr << "Try a smaller --length or fewer kernels to reduce host/device memory usage."
+                  << std::endl;
         return 1;
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
