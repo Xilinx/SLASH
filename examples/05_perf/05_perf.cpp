@@ -184,6 +184,7 @@ int main(int argc, char* argv[]) {
 
         vrt::Device device(bdf, vrtbinFile);
         const bool isEmu = (device.getPlatform() == vrt::Platform::EMULATION) || (device.getPlatform() == vrt::Platform::SIMULATION);
+        double expected_rate_gibs = static_cast<double>(device.getFrequency()) * sizeof(Word256) * kernelCount / (1024 * 1024 * 1024);
 
         std::vector<vrt::Kernel> kernels;
         std::vector<vrt::Buffer<Word256>> buffers;
@@ -236,11 +237,16 @@ int main(int argc, char* argv[]) {
             const std::uint64_t totalBytes = static_cast<std::uint64_t>(repetitions) *
                                              bytesPerKernel *
                                              static_cast<std::uint64_t>(kernelCount);
+            double measured_rate_gibs = gibPerSecond(totalBytes, elapsed);
+
             std::cout << label << " phase time: "
                       << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
                       << " ms";
             std::cout << " (" << std::fixed << std::setprecision(2)
-                      << gibPerSecond(totalBytes, elapsed) << " GiB/s aggregate)" << std::endl;
+                      << measured_rate_gibs << " GiB/s aggregate, "
+                      << measured_rate_gibs / expected_rate_gibs * 100.0 << " \% of expected rate "
+                      << expected_rate_gibs << " GiB/s aggregate)"
+                      << std::endl;
             return elapsed;
         };
 
@@ -283,9 +289,12 @@ int main(int argc, char* argv[]) {
         const auto totalElapsed = writeElapsed + readElapsed;
         const std::uint64_t totalBytes = 2ull * static_cast<std::uint64_t>(repetitions) *
                                          bytesPerKernel * static_cast<std::uint64_t>(kernelCount);
+        const double measured_rate_gibs = gibPerSecond(totalBytes, totalElapsed);
         std::cout << std::fixed << std::setprecision(2)
-                  << "Combined read+write throughput: " << gibPerSecond(totalBytes, totalElapsed)
-                  << " GiB/s aggregate" << std::endl;
+                  << "Combined read+write throughput: " << measured_rate_gibs << " GiB/s aggregate, "
+                  << measured_rate_gibs / expected_rate_gibs * 100.0 << " \% of expected rate "
+                  << expected_rate_gibs << " GiB/s aggregate."
+                  << std::endl;
 
         if (failures != 0) {
             std::cerr << failures << " kernel(s) produced invalid output" << std::endl;
