@@ -415,6 +415,7 @@ def build_system_map_context(
     clock_hz: int,
     kernel_hls_by_type: Optional[Dict[str, Path]] = None,
     platform: str = "Hardware",
+    shell_type: str = "compute",
     num_mem_ports: int = 8,
     num_virt: int = 4,
     network: Optional[object] = None,
@@ -528,6 +529,7 @@ def build_system_map_context(
 
     return {
         "platform": platform,
+        "shell_type": shell_type,
         "clock_hz": int(clock_hz),
         "kernels": kernels,
         "service_layer": service_layer,

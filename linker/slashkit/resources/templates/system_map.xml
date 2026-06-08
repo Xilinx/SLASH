@@ -1,5 +1,6 @@
 <SystemMap>
   <Platform>{{ platform }}</Platform>
+  <ShellType>{{ shell_type }}</ShellType>
   <ClockFrequency>{{ clock_hz }}</ClockFrequency>
   <ServiceLayer>
     <Ethernet enabled="{{ "true" if service_layer.eth_enabled else "false" }}">
