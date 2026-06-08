@@ -82,6 +82,11 @@ ifeq ($(SLASH_HAVE_MODULE_IMPORT_NS_TOKEN),y)
 ccflags-y += -DSLASH_HAVE_MODULE_IMPORT_NS_TOKEN
 endif
 
+# Force-include the compat header into every TU (including the pinned libqdma
+# submodule sources we don't modify) so kernel-API shims such as from_timer()
+# reach third-party code too. Safe on all kernels: the shims are guarded.
+ccflags-y += -include $(src)/slash_compat.h
+
 
 LIBQDMA_OBJS := \
 	$(LIBQDMA_PATH)/qdma_mbox.o \
