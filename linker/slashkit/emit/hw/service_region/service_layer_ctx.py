@@ -106,7 +106,7 @@ def build_service_axilite_ctx(net) -> Dict[str, Any]:
 
         # wiring
         # top-level service_layer AXI-Lite interface
-        "sl_si_src_if": "axi_noc_0/M00_AXI",
+        "sl_si_src_if": "axilite_firewall_0/M_AXI",
         "sl_clk0": "service_clk",            # service_layer clock pins
         "sl_rstn": "ilreduced_logic_0/Res",
 

@@ -1061,6 +1061,19 @@ connect_bd_net [get_bd_pins {{ c.src_pin }}] [get_bd_pins user_clk]
 connect_bd_net [get_bd_pins {{ r.src_pin }}] [get_bd_pins ilreduced_logic_0/Res]
 {% endfor %}
 
+# === AXI Firewall on AXI-Lite ingress (post-INI NoC, pre-SmartConnect) ===
+set axilite_firewall_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_firewall:1.2 axilite_firewall_0 ]
+set_property -dict [list \
+  CONFIG.PROTOCOL {AXI4} \
+  CONFIG.DATA_WIDTH {32} \
+  CONFIG.ADDR_WIDTH {32} \
+  CONFIG.ENABLE_TIMEOUT_CHECKS {1} \
+  CONFIG.ENABLE_PROTOCOL_CHECKS {1} \
+] $axilite_firewall_0
+connect_bd_net [get_bd_pins axilite_firewall_0/aclk]    [get_bd_pins user_clk]
+connect_bd_net [get_bd_pins axilite_firewall_0/aresetn] [get_bd_pins ilreduced_logic_0/Res]
+connect_bd_intf_net [get_bd_intf_pins axi_noc_0/M00_AXI] [get_bd_intf_pins axilite_firewall_0/S_AXI]
+
 # === SmartConnects for AXI-Lite control ===
 {% for sc in smartconnects %}
 # Create {{ sc.name }}

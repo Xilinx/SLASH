@@ -28,7 +28,7 @@ from slashkit.core.port import BusType
 def build_axilite_smartconnect_context(
     instances: Dict[str, KernelInstance],
     *,
-    si_bd_port: str = "axi_noc_0/M00_AXI",
+    si_bd_port: str = "axilite_firewall_0/M_AXI",
     max_mi: int = 16,
     chain_slot: int = 15,
     base_name: str = "smartconnect",

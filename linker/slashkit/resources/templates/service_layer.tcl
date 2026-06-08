@@ -1167,7 +1167,19 @@ import_files -fileset sources_1 -norecurse [file normalize "{{ vf }}"]
   # Ethernet disabled; no DCMAC hierarchy created.
 {% endif %}
 
-# === AXI-Lite SmartConnect for service_layer control ===
+# === AXI Firewall on AXI-Lite ingress (post-INI NoC, pre-SmartConnect) ===
+set axilite_firewall_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_firewall:1.2 axilite_firewall_0 ]
+set_property -dict [list \
+  CONFIG.PROTOCOL {AXI4} \
+  CONFIG.DATA_WIDTH {32} \
+  CONFIG.ADDR_WIDTH {32} \
+  CONFIG.ENABLE_TIMEOUT_CHECKS {1} \
+  CONFIG.ENABLE_PROTOCOL_CHECKS {1} \
+] $axilite_firewall_0
+connect_bd_net [get_bd_pins axilite_firewall_0/aclk]    [get_bd_pins service_clk]
+connect_bd_net [get_bd_pins axilite_firewall_0/aresetn] [get_bd_pins ilreduced_logic_0/Res]
+connect_bd_intf_net [get_bd_intf_pins axi_noc_0/M00_AXI] [get_bd_intf_pins axilite_firewall_0/S_AXI]
+
 # === AXI-Lite SmartConnect for service_layer control ===
 {% if sl_have_xbar %}
   current_bd_design service_layer_user
