@@ -144,6 +144,7 @@ xilinx.com:ip:dfx_decoupler:1.0\
 xilinx.com:ip:versal_cips:3.4\
 xilinx.com:ip:axis_noc:1.0\
 xilinx.com:ip:smartconnect:1.0\
+xilinx.com:ip:axi_firewall:1.2\
 xilinx.com:inline_hdl:ilreduced_logic:1.0\
 xilinx.com:ip:c_shift_ram:12.0\
 xilinx.com:ip:hw_discovery:1.0\
