@@ -1,13 +1,12 @@
 # Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-import argparse
 from default_ip import DefaultIP
 from utils import add_common_args, get_ip_offset
 
 
-class TrafficGenerator(DefaultIP):
-    """Specialization to support TrafficGenerator IP"""
+class TrafficProducer(DefaultIP):
+    """Specialization to support TrafficProducer IP"""
 
     _flits_offset = 0x10
     _dest_offset = 0x18
@@ -40,24 +39,3 @@ class TrafficGenerator(DefaultIP):
 
         self.write(self._flits_offset, value)
 
-
-def main(args):
-    intf = 0
-    offset = get_ip_offset(0x400_0000, args.dcmac*2 +intf)
-    tgen = TrafficGenerator(args.dev, base_offset=offset)
-
-    tgen.flits = args.flits
-    tgen.dest = 0
-    tgen.start()
-    del tgen
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-f', '--flits', type=int, default=10,
-                        help='Number of 64-Byte flits', required=False)
-
-    parser = add_common_args(parser)
-    args = parser.parse_args()
-
-    main(args)

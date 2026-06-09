@@ -3,11 +3,10 @@
 
 import argparse
 import time
-from dcmac_init import dcmac_logic_init
 from dcmac_mmio import DCMAC
 from utils import add_common_args, get_ip_offset
 from udp_utils import NetworkLayer
-from trafficgen import TrafficGenerator
+from trafficgen import TrafficProducer
 
 """This file aims at doing a test of the Ethernet or UDP layer between two interfaces in
 board, interface 0 and 2. It will initialize the DCMAC and then setup the
@@ -19,28 +18,16 @@ TRAFFICGEN_BASEADDR = 0x400_2000
 NL_BASEADDR = 0x400_0000
 
 
-class ArgsClass:
-    dcmac = 0
-    init = False
-    print = 1
-    dev = None
-    verbose = 1
-    loopback = None
-    keep_alive = 0
-    align_rx = 1
-    traffic_test = 0
-
-
 def main(args):
-    """Initialize DCMAC in each interface"""
-    init_args = ArgsClass()
-    init_args.dev = args.dev
-    """Init DCMAC 0"""
-    dcmac_logic_init(init_args)
+    dcmac0 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 0))
+    dcmac1 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 1))
 
-    """Init DCMAC 0"""
-    init_args.dcmac = 1
-    dcmac_logic_init(init_args)
+    print(f'{dcmac0.link_up=}')
+    print(f'{dcmac1.link_up=}')
+
+    if not (dcmac0.link_up and dcmac1.link_up):
+        print('Link not detected in at least one of the DCMACs')
+        return
 
     # reset TX first then RX
     if args.udp:
@@ -84,17 +71,17 @@ def main(args):
 
     """Now we can generate some traffic"""
 
-    tgen0 = TrafficGenerator(args.dev, resource=0, base_offset=0x004C_0000)
-    tgen1 = TrafficGenerator(args.dev, resource=0, base_offset=0x0050_0000)
+    tp0 = TrafficProducer(args.dev, resource=0, base_offset=0x004C_0000)
+    tp1 = TrafficProducer(args.dev, resource=0, base_offset=0x0050_0000)
 
-    tgen0.flits = 22
-    tgen0.dest = 0
-    tgen0.start()
+    tp0.flits = 22
+    tp0.dest = 0
+    tp0.start()
     time.sleep(1)
 
-    tgen1.flits = 22
-    tgen1.dest = 0
-    tgen1.start()
+    tp1.flits = 22
+    tp1.dest = 0
+    tp1.start()
     time.sleep(1)
 
     if args.udp:
@@ -104,9 +91,6 @@ def main(args):
         print('\n')
         nl1.get_debug_stats(True)
         print('\n')
-
-    dcmac0 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 0))
-    dcmac1 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 1))
 
     print(f'{dcmac0.tx_stats(verbose=1)=}')
     print(f'{dcmac0.rx_stats(verbose=1)=}')
