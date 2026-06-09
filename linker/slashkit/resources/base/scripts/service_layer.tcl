@@ -242,51 +242,18 @@ if { $bCheckIPsPassed != 1 } {
 # DESIGN PROCs
 ##################################################################
 
-proc add_dcmac_inst {} {
-
-  set DCMAC0_ENABLED 1
-  set DCMAC1_ENABLED 1
-
-  ## Each DCMAC can support 2 QSFP56 interfaces
-  ## select how many QSFP56 you want for each DCMAC, provided they are enabled
-
-  ## Setup number of QSFP56 interfaces for DCMAC0
-  set DUAL_QSFP_DCMAC0 0
-
-  ## Setup number of QSFP56 interfaces for DCMAC1
-  set DUAL_QSFP_DCMAC1 0
-
-    # Create network hierarchy
-    if { ${DCMAC0_ENABLED} == "1" } {
-        create_qsfp_hierarchy 0 ${DUAL_QSFP_DCMAC0}
-    }
-    if { ${DCMAC1_ENABLED} == "1" } {
-        create_qsfp_hierarchy 1 ${DUAL_QSFP_DCMAC1}
-    }
-}
 set current_file [file normalize [info script]]
 set current_dir [file normalize ${current_file}]
-set dcmac_base [file normalize [file join $current_dir .. .. .. dcmac]]
+set versal_dcmac_root  [file normalize [file join $current_dir .. .. .. .. .. .. submodules versal_dcmac]]
+set ::slash_wrapper_tcl [file normalize [file join $current_dir .. .. .. dcmac tcl slash_wrapper.tcl]]
 
-# Absolute paths (normalized)
-set ::slash_dcmac_tcl  [file join $dcmac_base tcl dcmac.tcl]
-set ::slash_dcmac_hdl  [file join $dcmac_base hdl]
+source $::slash_wrapper_tcl
+slash_setup_dcmac $versal_dcmac_root
 
-# Source the DCMAC Tcl helpers
-source $::slash_dcmac_tcl
-
-# Import DCMAC source files
-import_files -fileset sources_1 -norecurse [file join $::slash_dcmac_hdl axis_seg_to_unseg_converter.v]
-import_files -fileset sources_1 -norecurse [file join $::slash_dcmac_hdl clock_to_clock_bus.v]
-import_files -fileset sources_1 -norecurse [file join $::slash_dcmac_hdl dcmac200g_ctl_port.v]
-import_files -fileset sources_1 -norecurse [file join $::slash_dcmac_hdl serdes_clock.v]
-import_files -fileset sources_1 -norecurse [file join $::slash_dcmac_hdl syncer_reset.v]
-
-# --- DCMAC creation variables ---
-set DCMAC0_ENABLED 1
-set DCMAC1_ENABLED 1
-set DUAL_QSFP_DCMAC0 0
-set DUAL_QSFP_DCMAC1 0
+set ::DCMAC0_ENABLED   1
+set ::DCMAC1_ENABLED   1
+set ::DUAL_QSFP_DCMAC0 0
+set ::DUAL_QSFP_DCMAC1 0
 
 
 proc create_root_design { parentCell } {
@@ -1597,8 +1564,8 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net eth_6_m_axi_gmem0 [get_bd_intf_pins eth_6/m_axi_gmem0] [get_bd_intf_pins sl2noc_6/S00_AXI]
   connect_bd_intf_net -intf_net eth_7_m_axi_gmem0 [get_bd_intf_pins eth_7/m_axi_gmem0] [get_bd_intf_pins sl2noc_7/S00_AXI]
   connect_bd_intf_net -intf_net noc_virt_5_M00_INI [get_bd_intf_ports M_QDMA_SLV_BRIDGE] [get_bd_intf_pins noc_virt_4/M00_INI]
-  connect_bd_intf_net -intf_net qsfp0_322mhz_1 [get_bd_intf_ports qsfp0_322mhz] [get_bd_intf_pins qsfp_0_n_1/qsfp_clk_322mhz]
-  connect_bd_intf_net -intf_net qsfp2_322mhz_1 [get_bd_intf_ports qsfp2_322mhz] [get_bd_intf_pins qsfp_2_n_3/qsfp_clk_322mhz]
+  connect_bd_intf_net -intf_net qsfp0_322mhz_1 [get_bd_intf_ports qsfp0_322mhz] [get_bd_intf_pins qsfp_0_n_1/qsfp_gt_clk]
+  connect_bd_intf_net -intf_net qsfp2_322mhz_1 [get_bd_intf_ports qsfp2_322mhz] [get_bd_intf_pins qsfp_2_n_3/qsfp_gt_clk]
   connect_bd_intf_net -intf_net qsfp_0_n_1_M_AXIS_0 [get_bd_intf_pins dummy_noc_m_0/S00_AXIS] [get_bd_intf_pins qsfp_0_n_1/M_AXIS_0]
   connect_bd_intf_net -intf_net qsfp_0_n_1_qsfp_gt0 [get_bd_intf_ports qsfp0_4x] [get_bd_intf_pins qsfp_0_n_1/qsfp_gt0]
   connect_bd_intf_net -intf_net qsfp_2_n_3_M_AXIS_0 [get_bd_intf_pins dummy_noc_m_4/S00_AXIS] [get_bd_intf_pins qsfp_2_n_3/M_AXIS_0]
@@ -1681,8 +1648,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins sl2noc_5/aclk0] \
   [get_bd_pins sl2noc_6/aclk0] \
   [get_bd_pins sl2noc_7/aclk0] \
-  [get_bd_pins qsfp_0_n_1/ap_clk] \
-  [get_bd_pins qsfp_2_n_3/ap_clk] \
+  [get_bd_pins qsfp_0_n_1/aclk] \
+  [get_bd_pins qsfp_2_n_3/aclk] \
   [get_bd_pins smartconnect_1/aclk] \
   [get_bd_pins axi_noc_0/aclk0] \
   [get_bd_pins noc_virt_0/aclk0] \
@@ -1726,8 +1693,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins eth_5/ap_rst_n] \
   [get_bd_pins eth_6/ap_rst_n] \
   [get_bd_pins eth_7/ap_rst_n] \
-  [get_bd_pins qsfp_0_n_1/ap_rst_n] \
-  [get_bd_pins qsfp_2_n_3/ap_rst_n] \
+  [get_bd_pins qsfp_0_n_1/aresetn] \
+  [get_bd_pins qsfp_2_n_3/aresetn] \
   [get_bd_pins axi4_full_passthrough_0/aresetn] \
   [get_bd_pins axi_register_slice_0/aresetn] \
   [get_bd_pins axi_register_slice_1/aresetn] \
@@ -1771,16 +1738,6 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces axi4_full_passthrough_2/m_axi] [get_bd_addr_segs M_VIRT_2/Reg] -force
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces axi4_full_passthrough_3/m_axi] [get_bd_addr_segs M_VIRT_3/Reg] -force
   assign_bd_address -offset 0xE0000000 -range 0x10000000 -target_address_space [get_bd_addr_spaces axi4_full_passthrough_4/m_axi] [get_bd_addr_segs M_QDMA_SLV_BRIDGE/Reg] -force
-  # assign_bd_address -offset 0x020302040400 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020303040400 -range 0x00000100 -with_name SEG_axi_gpio_datapath_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020302040000 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020303040000 -range 0x00000100 -with_name SEG_axi_gpio_gt_control_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020302040200 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020303040200 -range 0x00000100 -with_name SEG_axi_gpio_monitor_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020302040600 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020303040600 -range 0x00000100 -with_name SEG_axi_gpio_reset_txrx_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
-  # assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/DCMAC_subsys/dcmac_0_core/s_axi/Reg] -force
-  # assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/DCMAC_subsys/dcmac_1_core/s_axi/Reg] -force
   assign_bd_address -offset 0x020300000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs eth_0/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020300010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs eth_1/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020300020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs eth_2/s_axi_control/Reg] -force
