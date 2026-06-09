@@ -23,6 +23,9 @@ from typing import Set, Dict, Any, List
 from dataclasses import dataclass
 from pathlib import Path
 
+_SLASH_ROOT = Path(__file__).resolve().parents[5]
+_DCMAC_VERSAL = _SLASH_ROOT / "submodules" / "versal_dcmac"
+
 
 @dataclass(frozen=True)
 class NetworkSpecView:
@@ -50,24 +53,30 @@ def build_service_layer_context(net) -> dict:
 
 def dcmac_paths(dcmac_dir: Path) -> Dict[str, Any]:
     """
-    Resolve absolute paths for service-layer assets regardless of CWD.
+    Resolve absolute paths for service-layer DCMAC assets.
+
     """
-    dcmac_tcl = dcmac_dir / "tcl" / "dcmac.tcl"
-    dcmac_hdl = dcmac_dir / "hdl"
+    dcmac_tcl         = dcmac_dir / "tcl" / "slash_wrapper.tcl"
+    versal_dcmac_tcl  = _DCMAC_VERSAL / "tcl" / "dcmac.tcl"
+    versal_dcmac_hdl  = _DCMAC_VERSAL / "hdl"
 
     # add/remove files as needed
     hdl_files = [
         "axis_seg_to_unseg_converter.v",
-        "clock_to_clock_bus.v",
+        "axis_to_dcmac_seg.sv",
+        "axis_to_dcmac_seg_wrapper.v",
+        "clock_utils.v",
         "dcmac200g_ctl_port.v",
-        "serdes_clock.v",
-        "syncer_reset.v",
+        "dcmac_reset_ctrl.sv",
+        "dcmac_reset_ctrl_wrapper.v",
     ]
 
     return {
-        "dcmac_tcl": str(dcmac_tcl),
-        "dcmac_hdl_dir": str(dcmac_hdl),
-        "dcmac_hdl_files": [str(dcmac_hdl / f) for f in hdl_files],
+        "dcmac_tcl":          str(dcmac_tcl),
+        "versal_dcmac_root":  str(_DCMAC_VERSAL),
+        "versal_dcmac_tcl":   str(versal_dcmac_tcl),
+        "dcmac_hdl_dir":      str(versal_dcmac_hdl),
+        "dcmac_hdl_files":    [str(versal_dcmac_hdl / f) for f in hdl_files],
     }
 
 
