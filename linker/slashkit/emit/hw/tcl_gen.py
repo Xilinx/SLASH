@@ -340,7 +340,8 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     svc_out = config.build_dir / "service_layer.tcl"
 
     dcmac_dir = config.build_dir / "dcmac"
-    export_package("slashkit.resources.dcmac", dcmac_dir)
+    if not dcmac_dir.is_dir():
+        export_package("slashkit.resources.dcmac", dcmac_dir)
 
     svc_ctx.update(dcmac_paths(dcmac_dir))
     render_template(
