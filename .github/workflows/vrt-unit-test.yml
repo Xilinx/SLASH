@@ -40,9 +40,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt install -y cmake pkg-config ninja-build \
-          libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
-          libsystemd-dev libinih-dev libcli11-dev lcov python3-zmq
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config ninja-build \
+            libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
+            libsystemd-dev libinih-dev libcli11-dev lcov python3-zmq
 
       - name: Build and run VRT unit tests
         run: |
