@@ -1,17 +1,21 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=68.0", "setuptools_scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "slashkit"
-version = "0.1.0"
 description = "Utility to link VRT binaries (VBINs) from user IP cores"
 license = "MIT"
 requires-python = ">=3.9"
 dependencies = ["jinja2>=2.11.3"]
+dynamic = ["version"]
 
 [project.scripts]
 "slashkit" = "slashkit.__main__:main"
+
+[tool.setuptools_scm]
+root = ".."
+git_describe_command = "git describe --tags --long --match \"v*\""
 
 [tool.setuptools.packages.find]
 include = ["slashkit*"]
