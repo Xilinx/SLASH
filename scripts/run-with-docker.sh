@@ -138,8 +138,9 @@ VERSION=${3:-}
 
 # Check the distro argument and select the packaging script, the default
 # version, and the base image for the requested (distro, version) pair.
-# Rocky 10 is not published under the deprecated "rockylinux" Docker Official
-# Image, so it is pulled from the team-maintained rockylinux/rockylinux repo.
+# Rocky images are pulled from the team-maintained rockylinux/rockylinux repo
+# rather than the "rockylinux" Docker Official Image: the latter is unmaintained
+# and badly out of date (stuck near 9.3), and never published a 10 tag at all.
 if [ "$DISTRO" = "ubuntu" ]; then
     PACKAGE_SCRIPT="./scripts/package-deb.sh"
     VERSION=${VERSION:-22.04}
@@ -154,8 +155,7 @@ elif [ "$DISTRO" = "rocky" ]; then
     PACKAGE_SCRIPT="./scripts/package-rpm.sh"
     VERSION=${VERSION:-9}
     case "$VERSION" in
-        9)  BASE_IMAGE="rockylinux:9" ;;
-        10) BASE_IMAGE="rockylinux/rockylinux:10" ;;
+        9|10) BASE_IMAGE="rockylinux/rockylinux:$VERSION" ;;
         *)
             echo "Unsupported rocky version '$VERSION' (supported: 9, 10)" >&2
             exit 1
