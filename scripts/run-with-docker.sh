@@ -35,7 +35,13 @@ set -exo pipefail
 #   package   Run the matching distro's packaging script
 #             (scripts/package-deb.sh on Ubuntu, scripts/package-rpm.sh on
 #             Rocky) inside a clean container that only has the build
-#             dependencies installed.
+#             dependencies installed. The built packages are written to a
+#             per-distro+version directory under the working tree:
+#               docker-build/ubuntu-22.04/*.deb
+#               docker-build/ubuntu-24.04/*.deb
+#               docker-build/ubuntu-26.04/*.deb
+#               docker-build/rocky-9/*.rpm
+#               docker-build/rocky-10/*.rpm
 #   run       Drop into an interactive bash shell inside a container that has
 #             the freshly built SLASH packages already installed.
 #
@@ -173,6 +179,13 @@ fi
 DOCKER_COMMAND="source $SLASH_XILINX_PATH/2025.1/Vivado/settings64.sh "
 DOCKER_COMMAND+="&& export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$SLASH_XILINX_PATH/2025.1/Vivado/lib/lnx64.o "
 if [ $CONTAINER = "package" ]; then
+    # Route the built packages into a per-distro+version subdirectory so the
+    # outputs of different builds do not clobber each other. Both packaging
+    # scripts honour ARTIFACTS_DIR. The path lives under $PWD, which is mounted
+    # at the same path in the container, so the artifacts are visible on the
+    # host once the container exits.
+    ARTIFACTS_DIR="$PWD/docker-build/$DISTRO-$VERSION"
+    DOCKER_RUN_ARGS+="-e ARTIFACTS_DIR=$ARTIFACTS_DIR "
     DOCKER_COMMAND+="&& $PACKAGE_SCRIPT "
 elif [ $CONTAINER = "run" ]; then
     DOCKER_COMMAND+="&& bash"
