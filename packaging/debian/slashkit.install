@@ -19,6 +19,6 @@
 # ##################################################################################################
 
 usr/bin/slashkit
-usr/lib/python3.10/dist-packages/slashkit/
-usr/lib/python3.10/dist-packages/slashkit-*.dist-info/
+usr/lib/python3.*/dist-packages/slashkit/
+usr/lib/python3.*/dist-packages/slashkit-*.dist-info/
 usr/lib/*/cmake/SlashTools/
