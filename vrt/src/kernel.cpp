@@ -49,22 +49,6 @@ MemoryConfig parseMemoryTarget(const std::string& target) {
     }
     throw std::runtime_error("Unknown memory target '" + target + "'");
 }
-
-uint64_t resolveBarOffset(uint64_t absoluteAddr, uint64_t accessSize, uint64_t barLen) {
-    if (barLen == 0) {
-        throw std::runtime_error("BAR length is zero");
-    }
-
-    // Design model: BAR maps a contiguous AXI window. Kernel base addresses
-    // are absolute within that window; register offsets are relative to kernel base.
-    const uint64_t barWindowBase = absoluteAddr - (absoluteAddr % barLen);
-    const uint64_t barOffset = absoluteAddr - barWindowBase;
-    if (barOffset + accessSize > barLen) {
-        throw std::runtime_error("BAR access out of range");
-    }
-    return barOffset;
-}
-
 }  // namespace
 
 Kernel::Kernel(const std::string& name, uint64_t baseAddr, uint64_t range,
@@ -97,9 +81,11 @@ void Kernel::write(uint32_t offset, uint32_t value) {
         utils::Logger::log(utils::LogLevel::DEBUG, __PRETTY_FUNCTION__,
                            "Writing to device {} kernel: {} at offset: {x} value: {x}", deviceBdf,
                            name, offset, value);
+        const uint64_t barAddr = baseAddr + static_cast<uint64_t>(offset);
+        if (barOffset + accessSize > barLen) {
+            throw std::runtime_error("BAR access out of range");
+        }
         auto& barFile = getOrOpenBarFile();
-        const uint64_t absoluteAddr = baseAddr + static_cast<uint64_t>(offset);
-        uint64_t barOffset = resolveBarOffset(absoluteAddr, sizeof(uint32_t), barFile.getLen());
         auto ptr = barFile.getPtr<uint32_t>(vrtd::BarFile::Direction::Write,
                                             static_cast<size_t>(barOffset));
         *ptr = value;
@@ -115,9 +101,11 @@ uint32_t Kernel::read(uint32_t offset) {
             utils::Logger::log(utils::LogLevel::DEBUG, __PRETTY_FUNCTION__,
                                "Reading from device {} kernel: {} at offset: {x}", deviceBdf, name,
                                offset);
+        const uint64_t barAddr = baseAddr + static_cast<uint64_t>(offset);
+        if (barOffset + accessSize > barLen) {
+            throw std::runtime_error("BAR access out of range");
+        }
         auto& barFile = getOrOpenBarFile();
-        const uint64_t absoluteAddr = baseAddr + static_cast<uint64_t>(offset);
-        uint64_t barOffset = resolveBarOffset(absoluteAddr, sizeof(uint32_t), barFile.getLen());
         auto ptr = barFile.getPtr<uint32_t>(vrtd::BarFile::Direction::Read,
                                             static_cast<size_t>(barOffset));
         return *ptr;

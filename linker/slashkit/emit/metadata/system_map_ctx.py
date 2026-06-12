@@ -418,6 +418,7 @@ def build_system_map_context(
     num_mem_ports: int = 8,
     num_virt: int = 4,
     network: Optional[object] = None,
+    base_offset: int = 0,
 ) -> dict:
     axilite_by_inst: Dict[str, List[dict]] = {}
     for entry in axilite_addr:
@@ -508,7 +509,7 @@ def build_system_map_context(
         kernels.append(
             {
                 "name": inst.name,
-                "base_addr": _format_hex(int(selected["offset"])),
+                "base_addr": _format_hex(int(selected["offset"]) - base_offset),
                 "range": _format_hex(int(selected["range"])),
                 "registers": registers,
                 "functional_args": functional_args,

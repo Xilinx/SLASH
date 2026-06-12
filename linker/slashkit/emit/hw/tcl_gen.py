@@ -36,7 +36,7 @@ from slashkit.emit.hw.user_region.terminator_ctx import build_host_noc_terminato
 from slashkit.emit.hw.service_region.network_ctx import build_network_axis_context
 from slashkit.emit.hw.service_region.stream_ctx import build_stream_connect_context
 from slashkit.emit.hw.user_region.host_ctx import build_host_smartconnect_context
-from slashkit.emit.hw.user_region.addr_ctx import build_axilite_address_context
+from slashkit.emit.hw.user_region.addr_ctx import build_axilite_address_context, AXILITE_BAR_BASE_OFFSET
 from slashkit.emit.hw.user_region.param_ctx import build_data_width_param_context
 from slashkit.emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from slashkit.emit.hw.service_region.service_layer_ctx import *
@@ -296,7 +296,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     axilite_ctx = build_axilite_address_context(
         instances,
         addr_space="S_AXILITE_INI",
-        base_offset=0x0202_0000_0000,
+        base_offset=AXILITE_BAR_BASE_OFFSET,
         min_align=0x0001_0000,
     )
     ctx.update(axilite_ctx)
@@ -318,6 +318,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         platform="Hardware",
         kernel_hls_by_type=kernel_hls_by_type,
         network=getattr(cfg, "network", None),
+        base_offset=AXILITE_BAR_BASE_OFFSET,
     )
     system_map_out = config.build_dir / "system_map.xml"
     render_template(

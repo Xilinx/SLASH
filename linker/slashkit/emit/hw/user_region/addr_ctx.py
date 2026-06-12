@@ -24,6 +24,14 @@ from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
 
+# Base address of the AXI-Lite CSR window in the hardware design. Kernel CSRs are
+# placed at absolute addresses starting here so that assign_bd_address matches the
+# BAR mapping. This offset is meaningful only to the hardware design (the BAR is
+# relative to it), so the host-facing system map reports kernel offsets relative
+# to this value.
+AXILITE_BAR_BASE_OFFSET = 0x0202_0000_0000
+
+
 def _align_up(x: int, a: int) -> int:
     return (x + (a - 1)) & ~(a - 1)
 
@@ -58,7 +66,7 @@ def build_axilite_address_context(
     instances: Dict[str, KernelInstance],
     *,
     addr_space: str = "S_AXILITE_INI",
-    base_offset: int = 0x0202_0000_0000,   # your example
+    base_offset: int = AXILITE_BAR_BASE_OFFSET,
     min_align: int = 0x0000_0100           # 256Bx alignment
 ) -> dict:
     """
