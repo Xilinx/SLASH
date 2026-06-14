@@ -218,8 +218,11 @@ def create_build_project(
             str(tcl_path),
             "-tclargs",
             config.project_name,
-            config.ip_repository
         ]
+
+        if config.ip_repository.exists():
+            cmd.append(config.ip_repository)
+
         if action:
             cmd.append(action)
 
