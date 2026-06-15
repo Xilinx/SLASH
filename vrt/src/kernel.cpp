@@ -77,42 +77,44 @@ vrtd::BarFile& Kernel::getOrOpenBarFile() {
 }
 
 void Kernel::write(uint32_t offset, uint32_t value) {
+    const uint64_t barAddr = baseAddr + static_cast<uint64_t>(offset);
+
     if (platform == Platform::HARDWARE) {
         utils::Logger::log(utils::LogLevel::DEBUG, __PRETTY_FUNCTION__,
                            "Writing to device {} kernel: {} at offset: {x} value: {x}", deviceBdf,
                            name, offset, value);
-        const uint64_t barAddr = baseAddr + static_cast<uint64_t>(offset);
-        if (barOffset + accessSize > barLen) {
+        auto& barFile = getOrOpenBarFile();
+        if (barAddr + sizeof(value) > barFile.getLen()) {
             throw std::runtime_error("BAR access out of range");
         }
-        auto& barFile = getOrOpenBarFile();
         auto ptr = barFile.getPtr<uint32_t>(vrtd::BarFile::Direction::Write,
-                                            static_cast<size_t>(barOffset));
+                                            static_cast<size_t>(barAddr));
         *ptr = value;
         return;
     } else if (platform == Platform::SIMULATION) {
-        server->sendScalar(baseAddr + offset, value);
+        server->sendScalar(barAddr, value);
     }
 }
 
 uint32_t Kernel::read(uint32_t offset) {
+    const uint64_t barAddr = baseAddr + static_cast<uint64_t>(offset);
+
     if (platform == Platform::HARDWARE) {
         if (offset != 0)
             utils::Logger::log(utils::LogLevel::DEBUG, __PRETTY_FUNCTION__,
                                "Reading from device {} kernel: {} at offset: {x}", deviceBdf, name,
                                offset);
-        const uint64_t barAddr = baseAddr + static_cast<uint64_t>(offset);
-        if (barOffset + accessSize > barLen) {
+        auto& barFile = getOrOpenBarFile();
+        if (barAddr + sizeof(uint32_t) > barFile.getLen()) {
             throw std::runtime_error("BAR access out of range");
         }
-        auto& barFile = getOrOpenBarFile();
         auto ptr = barFile.getPtr<uint32_t>(vrtd::BarFile::Direction::Read,
-                                            static_cast<size_t>(barOffset));
+                                            static_cast<size_t>(barAddr));
         return *ptr;
     } else if (platform == Platform::EMULATION) {
         return server->readRegister(name, offset);
     } else if (platform == Platform::SIMULATION) {
-        return server->fetchScalarSim(baseAddr + offset);
+        return server->fetchScalarSim(barAddr);
     }
     return 0;
 }
@@ -470,15 +472,12 @@ void Kernel::writeBatch() {
     }
     auto& barFile = *barFilePtr;
     uint64_t byteCount = static_cast<uint64_t>(noOfPhysicalRegisters) * sizeof(uint32_t);
-    uint64_t barOffset = 0;
-    try {
-        barOffset = resolveBarOffset(baseAddr, byteCount, barFile.getLen());
-    } catch (const std::runtime_error&) {
+    if (baseAddr + byteCount > barFile.getLen()) {
         free(buf);
         throw std::runtime_error("BAR write range out of range");
     }
     auto ptr = barFile.getPtr<uint32_t>(vrtd::BarFile::Direction::Write,
-                                        static_cast<size_t>(barOffset));
+                                        static_cast<size_t>(baseAddr));
     for (uint32_t i = 0; i < noOfPhysicalRegisters; ++i) {
         ptr[i] = buf[i];
     }
