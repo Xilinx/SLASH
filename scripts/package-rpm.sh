@@ -89,6 +89,7 @@ tar czf "${TOPDIR}/SOURCES/slash-${VERSION}.tar.gz" \
     --exclude='rpmbuild' \
     --exclude='rpm' \
     --exclude='deb' \
+    --exclude='docker-build' \
     --exclude='pbuild' \
     .
 

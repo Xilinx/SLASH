@@ -112,7 +112,7 @@
      *  @param arr The array to resize.
      *  @param len The new length.
      *  @return 0 on success, -1 on allocation failure. */ \
-    static inline NODISCARD \
+    NODISCARD static inline \
     int T_ARRAY##_resize(struct T_ARRAY *arr, size_t len) \
     { \
         size_t cap = likely(len > 0) ? bit_ceil(len) : 0; \
@@ -143,7 +143,7 @@
      *  @param arr The array to push to.
      *  @param v   The value to append.
      *  @return 0 on success, -1 on allocation failure. */ \
-    static inline NODISCARD \
+    NODISCARD static inline \
     int T_ARRAY##_push(struct T_ARRAY *arr, T v) { \
         if (unlikely(T_ARRAY##_resize(arr, arr->len + 1) == -1)) { \
             return -1; \

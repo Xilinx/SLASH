@@ -1,13 +1,27 @@
-FROM ubuntu:22.04
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE}
 
 ARG USER_ID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends \
-        build-essential ca-certificates pkg-config git rsync bash cmake git ninja-build \
-        locales locales-all libtinfo5 libc6-dev-i386 libglib2.0-0 libsm6 libxext6 libxrender-dev libpixman-1-0 lsb-core
+# Install base packages. lsb-release provides the lsb_release command Vivado
+# calls on every supported release. libtinfo5 (needed by Vivado) was dropped
+# after 22.04; on >= 24.04 install libtinfo6 and add a libtinfo.so.5
+# compatibility symlink instead.
+RUN . /etc/os-release && \
+    apt-get update -qq && \
+    PKGS="build-essential ca-certificates pkg-config git rsync bash cmake ninja-build \
+        locales locales-all libc6-dev-i386 libglib2.0-0 libsm6 libxext6 libxrender-dev libpixman-1-0 lsb-release" && \
+    if dpkg --compare-versions "$VERSION_ID" ge 24.04; then \
+        PKGS="$PKGS libtinfo6"; \
+    else \
+        PKGS="$PKGS libtinfo5"; \
+    fi && \
+    apt-get install -y --no-install-recommends $PKGS && \
+    if dpkg --compare-versions "$VERSION_ID" ge 24.04; then \
+        ln -sf libtinfo.so.6 /usr/lib/x86_64-linux-gnu/libtinfo.so.5; \
+    fi
 
 COPY deb/*.deb /tmp
 RUN apt install -y /tmp/slash-dev_*.deb \

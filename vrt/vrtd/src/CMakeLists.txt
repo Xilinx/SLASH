@@ -64,6 +64,9 @@ add_executable(vrtd ${CMAKE_CURRENT_SOURCE_DIR}/main.c)
 target_link_libraries(vrtd PRIVATE vrtd_core)
 
 set_target_properties(vrtd PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED YES
+  C_EXTENSIONS YES
   VERSION ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}
 )

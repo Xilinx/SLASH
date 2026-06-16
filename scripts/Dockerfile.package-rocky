@@ -1,4 +1,5 @@
-FROM rockylinux:9
+ARG BASE_IMAGE=rockylinux/rockylinux:9
+FROM ${BASE_IMAGE}
 
 ARG USER_ID=1000
 
