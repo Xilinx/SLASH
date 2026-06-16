@@ -18,25 +18,27 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <iostream>
-#include <ap_fixed.h>
-#include <hls_stream.h>
-#include <ap_int.h>
-#include <zmq.hpp>
-#include <json/json.h>
+#include <chrono>
 #include <cstdint>
-#include <map>
-#include <vector>
+#include <cstdlib>
 #include <cstring>
-#include <sstream>
-#include <stdexcept>
 #include <fstream>
 #include <functional>
-#include <thread>
 #include <future>
-#include <chrono>
-#include <cstdlib>
+#include <iostream>
+#include <map>
 #include <mutex>
+#include <sstream>
+#include <stdexcept>
+#include <thread>
+#include <vector>
+
+#include <ap_axi_sdata.h>
+#include <ap_fixed.h>
+#include <ap_int.h>
+#include <hls_stream.h>
+#include <json/json.h>
+#include <zmq.hpp>
 
 {% for p in prototypes %}
 {{ p }}
