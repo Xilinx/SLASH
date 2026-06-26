@@ -62,9 +62,6 @@ set -exo pipefail
 #                       the container.
 #
 # Optional environment variables:
-#   SLASH_XILINX_ROOT              Mount point for the Xilinx tools inside the
-#                                  container. Defaults to SLASH_XILINX_PATH so
-#                                  paths match host and container.
 #   SLASH_LICENSE_PATH             Path to the Xilinx license file (or
 #                                  directory) on the host. When set, it is
 #                                  mounted into the container and exported as
@@ -104,11 +101,7 @@ if [ -z $SLASH_XILINX_PATH ]; then
     exit 1
 fi
 
-if [ -z $SLASH_XILINX_ROOT ]; then
-    SLASH_XILINX_ROOT=$SLASH_XILINX_PATH
-fi
-
-DOCKER_RUN_ARGS+="-v $SLASH_XILINX_ROOT:$SLASH_XILINX_ROOT "
+DOCKER_RUN_ARGS+="-v $SLASH_XILINX_PATH:$SLASH_XILINX_PATH "
 
 # Mounting the license file for synthesis and implementation, if provided.
 # When unset, the license is assumed to be reachable via SLASH_XILINX_PATH
