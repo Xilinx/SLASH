@@ -45,6 +45,24 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(VRT_INCLUDE_VRTD "Include vrtd subdirectory instead of building from system" OFF)
 option(VRT_BUILD_TESTS "Build unit tests" OFF)
 
+# --- Optional GPU (ROCm/HIP) support ---
+option(VRT_ENABLE_GPU "Build with GPU device backend (requires ROCm/HIP)" OFF)
+
+if(VRT_ENABLE_GPU)
+  find_library(HIP_LIB amdhip64 PATHS /opt/rocm/lib)
+  if(HIP_LIB AND EXISTS "/opt/rocm/bin/amdclang++")
+    enable_language(HIP)
+    set(VRT_HAS_GPU TRUE)
+    set(GPU_ARCH "gfx90a" CACHE STRING "GPU architecture for HIP compilation")
+    message(STATUS "VRT GPU backend: ENABLED (GPU_ARCH=${GPU_ARCH})")
+  else()
+    message(WARNING "VRT_ENABLE_GPU=ON but ROCm/HIP not found; GPU backend disabled")
+    set(VRT_HAS_GPU FALSE)
+  endif()
+else()
+  set(VRT_HAS_GPU FALSE)
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -75,16 +93,38 @@ configure_file(
 file(
   GLOB
   LIB_SOURCES
-  
+
   ${CMAKE_CURRENT_SOURCE_DIR}/src/allocator/*.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/include/buffer/*.hpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/qdma/*.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp 
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/*.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/register/*.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/driver/*.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/utils/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/device/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/device/fpga/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/crossdevice/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/render/*.cpp
 )
+
+# Exclude GPU-only crossdevice sources from the unconditional glob; they're
+# added below only when the GPU backend is available.
+list(FILTER LIB_SOURCES EXCLUDE REGEX ".*/src/graph/crossdevice/cpu_gpu_bridge\\.cpp$")
+
+# --- GPU (HIP) sources ---
+if(VRT_HAS_GPU)
+  set(GPU_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/device/gpu_device.hip
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/graph/crossdevice/cpu_gpu_bridge.cpp
+  )
+  set_source_files_properties(${GPU_SOURCES} PROPERTIES
+    LANGUAGE HIP
+    HIP_ARCHITECTURES "${GPU_ARCH}"
+  )
+  list(APPEND LIB_SOURCES ${GPU_SOURCES})
+endif()
 
 add_library(vrt SHARED ${LIB_SOURCES})
 
@@ -107,6 +147,15 @@ set_target_properties(vrt PROPERTIES
   VERSION ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}
 )
+
+# --- GPU compile definitions and link ---
+if(VRT_HAS_GPU)
+  target_compile_definitions(vrt PUBLIC VRT_HAS_GPU=1)
+  target_include_directories(vrt PUBLIC /opt/rocm/include)
+  target_link_libraries(vrt PUBLIC ${HIP_LIB})
+else()
+  target_compile_definitions(vrt PUBLIC VRT_HAS_GPU=0)
+endif()
 
 
 if(VRT_INCLUDE_VRTD)
@@ -141,6 +190,9 @@ target_link_libraries(vrt
 if(VRT_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+# Examples
+add_subdirectory(examples)
 
 # Installation
 

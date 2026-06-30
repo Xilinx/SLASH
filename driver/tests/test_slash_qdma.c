@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /*
- * QDMA control device (/dev/slash_qdma_ctl<N>) ABI tests.
+ * Basic QDMA queue-pair lifecycle test.
  *
  * Covers QPAIR_ADD / Q_OP / QPAIR_GET_FD / INFO, the kernel-owned buffer fd
  * (BUF_CREATE + mmap), and the per-qpair anon-inode transfer fd
@@ -10,12 +10,21 @@
  */
 
 #include "kselftest_harness.h"
-#include "slash_test_helpers.h"
 
-#include <stdio.h>
-#include <sys/mman.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-#define TRANSFER_SIZE 4096
+#include <sys/ioctl.h>
+
+#include <slash/uapi/slash_interface.h>
+
+#define QDMA_CTL_DEV   "/dev/slash_qdma_ctl0"
+#define TRANSFER_SIZE  4096
+#define DDR_BASE_ADDRESS 0x60000000000ULL
 
 /* ---------- helpers ---------- */
 
@@ -24,8 +33,20 @@ static uint64_t get_dma_addr(void)
 	const char *val = getenv("SLASH_TEST_DMA_ADDR");
 
 	if (val)
-		return strtoull(val, NULL, 0);
+		return strtoull(val, NULL, DDR_BASE_ADDRESS);
 	return 0;
+}
+
+static int qpair_op(int fd, uint32_t qid, uint32_t op)
+{
+	struct slash_qdma_qpair_op req;
+
+	memset(&req, 0, sizeof(req));
+	req.size = sizeof(req);
+	req.qid  = qid;
+	req.op   = op;
+
+	return ioctl(fd, SLASH_QDMA_IOCTL_Q_OP, &req);
 }
 
 static void fill_pattern(uint8_t *buf, size_t len)
@@ -105,14 +126,14 @@ FIXTURE(qdma)
 FIXTURE_SETUP(qdma)
 {
 	self->ctl_fd = -1;
-	self->io_fd = -1;
-	self->qpair_added = 0;
+	self->io_fd  = -1;
+	self->qpair_added   = 0;
 	self->qpair_started = 0;
 
-	if (access(SLASH_TEST_QDMA_DEV, F_OK) != 0)
-		SKIP(return, "QDMA device not found (%s)", SLASH_TEST_QDMA_DEV);
+	if (access(QDMA_CTL_DEV, F_OK) != 0)
+		SKIP(return, "QDMA device not found (%s)", QDMA_CTL_DEV);
 
-	self->ctl_fd = open(SLASH_TEST_QDMA_DEV, O_RDWR);
+	self->ctl_fd = open(QDMA_CTL_DEV, O_RDWR);
 	ASSERT_GE(self->ctl_fd, 0);
 }
 
@@ -122,32 +143,16 @@ FIXTURE_TEARDOWN(qdma)
 		close(self->io_fd);
 
 	if (self->qpair_started)
-		slash_qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_STOP);
+		qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_STOP);
 
 	if (self->qpair_added)
-		slash_qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_DEL);
+		qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_DEL);
 
 	if (self->ctl_fd >= 0)
 		close(self->ctl_fd);
 }
 
-/* Bring up a default MM qpair (H2C | C2H) and an I/O fd on the fixture. */
-static void bring_up_qpair(struct __test_metadata *_metadata,
-						   FIXTURE_DATA(qdma) * self, uint32_t dir_mask)
-{
-	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 0 /* MM */, dir_mask,
-								 &self->qid));
-	self->qpair_added = 1;
-
-	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
-								SLASH_QDMA_QUEUE_OP_START));
-	self->qpair_started = 1;
-
-	self->io_fd = slash_qpair_get_fd(self->ctl_fd, self->qid, O_CLOEXEC);
-	ASSERT_GE(self->io_fd, 0);
-}
-
-/* ---------- happy-path tests ---------- */
+/* ---------- tests ---------- */
 
 TEST_F(qdma, query_info)
 {
@@ -155,28 +160,44 @@ TEST_F(qdma, query_info)
 
 	memset(&info, 0, sizeof(info));
 	info.size = sizeof(info);
+
 	EXPECT_GE(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info), 0);
 }
 
 TEST_F(qdma, qpair_lifecycle)
 {
-	// Direction 0b11 -> host-to-card and card-to-host
-	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 0, 0b11, &self->qid));
+	struct slash_qdma_qpair_add add;
+	struct slash_qdma_qpair_fd_request fd_req;
+
+	/* Add queue pair */
+	memset(&add, 0, sizeof(add));
+	add.size     = sizeof(add);
+	add.mode     = 0;   /* MM mode */
+	add.dir_mask = 0x3; /* H2C | C2H */
+
+	ASSERT_GE(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &add), 0);
+	self->qid = add.qid;
 	self->qpair_added = 1;
 
-	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
-								SLASH_QDMA_QUEUE_OP_START));
+	/* Start queue pair */
+	ASSERT_GE(qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_START), 0);
 	self->qpair_started = 1;
 
-	self->io_fd = slash_qpair_get_fd(self->ctl_fd, self->qid, O_CLOEXEC);
+	/* Get I/O fd */
+	memset(&fd_req, 0, sizeof(fd_req));
+	fd_req.size  = sizeof(fd_req);
+	fd_req.qid   = self->qid;
+	fd_req.flags = O_CLOEXEC;
+
+	self->io_fd = ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &fd_req);
 	ASSERT_GE(self->io_fd, 0);
 
-	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
-								SLASH_QDMA_QUEUE_OP_STOP));
+	/* Stop queue pair */
+	ASSERT_GE(qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_STOP), 0);
 	self->qpair_started = 0;
 
-	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
-								SLASH_QDMA_QUEUE_OP_DEL));
+	/* Delete queue pair */
+	ASSERT_GE(qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_DEL), 0);
 	self->qpair_added = 0;
 }
 
@@ -187,7 +208,11 @@ TEST_F(qdma, write_read_verify)
 	uint8_t *write_buf, *read_buf;
 	long ret;
 
-	bring_up_qpair(_metadata, self, 0x3);
+	/* Add + start queue pair */
+	memset(&add, 0, sizeof(add));
+	add.size     = sizeof(add);
+	add.mode     = 0;
+	add.dir_mask = 0x3;
 
 	write_fd = qdma_buf_create(self->ctl_fd, TRANSFER_SIZE, NULL, NULL);
 	ASSERT_GE(write_fd, 0);
@@ -210,6 +235,7 @@ TEST_F(qdma, write_read_verify)
 				TRANSFER_SIZE, SLASH_QDMA_XFER_C2H);
 	ASSERT_EQ(TRANSFER_SIZE, ret);
 
+	/* Verify */
 	EXPECT_EQ(0, memcmp(write_buf, read_buf, TRANSFER_SIZE));
 
 	munmap(write_buf, TRANSFER_SIZE);

@@ -45,8 +45,8 @@ def main(args):
     # reset TX first then RX
     if args.udp:
         """Basic network layer config"""
-        nl0 = NetworkLayer(args.dev, base_offset=get_ip_offset(NL_BASEADDR, 0))
-        nl1 = NetworkLayer(args.dev, base_offset=get_ip_offset(NL_BASEADDR, 2))
+        nl0 = NetworkLayer(args.dev, get_ip_offset(NL_BASEADDR, 0))
+        nl1 = NetworkLayer(args.dev, get_ip_offset(NL_BASEADDR, 2))
 
         print(f'nl0._base_offset=0x{nl0._base_offset:0X}')
         print(f'nl1._base_offset=0x{nl1._base_offset:0X}')
@@ -84,8 +84,8 @@ def main(args):
 
     """Now we can generate some traffic"""
 
-    tgen0 = TrafficGenerator(args.dev, resource=0, base_offset=0x004C_0000)
-    tgen1 = TrafficGenerator(args.dev, resource=0, base_offset=0x0050_0000)
+    tgen0 = TrafficGenerator(args.dev, 0x00)
+    tgen1 = TrafficGenerator(args.dev, 0x80)
 
     tgen0.flits = 22
     tgen0.dest = 0
@@ -105,8 +105,8 @@ def main(args):
         nl1.get_debug_stats(True)
         print('\n')
 
-    dcmac0 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 0))
-    dcmac1 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 1))
+    dcmac0 = DCMAC(args.dev, get_ip_offset(DCMAC_BASEADDR, 0))
+    dcmac1 = DCMAC(args.dev, get_ip_offset(DCMAC_BASEADDR, 1))
 
     print(f'{dcmac0.tx_stats(verbose=1)=}')
     print(f'{dcmac0.rx_stats(verbose=1)=}')

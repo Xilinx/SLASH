@@ -58,9 +58,9 @@ class NetworkLayer(DefaultIP):
         ]
     )
 
-    def __init__(self, device: str = 'e2', resource: int = 2,
-                 base_offset: int = 0x0, debug: bool = False):
-        super().__init__(device, resource, base_offset, debug)
+    def __init__(self, device: str = 'e2', base_offset: int = 0x0,
+                 debug: bool = False):
+        super().__init__(device, base_offset, debug)
         self.registers = nl_regs
         self.sockets = np.zeros(16, dtype=self._socketType)
         self.freq = None

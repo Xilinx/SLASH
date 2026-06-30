@@ -19,7 +19,7 @@ Physical Functions
    │                                          │
    │   PF0 (.0)      PF1 (.1)      PF2 (.2)  │
    │   ami           slash_qdma    slash_ctl   │
-   │   0x50B4        0x50B5        0x50B6      │
+   │   0x50B4        0x50C1        0x50C2      │
    │   Management    DMA           BAR MMIO    │
    └──────────────────────────────────────────┘
 
@@ -39,13 +39,13 @@ Physical Functions
      - AVED management interface — sensor readings, board identity, firmware
        version.
    * - PF1
-     - ``0x50B5``
+     - ``0x50C1``
      - ``slash_qdma``
      - ``/dev/slash_qdma_ctl<N>``
      - Queue-based DMA subsystem — H2C and C2H data transfers for buffers and
        streaming.
    * - PF2
-     - ``0x50B6``
+     - ``0x50C2``
      - ``slash_ctl``
      - ``/dev/slash_ctl<N>``
      - BAR MMIO access — kernel register reads and writes via memory-mapped
@@ -79,7 +79,7 @@ Device Discovery
 1. Enumerate ``/sys/bus/pci/devices/`` for entries with vendor ``0x10EE`` and
    device ``0x50B4`` (PF0).
 2. Extract the board BDF from the matching entry.
-3. Verify that companion functions PF1 (``0x50B5``) and PF2 (``0x50B6``)
+3. Verify that companion functions PF1 (``0x50C1``) and PF2 (``0x50C2``)
    exist at the same bus and device.
 4. Check that the correct kernel driver is bound to each function by
    inspecting the ``driver`` symlink in sysfs.
@@ -102,10 +102,10 @@ Readiness Checks
      - ``ami`` driver bound to ``0x50B4``
      - AMI management driver not loaded
    * - **PF1**
-     - ``slash_qdma`` driver bound to ``0x50B5``
+     - ``slash_qdma`` driver bound to ``0x50C1``
      - QDMA driver not loaded
    * - **PF2**
-     - ``slash_ctl`` driver bound to ``0x50B6``
+     - ``slash_ctl`` driver bound to ``0x50C2``
      - Control driver not loaded
    * - **VRTD**
      - Daemon has registered the board

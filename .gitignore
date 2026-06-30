@@ -26,6 +26,7 @@ cmake_install.cmake
 *.exe
 *.out
 *.app
+*.elf
 
 # Ignore logs and databases
 *.jou
@@ -64,9 +65,6 @@ __pycache__/
 *.pyc
 .venv/
 
-# Kernel module kcompat probe scratch (driver/kcompat/probe.sh)
-driver/kcompat/.scratch/
-
 # Build files for package
 /pbuild/
 /rpmbuild/
@@ -86,5 +84,15 @@ driver/kcompat/.scratch/
 # Python test coverage
 .coverage
 
-# Project-local scratch space
+# Generated graph/render demo artifacts
+/render_demo_out/
+
+# Project-local scratch directory
 /tmp/
+
+# Personal/HSA-iteration scripts (not part of the released stack)
+/scripts/hsa/
+
+# Locally-built ROCm source tree (foreign-dma-buf-patched HSA runtime).
+# See examples/rp1_bringup_gpu/scripts/build_rocm_with_foreign_dmabuf.sh.
+/examples/rp1_bringup_gpu/rocm-slash-src/

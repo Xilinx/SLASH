@@ -38,10 +38,9 @@ class DefaultIP(GenericMMIO):
     _intenable = 0x08
     _intstatus = 0x10
 
-    def __init__(self, device: str = 'e2', resource: int = 2,
-                 base_offset: int = 0x0, debug: bool = False,
-                 regs: dict = None):
-        super().__init__(device, resource, base_offset, debug)
+    def __init__(self, device: str = 'e2', base_offset: int = 0x0,
+                 debug: bool = False, regs: dict = None):
+        super().__init__(device, base_offset, debug)
         self.registers = cregs if regs is None else regs
 
     def start(self, value: int = 1):

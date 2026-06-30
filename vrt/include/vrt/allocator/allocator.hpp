@@ -207,10 +207,18 @@ protected:
     static constexpr size_t kMax = MAX_K;
     static constexpr size_t kNumBuckets = MAX_K - MIN_K + 1;
     static constexpr size_t kToIndex(size_t k) { return k - MIN_K; }
-    static size_t sizeToIndex(size_t size, const char* tooSmallError) {
+    static size_t sizeToIndex(size_t size, const char* /*tooSmallError*/) {
+        // Requests at or below the minimum block size round up to the smallest
+        // bucket: a buddy allocator's minimum block is its allocation floor, so
+        // tiny buffers (e.g. a handful of elements) should consume one smallest
+        // block rather than be rejected.  Also avoids __builtin_clzll(0) UB for
+        // size <= 1.
+        if (size <= (size_t(1) << MIN_K)) {
+            return 0;
+        }
         size_t k = 64 - __builtin_clzll((unsigned long long)(size - 1));
         if (k < MIN_K) {
-            throw std::runtime_error(tooSmallError);
+            return 0;
         }
         return kToIndex(k);
     }

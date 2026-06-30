@@ -125,7 +125,7 @@ the BAR is present and usable for MMIO, its physical address, and its size.
     struct slash_ioctl_device_info dev_info = { .size = sizeof(dev_info) };
     ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &dev_info);
     /* dev_info.bdf → e.g. "0000:61:00.2" */
-    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50B6 */
+    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50C2 */
 
     /* Enumerate all six BARs */
     for (int i = 0; i < 6; i++) {
@@ -302,7 +302,7 @@ fd with a physical board and with the matching QDMA control device.
         __u32 size;                   /* [in/out] ABI version */
         char  bdf[SLASH_PCI_BDF_LEN]; /* [out] PCI BDF string, NUL-terminated, e.g. "0000:61:00.2" */
         __u16 vendor_id;              /* [out] PCI vendor ID (0x10EE for AMD/Xilinx) */
-        __u16 device_id;              /* [out] PCI device ID (0x50B6 for PF2) */
+        __u16 device_id;              /* [out] PCI device ID (0x50C2 for PF2) */
         __u16 subsystem_vendor_id;    /* [out] PCI subsystem vendor ID */
         __u16 subsystem_device_id;    /* [out] PCI subsystem device ID */
     };

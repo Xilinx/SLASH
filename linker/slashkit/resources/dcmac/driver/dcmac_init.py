@@ -60,11 +60,11 @@ def dcmac_logic_init(args):
     global intf_id, dcmac, gt_gpio, monitor, gtdatapath
 
     intf_id = 0 # TODO: in the future, we'll have 2 interfaces per DCMAC
-    dcmac = DCMAC(args.dev, base_offset=get_ip_offset(0x200_0000, args.dcmac))
-    gt_gpio = AxiGTController(args.dev, base_offset=get_ip_offset(0x204_0000, args.dcmac),
+    dcmac = DCMAC(args.dev, get_ip_offset(0x200_0000, args.dcmac))
+    gt_gpio = AxiGTController(args.dev, get_ip_offset(0x204_0000, args.dcmac),
                               gpio_index=0)
-    monitor = AxiGPIOMonitor(args.dev, base_offset=get_ip_offset(0x204_0200, args.dcmac), gpio_index=0)
-    gtdatapath = AxiGpioMMIO(args.dev, base_offset=get_ip_offset(0x204_0400, args.dcmac))
+    monitor = AxiGPIOMonitor(args.dev, get_ip_offset(0x204_0200, args.dcmac), gpio_index=0)
+    gtdatapath = AxiGpioMMIO(args.dev, get_ip_offset(0x204_0400, args.dcmac))
 
     # Set GT Tx analog front-end swing and pre/post-emphasis:
     # TODO: Fine-tune the following configuration. In general, this achieves alignment,

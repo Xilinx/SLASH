@@ -23,9 +23,8 @@
  * to provide queue-pair-based DMA transfers between host memory and the
  * FPGA fabric.
  *
- * The QDMA subsystem binds to PF1 (PCI device ID 0x50B5, or 0x50BD on
- * AVED/V80P designs), while the control device (slash_ctldev) binds to
- * PF2 (device ID 0x50B6).
+ * The QDMA subsystem binds to PF1 (PCI device ID 0x50C1), while the
+ * control device (slash_ctldev) binds to PF2 (device ID 0x50C2).
  *
  * Queue pair lifecycle:
  *   add -> start -> I/O (via anon_inode fd) -> stop -> del
@@ -67,7 +66,6 @@
 #include <linux/pci.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/stddef.h>
 #include <linux/uaccess.h>
 #include <linux/xarray.h>
 #include <linux/anon_inodes.h>
@@ -726,12 +724,10 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc, struct slash_qdma_dev
 /**
  * slash_qdma_ids - PCI device ID table for the QDMA PF.
  *
- * Matches PF1 QDMA functions on AMD/Xilinx V80 cards, including the
- * AVED/V80P device ID.
+ * Matches only PF1 (device ID 0x50C1) on AMD/Xilinx V80 cards.
  */
 static const struct pci_device_id slash_qdma_ids[] = {
     {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_QDMA_PCI_DEVICE_ID)},
-    {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_AVED_QDMA_PCI_DEVICE_ID)},
     {0,}
 };
 MODULE_DEVICE_TABLE(pci, slash_qdma_ids);
@@ -1766,12 +1762,6 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (user_size < SLASH_QDMA_INFO_MIN_SIZE) {
-        dev_warn(misc->this_device,
-                 "qdma: INFO size too small (%u)\n", user_size);
-        return -EINVAL;
-    }
-
     memset(&info, 0, sizeof(info));
     info.size = sizeof(info);
 
@@ -1828,9 +1818,8 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc,
  * @uarg:     User-space pointer to a slash_qdma_qpair_add struct.
  *
  * Validates userspace inputs:
- *   - @dir_mask must be non-zero, contain only known bits, and not include CMPT
- *     (completion queues are not yet supported).
- *   - @mode must be MM; streaming mode (ST) is not yet supported.
+ *   - @dir_mask must contain only valid direction bits and be non-zero.
+ *   - @mode must be MM or ST.
  *   - Ring size indices must be in [0, 15] (CSR table range).
  *   - @aperture_size must be zero (linear addressing) or a power-of-two
  *     libqdma keyhole aperture.
@@ -1857,30 +1846,18 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (user_size < SLASH_QDMA_QPAIR_ADD_MIN_SIZE) {
-        dev_warn(misc->this_device,
-                 "qdma: QPAIR_ADD size too small (%u)\n", user_size);
-        return -EINVAL;
-    }
-
     memset(&req, 0, sizeof(req));
 
     if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
-
-    /* Completion queues are not yet supported. */
-    if (req.dir_mask & SLASH_QDMA_DIR_CMPT)
-        return -EOPNOTSUPP;
 
     /* Validate direction mask: must be non-zero and contain only known bits. */
     dir_mask = req.dir_mask & SLASH_QDMA_DIR_MASK;
     if (!dir_mask || dir_mask != req.dir_mask)
         return -EINVAL;
 
-    /* Streaming mode is not yet supported; only memory-mapped mode is accepted. */
-    if (req.mode == QDMA_Q_MODE_ST)
-        return -EOPNOTSUPP;
-    if (req.mode != QDMA_Q_MODE_MM)
+    /* Only memory-mapped and streaming modes are supported. */
+    if (req.mode != QDMA_Q_MODE_MM && req.mode != QDMA_Q_MODE_ST)
         return -EINVAL;
 
     /*
@@ -2272,12 +2249,6 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
      */
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
-
-    if (user_size < SLASH_QDMA_QPAIR_OP_MIN_SIZE) {
-        dev_warn(misc->this_device,
-                 "qdma: Q_OP size too small (%u)\n", user_size);
-        return -EINVAL;
-    }
 
     memset(&req, 0, sizeof(req));
 
@@ -3628,14 +3599,10 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
     int fd;
     int err;
 
+    (void)misc;
+
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
-
-    if (user_size < SLASH_QDMA_QPAIR_GET_FD_MIN_SIZE) {
-        dev_warn(misc->this_device,
-                 "qdma: QPAIR_GET_FD size too small (%u)\n", user_size);
-        return -EINVAL;
-    }
 
     memset(&req, 0, sizeof(req));
 
@@ -3746,4 +3713,48 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
     fd_install(fd, file);
 
     return fd;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Queue pair teardown helper
+ * ───────────────────────────────────────────────────────────────────── */
+
+/**
+ * slash_qdma_qpair_teardown() - Fully remove a queue pair and its HW queues.
+ * @qdma_dev: QDMA device.
+ * @qid:      Queue pair ID.
+ * @entry:    Queue pair entry to tear down.
+ *
+ * Must be called with @qdma_dev->lock held.
+ *
+ * Stops and removes all HW queues in the pair, invalidates all handles,
+ * erases the entry from the xarray, and drops the xarray's ref on the
+ * entry.  The entry itself is freed only when all references (including
+ * any held by open anon_inode fds) have been released.
+ */
+/* Must be called with qdma_dev->lock held */
+static void slash_qdma_qpair_teardown(struct slash_qdma_dev *qdma_dev, u32 qid,
+                                      struct slash_qdma_qpair_entry *entry)
+{
+    unsigned int idx;
+
+    if (!entry)
+        return;
+
+    /* Remove any queues that still exist */
+    for (idx = 0; idx < SLASH_QDMA_QTYPE_COUNT; idx++) {
+        enum queue_type_t qtype = idx;
+
+        if (entry->dir_mask & slash_qdma_qtype_to_dir(qtype))
+            slash_qdma_ioctl_qpair_rm_q(&qdma_dev->misc, qdma_dev, entry, qtype);
+    }
+
+    /* Mark entry dead for any stale FDs */
+    for (idx = 0; idx < SLASH_QDMA_QTYPE_COUNT; idx++)
+        entry->qhndl[idx] = QDMA_QUEUE_IDX_INVALID;
+    entry->dir_mask = 0;
+
+    /* Drop from xarray and release ref */
+    xa_erase(&qdma_dev->qpairs, qid);
+    slash_qdma_qpair_put(entry);
 }

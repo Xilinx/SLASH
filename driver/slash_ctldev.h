@@ -34,6 +34,8 @@
  * @active: 1 if the BAR is present (has a non-zero start address).
  * @mmio:   1 if the BAR is a memory-mapped I/O region (IORESOURCE_MEM).
  *          I/O-port BARs are tracked but not exported to userspace.
+ * @p2pdma_registered: 1 if this BAR was successfully registered with
+ *          pci_p2pdma_add_resource().
  * @start:  Physical/bus start address of the BAR.
  * @end:    Physical/bus end address of the BAR (inclusive).
  * @len:    Size of the BAR in bytes.
@@ -43,6 +45,7 @@
 struct slash_ctldev_bar {
     unsigned int active : 1;
     unsigned int mmio : 1;
+    unsigned int p2pdma_registered : 1;
     resource_size_t start;
     resource_size_t end;
     resource_size_t len;

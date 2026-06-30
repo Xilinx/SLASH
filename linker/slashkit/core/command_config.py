@@ -362,6 +362,8 @@ Example:
 
 
 class InstallerConfiguration(CommandConfiguration):
+    VALID_STAGES = ("all", "base-shell", "firmware", "rp1-firmware")
+
     @classmethod
     def populate_argument_parser(cls, ap: argparse.ArgumentParser):
         super().populate_argument_parser(ap)
@@ -378,16 +380,25 @@ class InstallerConfiguration(CommandConfiguration):
                         + "If you have checked out the SLASH repository, this would be linker/slashkit/resources")
         ap.add_argument("--ignore-timing-failure", action="store_true",
                         help="Install static shell artifacts even when timing failed (WNS < 0 or WHS < 0).")
+        ap.add_argument("--stage", required=False, choices=cls.VALID_STAGES, default="all",
+                        help="Installer stage to run. Default: all. "
+                             "Development-only: use base-shell to build/reuse implementation artifacts, "
+                             "firmware to rebuild AMC+RP1 firmware and repack an existing build-dir, "
+                             "or rp1-firmware to rebuild only RP1 and repack using existing AMC/FPT artifacts.")
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
 
         self._ignore_timing_failure: bool = args.ignore_timing_failure
+        self._stage: str = args.stage
 
         self._build_dir: Path = args.build_dir.expanduser().resolve()
-        if self._build_dir.is_dir():
-            shutil.rmtree(self._build_dir)
-        self._build_dir.mkdir(parents=True)
+        if self._stage in ("all", "base-shell"):
+            if self._build_dir.is_dir():
+                shutil.rmtree(self._build_dir)
+            self._build_dir.mkdir(parents=True)
+        elif not self._build_dir.is_dir():
+            raise FileNotFoundError(self._build_dir)
 
         self._aved_repo: str = args.aved_repo
         self._aved_ref: str = args.aved_ref
@@ -424,3 +435,5 @@ class InstallerConfiguration(CommandConfiguration):
     def noninteractive(self) -> bool:
         value = os.getenv("SLASH_NONINTERACTIVE", "")
         return value not in ("", "0", "false", "False", "no", "No")
+    def stage(self) -> str:
+        return self._stage

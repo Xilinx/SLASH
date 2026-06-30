@@ -53,10 +53,10 @@ constexpr unsigned int SLASH_DEVICE_ID{0x50B4};
 constexpr unsigned int SLASH_PF_NUMBER{0};
 
 /// PCI device ID for the V80 QDMA function (PF1).
-constexpr unsigned int SLASH_PF1_DEVICE_ID{0x50B5};
+constexpr unsigned int SLASH_PF1_DEVICE_ID{0x50C1};
 
 /// PCI device ID for the V80 control function (PF2).
-constexpr unsigned int SLASH_PF2_DEVICE_ID{0x50B6};
+constexpr unsigned int SLASH_PF2_DEVICE_ID{0x50C2};
 
 /// Expected driver for PF0 (AMI management function).
 constexpr char PF0_EXPECTED_DRIVER[] = "ami";

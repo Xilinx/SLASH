@@ -155,6 +155,32 @@ When you construct ``vrt::Device(bdf, vrtbinPath)``:
    bitstream(s) via the vrtd daemon. On emulation/simulation, it launches
    the model executable in a background thread.
 
+Graph API and RP1
+=================
+
+The VRT graph FPGA backend also consumes vbin metadata.  It does not require a
+new manifest file: kernel shape is derived from ``system_map.xml`` and hardware
+PDI files are discovered with the same ``vrt::Vrtbin`` logic used by
+``vrt::Device``.
+
+For RP1 graph execution, each hardware vbin is currently treated as an
+exclusive user-region image.  The graph-facing image spec maps every
+``<Kernel>`` entry to:
+
+* a graph ``KernelDescriptor`` / ``IOTypeMap`` built from
+  ``functional_args``;
+* the host-view base address from ``<BaseAddress>``;
+* the RP1/R5-visible AXI-Lite base address:
+
+  .. code-block:: text
+
+     r5_addr = 0x88000000 + (system_map_base - 0x020200000000)
+
+Graph authors explicitly request image swaps with a reprogram node.  In the
+RP1 backend this lowers to ``RP1_OP_PDI_LOAD`` using the selected vbin's PDI
+bytes staged into RP1-visible DDR.  No partial-region coexistence metadata is
+modeled yet; at most one vbin image is active per FPGA device.
+
 Inspecting a Vrtbin
 ===================
 

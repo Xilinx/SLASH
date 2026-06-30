@@ -35,12 +35,17 @@
 #include "slash_ctldev.h"
 
 #include <linux/atomic.h>
+#include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 #include <linux/printk.h>
 #include <linux/stddef.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
+#ifdef CONFIG_PCI_P2PDMA
+#include <linux/pci-p2pdma.h>
+#endif
 
 #include "slash.h"
 #include "slash_dmabuf.h"
@@ -65,16 +70,7 @@
 #define SLASH_IOCTL_BAR_FD_RESPONSE_SIZE \
     (offsetof(struct slash_ioctl_bar_fd_request, length) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_fd_request, length))
 
-/*
- * GET_DEVICE_INFO is pure output: there are no input fields beyond `size`
- * itself, so the smallest meaningful user_size is the size field on its
- * own. A caller passing size==0 has either forgotten to initialise the
- * struct or claimed an incoherent "my struct has zero bytes" — either way
- * the kernel rejects with -EINVAL rather than silently writing 0 bytes
- * back.
- */
-#define SLASH_IOCTL_DEVICE_INFO_MIN_SIZE \
-    SLASH_FIELD_SIZE(struct slash_ioctl_device_info, size)
+#define SLASH_BAR_DMABUF_DRAIN_TIMEOUT_MS 5000
 
 static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *ctldev);
 static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev);
@@ -209,6 +205,29 @@ static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *
         flags                  = pci_resource_flags(pdev, i);
         ctldev->bars[i].mmio   = ((flags & IORESOURCE_MEM) != 0);
 
+#ifdef CONFIG_PCI_P2PDMA
+        if (ctldev->bars[i].mmio) {
+            int p2p_ret;
+
+            p2p_ret = pci_p2pdma_add_resource(pdev, i, 0, 0);
+            if (p2p_ret) {
+                dev_warn(&pdev->dev,
+                         "ctldev: BAR%d P2PDMA registration failed: %d "
+                         "(BAR may not be prefetchable in the running bitstream)\n",
+                         i, p2p_ret);
+            } else {
+                ctldev->bars[i].p2pdma_registered = 1;
+                dev_info(&pdev->dev,
+                         "ctldev: BAR%d registered with P2PDMA\n",
+                         i);
+            }
+        }
+#else
+        dev_warn_once(&pdev->dev,
+                      "ctldev: kernel built without CONFIG_PCI_P2PDMA; "
+                      "GPU<->FPGA peer-to-peer DMA will not be available\n");
+#endif
+
 
         dev_info(&pdev->dev,
                 "Found BAR%d: 0x%pa - 0x%pa (size: %pa) %s\n",
@@ -241,7 +260,8 @@ static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev)
             continue;
         }
 
-        dmabuf = slash_bar_dmabuf_create(ctldev->pdev, i);
+        dmabuf = slash_bar_dmabuf_create(ctldev->pdev, i,
+                                         ctldev->bars[i].p2pdma_registered);
         if (IS_ERR(dmabuf)) {
             dev_err(&ctldev->pdev->dev, "ctldev: BAR%d dmabuf create failed: %ld\n", i, PTR_ERR(dmabuf));
             return PTR_ERR(dmabuf);
@@ -442,11 +462,41 @@ static void slash_ctldev_destroy_misc(struct slash_ctldev *ctldev)
 static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev)
 {
     int i;
+    unsigned long timeout = msecs_to_jiffies(SLASH_BAR_DMABUF_DRAIN_TIMEOUT_MS);
+
+    /* Freeze BAR dmabufs first so new mappings fail during teardown. */
+    for (i = 0; i < PCI_STD_NUM_BARS; i++) {
+        if (ctldev->bars[i].dmabuf)
+            slash_bar_dmabuf_begin_remove(ctldev->bars[i].dmabuf);
+    }
+
+    /* Notify dynamic importers to drop and recreate mappings elsewhere. */
+    for (i = 0; i < PCI_STD_NUM_BARS; i++) {
+        if (ctldev->bars[i].dmabuf)
+            slash_bar_dmabuf_invalidate(ctldev->bars[i].dmabuf);
+    }
+
+    /* Give importers a bounded window to drain active P2P maps. */
+    for (i = 0; i < PCI_STD_NUM_BARS; i++) {
+        struct dma_buf *dmabuf = ctldev->bars[i].dmabuf;
+
+        if (!dmabuf)
+            continue;
+
+        if (!slash_bar_dmabuf_wait_p2p_idle(dmabuf, timeout)) {
+            dev_warn(&ctldev->pdev->dev,
+                     "ctldev: BAR%d still has %u active P2P maps after %dms\n",
+                     i,
+                     slash_bar_dmabuf_p2p_map_count(dmabuf),
+                     SLASH_BAR_DMABUF_DRAIN_TIMEOUT_MS);
+        }
+    }
 
     for (i = 0; i < PCI_STD_NUM_BARS; i++) {
         if (ctldev->bars[i].dmabuf) {
             dev_dbg(&ctldev->pdev->dev, "ctldev: destroying BAR%d dmabuf\n", i);
             slash_bar_dmabuf_destroy(ctldev->bars[i].dmabuf);
+            ctldev->bars[i].dmabuf = NULL;
         }
     }
 }
@@ -518,7 +568,7 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
 
         /* Populate output fields. */
         bar_info.usable = bar->active && bar->mmio;
-        bar_info.in_use = 0;
+        bar_info.in_use = bar->dmabuf ? slash_bar_dmabuf_in_use(bar->dmabuf) : 0;
         bar_info.start_address = bar->start;
         bar_info.length = bar->len;
 
@@ -653,11 +703,6 @@ static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned 
         if (copy_from_user(&user_size, (void __user *)arg, sizeof(user_size))) {
             dev_err(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO copy_from_user failed\n");
             return -EFAULT;
-        }
-
-        if (user_size < SLASH_IOCTL_DEVICE_INFO_MIN_SIZE) {
-            dev_warn(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO size too small (%u)\n", user_size);
-            return -EINVAL;
         }
 
         memset(&info, 0, sizeof(info));

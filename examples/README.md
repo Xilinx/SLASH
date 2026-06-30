@@ -10,7 +10,8 @@ This directory contains the example projects for VRT. Each example demonstrates 
 | 3 | Controlling multiple V80s | Uses vrtbin of example 0 |
 | 4 | Frequency targets | |
 | 5 | Memory performance test | Instantiates current maximum number of kernels |
-| 6 | Network interface test | Drives two network interfaces |
+| `rp1_bringup_vrt` | VRT-graph + FpgaDevice → RP1 firmware | Phase-1 RP1 regression: four-kernel diamond on top of `vrt::graph::Graph`. See [rp1_bringup_vrt/README.md](rp1_bringup_vrt/README.md). |
+| `rp1_pdi_loop`    | RP1 `PDI_LOAD` partial reconfiguration in a `LOOP` | Two single-kernel vbins (variant A writes `0xAAAA_AAAA`, variant B writes `0xBBBB_BBBB`), host stages both partial PDIs in DDR via `vrt::Buffer`, RP1 alternates `PDI_LOAD(A) -> kernel A -> PDI_LOAD(B) -> kernel B -> RERUN`. See [rp1_pdi_loop/README.md](rp1_pdi_loop/README.md). |
 
 ## How to run the examples
 

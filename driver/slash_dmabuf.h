@@ -19,9 +19,8 @@
  *
  * Provides a dma-buf wrapper around a PCI BAR so that userspace can
  * obtain a file descriptor and mmap the BAR for direct MMIO access.
- * Only userspace mmap is supported; kernel-side device attachment is
- * intentionally rejected because a PCI BAR is device I/O memory, not
- * system RAM.
+ * If P2PDMA registration is available for the BAR, kernel-side device
+ * attachment is also supported for peer-to-peer DMA imports.
  */
 
 #ifndef SLASH_DMABUF_H
@@ -34,6 +33,8 @@
  * slash_bar_dmabuf_create() - Export a PCI BAR as a dma-buf.
  * @pdev:       PCI device owning the BAR.
  * @bar_number: BAR index (0-5).  Must be a valid MMIO BAR.
+ * @p2pdma_registered: true if pci_p2pdma_add_resource() succeeded for
+ *                     this BAR.
  *
  * Creates a dma-buf exporter backed by the physical address range of
  * the specified BAR.  Takes a reference on @pdev (via pci_dev_get())
@@ -41,7 +42,8 @@
  *
  * Return: Pointer to the new dma_buf on success, ERR_PTR on failure.
  */
-struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number);
+struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number,
+                                        bool p2pdma_registered);
 
 /**
  * slash_bar_dmabuf_destroy() - Release a BAR dma-buf.
@@ -52,5 +54,21 @@ struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number);
  * last user closes their fd / drops their reference.
  */
 void slash_bar_dmabuf_destroy(struct dma_buf *dmabuf);
+
+/** Mark a BAR dma-buf as being in remove path and reject new mappings. */
+void slash_bar_dmabuf_begin_remove(struct dma_buf *dmabuf);
+
+/** Notify importers to drop mappings through dynamic-attach move_notify. */
+void slash_bar_dmabuf_invalidate(struct dma_buf *dmabuf);
+
+/** Wait for active P2P maps to drain. Returns true when idle before timeout. */
+bool slash_bar_dmabuf_wait_p2p_idle(struct dma_buf *dmabuf,
+                                    unsigned long timeout_jiffies);
+
+/** Snapshot active P2P map count for diagnostics. */
+unsigned int slash_bar_dmabuf_p2p_map_count(struct dma_buf *dmabuf);
+
+/** Returns true when BAR dmabuf has active CPU or P2P mappings. */
+bool slash_bar_dmabuf_in_use(struct dma_buf *dmabuf);
 
 #endif /* SLASH_DMABUF_H */

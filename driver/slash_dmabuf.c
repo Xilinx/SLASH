@@ -21,11 +21,12 @@
  * userspace to obtain a file descriptor (via the control device ioctl)
  * and mmap the BAR for direct MMIO register access.
  *
- * Only userspace mmap is supported.  Kernel-side device attachments
- * (the normal dma-buf import path) are intentionally rejected because
- * a PCI BAR is I/O memory, not DMA-able system RAM.  The dma-buf
- * framework is used here solely for its fd-based lifetime management
- * and mmap infrastructure.
+ * For BARs that are registered with pci_p2pdma_add_resource(), this
+ * exporter also supports kernel-side dma-buf attachment and mapping so
+ * peer devices can issue P2P DMA transactions directly to the BAR.
+ *
+ * Phase-1 policy in this driver serializes userspace mmap access and
+ * P2P DMA access: both modes are supported, but not simultaneously.
  *
  * Cache attribute selection:
  *   - **Prefetchable BARs** → write-combine mapping (pgprot_writecombine).
@@ -39,13 +40,23 @@
 #include "slash_dmabuf.h"
 
 #include "slash.h"
-#include "slash_compat.h"
 
+#include <linux/atomic.h>
+#include <linux/dma-mapping.h>
 #include <linux/err.h>
+#include <linux/kernel.h>
 #include <linux/mm.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
+#ifdef CONFIG_PCI_P2PDMA
+#include <linux/pci-p2pdma.h>
+#endif
 #include <linux/printk.h>
+#include <linux/scatterlist.h>
 #include <linux/slab.h>
+#include <linux/version.h>
+#include <linux/vmalloc.h>
+#include <linux/wait.h>
 
 /**
  * struct slash_bar_dmabuf_data - Private data attached to each BAR dma-buf.
@@ -53,42 +64,198 @@
  * @len:        Size of the BAR region in bytes.
  * @pdev:       PCI device owning the BAR.  Held via pci_dev_get()
  *              for the lifetime of this struct.
+ * @p2pdma_registered: True when this BAR was successfully registered via
+ *                     pci_p2pdma_add_resource().
+ * @cpu_mmap_count: Number of active userspace VMAs for this BAR.
+ * @p2p_map_count: Number of active P2P sg mappings exported to importers.
+ * @remove_in_progress: Set while remove path is draining this dmabuf.
+ * @mode_lock: Serializes access-mode checks and state transitions.
+ * @p2p_idle_wq: Woken when p2p_map_count transitions to zero.
  */
 struct slash_bar_dmabuf_data {
     int bar_number;
     resource_size_t len;
 
     struct pci_dev *pdev;
+
+    bool p2pdma_registered;
+    atomic_t cpu_mmap_count;
+    atomic_t p2p_map_count;
+    atomic_t remove_in_progress;
+    struct mutex mode_lock;
+    wait_queue_head_t p2p_idle_wq;
 };
 
-/*
- * We only support userspace mmaps of the BAR; importing into other
- * devices is intentionally rejected because a PCI BAR is not system
- * memory — it cannot be scatter-gathered or DMA-mapped by another
- * device.
- */
 static int slash_bar_dmabuf_attach(struct dma_buf *dmabuf, struct dma_buf_attachment *attach)
 {
-    dev_warn(attach->dev, "%s: device attachments are not supported for BAR dmabuf", SLASH_NAME);
+    struct slash_bar_dmabuf_data *priv = dmabuf->priv;
+
+#ifdef CONFIG_PCI_P2PDMA
+    struct device *clients[1] = { attach->dev };
+
+    mutex_lock(&priv->mode_lock);
+
+    if (atomic_read(&priv->remove_in_progress)) {
+        mutex_unlock(&priv->mode_lock);
+        return -ENODEV;
+    }
+
+    if (!priv->p2pdma_registered) {
+        mutex_unlock(&priv->mode_lock);
+        dev_warn_ratelimited(&priv->pdev->dev,
+                             "slash: BAR%d dma-buf attach rejected: "
+                             "BAR not registered with pci_p2pdma_add_resource() "
+                             "(BAR not prefetchable, or kernel lacks CONFIG_PCI_P2PDMA)\n",
+                             priv->bar_number);
+        return -EOPNOTSUPP;
+    }
+
+    if (atomic_read(&priv->cpu_mmap_count) > 0) {
+        mutex_unlock(&priv->mode_lock);
+        dev_warn_ratelimited(&priv->pdev->dev,
+                             "slash: BAR%d dma-buf attach rejected: "
+                             "%d active CPU mmap(s) (Phase-1 exclusivity)\n",
+                             priv->bar_number,
+                             atomic_read(&priv->cpu_mmap_count));
+        return -EBUSY;
+    }
+
+    mutex_unlock(&priv->mode_lock);
+
+    if (pci_p2pdma_distance_many(priv->pdev, clients, ARRAY_SIZE(clients), true) < 0) {
+        dev_warn(attach->dev,
+                 "slash: P2P not supported for BAR%d topology\n",
+                 priv->bar_number);
+        return -EOPNOTSUPP;
+    }
+
+    mutex_lock(&priv->mode_lock);
+    if (atomic_read(&priv->remove_in_progress)) {
+        mutex_unlock(&priv->mode_lock);
+        return -ENODEV;
+    }
+    if (atomic_read(&priv->cpu_mmap_count) > 0) {
+        mutex_unlock(&priv->mode_lock);
+        return -EBUSY;
+    }
+    mutex_unlock(&priv->mode_lock);
+
+    return 0;
+#else
+    dev_warn_once(attach->dev,
+                  "slash: BAR%d dma-buf attach rejected: "
+                  "kernel built without CONFIG_PCI_P2PDMA\n",
+                  priv->bar_number);
     return -EOPNOTSUPP;
+#endif
 }
 
 static void slash_bar_dmabuf_detach(struct dma_buf *dmabuf, struct dma_buf_attachment *attach)
 {
-    dev_dbg(attach->dev, "slash: dmabuf detach (noop)\n");
+    struct slash_bar_dmabuf_data *priv = dmabuf->priv;
+
+    dev_dbg(attach->dev, "slash: dmabuf detach BAR%d\n", priv->bar_number);
 }
 
 static struct sg_table *slash_bar_dmabuf_map(struct dma_buf_attachment *attach,
                                         enum dma_data_direction dir)
 {
-    dev_dbg(attach->dev, "slash: dmabuf map requested -> not supported\n");
+    struct slash_bar_dmabuf_data *priv = attach->dmabuf->priv;
+
+#ifdef CONFIG_PCI_P2PDMA
+    resource_size_t bar_start;
+    unsigned long first_pfn;
+    unsigned long page_off;
+    unsigned long span;
+    unsigned long npages;
+    unsigned long i;
+    struct page **pages;
+    struct sg_table *sgt;
+    int ret;
+
+    mutex_lock(&priv->mode_lock);
+    if (atomic_read(&priv->remove_in_progress)) {
+        mutex_unlock(&priv->mode_lock);
+        return ERR_PTR(-ENODEV);
+    }
+    if (!priv->p2pdma_registered) {
+        mutex_unlock(&priv->mode_lock);
+        return ERR_PTR(-EOPNOTSUPP);
+    }
+    if (atomic_read(&priv->cpu_mmap_count) > 0) {
+        mutex_unlock(&priv->mode_lock);
+        return ERR_PTR(-EBUSY);
+    }
+    mutex_unlock(&priv->mode_lock);
+
+    bar_start = pci_resource_start(priv->pdev, priv->bar_number);
+    page_off = offset_in_page(bar_start);
+    span = page_off + priv->len;
+    npages = DIV_ROUND_UP(span, PAGE_SIZE);
+
+    if (npages > INT_MAX)
+        return ERR_PTR(-E2BIG);
+
+    pages = kvmalloc_array(npages, sizeof(*pages), GFP_KERNEL);
+    if (!pages)
+        return ERR_PTR(-ENOMEM);
+
+    first_pfn = PFN_DOWN(bar_start);
+    for (i = 0; i < npages; i++) {
+        pages[i] = pfn_to_page(first_pfn + i);
+    }
+
+    sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
+    if (!sgt) {
+        kvfree(pages);
+        return ERR_PTR(-ENOMEM);
+    }
+
+    ret = sg_alloc_table_from_pages(sgt, pages, npages, page_off, priv->len,
+                                    GFP_KERNEL);
+    kvfree(pages);
+    if (ret) {
+        kfree(sgt);
+        return ERR_PTR(ret);
+    }
+
+    ret = dma_map_sgtable(attach->dev, sgt, dir, DMA_ATTR_SKIP_CPU_SYNC);
+    if (ret) {
+        sg_free_table(sgt);
+        kfree(sgt);
+        return ERR_PTR(ret);
+    }
+
+    atomic_inc(&priv->p2p_map_count);
+
+    return sgt;
+#else
+    dev_dbg(attach->dev, "%s: CONFIG_PCI_P2PDMA disabled", SLASH_NAME);
     return ERR_PTR(-EOPNOTSUPP);
+#endif
 }
 
 static void slash_bar_dmabuf_unmap(struct dma_buf_attachment *attach,
                               struct sg_table *sgl, enum dma_data_direction dir)
 {
-    dev_dbg(attach->dev, "slash: dmabuf unmap (noop)\n");
+    struct slash_bar_dmabuf_data *priv = attach->dmabuf->priv;
+
+    if (!sgl)
+        return;
+
+    dma_unmap_sgtable(attach->dev, sgl, dir, DMA_ATTR_SKIP_CPU_SYNC);
+    sg_free_table(sgl);
+    kfree(sgl);
+
+    if (atomic_read(&priv->p2p_map_count) <= 0) {
+        dev_warn(&priv->pdev->dev,
+                 "slash: BAR%d unmap underflow in p2p_map_count\n",
+                 priv->bar_number);
+        return;
+    }
+
+    if (atomic_dec_and_test(&priv->p2p_map_count))
+        wake_up_all(&priv->p2p_idle_wq);
 }
 
 /**
@@ -139,8 +306,23 @@ static vm_fault_t slash_bar_dmabuf_fault(struct vm_fault *vmf)
     return vmf_insert_pfn(vma, vmf->address, pfn);
 }
 
+static void slash_bar_dmabuf_vma_close(struct vm_area_struct *vma)
+{
+    struct slash_bar_dmabuf_data *priv = vma->vm_private_data;
+
+    mutex_lock(&priv->mode_lock);
+    if (atomic_read(&priv->cpu_mmap_count) > 0)
+        atomic_dec(&priv->cpu_mmap_count);
+    else
+        dev_warn(&priv->pdev->dev,
+                 "slash: BAR%d cpu_mmap_count underflow on close\n",
+                 priv->bar_number);
+    mutex_unlock(&priv->mode_lock);
+}
+
 static const struct vm_operations_struct slash_bar_dmabuf_vm_ops = {
     .fault = slash_bar_dmabuf_fault,
+    .close = slash_bar_dmabuf_vma_close,
 };
 
 /**
@@ -168,10 +350,26 @@ static int slash_bar_dmabuf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *
     unsigned long size = vma->vm_end - vma->vm_start;
     u64 offset = (u64)vma->vm_pgoff << PAGE_SHIFT;
     bool wc;
+    int ret = 0;
 
     /* Ensure the requested range lies fully within the BAR. */
     if (offset > priv->len || size > priv->len - offset)
         return -EINVAL;
+
+    mutex_lock(&priv->mode_lock);
+
+    if (atomic_read(&priv->remove_in_progress)) {
+        ret = -ENODEV;
+        goto out_unlock;
+    }
+
+    if (atomic_read(&priv->p2p_map_count) > 0) {
+        ret = -EBUSY;
+        goto out_unlock;
+    }
+
+    atomic_inc(&priv->cpu_mmap_count);
+    mutex_unlock(&priv->mode_lock);
 
     /*
      * VM_PFNMAP    — raw PFN mapping, required for vmf_insert_pfn().
@@ -181,8 +379,13 @@ static int slash_bar_dmabuf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *
      * VM_DONTCOPY  — do not inherit across fork(); BAR register
      *                mappings should not be silently shared with children.
      */
-    slash_vm_flags_set(vma, VM_PFNMAP | VM_IO | VM_DONTDUMP |
-                            VM_DONTEXPAND | VM_DONTCOPY);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+    vm_flags_set(vma, VM_PFNMAP | VM_IO | VM_DONTDUMP |
+                      VM_DONTEXPAND | VM_DONTCOPY);
+#else
+    vma->vm_flags |= VM_PFNMAP | VM_IO | VM_DONTDUMP |
+                     VM_DONTEXPAND | VM_DONTCOPY;
+#endif
 
     wc = !!(pci_resource_flags(priv->pdev, priv->bar_number) & IORESOURCE_PREFETCH);
     vma->vm_page_prot = wc ? pgprot_writecombine(vma->vm_page_prot)
@@ -196,6 +399,10 @@ static int slash_bar_dmabuf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *
             priv->bar_number, wc, vma->vm_pgoff, size);
 
     return 0;
+
+out_unlock:
+    mutex_unlock(&priv->mode_lock);
+    return ret;
 }
 
 /**
@@ -210,6 +417,20 @@ static void slash_bar_dmabuf_release(struct dma_buf *dmabuf)
     struct slash_bar_dmabuf_data *priv = dmabuf->priv;
 
     dev_dbg(&priv->pdev->dev, "slash: dmabuf release (BAR%d)\n", priv->bar_number);
+
+    if (atomic_read(&priv->p2p_map_count) > 0) {
+        dev_warn(&priv->pdev->dev,
+                 "slash: BAR%d released with %d active P2P maps\n",
+                 priv->bar_number,
+                 atomic_read(&priv->p2p_map_count));
+    }
+
+    if (atomic_read(&priv->cpu_mmap_count) > 0) {
+        dev_warn(&priv->pdev->dev,
+                 "slash: BAR%d released with %d active CPU mmaps\n",
+                 priv->bar_number,
+                 atomic_read(&priv->cpu_mmap_count));
+    }
 
     pci_dev_put(priv->pdev);
     kfree(priv);
@@ -228,6 +449,7 @@ static const struct dma_buf_ops slash_bar_dmabuf_ops = {
  * slash_bar_dmabuf_create() - Export a PCI BAR as a dma-buf.
  * @pdev:       PCI device owning the BAR.
  * @bar_number: BAR index (0-5).  Must be present and MMIO.
+ * @p2pdma_registered: True when this BAR has P2PDMA page backing.
  *
  * Allocates private state, takes a reference on @pdev, and registers a
  * dma-buf exporter.  The DEFINE_DMA_BUF_EXPORT_INFO macro initializes
@@ -236,7 +458,8 @@ static const struct dma_buf_ops slash_bar_dmabuf_ops = {
  *
  * Return: Pointer to the new dma_buf on success, ERR_PTR on failure.
  */
-struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number)
+struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number,
+                                        bool p2pdma_registered)
 {
     long err;
     resource_size_t len;
@@ -269,6 +492,14 @@ struct dma_buf *slash_bar_dmabuf_create(struct pci_dev *pdev, int bar_number)
 
     priv->bar_number = bar_number;
     priv->len = len;
+    priv->p2pdma_registered = p2pdma_registered;
+
+    atomic_set(&priv->cpu_mmap_count, 0);
+    atomic_set(&priv->p2p_map_count, 0);
+    atomic_set(&priv->remove_in_progress, 0);
+    mutex_init(&priv->mode_lock);
+    init_waitqueue_head(&priv->p2p_idle_wq);
+
     /* Hold a PCI device reference for the lifetime of the dma-buf. */
     priv->pdev = pci_dev_get(pdev);
 
@@ -293,6 +524,73 @@ err_free_priv:
     kfree(priv);
 
     return ERR_PTR(err);
+}
+
+void slash_bar_dmabuf_begin_remove(struct dma_buf *dmabuf)
+{
+    struct slash_bar_dmabuf_data *priv;
+
+    if (!dmabuf)
+        return;
+
+    priv = dmabuf->priv;
+    atomic_set(&priv->remove_in_progress, 1);
+}
+
+void slash_bar_dmabuf_invalidate(struct dma_buf *dmabuf)
+{
+    if (!dmabuf)
+        return;
+
+    slash_bar_dmabuf_begin_remove(dmabuf);
+    dma_buf_move_notify(dmabuf);
+}
+
+bool slash_bar_dmabuf_wait_p2p_idle(struct dma_buf *dmabuf,
+                                    unsigned long timeout_jiffies)
+{
+    struct slash_bar_dmabuf_data *priv;
+    long ret;
+
+    if (!dmabuf)
+        return true;
+
+    priv = dmabuf->priv;
+
+    if (atomic_read(&priv->p2p_map_count) == 0)
+        return true;
+
+    ret = wait_event_timeout(priv->p2p_idle_wq,
+                             atomic_read(&priv->p2p_map_count) == 0,
+                             timeout_jiffies);
+
+    if (ret > 0)
+        return true;
+
+    return atomic_read(&priv->p2p_map_count) == 0;
+}
+
+unsigned int slash_bar_dmabuf_p2p_map_count(struct dma_buf *dmabuf)
+{
+    struct slash_bar_dmabuf_data *priv;
+
+    if (!dmabuf)
+        return 0;
+
+    priv = dmabuf->priv;
+    return atomic_read(&priv->p2p_map_count);
+}
+
+bool slash_bar_dmabuf_in_use(struct dma_buf *dmabuf)
+{
+    struct slash_bar_dmabuf_data *priv;
+
+    if (!dmabuf)
+        return false;
+
+    priv = dmabuf->priv;
+    return atomic_read(&priv->cpu_mmap_count) > 0 ||
+           atomic_read(&priv->p2p_map_count) > 0;
 }
 
 /**

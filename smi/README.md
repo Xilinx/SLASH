@@ -82,8 +82,8 @@ v80-smi list [-l] [-s] [-j | -J]
 Readiness checks per board:
 
 - **PF0** (device 0x50B4) &mdash; expected driver: `ami`
-- **PF1** (device 0x50B5) &mdash; expected driver: `slash_qdma`
-- **PF2** (device 0x50B6) &mdash; expected driver: `slash_ctl`
+- **PF1** (device 0x50C1) &mdash; expected driver: `slash_qdma`
+- **PF2** (device 0x50C2) &mdash; expected driver: `slash_ctl`
 - **VRTD** &mdash; daemon reachable and device registered
 
 ```console
