@@ -39,6 +39,7 @@ management, and memory operations.
    reference/libvrtd-api/index
    reference/libvrtdpp-api/index
    reference/vrtd/index
+   reference/model-protocol/index
    reference/smi/index
    reference/cmake/index
 
