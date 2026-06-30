@@ -150,10 +150,11 @@ PASS: PDI_LOAD loop ran 4 body iterations (8 partial reconfigurations) cleanly.
 
 ## Graph layout
 
-The graph is hand-packed because phase-1 `vrt::graph::FpgaDevice` only
-emits `KERNEL_DISPATCH` + a trailing sentinel `SIGNAL`
-(`vrt/src/graph/device/fpga/fpga_device.cpp`); it cannot yet author
-`PDI_LOAD` / `LOOP` / `RERUN`. The 10 nodes are:
+The graph is hand-packed to demonstrate the raw RP1 opcodes directly. (The
+`vrt::graph::FpgaDevice` backend — `vrt/src/graph/device/fpga_device.cpp` —
+can now author `PDI_LOAD` / `LOOP` graphs itself; see
+`examples/rp1_graph_vbin_full` for the high-level API. This example
+deliberately stays at the packet level.) The 10 nodes are:
 
 | Idx | Opcode | Bucket-await | Bucket-set | Payload |
 |----:|--------|:-:|:-:|---------|

@@ -870,13 +870,13 @@ TEST_F(FpgaDeviceFixture, U64ScalarArgsConsumeTwoArgWords) {
     EXPECT_EQ(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 2u);
 }
 
-// Note: as of phase 1, the GraphCompiler rejects global-variable scalar
+// Note: the GraphCompiler currently rejects global-variable scalar
 // bindings on non-CPU kernels with "global scalar bindings are currently
 // supported only on CPU kernels". The FpgaDevice's deferred-scalar
 // resolution path is therefore unreachable through the public Graph API
 // today, but the code is kept (and exercised by direct DGraph
-// construction in DeferredScalarsResolvedAtLaunch) so a future phase
-// that relaxes the compiler restriction Just Works.
+// construction in DeferredScalarsResolvedAtLaunch) so that relaxing the
+// compiler restriction later Just Works.
 TEST_F(FpgaDeviceFixture, GlobalScalarOnFpgaKernelUsesDeferredLaunchValue) {
     IOTypeMap iot;
     iot.inputScalars.push_back({"size", ScalarType::U32});

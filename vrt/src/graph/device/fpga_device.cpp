@@ -254,7 +254,7 @@ class ArgLayout {
             return it->second;
         }
         // An RW buffer's synthetic "<name>_out" port shares the single HLS
-        // pointer register named "<name>".  (Phase-1 limitation: in and out
+        // pointer register named "<name>".  (Current limitation: in and out
         // addresses are both written to that one register; tracked for a
         // future protocol revision that distinguishes them.)
         if (port.size() > 4 &&
@@ -1434,7 +1434,8 @@ class FpgaDevicePlan : public IDevicePlan {
         if (bodyNodes.empty()) {
             throw std::logic_error(
                 "FpgaDevice: loop '" + loop.id +
-                "' has no body nodes (cross-device body is Phase 2)");
+                "' has no FPGA body nodes (a loop body running entirely on another "
+                "device is not yet supported)");
         }
 
         const std::uint32_t loopAwait = awaitMaskFor(loop.dependsOn);
@@ -1525,7 +1526,8 @@ class FpgaDevicePlan : public IDevicePlan {
                 if (k->kernel.type != DeviceType::FPGA) {
                     throw std::logic_error(
                         "FpgaDevice: loop '" + loop.id + "' body kernel '" + k->kernel.name +
-                        "' is not an FPGA kernel; cross-device loop bodies are Phase 2");
+                        "' is not an FPGA kernel; loop bodies mixing CPU and FPGA kernels "
+                        "are not yet supported");
                 }
                 // Feed any loop-carried scalar inputs from their slots before the
                 // dispatch (SCALAR_COPY slot -> input register); skip packing them.
@@ -2495,16 +2497,11 @@ std::unique_ptr<IDevicePlan> FpgaDevice::compilePlan(const DGraph& dg) {
     populateBufferRegions(dg);
 
     // -------------------------------------------------------------------
-    // Pass 1: reject unsupported node variants and collect kernel nodes
-    //         in topological (= DGraph) order.
+    // Validate node variants. The actual lowering happens in FpgaDevicePlan;
+    // here we only reject the cases it cannot handle, with a clear diagnostic.
+    // All other variants (bridge / reprogram / loop / conditional / signal /
+    // wait) are lowered by the plan.
     // -------------------------------------------------------------------
-    std::vector<const CompiledKernelNode*> kernels;
-    kernels.reserve(dg.nodes.size());
-    bool hasBridgeOps = false;
-    bool hasReprogramOps = false;
-    bool hasControlOps = false;
-    bool hasRendezvousOps = false;
-
     for (const CompiledNode& node : dg.nodes) {
         std::visit(
             [&](const auto& concrete) {
@@ -2512,29 +2509,15 @@ std::unique_ptr<IDevicePlan> FpgaDevice::compilePlan(const DGraph& dg) {
                 if constexpr (std::is_same_v<T, CompiledKernelNode>) {
                     if (concrete.kernel.type != DeviceType::FPGA) {
                         throw std::logic_error(
-                            std::string("FpgaDevice phase 1: kernel '") +
+                            std::string("FpgaDevice: kernel '") +
                             concrete.kernel.name +
                             "' has DeviceType::" + deviceTypeName(concrete.kernel.type) +
                             "; expected FPGA");
                     }
-                    kernels.push_back(&concrete);
-                } else if constexpr (std::is_same_v<T, CompiledBridgeOpNode>) {
-                    hasBridgeOps = true;
-                } else if constexpr (std::is_same_v<T, CompiledReprogramNode>) {
-                    hasReprogramOps = true;
                 } else if constexpr (std::is_same_v<T, CompiledBoundaryNode>) {
                     throw std::logic_error(
-                        std::string("FpgaDevice phase 1: graph-region boundaries are not "
+                        std::string("FpgaDevice: top-level graph-region boundaries are not "
                                     "yet supported, got '") + concrete.id + "'");
-                } else if constexpr (std::is_same_v<T, CompiledLoopNode>) {
-                    hasControlOps = true;
-                } else if constexpr (std::is_same_v<T, CompiledConditionalNode>) {
-                    hasControlOps = true;
-                } else if constexpr (std::is_same_v<T, CompiledSignalNode> ||
-                                     std::is_same_v<T, CompiledWaitNode>) {
-                    hasRendezvousOps = true;
-                } else {
-                    static_assert(sizeof(T) == 0, "Unhandled CompiledNode variant");
                 }
             },
             node);

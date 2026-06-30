@@ -22,28 +22,35 @@
  * @file fpga_device.hpp
  * @brief FpgaDevice — IDevice backend that lowers DGraphs to RP1 graphs.
  *
- * Phase-1 scope (diamond parity):
- *   - Only `CompiledKernelNode` entries are honoured. Any other compiled
- *     node variant (`CompiledBridgeOpNode`, `CompiledBoundaryNode`,
- *     `CompiledLoopNode`, `CompiledConditionalNode`) causes
- *     `compilePlan()` to throw with a descriptive diagnostic.
- *   - Each kernel becomes one `RP1_OP_KERNEL_DISPATCH` packet; barriers
- *     are allocated in bucket 0 (up to 31 kernels). Bit 31 is reserved
- *     for the trailing sentinel `RP1_OP_SIGNAL` that writes
- *     `kDefaultSentinelValue` into `kDefaultSentinelSlot` once every
- *     leaf kernel completes.
- *   - Kernel arguments are taken from `IOMap` scalar bindings, packed in
- *     the order declared by the kernel's `IOTypeMap::inputScalars`.
- *     Constants are baked in at compile time; global-variable bindings
- *     are resolved at `launch()` time via the per-graph scalar map.
- *   - Input/output/RW buffer bindings are tolerated (their presence
- *     does not break compilation) but the actual data movement must be
- *     arranged by the user outside the graph for phase 1; the
- *     `CpuFpgaBridge` data path is still stubbed.  This matches the
- *     "buffers pre-staged" intent.
+ * `compilePlan()` lowers a DGraph into a packed RP1 node program submitted to
+ * the R5 command processor:
+ *   - `CompiledKernelNode` -> `RP1_OP_KERNEL_DISPATCH`. Kernel arguments are
+ *     taken from `IOMap` scalar bindings, packed in the order declared by the
+ *     kernel's `IOTypeMap::inputScalars`. Constants are baked in at compile
+ *     time; global-variable bindings are resolved at `launch()` time via the
+ *     per-graph scalar map.
+ *   - `CompiledReprogramNode` -> `RP1_OP_PDI_LOAD` (partial reconfiguration of
+ *     the user region), with the PDI staged through QDMA/DDR.
+ *   - `CompiledLoopNode` / `CompiledConditionalNode` -> autonomous
+ *     `RP1_OP_LOOP` / branch packets when the whole body lowers to the FPGA,
+ *     or a split Authority/Follower rendezvous when a peer (e.g. CPU) queue
+ *     drives the control decision.
+ *   - `CompiledSignalNode` / `CompiledWaitNode` -> cross-queue signal/wait
+ *     rendezvous over host-visible BAR signal slots.
+ *   - `CompiledBridgeOpNode` -> data movement via the registered bridge.
+ *   - Barrier bits are allocated per reset domain; bit 31 of the lifecycle
+ *     bucket is reserved for the trailing sentinel `RP1_OP_SIGNAL` that writes
+ *     `kDefaultSentinelValue` into `kDefaultSentinelSlot` once every leaf node
+ *     completes.
  *
- * Future phases will extend `compilePlan` to also emit DMA_COPY,
- * LOOP/COND/RERUN packets, and proper cross-device bridge handling.
+ * Current limitations — these make `compilePlan()` throw a descriptive
+ * diagnostic rather than silently misbehave:
+ *   - Top-level `CompiledBoundaryNode`s are not yet supported (boundaries are
+ *     only handled inside loop/conditional child DGraphs).
+ *   - A loop body that mixes CPU and FPGA kernels, or an FPGA loop with no
+ *     FPGA body nodes, is not yet supported.
+ *   - Control-flow outputs published to a device other than the one that
+ *     produced them are not yet executable.
  */
 
 #ifndef VRT_GRAPH_DEVICE_FPGA_DEVICE_HPP

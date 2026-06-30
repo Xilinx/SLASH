@@ -56,7 +56,7 @@ After `--iters` iterations LOOP exits, sentinel `SIGNAL` writes
 Hand-authoring (rather than going through VRT's `FpgaDevice`) lets us
 use all 32 bits of buckets 2/3 instead of paying the
 [31-kernel-per-graph cap](../../vrt/src/graph/device/fpga_device.cpp)
-that `FpgaDevice` phase-1 enforces (it reserves bit 31 for an
+that `FpgaDevice` enforces (it reserves bit 31 for an
 auto-emitted sentinel).
 
 ## Concurrency
