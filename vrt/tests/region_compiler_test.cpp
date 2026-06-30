@@ -98,6 +98,17 @@ class InspectionBridge : public IBridge {
             []() {}};
     }
 
+    BridgeStepPair makeScalarTransfer(IDevice& /*src*/, IDevice& /*dst*/,
+                                      const std::string& /*scalarKey*/,
+                                      const std::string& /*producerNodeId*/,
+                                      const std::string& /*consumerNodeId*/) override {
+        return BridgeStepPair{
+            std::make_shared<InspectionBridgeOp>("inspection_scalar_xfer"),
+            []() {},
+            []() { return true; },
+            []() {}};
+    }
+
     BridgeStepPair makeBarrier(IDevice& /*src*/, IDevice& /*dst*/,
                                 const std::string& /*producerNodeId*/,
                                 const std::string& /*consumerNodeId*/) override {
@@ -220,10 +231,9 @@ void ensureInspectionBridgeFactories(Graph& graph) {
 std::vector<DGraph> compileForInspection(Graph& graph) {
     ensureInspectionBridgeFactories(graph);
     GraphCompiler compiler;
-    auto bridgeFor = [](const std::string& src, const std::string& dst) -> IBridge* {
-        throw std::runtime_error(
-            "unexpected bridge request from '" + src + "' to '" + dst + "'");
-    };
+    static InspectionBridge bridge;
+    auto bridgeFor = [](const std::string& /*src*/, const std::string& /*dst*/)
+        -> IBridge* { return &bridge; };
     return compiler.compile(graph.rootRegion(), graph.devices(),
                             graph.bridgeFactories(), bridgeFor,
                             std::make_shared<std::map<std::string, uint64_t>>());

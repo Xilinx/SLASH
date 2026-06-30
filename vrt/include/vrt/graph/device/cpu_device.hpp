@@ -349,6 +349,11 @@ class CpuDevice : public IDevice {
      */
     size_t bufferSize(const std::string& bufferName) const;
 
+    // --- Scalar accessors (also used by scalar bridges) ---
+
+    void setInputScalar(const std::string& scalarKey, std::uint64_t bits);
+    std::uint64_t getOutputScalar(const std::string& scalarKey) const;
+
     // --- Cross-queue rendezvous signal access (Phase E) ---
 
     /// Reads the 32-bit value of a host-visible signal slot.
@@ -384,6 +389,7 @@ class CpuDevice : public IDevice {
     std::string                                  id_;
     std::map<std::string, std::shared_ptr<CpuKernel>> kernels_;
     std::map<std::string, std::vector<uint8_t>>  buffers_;
+    std::shared_ptr<std::map<std::string, uint64_t>> scalarValues_;
     SignalReadFn                                 signalRead_;
     SignalWriteFn                                signalWrite_;
 };

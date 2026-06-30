@@ -488,8 +488,8 @@ class Graph {
      */
     template <class T>
     GraphBuffer buffer(std::string name, GraphScalar size) {
-        return GraphBuffer::make(typeToBufferType<T>(), std::move(name),
-                                 rootRegion_->scopeId(), std::move(size));
+        return rootRegion_->buffer(typeToBufferType<T>(), std::move(name),
+                                   std::move(size));
     }
 
     /**

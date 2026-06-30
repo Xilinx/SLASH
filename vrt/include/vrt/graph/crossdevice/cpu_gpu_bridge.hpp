@@ -67,6 +67,12 @@ class CpuGpuBridge : public IBridge {
                                 const std::string&  producerNodeId,
                                 const std::string&  consumerNodeId) override;
 
+    BridgeStepPair makeScalarTransfer(IDevice&            src,
+                                      IDevice&            dst,
+                                      const std::string&  scalarKey,
+                                      const std::string&  producerNodeId,
+                                      const std::string&  consumerNodeId) override;
+
     BridgeStepPair makeBarrier(IDevice&            src,
                                 IDevice&            dst,
                                 const std::string&  producerNodeId,

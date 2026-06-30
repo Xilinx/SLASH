@@ -63,6 +63,22 @@ struct CompiledBridgeOpNode {
     std::function<bool()> tryReady = []{ return true; };
 };
 
+struct CompiledSourceNode {
+    std::string id;
+    std::string deviceId;
+    std::vector<std::string> inputBufferKeys;
+    std::vector<std::string> inputScalarKeys;
+    std::vector<std::string> dependsOn;
+};
+
+struct CompiledSinkNode {
+    std::string id;
+    std::string deviceId;
+    std::vector<std::string> outputBufferKeys;
+    std::vector<std::string> outputScalarKeys;
+    std::vector<std::string> dependsOn;
+};
+
 struct CompiledReprogramNode {
     std::string id;
     std::string deviceId;
@@ -232,6 +248,8 @@ struct CompiledWaitNode {
 
 using CompiledNode = std::variant<CompiledKernelNode,
                                   CompiledBridgeOpNode,
+                                  CompiledSourceNode,
+                                  CompiledSinkNode,
                                   CompiledReprogramNode,
                                   CompiledBoundaryNode,
                                   CompiledLoopNode,

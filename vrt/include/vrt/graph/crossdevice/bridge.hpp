@@ -107,6 +107,21 @@ class IBridge {
                                          const std::string&  consumerNodeId) = 0;
 
     /**
+     * @brief Build a producer/consumer closure pair for a cross-device
+     *        transfer of a scalar value identified by @p scalarKey.
+     *
+     * The scalar key is the fully-scoped key (`scope:N:name`). Concrete
+     * devices expose scalar values through their native per-key storage
+     * (CPU scalar map, FPGA signal slot, etc.); the bridge owns only the
+     * synchronization/staging needed to move the 64-bit value.
+     */
+    virtual BridgeStepPair makeScalarTransfer(IDevice&            src,
+                                               IDevice&            dst,
+                                               const std::string&  scalarKey,
+                                               const std::string&  producerNodeId,
+                                               const std::string&  consumerNodeId) = 0;
+
+    /**
      * @brief Build a pure-synchronisation closure pair (no data movement).
      *
      * Used by the compiler to honour cross-device `afterNodes` constraints.

@@ -20,6 +20,7 @@
 
 #include <vrt/graph/crossdevice/cpu_fpga_bridge.hpp>
 
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -41,6 +42,14 @@ struct CpuFpgaBridgeOp : IBridgeOp {
     std::vector<uint8_t> staging;
 
     std::string label() const override { return "cpu_fpga_xfer"; }
+};
+
+struct CpuFpgaScalarBridgeOp : IBridgeOp {
+    SemaphorePool*  pool;
+    SemaphoreHandle sem;
+    std::uint64_t   bits = 0;
+
+    std::string label() const override { return "cpu_fpga_scalar_xfer"; }
 };
 
 struct CpuFpgaBarrierOp : IBridgeOp {
@@ -107,6 +116,43 @@ BridgeStepPair CpuFpgaBridge::makeTransfer(IDevice&            /*src*/,
             dstCpu->setInputBuffer(bufName, op->staging.data(), op->staging.size());
         } else {
             dstFpga->setInputBuffer(bufName, op->staging.data(), op->staging.size());
+        }
+    };
+
+    return BridgeStepPair{op,
+                          std::move(producerClosure),
+                          std::move(tryReady),
+                          std::move(consumerAction)};
+}
+
+BridgeStepPair CpuFpgaBridge::makeScalarTransfer(IDevice&            /*src*/,
+                                                  IDevice&            /*dst*/,
+                                                  const std::string&  scalarKey,
+                                                  const std::string&  /*producerNodeId*/,
+                                                  const std::string&  /*consumerNodeId*/) {
+    auto op  = std::make_shared<CpuFpgaScalarBridgeOp>();
+    op->pool = &pool_;
+    op->sem  = pool_.allocate();
+
+    auto* srcCpu  = srcCpu_;
+    auto* srcFpga = srcFpga_;
+    auto* dstCpu  = dstCpu_;
+    auto* dstFpga = dstFpga_;
+
+    auto producerClosure = [op, srcCpu, srcFpga, scalarKey]() {
+        op->bits = srcCpu ? srcCpu->getOutputScalar(scalarKey)
+                          : srcFpga->getOutputScalar(scalarKey);
+        op->pool->signal(op->sem);
+    };
+
+    auto tryReady = [op]() -> bool {
+        return op->pool->tryAwait(op->sem);
+    };
+    auto consumerAction = [op, dstCpu, dstFpga, scalarKey]() {
+        if (dstCpu) {
+            dstCpu->setInputScalar(scalarKey, op->bits);
+        } else {
+            dstFpga->setInputScalar(scalarKey, op->bits);
         }
     };
 

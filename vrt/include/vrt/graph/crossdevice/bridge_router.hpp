@@ -147,6 +147,60 @@ class BridgeRouter {
 
         return legs;
     }
+
+    static std::vector<RoutedLeg> routeScalarTransfer(
+        IDevice&            src,
+        IDevice&            dst,
+        const std::string&  scalarKey,
+        const BridgeFor&    bridgeFor,
+        IDevice&            cpuDevice,
+        const std::string&  producerKernelId,
+        const std::string&  consumerKernelId)
+    {
+        std::vector<RoutedLeg> legs;
+
+        if (IBridge* direct = bridgeFor(src.id(), dst.id())) {
+            auto pair = direct->makeScalarTransfer(
+                src, dst, scalarKey, producerKernelId, consumerKernelId);
+            legs.push_back(RoutedLeg{
+                src.id(), dst.id(),
+                producerKernelId, consumerKernelId,
+                std::move(pair)});
+            return legs;
+        }
+
+        IBridge* srcCpuBridge = bridgeFor(src.id(), cpuDevice.id());
+        if (!srcCpuBridge) {
+            throw std::runtime_error(
+                "BridgeRouter: no bridge factory for {" + src.id() +
+                ", cpu} — cannot bounce transfer of scalar '" +
+                scalarKey + "'");
+        }
+
+        IBridge* cpuDstBridge = bridgeFor(cpuDevice.id(), dst.id());
+        if (!cpuDstBridge) {
+            throw std::runtime_error(
+                "BridgeRouter: no bridge factory for {cpu, " + dst.id() +
+                "} — cannot bounce transfer of scalar '" +
+                scalarKey + "'");
+        }
+
+        auto leg1 = srcCpuBridge->makeScalarTransfer(
+            src, cpuDevice, scalarKey, producerKernelId, consumerKernelId);
+        legs.push_back(RoutedLeg{
+            src.id(), cpuDevice.id(),
+            producerKernelId, consumerKernelId,
+            std::move(leg1)});
+
+        auto leg2 = cpuDstBridge->makeScalarTransfer(
+            cpuDevice, dst, scalarKey, producerKernelId, consumerKernelId);
+        legs.push_back(RoutedLeg{
+            cpuDevice.id(), dst.id(),
+            producerKernelId, consumerKernelId,
+            std::move(leg2)});
+
+        return legs;
+    }
 };
 
 }  // namespace vrt::graph

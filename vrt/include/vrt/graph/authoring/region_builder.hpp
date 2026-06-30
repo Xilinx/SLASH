@@ -74,8 +74,7 @@ class RegionBuilder {
     /** @brief Mint a fresh typed buffer token in this region's scope. */
     template <class T>
     GraphBuffer buffer(std::string name, GraphScalar size) {
-        return GraphBuffer::make(typeToBufferType<T>(), std::move(name), region_->scopeId(),
-                                 std::move(size));
+        return region_->buffer(typeToBufferType<T>(), std::move(name), std::move(size));
     }
 
     /** @brief Per-iteration / per-branch input token bound to a named port. */
@@ -209,6 +208,10 @@ inline RegionBuilder RegionBuilder::addLoop(const LoopBuildSpec& spec) {
 
 inline std::pair<RegionBuilder, RegionBuilder> RegionBuilder::addConditional(
     const ConditionalBuildSpec& spec) {
+    if (!spec.condition) {
+        throw std::invalid_argument(
+            "RegionBuilder::addConditional: ConditionalBuildSpec.condition must be set");
+    }
     auto thenRegion = region_->createChild();
     auto elseRegion = region_->createChild();
 

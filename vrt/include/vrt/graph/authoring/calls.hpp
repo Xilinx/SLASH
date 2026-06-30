@@ -163,10 +163,13 @@ struct LoopBuildSpec {
  * graph scalar (e.g. `(parity == 0)`).
  */
 struct ConditionalBuildSpec {
-    Condition              condition = Condition::alwaysFalse();
-    std::vector<BufferArg> inputs;
-    std::vector<BufferArg> outputs;
-    std::vector<GraphNode> after;
+    /// Required: the branch predicate (e.g. `(parity == 0)`). Authoring a
+    /// conditional without a condition throws rather than silently defaulting
+    /// to a never-taken branch.
+    std::optional<Condition> condition;
+    std::vector<BufferArg>   inputs;
+    std::vector<BufferArg>   outputs;
+    std::vector<GraphNode>   after;
 };
 
 }  // namespace vrt::graph

@@ -148,6 +148,10 @@ class CpuMockBridge : public IBridge {
                                  uint64_t, const std::string&, const std::string&) override {
         return makeCpuLikeTransfer(pool_, s, d, b);
     }
+    BridgeStepPair makeScalarTransfer(IDevice&, IDevice&, const std::string&,
+                                      const std::string&, const std::string&) override {
+        return makeCpuLikeBarrier(pool_);
+    }
     BridgeStepPair makeBarrier(IDevice&, IDevice&,
                                 const std::string&, const std::string&) override {
         return makeCpuLikeBarrier(pool_);
@@ -163,6 +167,10 @@ class MockMockBridge : public IBridge {
     BridgeStepPair makeTransfer(IDevice& s, IDevice& d, const GraphBuffer& b,
                                  uint64_t, const std::string&, const std::string&) override {
         return makeCpuLikeTransfer(pool_, s, d, b);
+    }
+    BridgeStepPair makeScalarTransfer(IDevice&, IDevice&, const std::string&,
+                                      const std::string&, const std::string&) override {
+        return makeCpuLikeBarrier(pool_);
     }
     BridgeStepPair makeBarrier(IDevice&, IDevice&,
                                 const std::string&, const std::string&) override {

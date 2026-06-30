@@ -544,6 +544,13 @@ class FpgaDevicePlan : public IDevicePlan {
     const fpga::Rp1GraphImage& image() const noexcept { return image_; }
 
    private:
+    void registerDeviceScalarSlot(const std::string& key, std::uint32_t slot) {
+        if (!device_) return;
+        std::lock_guard<std::mutex> lk(device_->scalarMutex_);
+        device_->scalarSlots_[key] = slot;
+        device_->scalarSlotAlloc_.reserve(slot);
+    }
+
     void applyImageSideEffects() {
         if (!device_) return;
         for (const DeferredPdi& pdi : deferredPdis_) {
@@ -1062,7 +1069,9 @@ class FpgaDevicePlan : public IDevicePlan {
                     auto bindIt = k->ioMap.outputScalars().find(sp.name);
                     if (bindIt != k->ioMap.outputScalars().end()) {
                         const GraphScalar& gs = bindIt->second;
-                        scalarSlots_[scopedScalarKey(gs.scopeId(), gs.varName())] = slot;
+                        const std::string key = scopedScalarKey(gs.scopeId(), gs.varName());
+                        scalarSlots_[key] = slot;
+                        registerDeviceScalarSlot(key, slot);
                     }
                     extraLeafGroups[rbucket] |= rmask;
                     lastBucket = rbucket;
@@ -1200,7 +1209,9 @@ class FpgaDevicePlan : public IDevicePlan {
                     auto bindIt = k->ioMap.outputScalars().find(sp.name);
                     if (bindIt != k->ioMap.outputScalars().end()) {
                         const GraphScalar& gs = bindIt->second;
-                        scalarSlots_[scopedScalarKey(gs.scopeId(), gs.varName())] = slot;
+                        const std::string key = scopedScalarKey(gs.scopeId(), gs.varName());
+                        scalarSlots_[key] = slot;
+                        registerDeviceScalarSlot(key, slot);
                     }
                     consumedMain.push_back(lastId);
                     lastId  = k->id + ".sread." + sp.name;
@@ -1596,7 +1607,10 @@ class FpgaDevicePlan : public IDevicePlan {
                     sr.payload.scalar_read.source_addr = loc.r5_base_addr + off;
                     sr.payload.scalar_read.target_slot = slot;
                     image.nodes.push_back(sr);
-                    if (!localKey.empty()) scalarSlots_[localKey] = slot;
+                    if (!localKey.empty()) {
+                        scalarSlots_[localKey] = slot;
+                        registerDeviceScalarSlot(localKey, slot);
+                    }
                     lastDone = readDone;
                 }
             } else if (const auto* r = std::get_if<CompiledReprogramNode>(&bn)) {
@@ -1952,6 +1966,7 @@ FpgaDevice::FpgaDevice(std::string                       id,
     if (!lookup_) {
         throw std::invalid_argument("FpgaDevice: kernel-location lookup must not be null");
     }
+    scalarSlotAlloc_.reserve(sentinelSlot_);
     submitter_ = std::make_shared<fpga::Rp1Submitter>(*window_, cq_size);
 }
 
@@ -1979,6 +1994,7 @@ FpgaDevice::FpgaDevice(std::string                       id,
         throw std::invalid_argument(
             "FpgaDevice: initial image '" + activeImageId_ + "' is not in the vbin spec");
     }
+    scalarSlotAlloc_.reserve(sentinelSlot_);
     submitter_ = std::make_shared<fpga::Rp1Submitter>(*window_, cq_size);
 }
 
@@ -1991,6 +2007,7 @@ void FpgaDevice::setSentinelSlot(std::uint32_t slot) {
             " out of range [0, " + std::to_string(RP1_MAX_SIGNALS) + ")");
     }
     sentinelSlot_ = slot;
+    scalarSlotAlloc_.reserve(slot);
 }
 
 void FpgaDevice::setSentinelValue(std::uint32_t value) {
@@ -2488,6 +2505,32 @@ std::size_t FpgaDevice::bufferSize(const std::string& bufferName) const {
     std::lock_guard<std::mutex> lk(bufferMutex_);
     auto it = buffers_.find(key);
     return (it == buffers_.end()) ? 0 : it->second.size;
+}
+
+void FpgaDevice::setInputScalar(const std::string& scalarKey, std::uint64_t bits) {
+    std::lock_guard<std::mutex> lk(scalarMutex_);
+    auto [it, inserted] = scalarSlots_.emplace(scalarKey, 0u);
+    if (inserted) {
+        it->second = scalarSlotAlloc_.alloc();
+    }
+    const std::uint32_t slot = it->second;
+    window_->writeU32(static_cast<std::uint32_t>(
+                          RP1_DEFAULT_SIG_ARRAY_OFFSET +
+                          slot * sizeof(rp1_signal_slot_t) +
+                          offsetof(rp1_signal_slot_t, value)),
+                      static_cast<std::uint32_t>(bits));
+}
+
+std::uint64_t FpgaDevice::getOutputScalar(const std::string& scalarKey) const {
+    std::lock_guard<std::mutex> lk(scalarMutex_);
+    auto it = scalarSlots_.find(scalarKey);
+    if (it == scalarSlots_.end()) {
+        throw std::runtime_error(
+            "FpgaDevice::getOutputScalar: unknown scalar '" + scalarKey + "'");
+    }
+    rp1_signal_slot_t slot{};
+    window_->readSignal(it->second, slot);
+    return static_cast<std::uint64_t>(slot.value);
 }
 
 std::unique_ptr<IDevicePlan> FpgaDevice::compilePlan(const DGraph& dg) {

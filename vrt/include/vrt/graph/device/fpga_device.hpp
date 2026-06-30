@@ -71,6 +71,7 @@
 #include <vrt/device.hpp>
 #include <vrt/graph/device/device.hpp>
 #include <vrt/graph/device/dgraph.hpp>
+#include <vrt/graph/device/fpga/control_lowering.hpp>
 #include <vrt/graph/device/fpga/rp1_bar_window.hpp>
 #include <vrt/graph/device/fpga/rp1_submitter.hpp>
 
@@ -180,6 +181,11 @@ class FpgaDevice : public IDevice {
      * @brief Returns the current logical size of @p bufferName.
      */
     std::size_t bufferSize(const std::string& bufferName) const;
+
+    // ---- BAR-backed scalar accessors (also used by scalar bridges) ----
+
+    void setInputScalar(const std::string& scalarKey, std::uint64_t bits);
+    std::uint64_t getOutputScalar(const std::string& scalarKey) const;
 
     // ---- FpgaDevice-specific configuration --------------------------
 
@@ -306,6 +312,9 @@ class FpgaDevice : public IDevice {
     std::map<std::string, BufferRecord>    buffers_;
     std::map<std::string, ::vrt::MemoryConfig> bufferRegion_;
     std::uint32_t                          nextBufferOffset_ = 0;
+    mutable std::mutex                     scalarMutex_;
+    fpga::SignalSlotAllocator              scalarSlotAlloc_;
+    std::map<std::string, std::uint32_t>    scalarSlots_;
     mutable std::mutex                     pdiMutex_;
     std::shared_ptr<::vrt::Device>          pdiStagingDevice_;
     std::map<std::string, StagedPdiRecord>  stagedPdis_;

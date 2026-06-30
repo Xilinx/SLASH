@@ -98,6 +98,16 @@ BridgeStepPair CpuGpuBridge::makeTransfer(IDevice&            /*src*/,
                           std::move(consumerAction)};
 }
 
+BridgeStepPair CpuGpuBridge::makeScalarTransfer(IDevice&            /*src*/,
+                                                 IDevice&            /*dst*/,
+                                                 const std::string&  scalarKey,
+                                                 const std::string&  /*producerNodeId*/,
+                                                 const std::string&  /*consumerNodeId*/) {
+    throw std::runtime_error(
+        "CpuGpuBridge::makeScalarTransfer: GPU scalar bridge is not implemented for '" +
+        scalarKey + "'");
+}
+
 BridgeStepPair CpuGpuBridge::makeBarrier(IDevice&            /*src*/,
                                           IDevice&            /*dst*/,
                                           const std::string&  /*producerNodeId*/,

@@ -129,6 +129,9 @@ class CpuDevicePlan : public IDevicePlan {
                                       : NodeKind::ConsumerOp;
                         rt.tryReady = n.tryReady;
                         rt.action = n.action;
+                    } else if constexpr (std::is_same_v<T, CompiledSourceNode> ||
+                                         std::is_same_v<T, CompiledSinkNode>) {
+                        rt.kind = NodeKind::Noop;
                     } else if constexpr (std::is_same_v<T, CompiledBoundaryNode>) {
                         rt.kind = NodeKind::Boundary;
                         rt.boundary = n;
@@ -223,7 +226,7 @@ class CpuDevicePlan : public IDevicePlan {
     }
 
    private:
-    enum class NodeKind { Kernel, ProducerOp, ConsumerOp, Boundary, Loop, Conditional,
+    enum class NodeKind { Kernel, ProducerOp, ConsumerOp, Noop, Boundary, Loop, Conditional,
                           Signal, Wait };
 
     struct NodeRuntime {
@@ -282,6 +285,8 @@ class CpuDevicePlan : public IDevicePlan {
                 case NodeKind::ProducerOp:
                 case NodeKind::ConsumerOp:
                     rt.action();
+                    break;
+                case NodeKind::Noop:
                     break;
                 case NodeKind::Boundary:
                     executeBoundary(rt.boundary);
@@ -858,7 +863,26 @@ size_t CpuDevice::bufferSize(const std::string& bufferName) const {
     return (it == buffers_.end()) ? 0 : it->second.size();
 }
 
+void CpuDevice::setInputScalar(const std::string& scalarKey, std::uint64_t bits) {
+    if (!scalarValues_) {
+        scalarValues_ = std::make_shared<std::map<std::string, uint64_t>>();
+    }
+    (*scalarValues_)[scalarKey] = bits;
+}
+
+std::uint64_t CpuDevice::getOutputScalar(const std::string& scalarKey) const {
+    if (!scalarValues_) {
+        throw std::runtime_error("CpuDevice::getOutputScalar: no scalar map is available");
+    }
+    auto it = scalarValues_->find(scalarKey);
+    if (it == scalarValues_->end()) {
+        throw std::runtime_error("CpuDevice::getOutputScalar: unknown scalar '" + scalarKey + "'");
+    }
+    return it->second;
+}
+
 std::unique_ptr<IDevicePlan> CpuDevice::compilePlan(const DGraph& dg) {
+    scalarValues_ = dg.scalarValues;
     return std::make_unique<CpuDevicePlan>(*this, dg);
 }
 

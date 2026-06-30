@@ -58,9 +58,10 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
 
     GraphBuffer inputBuffer(BufferType type, std::string name,
                             std::optional<GraphScalar> size = std::nullopt) {
-        if (bufferNames_.count(name)) {
+        if (tokenNames_.count(name)) {
             throw std::invalid_argument("GraphRegion::inputBuffer: name '" + name + "' already used");
         }
+        tokenNames_.insert(name);
         bufferNames_.insert(name);
         return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
     }
@@ -68,6 +69,27 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
     GraphBuffer inputBuffer(BufferType type, std::string name, GraphScalar size) {
         return inputBuffer(type, std::move(name),
                            std::optional<GraphScalar>(std::move(size)));
+    }
+
+    /**
+     * @brief Mint a fresh single-assignment buffer token in this region's scope.
+     *
+     * Unlike inputBuffer(), the token is NOT recorded as a producer-less graph
+     * input: it must be written by exactly one op, and a kernel that reads it
+     * at root scope without a producer is rejected at compile time. The name
+     * must be unique among every buffer token minted in this region (graph
+     * inputs included), preserving the single-assignment identity that the
+     * compiler keys on (scopeId, name).
+     *
+     * @throws std::invalid_argument  If the name is already taken in this scope.
+     */
+    GraphBuffer buffer(BufferType type, std::string name,
+                       std::optional<GraphScalar> size = std::nullopt) {
+        if (tokenNames_.count(name)) {
+            throw std::invalid_argument("GraphRegion::buffer: name '" + name + "' already used");
+        }
+        tokenNames_.insert(name);
+        return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
     }
 
     GraphScalar scalar(ScalarType type, std::string name) {
@@ -314,7 +336,8 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
     uint64_t scopeId_ = 0;
     uint64_t parentScopeId_ = 0;
     uint32_t opCounter_ = 0;
-    std::set<std::string> bufferNames_;
+    std::set<std::string> tokenNames_;   // every buffer token minted in this scope (uniqueness)
+    std::set<std::string> bufferNames_;  // subset: producer-less graph input buffers
     std::map<std::string, ScalarType> scalarTypes_;
     std::map<std::string, ScalarType> inputScalarTypes_;
     std::set<std::string> opIds_;

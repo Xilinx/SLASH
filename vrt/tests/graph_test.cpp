@@ -273,7 +273,10 @@ class MockCpuDevice : public IDevice {
         }
 
         for (const auto& [port, buf] : node.ioMap.outputs()) {
-            auto& storage = ensureBuffer(buf, defaultSize);
+            const size_t outputSize = buf.hasSizeScalar()
+                ? resolvedBufferSizeBytes(buf, scalarValues, "MockCpuDevice")
+                : defaultSize;
+            auto& storage = ensureBuffer(buf, outputSize);
             bufViews[port] = CpuBufferView{storage.data(), storage.size(), buf.type()};
         }
 
@@ -430,6 +433,13 @@ class CpuMockCpuBridge : public IBridge {
         return makeCpuLikeTransfer(pool_, src, dst, buffer);
     }
 
+    BridgeStepPair makeScalarTransfer(IDevice& /*src*/, IDevice& /*dst*/,
+                                      const std::string& /*scalarKey*/,
+                                      const std::string& /*producerNodeId*/,
+                                      const std::string& /*consumerNodeId*/) override {
+        return makeCpuLikeBarrier(pool_);
+    }
+
     BridgeStepPair makeBarrier(IDevice& /*src*/, IDevice& /*dst*/,
                                 const std::string& /*producerNodeId*/,
                                 const std::string& /*consumerNodeId*/) override {
@@ -449,6 +459,13 @@ class MockCpuMockCpuBridge : public IBridge {
                                  const std::string& /*producerNodeId*/,
                                  const std::string& /*consumerNodeId*/) override {
         return makeCpuLikeTransfer(pool_, src, dst, buffer);
+    }
+
+    BridgeStepPair makeScalarTransfer(IDevice& /*src*/, IDevice& /*dst*/,
+                                      const std::string& /*scalarKey*/,
+                                      const std::string& /*producerNodeId*/,
+                                      const std::string& /*consumerNodeId*/) override {
+        return makeCpuLikeBarrier(pool_);
     }
 
     BridgeStepPair makeBarrier(IDevice& /*src*/, IDevice& /*dst*/,
@@ -1912,10 +1929,10 @@ TEST(GraphTest, CompilerPopulatesDependsOnAcrossDevices) {
     IOMap m3; m3.bindInput("in", b2).bindOutput("out", BufferType::I32, b3);
     auto idC = g.addNode(cpuKernel("add1"), std::move(m3), "cpu");
 
-    std::vector<int32_t> in = {1};
-    cpu->setInputBuffer("raw", in.data(), sizeof(int32_t));
     auto exec = g.compile();
+    std::vector<int32_t> in = {1};
     exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.write(raw, in);
     exec.run();
 
     const auto* dgCpu = findDg(exec.dgraphs(), "cpu");
@@ -1923,10 +1940,10 @@ TEST(GraphTest, CompilerPopulatesDependsOnAcrossDevices) {
     ASSERT_NE(dgCpu, nullptr);
     ASSERT_NE(dgM,   nullptr);
 
-    // Kernel A (cpu) is a graph-level input → no predecessors.
+    // Kernel A (cpu) consumes a graph-level input produced by the CPU start node.
     const CompiledNode* nA = findNode(*dgCpu, idA);
     ASSERT_NE(nA, nullptr);
-    EXPECT_TRUE(compiledNodeDependsOn(*nA).empty());
+    EXPECT_TRUE(depsContain(*nA, "__graph_start"));
 
     // Kernel B (mcpu:0) consumes b1 produced by A (cpu) → its dep must be the
     // consumer-side bridge op anchored to B, NOT idA itself.
@@ -2869,11 +2886,10 @@ TEST(GraphTest, CpuExecutorBlocksConsumerUntilProducerSignals) {
     IOMap ioS; ioS.bindInput("in", dbld).bindOutput("out", BufferType::I32, finalBuf);
     g.addNode(cpuKernel("sink"), std::move(ioS), "cpu");
 
-    std::vector<int32_t> in = {3, 5, 9};
-    mcpu->setInputBuffer("raw", in.data(), in.size() * sizeof(int32_t));
-
     auto exec = g.compile();
+    std::vector<int32_t> in = {3, 5, 9};
     exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.write(raw, in);
     exec.run();
 
     std::vector<int32_t> out(3);
@@ -2925,11 +2941,10 @@ TEST(GraphTest, CpuExecutorSharedRemoteBufferFanoutUsesSameConsumerBridge) {
                   .bindOutput("out", BufferType::I32, sumBuf);
     g.addNode(cpuKernel("sum"), std::move(ioS), "cpu");
 
-    std::vector<int32_t> in = {3, 5};
-    mcpu->setInputBuffer("raw", in.data(), in.size() * sizeof(int32_t));
-
     auto exec = g.compile();
+    std::vector<int32_t> in = {3, 5};
     exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.write(raw, in);
     ASSERT_NO_THROW(exec.run());
 
     std::vector<int32_t> out(2);
@@ -3188,13 +3203,12 @@ TEST(GraphTest, CpuExecutorMultipleConsumersOutOfOrderSignals) {
                   .bindOutput("out", BufferType::I32, sumBuf);
     g.addNode(cpuKernel("fanin"), std::move(ioJ), "cpu");
 
-    std::vector<int32_t> a = {1, 2}, b = {3, 4}, c = {5, 6};
-    mcpu0->setInputBuffer("rawA", a.data(), a.size() * sizeof(int32_t));
-    mcpu1->setInputBuffer("rawB", b.data(), b.size() * sizeof(int32_t));
-    mcpu2->setInputBuffer("rawC", c.data(), c.size() * sizeof(int32_t));
-
     auto exec = g.compile();
+    std::vector<int32_t> a = {1, 2}, b = {3, 4}, c = {5, 6};
     exec.setScalar(elements, static_cast<std::uint64_t>(a.size()));
+    exec.write(rawA, a);
+    exec.write(rawB, b);
+    exec.write(rawC, c);
     exec.run();
 
     std::vector<int32_t> out(2);

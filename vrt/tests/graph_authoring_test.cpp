@@ -35,6 +35,7 @@
 
 #include <vrt/graph/device/cpu_device.hpp>
 #include <vrt/graph/device/device.hpp>
+#include <vrt/graph/crossdevice/bridge.hpp>
 #include <vrt/graph/graph.hpp>
 
 using namespace vrt::graph;
@@ -62,6 +63,49 @@ class StubFpgaDevice : public IDevice {
    private:
     std::string id_;
 };
+
+struct NoopBridgeOp : IBridgeOp {
+    std::string label() const override { return "noop"; }
+};
+
+class NoopBridge : public IBridge {
+   public:
+    BridgeStepPair makeTransfer(IDevice&, IDevice&, const GraphBuffer&, uint64_t,
+                                const std::string&, const std::string&) override {
+        return step();
+    }
+    BridgeStepPair makeScalarTransfer(IDevice&, IDevice&, const std::string&,
+                                      const std::string&, const std::string&) override {
+        return step();
+    }
+    BridgeStepPair makeBarrier(IDevice&, IDevice&, const std::string&,
+                               const std::string&) override {
+        return step();
+    }
+
+   private:
+    static BridgeStepPair step() {
+        return BridgeStepPair{
+            std::make_shared<NoopBridgeOp>(),
+            []() {},
+            []() { return true; },
+            []() {}};
+    }
+};
+
+Graph stubFpgaGraph() {
+    Graph graph;
+    graph.registerDevice(std::make_shared<CpuDevice>("cpu"));
+    graph.registerDevice(std::make_shared<StubFpgaDevice>("fpga:0"));
+    auto factory = [](IDevice& src, IDevice& dst) -> std::shared_ptr<IBridge> {
+        (void)src;
+        (void)dst;
+        return std::make_shared<NoopBridge>();
+    };
+    graph.registerBridgeFactory(DeviceType::CPU, DeviceType::FPGA, factory);
+    graph.registerBridgeFactory(DeviceType::FPGA, DeviceType::CPU, factory);
+    return graph;
+}
 
 class CpuPreprocess : public CpuKernel {
    public:
@@ -289,8 +333,7 @@ TEST(GraphAuthoringTest, LoopConditionalInplaceFullPipeline) {
 }
 
 TEST(GraphAuthoringTest, UngatedFpgaDispatchIsRejected) {
-    Graph graph = Graph::withDefaults();
-    graph.registerDevice(std::make_shared<StubFpgaDevice>("fpga:0"));
+    Graph graph = stubFpgaGraph();
 
     // FPGA kernel that names an image but is not gated behind any reprogram.
     KernelHandle fpgaK{"graph_kernel_0", DeviceType::FPGA, "imageA",
@@ -304,8 +347,7 @@ TEST(GraphAuthoringTest, UngatedFpgaDispatchIsRejected) {
 }
 
 TEST(GraphAuthoringTest, GatedFpgaDispatchCompiles) {
-    Graph graph = Graph::withDefaults();
-    graph.registerDevice(std::make_shared<StubFpgaDevice>("fpga:0"));
+    Graph graph = stubFpgaGraph();
 
     KernelHandle fpgaK{"graph_kernel_0", DeviceType::FPGA, "imageA",
                        IOTypeMap{}.scalarIn<uint64_t>("n").out<int32_t>("out"), "fpga:0"};

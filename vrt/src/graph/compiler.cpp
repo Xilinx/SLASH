@@ -421,115 +421,6 @@ void validateRootScopeScalarReferences(const GraphRegion& rootRegion) {
     walk(rootRegion);
 }
 
-void validateRootScopeBufferReferences(const GraphRegion& rootRegion) {
-    const uint64_t rootScopeId = rootRegion.scopeId();
-    const auto& declaredInputs = rootRegion.declaredInputBufferNames();
-
-    // Collect every buffer name produced at root scope by any op of the root
-    // region. Kernel ops contribute outputs and inouts.out. Loop and
-    // conditional control ops publish their declared outputs to the
-    // parent scope, so they count as producers too. Boundary ops at root
-    // produce only into a child scope, so we skip them here.
-    std::set<std::string> producedAtRoot;
-    auto recordProduced = [&](const IOMap& ioMap) {
-        for (const auto& [port, buffer] : ioMap.outputs()) {
-            (void)port;
-            if (buffer.scopeId() == rootScopeId) {
-                producedAtRoot.insert(buffer.name());
-            }
-        }
-        for (const auto& rw : ioMap.inouts()) {
-            if (rw.out.scopeId() == rootScopeId) {
-                producedAtRoot.insert(rw.out.name());
-            }
-        }
-    };
-    // Loop / conditional control ops publish to the parent scope through their
-    // body/branch end boundaries (the struct-literal authoring API binds
-    // `.outputs` this way rather than via the control op's own IOMap), so scan
-    // those end-boundary targets too.
-    auto recordControlPublications = [&](const GraphRegion& child) {
-        for (const RegionOp& childOp : child.ops()) {
-            const auto* boundary = std::get_if<SubgraphBoundaryOp>(&childOp);
-            if (!boundary || boundary->side != BoundarySide::End) continue;
-            for (const auto& mapping : boundary->bufferMappings) {
-                if (mapping.target.scopeId() == rootScopeId) {
-                    producedAtRoot.insert(mapping.target.name());
-                }
-            }
-        }
-    };
-    for (const RegionOp& op : rootRegion.ops()) {
-        std::visit(
-            [&](const auto& concrete) {
-                using T = std::decay_t<decltype(concrete)>;
-                if constexpr (std::is_same_v<T, KernelOp>) {
-                    recordProduced(concrete.ioMap);
-                } else if constexpr (std::is_same_v<T, LoopOp>) {
-                    recordProduced(concrete.ioMap);
-                    if (concrete.body) recordControlPublications(*concrete.body);
-                } else if constexpr (std::is_same_v<T, ConditionalOp>) {
-                    recordProduced(concrete.ioMap);
-                    if (concrete.thenRegion) recordControlPublications(*concrete.thenRegion);
-                    if (concrete.elseRegion) recordControlPublications(*concrete.elseRegion);
-                } else if constexpr (std::is_same_v<T, SubgraphBoundaryOp>) {
-                    for (const auto& mapping : concrete.bufferMappings) {
-                        if (mapping.target.scopeId() == rootScopeId) {
-                            producedAtRoot.insert(mapping.target.name());
-                        }
-                    }
-                }
-            },
-            op);
-    }
-
-    auto requireDeclared = [&](const GraphBuffer& buffer) {
-        if (buffer.scopeId() != rootScopeId) return;
-        if (declaredInputs.count(buffer.name())) return;
-        if (producedAtRoot.count(buffer.name())) return;
-        throw std::runtime_error(
-            "GraphCompiler: input buffer '" + buffer.name() +
-            "' is not declared; call Graph::inputBuffer() first");
-    };
-
-    auto checkIoMap = [&](const IOMap& ioMap) {
-        for (const auto& [port, buffer] : ioMap.inputs()) {
-            (void)port;
-            requireDeclared(buffer);
-        }
-        for (const auto& rw : ioMap.inouts()) {
-            requireDeclared(rw.in);
-        }
-    };
-
-    std::function<void(const GraphRegion&)> walk = [&](const GraphRegion& region) {
-        for (const RegionOp& op : region.ops()) {
-            std::visit(
-                [&](const auto& concrete) {
-                    using T = std::decay_t<decltype(concrete)>;
-                    if constexpr (std::is_same_v<T, KernelOp>) {
-                        checkIoMap(concrete.ioMap);
-                    } else if constexpr (std::is_same_v<T, SubgraphBoundaryOp>) {
-                        checkIoMap(concrete.ioMap);
-                        for (const auto& mapping : concrete.bufferMappings) {
-                            requireDeclared(mapping.source);
-                        }
-                    } else if constexpr (std::is_same_v<T, LoopOp>) {
-                        checkIoMap(concrete.ioMap);
-                        if (concrete.body) walk(*concrete.body);
-                    } else if constexpr (std::is_same_v<T, ConditionalOp>) {
-                        checkIoMap(concrete.ioMap);
-                        if (concrete.thenRegion) walk(*concrete.thenRegion);
-                        if (concrete.elseRegion) walk(*concrete.elseRegion);
-                    }
-                },
-                op);
-        }
-    };
-
-    walk(rootRegion);
-}
-
 void validateSizeScalarReferences(const GraphRegion& rootRegion) {
     const auto& declaredInputScalars = rootRegion.declaredInputScalars();
     std::set<std::string> sizeScalarKeys;
@@ -1213,7 +1104,7 @@ std::map<std::string, std::vector<std::string>> buildRegionAdjacency(
                        producerIt != bufferProducers.producers.end()) {
                 producerId = producerIt->second;
             }
-            if (!producerId.empty() && producerId != opId) {
+            if (!producerId.empty() && producerId != opId && adj.count(producerId)) {
                 adj[producerId].push_back(opId);
             }
         }
@@ -1226,7 +1117,7 @@ std::map<std::string, std::vector<std::string>> buildRegionAdjacency(
                        producerIt != scalarProducers.producers.end()) {
                 producerId = producerIt->second;
             }
-            if (!producerId.empty() && producerId != opId) {
+            if (!producerId.empty() && producerId != opId && adj.count(producerId)) {
                 adj[producerId].push_back(opId);
             }
         }
@@ -1704,10 +1595,6 @@ void validateRegionScalarProvenance(
         for (const auto& ref : consumedScalarRefs(op)) {
             if (ref.scopeId != regionScope) continue;
             if (scalarProducerMap.count(ref.key)) continue;
-            // Root scope (0) is validated separately by Graph::validateDeclaredScalars,
-            // which knows the user-declared globals; nested regions enforce strict
-            // start-boundary imports so we keep this check active for them.
-            if (regionScope == 0) continue;
             throw std::runtime_error(
                 "GraphCompiler: op '" + regionOpId(op) + "' reads " + ref.kind + " '" +
                 ref.name + "' in region scope " + std::to_string(regionScope) +
@@ -1726,10 +1613,6 @@ void validateRegionBufferProvenance(
         for (const auto& ref : consumedBufferRefs(op)) {
             if (ref.scopeId != regionScope) continue;
             if (bufferProducerMap.count(ref.key)) continue;
-            // Root scope (0) is validated separately by Graph::validateDeclaredBuffers,
-            // which knows the user-declared inputs; nested regions enforce strict
-            // start-boundary imports so we keep this check active for them.
-            if (regionScope == 0) continue;
             throw std::runtime_error(
                 "GraphCompiler: op '" + regionOpId(op) + "' reads " + ref.kind + " '" +
                 ref.name + "' in region scope " + std::to_string(regionScope) +
@@ -2451,10 +2334,16 @@ class RegionCompiler {
 
     std::vector<DGraph> compileRegion(const GraphRegion& region, bool topLevel = true) {
         RegionCompilation rc;
+        rc.topLevel = topLevel;
+        rc.region = &region;
         rc.ops = collectRegionOps(region);
         if (rc.ops.empty()) return {};
 
         rc.cpuDevice = findSingletonCpuDevice(devices_);
+        if (topLevel && !rc.cpuDevice) {
+            throw std::runtime_error(
+                "GraphCompiler: graph I/O requires a CPU device; use Graph::withDefaults()");
+        }
         indexOps(rc);
         compileChildRegions(rc);
         validateOpsAndPortBindings(rc);
@@ -2466,6 +2355,7 @@ class RegionCompiler {
         populateProducerDevicePlacements(rc);
         buildPerDeviceCompiledNodes(rc);
         insertCrossDeviceBridges(rc);
+        insertTerminalOutputBridges(rc);
         insertAfterOpsBarriers(rc);
         populateDependsOn(rc);
         splitCrossQueueLoops(rc);
@@ -2484,6 +2374,8 @@ class RegionCompiler {
     /// Per-call state for a single compileRegion() invocation. Lives on the
     /// stack so recursive compilations do not interfere.
     struct RegionCompilation {
+        bool topLevel = true;
+        const GraphRegion* region = nullptr;
         std::vector<const RegionOp*> ops;
         IDevice* cpuDevice = nullptr;
         std::map<std::string, const RegionOp*>          opById;
@@ -2505,7 +2397,14 @@ class RegionCompiler {
         std::map<std::string, std::vector<CompiledNode>>      nodesByDevice;
         std::map<std::string, DeviceInsertions>               insertions;
         std::map<std::pair<std::string, std::string>, std::string> remoteConsumerBridgeIds;
+        std::map<std::pair<std::string, std::string>, std::string> remoteConsumerScalarBridgeIds;
         uint32_t bridgeCounter = 0;
+        std::string graphStartId;
+        std::string graphEndId;
+        std::set<std::string> graphInputBufferKeys;
+        std::set<std::string> graphInputScalarKeys;
+        std::set<std::string> graphOutputBufferKeys;
+        std::set<std::string> graphOutputScalarKeys;
         // Cross-queue-split loops: control op id -> sorted participating device
         // ids.  The control node is replicated onto each; its body's in-body
         // bridges are converted to per-iteration SIGNAL/WAIT rendezvous.
@@ -2581,8 +2480,53 @@ class RegionCompiler {
             std::move(scalarProducers.loopCarriedInitialProducers);
         rc.loopCarriedInitialBufferProducers =
             std::move(bufferProducers.loopCarriedInitialProducers);
+        if (rc.topLevel) seedGraphStartProducers(region, rc);
         validateRegionScalarProvenance(region, rc.ops, rc.scalarProducerMap);
         validateRegionBufferProvenance(region, rc.ops, rc.bufferProducerMap);
+    }
+
+    void seedGraphStartProducers(const GraphRegion& region, RegionCompilation& rc) const {
+        if (!rc.cpuDevice) return;
+        rc.graphStartId = "__graph_start";
+        const std::string cpuId = rc.cpuDevice->id();
+        rc.nodeDevice[rc.graphStartId] = cpuId;
+
+        for (const std::string& name : region.declaredInputBufferNames()) {
+            const std::string key = scopedBufferKey(region.scopeId(), name);
+            rc.graphInputBufferKeys.insert(key);
+            rc.bufferProducerMap[key] = rc.graphStartId;
+            rc.bufferProducerDeviceByKey[key] = cpuId;
+        }
+
+        for (const auto& [name, type] : region.declaredScalars()) {
+            (void)type;
+            const std::string key = scopedScalarKey(region.scopeId(), name);
+            if (auto prodIt = rc.scalarProducerMap.find(key);
+                prodIt != rc.scalarProducerMap.end()) {
+                auto opIt = rc.opById.find(prodIt->second);
+                if (opIt != rc.opById.end()) {
+                    const bool carried = isLoopCarriedKey(*opIt->second, key, true);
+                    bool selfConsumedLoop = false;
+                    if (std::holds_alternative<LoopOp>(*opIt->second)) {
+                        for (const ConsumedScalarRef& ref : consumedScalarRefs(*opIt->second)) {
+                            if (ref.key == key) {
+                                selfConsumedLoop = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (carried || selfConsumedLoop) {
+                        rc.graphInputScalarKeys.insert(key);
+                        rc.loopCarriedInitialScalarProducers.emplace(
+                            std::make_pair(prodIt->second, key), rc.graphStartId);
+                    }
+                }
+                continue;
+            }
+            rc.graphInputScalarKeys.insert(key);
+            rc.scalarProducerMap[key] = rc.graphStartId;
+            rc.scalarProducerDeviceByKey[key] = cpuId;
+        }
     }
 
     /// Resolve the device placement of every loop/conditional output,
@@ -3438,6 +3382,16 @@ class RegionCompiler {
             (void)dev;
             rc.nodesByDevice[did];
         }
+        if (rc.topLevel && !rc.graphStartId.empty()) {
+            CompiledSourceNode source;
+            source.id = rc.graphStartId;
+            source.deviceId = rc.cpuDevice->id();
+            source.inputBufferKeys.assign(rc.graphInputBufferKeys.begin(),
+                                          rc.graphInputBufferKeys.end());
+            source.inputScalarKeys.assign(rc.graphInputScalarKeys.begin(),
+                                          rc.graphInputScalarKeys.end());
+            rc.nodesByDevice[source.deviceId].push_back(std::move(source));
+        }
         for (const auto& id : rc.sortedIds) {
             const RegionOp& op = *rc.opById.at(id);
             const CompiledLoopOutputPlacement* loopPlacement = nullptr;
@@ -3497,6 +3451,9 @@ class RegionCompiler {
             for (const auto& rw : ioMap.inouts()) {
                 routeBufferTransferIfNeeded(rc, op, consumerDevId, rw.in);
             }
+            for (const ConsumedScalarRef& ref : consumedScalarRefs(op)) {
+                routeScalarTransferIfNeeded(rc, op, consumerDevId, ref);
+            }
             // A loop placed on a non-CPU (FPGA) queue consumes its carried/
             // initial inputs through the body's import boundaries rather than
             // its own IOMap, so enumerate those consumed buffers and bridge any
@@ -3507,12 +3464,186 @@ class RegionCompiler {
                         routeBufferTransferIfNeeded(rc, op, consumerDevId, *gb);
                     }
                 }
+                for (const ConsumedScalarRef& ref : consumedScalarRefs(op)) {
+                    routeScalarTransferIfNeeded(rc, op, consumerDevId, ref);
+                }
             }
         }
     }
 
+    void insertTerminalOutputBridges(RegionCompilation& rc) {
+        if (!rc.topLevel) return;
+        if (!rc.cpuDevice) return;
+
+        std::map<std::string, std::set<std::string>> consumedBuffers;
+        std::map<std::string, std::set<std::string>> consumedScalars;
+        for (const RegionOp* opPtr : rc.ops) {
+            const std::string consumerId = regionOpId(*opPtr);
+            for (const ConsumedBufferRef& ref : consumedBufferRefs(*opPtr)) {
+                consumedBuffers[ref.key].insert(consumerId);
+            }
+            for (const ConsumedScalarRef& ref : consumedScalarRefs(*opPtr)) {
+                consumedScalars[ref.key].insert(consumerId);
+            }
+        }
+
+        for (const auto& [key, producer] : rc.bufferProducerMap) {
+            if (rc.graphInputBufferKeys.count(key)) continue;
+            auto cIt = consumedBuffers.find(key);
+            if (cIt != consumedBuffers.end() &&
+                !(cIt->second.size() == 1 && cIt->second.count(producer))) {
+                continue;
+            }
+            rc.graphOutputBufferKeys.insert(key);
+        }
+        for (const auto& [key, producer] : rc.scalarProducerMap) {
+            if (producer == rc.graphStartId) continue;
+            auto cIt = consumedScalars.find(key);
+            if (cIt != consumedScalars.end() &&
+                !(cIt->second.size() == 1 && cIt->second.count(producer))) {
+                continue;
+            }
+            rc.graphOutputScalarKeys.insert(key);
+        }
+        if (rc.graphOutputBufferKeys.empty() && rc.graphOutputScalarKeys.empty()) return;
+
+        rc.graphEndId = "__graph_end";
+        CompiledSinkNode sink;
+        sink.id = rc.graphEndId;
+        sink.deviceId = rc.cpuDevice->id();
+        sink.outputBufferKeys.assign(rc.graphOutputBufferKeys.begin(),
+                                     rc.graphOutputBufferKeys.end());
+        sink.outputScalarKeys.assign(rc.graphOutputScalarKeys.begin(),
+                                     rc.graphOutputScalarKeys.end());
+        rc.nodeDevice[rc.graphEndId] = sink.deviceId;
+        rc.nodesByDevice[sink.deviceId].push_back(std::move(sink));
+
+        for (const std::string& key : rc.graphOutputBufferKeys) {
+            routeTerminalBufferToCpu(rc, key);
+        }
+        for (const std::string& key : rc.graphOutputScalarKeys) {
+            routeTerminalScalarToCpu(rc, key);
+        }
+    }
+
+    void addGraphEndDependency(RegionCompilation& rc, const std::string& depId) const {
+        if (depId.empty()) return;
+        auto& nodes = rc.nodesByDevice[rc.cpuDevice->id()];
+        for (CompiledNode& node : nodes) {
+            if (auto* sink = std::get_if<CompiledSinkNode>(&node)) {
+                if (sink->id != rc.graphEndId) continue;
+                if (std::find(sink->dependsOn.begin(), sink->dependsOn.end(), depId) ==
+                    sink->dependsOn.end()) {
+                    sink->dependsOn.push_back(depId);
+                }
+                return;
+            }
+        }
+    }
+
+    void routeTerminalBufferToCpu(RegionCompilation& rc, const std::string& key) {
+        auto prodIt = rc.bufferProducerMap.find(key);
+        if (prodIt == rc.bufferProducerMap.end()) return;
+        const std::string producerNodeId = prodIt->second;
+        std::string producerDevId = rc.nodeDevice.at(producerNodeId);
+        if (auto devIt = rc.bufferProducerDeviceByKey.find(key);
+            devIt != rc.bufferProducerDeviceByKey.end()) {
+            producerDevId = devIt->second;
+        }
+        const std::string cpuId = rc.cpuDevice->id();
+        if (producerDevId == cpuId) {
+            addGraphEndDependency(rc, producerNodeId);
+            return;
+        }
+        const GraphBuffer* buffer = findBufferObject(*rc.region, key);
+        if (!buffer) {
+            throw std::runtime_error(
+                "GraphCompiler: terminal output buffer '" + key +
+                "' cannot be materialized on CPU because its token metadata was not found");
+        }
+        auto legs = BridgeRouter::routeTransfer(
+            *devices_.at(producerDevId), *rc.cpuDevice,
+            *buffer, 0, bridgeFor_, *rc.cpuDevice,
+            producerNodeId, rc.graphEndId);
+        std::string prevConsumerId;
+        for (const auto& leg : legs) {
+            auto idsPair = materialiseLeg(rc, leg, prevConsumerId);
+            prevConsumerId = idsPair.second;
+        }
+        rc.bufferProducerDeviceByKey[key] = cpuId;
+        if (!prevConsumerId.empty()) addGraphEndDependency(rc, prevConsumerId);
+    }
+
+    void routeTerminalScalarToCpu(RegionCompilation& rc, const std::string& key) {
+        auto prodIt = rc.scalarProducerMap.find(key);
+        if (prodIt == rc.scalarProducerMap.end()) return;
+        const std::string producerNodeId = prodIt->second;
+        std::string producerDevId = rc.nodeDevice.at(producerNodeId);
+        if (auto devIt = rc.scalarProducerDeviceByKey.find(key);
+            devIt != rc.scalarProducerDeviceByKey.end()) {
+            producerDevId = devIt->second;
+        }
+        const std::string cpuId = rc.cpuDevice->id();
+        if (producerDevId == cpuId) {
+            addGraphEndDependency(rc, producerNodeId);
+            return;
+        }
+        auto legs = BridgeRouter::routeScalarTransfer(
+            *devices_.at(producerDevId), *rc.cpuDevice,
+            key, bridgeFor_, *rc.cpuDevice,
+            producerNodeId, rc.graphEndId);
+        std::string prevConsumerId;
+        for (const auto& leg : legs) {
+            auto idsPair = materialiseLeg(rc, leg, prevConsumerId);
+            prevConsumerId = idsPair.second;
+        }
+        rc.scalarProducerDeviceByKey[key] = cpuId;
+        if (!prevConsumerId.empty()) addGraphEndDependency(rc, prevConsumerId);
+    }
+
     std::string cpuDeviceId(const RegionCompilation& rc) const {
         return rc.cpuDevice ? rc.cpuDevice->id() : std::string{};
+    }
+
+    const GraphBuffer* findBufferObject(const GraphRegion& region,
+                                        const std::string& key) const {
+        for (const RegionOp& op : region.ops()) {
+            const IOMap& io = regionOpIoMap(op);
+            for (const auto& [port, gb] : io.inputs()) {
+                (void)port;
+                if (scopedBufferKey(gb.scopeId(), gb.name()) == key) return &gb;
+            }
+            for (const auto& [port, gb] : io.outputs()) {
+                (void)port;
+                if (scopedBufferKey(gb.scopeId(), gb.name()) == key) return &gb;
+            }
+            for (const IOMap::InoutBinding& rw : io.inouts()) {
+                if (scopedBufferKey(rw.in.scopeId(), rw.in.name()) == key) return &rw.in;
+                if (scopedBufferKey(rw.out.scopeId(), rw.out.name()) == key) return &rw.out;
+            }
+            if (const auto* boundary = std::get_if<SubgraphBoundaryOp>(&op)) {
+                for (const auto& mapping : boundary->bufferMappings) {
+                    if (scopedBufferKey(mapping.source.scopeId(), mapping.source.name()) == key) {
+                        return &mapping.source;
+                    }
+                    if (scopedBufferKey(mapping.target.scopeId(), mapping.target.name()) == key) {
+                        return &mapping.target;
+                    }
+                }
+            } else if (const auto* loop = std::get_if<LoopOp>(&op)) {
+                if (loop->body) {
+                    if (const GraphBuffer* gb = findBufferObject(*loop->body, key)) return gb;
+                }
+            } else if (const auto* cond = std::get_if<ConditionalOp>(&op)) {
+                if (cond->thenRegion) {
+                    if (const GraphBuffer* gb = findBufferObject(*cond->thenRegion, key)) return gb;
+                }
+                if (cond->elseRegion) {
+                    if (const GraphBuffer* gb = findBufferObject(*cond->elseRegion, key)) return gb;
+                }
+            }
+        }
+        return nullptr;
     }
 
     /// Find the GraphBuffer object a producer op emits under @p key (scanning
@@ -3597,23 +3728,33 @@ class RegionCompiler {
                 for (const auto& scalarKey : consumedScalarKeys(source)) {
                     if (followerSkipsScalarDeps) continue;
                     std::string producerNodeId;
+                    bool usingCarriedInitial = false;
                     auto carriedIt = rc.loopCarriedInitialScalarProducers.find(
                         {compiledNodeId(node), scalarKey});
                     if (carriedIt != rc.loopCarriedInitialScalarProducers.end()) {
                         producerNodeId = carriedIt->second;
+                        usingCarriedInitial = true;
                     } else if (auto producerIt = rc.scalarProducerMap.find(scalarKey);
                                producerIt != rc.scalarProducerMap.end()) {
                         producerNodeId = producerIt->second;
                     }
                     if (producerNodeId.empty()) continue;
                     std::string producerDeviceId = rc.nodeDevice.at(producerNodeId);
-                    if (auto devIt = rc.scalarProducerDeviceByKey.find(scalarKey);
-                        devIt != rc.scalarProducerDeviceByKey.end()) {
-                        producerDeviceId = devIt->second;
+                    if (!usingCarriedInitial) {
+                        if (auto devIt = rc.scalarProducerDeviceByKey.find(scalarKey);
+                            devIt != rc.scalarProducerDeviceByKey.end()) {
+                            producerDeviceId = devIt->second;
+                        }
                     }
                     if (producerDeviceId != did) {
-                        throw std::runtime_error(
-                            "GraphCompiler: cross-device global scalar dependencies are not supported yet");
+                        auto bridgeIt = rc.remoteConsumerScalarBridgeIds.find({scalarKey, did});
+                        if (bridgeIt == rc.remoteConsumerScalarBridgeIds.end()) {
+                            throw std::runtime_error(
+                                "GraphCompiler: missing consumer-side bridge for remote scalar '" +
+                                scalarKey + "' on device '" + did + "'");
+                        }
+                        addDep(node, seen, bridgeIt->second);
+                        continue;
                     }
                     addDep(node, seen, producerNodeId);
                 }
@@ -3769,23 +3910,30 @@ class RegionCompiler {
                                      const GraphBuffer& bufObj) {
         const std::string bufKey = scopedBufferKey(bufObj.scopeId(), bufObj.name());
         std::string producerNodeId;
+        bool usingCarriedInitial = false;
         auto carriedIt = rc.loopCarriedInitialBufferProducers.find(
             {regionOpId(consumerOp), bufKey});
         if (carriedIt != rc.loopCarriedInitialBufferProducers.end()) {
             producerNodeId = carriedIt->second;
+            usingCarriedInitial = true;
         } else if (auto prodIt = rc.bufferProducerMap.find(bufKey);
                    prodIt != rc.bufferProducerMap.end()) {
             producerNodeId = prodIt->second;
         }
         if (producerNodeId.empty()) return;
         std::string producerDevId = rc.nodeDevice.at(producerNodeId);
-        if (auto devIt = rc.bufferProducerDeviceByKey.find(bufKey);
-            devIt != rc.bufferProducerDeviceByKey.end()) {
-            producerDevId = devIt->second;
+        if (!usingCarriedInitial) {
+            if (auto devIt = rc.bufferProducerDeviceByKey.find(bufKey);
+                devIt != rc.bufferProducerDeviceByKey.end()) {
+                producerDevId = devIt->second;
+            }
         }
         if (producerDevId == consumerDevId) return;
 
-        const RegionOp& producerOp = *rc.opById.at(producerNodeId);
+        const RegionOp* producerOpPtr = nullptr;
+        auto producerIt = rc.opById.find(producerNodeId);
+        if (producerIt != rc.opById.end()) producerOpPtr = producerIt->second;
+        const bool producerIsGraphStart = rc.topLevel && producerNodeId == rc.graphStartId;
         // Boundary ops are CPU-pinned and move data through their compiled
         // CompiledBoundaryNode actions, not through bridges; refuse to route
         // bridges that involve them on either side. Kernel and control op
@@ -3793,9 +3941,11 @@ class RegionCompiler {
         // are already published on the resolved placement device after Phase
         // 7C materialisation, so a parent-level cross-device consumer is
         // treated like any other cross-device kernel-to-kernel transfer.
-        const bool producerOk = std::holds_alternative<KernelOp>(producerOp) ||
-                                std::holds_alternative<LoopOp>(producerOp) ||
-                                std::holds_alternative<ConditionalOp>(producerOp);
+        const bool producerOk = producerIsGraphStart ||
+                                (producerOpPtr &&
+                                 (std::holds_alternative<KernelOp>(*producerOpPtr) ||
+                                  std::holds_alternative<LoopOp>(*producerOpPtr) ||
+                                  std::holds_alternative<ConditionalOp>(*producerOpPtr)));
         if (!producerOk) {
             throw std::runtime_error(
                 "GraphCompiler: cross-device transfer from boundary op '" +
@@ -3839,6 +3989,59 @@ class RegionCompiler {
                 "' did not produce a consumer-side bridge op");
         }
         rc.remoteConsumerBridgeIds[edgeKey] = prevConsumerId;
+    }
+
+    void routeScalarTransferIfNeeded(RegionCompilation& rc,
+                                     const RegionOp& consumerOp,
+                                     const std::string& consumerDevId,
+                                     const ConsumedScalarRef& ref) {
+        std::string producerNodeId;
+        bool usingCarriedInitial = false;
+        auto carriedIt = rc.loopCarriedInitialScalarProducers.find(
+            {regionOpId(consumerOp), ref.key});
+        if (carriedIt != rc.loopCarriedInitialScalarProducers.end()) {
+            producerNodeId = carriedIt->second;
+            usingCarriedInitial = true;
+        } else if (auto prodIt = rc.scalarProducerMap.find(ref.key);
+                   prodIt != rc.scalarProducerMap.end()) {
+            producerNodeId = prodIt->second;
+        }
+        if (producerNodeId.empty()) return;
+        std::string producerDevId = rc.nodeDevice.at(producerNodeId);
+        if (!usingCarriedInitial) {
+            if (auto devIt = rc.scalarProducerDeviceByKey.find(ref.key);
+                devIt != rc.scalarProducerDeviceByKey.end()) {
+                producerDevId = devIt->second;
+            }
+        }
+        if (producerDevId == consumerDevId) return;
+
+        auto edgeKey = std::make_pair(ref.key, consumerDevId);
+        if (rc.remoteConsumerScalarBridgeIds.count(edgeKey)) return;
+
+        if (!rc.cpuDevice) {
+            throw std::runtime_error(
+                "GraphCompiler: cross-device transfer of scalar '" + ref.name +
+                "' requires a CPU device but none is registered");
+        }
+
+        auto legs = BridgeRouter::routeScalarTransfer(
+            *devices_.at(producerDevId),
+            *devices_.at(consumerDevId),
+            ref.key, bridgeFor_, *rc.cpuDevice,
+            producerNodeId, regionOpId(consumerOp));
+        std::string prevConsumerId;
+        for (const auto& leg : legs) {
+            auto idsPair = materialiseLeg(rc, leg, prevConsumerId);
+            prevConsumerId = idsPair.second;
+        }
+        if (prevConsumerId.empty()) {
+            throw std::runtime_error(
+                "GraphCompiler: remote transfer of scalar '" + ref.name +
+                "' to device '" + consumerDevId +
+                "' did not produce a consumer-side bridge op");
+        }
+        rc.remoteConsumerScalarBridgeIds[edgeKey] = prevConsumerId;
     }
 
     /// Materialise a barrier-only bridge pair for an afterOps edge from
@@ -3901,17 +4104,21 @@ class RegionCompiler {
                               const ConsumedBufferRef& ref) const {
         auto pit = rc.bufferProducerMap.find(ref.key);
         std::string producerNodeId;
+        bool usingCarriedInitial = false;
         auto carriedIt = rc.loopCarriedInitialBufferProducers.find({compiledNodeId(node), ref.key});
         if (carriedIt != rc.loopCarriedInitialBufferProducers.end()) {
             producerNodeId = carriedIt->second;
+            usingCarriedInitial = true;
         } else if (pit != rc.bufferProducerMap.end()) {
             producerNodeId = pit->second;
         }
         if (producerNodeId.empty()) return;
         std::string producerDevId = rc.nodeDevice.at(producerNodeId);
-        if (auto devIt = rc.bufferProducerDeviceByKey.find(ref.key);
-            devIt != rc.bufferProducerDeviceByKey.end()) {
-            producerDevId = devIt->second;
+        if (!usingCarriedInitial) {
+            if (auto devIt = rc.bufferProducerDeviceByKey.find(ref.key);
+                devIt != rc.bufferProducerDeviceByKey.end()) {
+                producerDevId = devIt->second;
+            }
         }
         if (producerDevId == did) {
             addDep(node, seen, producerNodeId);
@@ -4006,7 +4213,6 @@ std::vector<DGraph> GraphCompiler::compile(
     validateRegionScopes(rootRegion, rootProducedScalars);
     validateSizeScalarReferences(rootRegion);
     validateRootScopeScalarReferences(rootRegion);
-    validateRootScopeBufferReferences(rootRegion);
     RegionCompiler compiler(devices, bridgeFor, scalarValues);
     return compiler.compileRegion(rootRegion);
 }
