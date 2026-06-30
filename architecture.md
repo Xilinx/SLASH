@@ -273,15 +273,16 @@ TODO
 ## QDMA subsystem (`slash_qdma_ctl<N>`)
 
 * Top-level control socket exposed as `slash_qdma_ctl<N>`, one for each accelerator.
-* Resources managed by the daemon:
+* Resources managed by the daemon, for each accelerator
     * Qpairs
         * No inherent meaning for the daemon
-        * Only some state machines to check that the user manages qpairs correctly
+        * Only a state machine per qpair to check that the user manages qpairs correctly
     * Transfer sessions
         * Created with the `QPAIR_GET_FD` IOCTL
         * Leads to the creation of a new, anonymous UNIX domain socket
         * Managed by a new worker thread
         * Executes memory transfers between the user and the model server on the user's behalf
+    * A handle to the (locked) ZeroMQ socket
 * Host buffers need no inherent management by the daemon
     * They are created as memfds and passed to the user
     * But the daemon can (and must) instantly forget about them
@@ -289,15 +290,55 @@ TODO
         * If the daemon keeps a reference to them, they are not released once the client closes their last FD to them
     * They will be passed back to the daemon as part of a transfer IOCTL later
 
-### Mechanics
+### Mechanisms
 
-* TODO
-* Issues to consider:
-    * Exit conditions
-    * Validation/Handling of qpairs
-    * ZMQ thread-safety: ZMQ sockets are not thread-safe.
-    * Thread pool model
-* TODO: Memory range decodes
+* First, a user has to create and start some qpairs
+    * Again, these are only entries in a state tracking table
+    * Possible state transitions:
+        * Initial -[QPAIR_ADD]-> Stopped
+        * Stopped, Started -[START]-> Started
+        * Started -[GET_FD]-> Used
+        * Used -[last close on FD]-> Started
+        * Started, Stopped -[STOP]-> Stopped
+        * Started, Stopped -[DEL]-> Removed from the list
+* Then, a user can create a transfer FD
+    * Internally handled as a transfer session
+    * Needs to use at least one qpair
+        * All qpairs have to be in the "started" state
+    * Starts a new worker thread and a socket pair
+        * One end is used by the worker thread, the other is passed to the user
+    * Worker thread is active until the user closes the socket on their side
+* Mechanism of a transfer operation
+    * User:
+        * Sends the source or target FDs it wants to use as ancillary data to the transfer session worker
+        * Then, sends the transfer IOCTL request
+            * Using indices to the list of transferred FDs instead of FDs in the request
+    * Daemon:
+        * Receives ancillary data and IOCTL request
+        * If any of the referenced qpairs has been marked as "stopped" or removed from the qpairs list:
+            * Transfer fails with `-ENODEV`
+            * Correctly models the behavior of the driver, which does not invalidate a "transfer session" if an underlying qpair is stopped/removed
+        * For H2C (sub-)transfers to DDR/HBM:
+            * Read the data from the referenced FD via `pread`
+            * send it to the model server via a "populate" request
+        * For C2H (sub-)transfers from DDR/HBM:
+            * Requests the data from the model server and receive it
+            * write the data to the referenced FD using `pwrite`
+        * For H2C (sub-)transfers to the reconfiguration aperture:
+            * Read the data from the referenced FD via `pread`
+            * Append the data to the staging VBIN file (see section "reconfiguration")
+        * Responds to the IOCTL
+        * Closes the transferred file descriptors
+    * Return value on success: The total number of bytes transferred
+* Transfers between the daemon and the model process have to be serialized
+    * Globally, for all transfer sessions connected to the same model process
+    * So that only one transfer session ever has an open request with the model process
+    * Reads and writes to and from the user's target file are not part of this critical section
+
+### Accepted inaccuracies
+
+* The FDs used in a transfer IOCTL don't have to be necessarily created by `BUF_CREATE`
+    * Slight emulation error accepted for now, could be fixed in the future, but not necessary
 
 ### Necessary functional changes to other components
 
@@ -308,10 +349,38 @@ TODO
         * The kernel driver (needs to report the BDF)
         * The libslash library (needs to forward this information)
         * VRTD (needs to change the discovery mechanism to use BDF returned by QDMA)
+* The memory ranges of HBM/DDR/Reconfiguration region should be added to the kernel ABI header
+* The reconfiguration writing protocol should be part of the kernel ABI documentation
 
 ### Messages over the socket:
 
+The QDMA subsystem accepts datagrams on two kinds of endpoint:
+
+* **CTL** — the top-level `slash_qdma_ctl<N>` socket, the emulated equivalent of the
+  `/dev/slash_qdma_ctl<N>` control fd.
+* **XFER** — a per-transfer-session anonymous socket, the emulated equivalent of a qpair I/O fd
+  returned by `QPAIR_GET_FD`. Created and serviced by a dedicated worker thread.
+
+Each opcode's `ioctl_op` field (in `struct slash_emu_socket_header`) carries the original IOCTL
+command number. The table below states which endpoints accepts which operations:
+
+| Opcode | Cmd (`'v'`) | CTL | XFER |
+| --- | --- | :---: | :---: |
+| `SLASH_QDMA_IOCTL_INFO` | `0x50` | ✓ | ✗ |
+| `SLASH_QDMA_IOCTL_QPAIR_ADD` | `0x51` | ✓ | ✗ |
+| `SLASH_QDMA_IOCTL_Q_OP` | `0x52` | ✓ | ✗ |
+| `SLASH_QDMA_IOCTL_QPAIR_GET_FD` | `0x53` | ✓ | ✗ |
+| `SLASH_QDMA_IOCTL_BUF_CREATE` | `0x54` | ✓ | ✓ |
+| *(reserved)* | `0x55` | ✗ | ✗ |
+| `SLASH_QDMA_QPAIR_IOCTL_TRANSFER` | `0x56` | ✗ | ✓ |
+
+The following again lists all operations and the differences between the real and the emulated behavior.
+If not stated otherwise, the behavior and contracts from the real kernel ABI apply to the emulation too.
+
 * `SLASH_QDMA_IOCTL_INFO`
+    * Addition: The BDF is now returned too
+        * Set to the BDF of the QDMA PF, i.e. PF 1
+    * Full IOCTL argument struct and opcode definition:
     ``` C
     #define SLASH_PCI_BDF_LEN 32
 
@@ -326,117 +395,30 @@ TODO
 
     #define SLASH_QDMA_IOCTL_INFO _IOWR('v', 0x50, struct slash_qdma_info)
     ```
-    * Addition: The BDF is now returned too
-        * Set to the BDF of the QDMA PF, i.e. PF 1
 * `SLASH_QDMA_IOCTL_QPAIR_ADD`
-    ``` C
-    struct slash_qdma_qpair_add {
-        __u32 size;          /* [in/out] ABI version */
-        __u32 mode;          /* [in]  Queue mode: 0=MM (Memory Mapped), 1=ST (Streaming, not yet supported) */
-        __u32 dir_mask;      /* [in]  Direction bitmask (see below) */
-        __u32 h2c_ring_sz;   /* [in]  H2C descriptor ring CSR table index: 0–15 */
-        __u32 c2h_ring_sz;   /* [in]  C2H descriptor ring CSR table index: 0–15 */
-        __u32 cmpt_ring_sz;  /* [in]  Completion ring CSR table index: 0–15 */
-        __u32 qid;           /* [out] Kernel-assigned queue pair ID */
-    };
-    
-    #define SLASH_QDMA_IOCTL_QPAIR_ADD _IOWR('v', 0x51, struct slash_qdma_qpair_add)
-    ```
+    * As specified in the kernel ABI
 * `SLASH_QDMA_IOCTL_Q_OP`
-    ``` C
-    struct slash_qdma_qpair_op {
-        __u32 size; /* [in/out] ABI version */
-        __u32 qid;  /* [in]     Queue pair ID from QPAIR_ADD */
-        __u32 op;   /* [in]     Operation: 0=START, 1=STOP, 2=DEL */
-    };
-    #define SLASH_QDMA_IOCTL_Q_OP _IOWR('v', 0x52, struct slash_qdma_qpair_op)
-    ```
-    * The daemon must track the state machine of each qpair
-        * Allows users to find qpair handling errors before moving to hardware
-        * Even it may not be necessary to emulate the rest of the functionality
+    * As specified in the kernel ABI
 * `SLASH_QDMA_IOCTL_QPAIR_GET_FD`
-    ``` C
-    #define SLASH_QDMA_FD_MAX_QPAIRS 2u
-
-    struct slash_qdma_qpair_fd_request {
-        __u32 size;        /* [in/out] ABI version */
-        __u32 qid;         /* [in]     Legacy single qpair ID; used when qpair_count == 0 */
-        __u32 flags;       /* [in]     fd flags: only O_CLOEXEC is honoured */
-        __u32 qpair_count; /* [in]     Number of qpair_ids (1..SLASH_QDMA_FD_MAX_QPAIRS); 0 = use qid */
-        __u32 qpair_ids[SLASH_QDMA_FD_MAX_QPAIRS]; /* [in] qpair IDs; index == qpair_index */
-    };
-
-    #define SLASH_QDMA_IOCTL_QPAIR_GET_FD _IOWR('v', 0x53, struct slash_qdma_qpair_fd_request)
-    ```
+    * Opcode and argument struct as specified in the kernel ABI
     * On success, the `return_value` is zero, and the new FD is transferred as ancillary data as SCM_RIGHTS
     * The returned FD points to an anonymous UNIX domain socket
+        * Used to communicate with the worker of the newly created transfer session
         * Also emulates the IOCTLs of the original control file via datagrams
 * `SLASH_QDMA_IOCTL_BUF_CREATE`
-    ``` C
-    struct slash_qdma_buf_create {
-        __u32 size;          /* [in/out] ABI version */
-        __u32 flags;         /* [in]  Only O_CLOEXEC is honoured */
-        __u64 length;        /* [in]  Buffer length in bytes (page multiple) */
-        __u32 granule;       /* [out] Bytes per SGL descriptor (host page size) */
-        __u32 transfer_hint; /* [out] enum slash_qdma_transfer_hint */
-    };
-
-    #define SLASH_QDMA_IOCTL_BUF_CREATE _IOWR('v', 0x54, struct slash_qdma_buf_create)
-    ```
+    * Opcode and argument struct as specified in the kernel ABI
     * On success, the `return_value` is zero, and the new FD is transferred as ancillary data as SCM_RIGHTS
-    * The returned FD is merely a memfd
+    * The returned FD merely points to a memfd
         * Supports the same user-visible operations as the kernel buffer returned by the driver
         * Immediately closed by the daemon after responding, so that the memfd is automatically released once the user stops using them
     * Granule is the default page size as returned by `getpagesize`
     * The transfer hint is `SLASH_QDMA_TRANSFER_HINT_SINGLE_QPAIR`
 * `SLASH_QDMA_QPAIR_IOCTL_TRANSFER`
-    ``` C
-    struct slash_qdma_subxfer {
-        __u32 qpair_index; /* [in] Index into the fd's bound qpairs */
-        __u32 direction;   /* [in] 1=H2C (write), 2=C2H (read) */
-        __s32 buf_fd;      /* [in] Kernel buffer fd from BUF_CREATE */
-        __u32 pad0;        /* padding */
-        __u64 buf_offset;  /* [in] Byte offset within the buffer */
-        __u64 dev_addr;    /* [in] Device-side (endpoint) address */
-        __u64 length;      /* [in] Number of bytes to transfer */
-    };
-
-    struct slash_qdma_transfer {
-        __u32 size;   /* [in/out] ABI version */
-        __u32 count;  /* [in] Number of sub-transfers (1..SLASH_QDMA_FD_MAX_QPAIRS) */
-        struct slash_qdma_subxfer xfers[SLASH_QDMA_FD_MAX_QPAIRS];
-    };
-
-    #define SLASH_QDMA_QPAIR_IOCTL_TRANSFER _IOWR('v', 0x56, struct slash_qdma_transfer)
-    ```
+    * Opcode and argument struct as specified in the kernel ABI
     * Before sending the request, the user has to send the desired FDs as ancillary data to the daemon
     * Then, they should use the index of an FD in the list of transferred FDs in `xfers[i].buf_fd`
         * Instead of the actual FD
-    * Implementation in the daemon
-        * The daemon receives the request, interprets it
-        * The daemon fetches the FDs
-        * For H2C transfers to DDR/HBM:
-            * Read the data via `read`
-            * send it to the model server via a "populate" request
-        * For C2H transfers from DDR/HBM:
-            * Requests the data from the model server
-            * receive the data
-            * write the data using `write`
-        * For H2C transfers to the reconfiguration aperture:
-            * Read the data via `read`
-            * Append the data to the reconfiguration buffer (see section "reconfiguration")
-        * Responds to the IOCTL
-        * Closes the transferred file descriptors
-    * Return value on success: The total number of bytes transferred
-    * Implication: The FDs used in a transfer don't have to be necessarily created by `BUF_CREATE`
-        * Slight emulation error accepted for now, could be fixed in the future
-    * Multiple transfers, qpairs, and channels are handled with the correct functionality
-        * But only sequentially
-        * No performance advantage from using multiple transfers, qpairs, channels under emulation
-
-### Opcode matrix
-
-TODO
+    * Mechanism defined above
 
 ## Future work
 
