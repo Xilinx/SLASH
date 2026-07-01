@@ -41,4 +41,5 @@ macro(add_slash_emu_test test_name test_source)
   add_dependencies(unit_tests ${test_name})
 endmacro()
 
-add_slash_emu_test(daemon_test  daemon_test.cpp)
+add_slash_emu_test(daemon_test     daemon_test.cpp)
+add_slash_emu_test(transport_test transport_test.cpp)

@@ -22,6 +22,7 @@
 
 add_library(slash_emu_core STATIC
   daemon.cpp
+  transport.cpp
 )
 
 target_include_directories(slash_emu_core
