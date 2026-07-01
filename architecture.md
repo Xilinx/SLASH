@@ -113,10 +113,6 @@ This architecture and the sprint that it describes is only supposed to implement
     * but at least one of the PF subsystems is down
     * Reached after a REMOVE operation on some, but not all PF subsystems
 
-### Configuration file format
-
-TODO
-
 ### Life cycle operations (Hotplugging)
 
 * Managed out-of-band of the accelerator subsystems
@@ -391,7 +387,6 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
     * Does not support COR registers, does not preserve read/write ordering, support other control states, etc.
     * However, suffices for most compute kernels and thus the MVP daemon
     * When the read/write-based BAR interface is implemented, each read/write can go directly to the model server
-* TODO: Decide on how to handle auto-restart
 
 #### Control register bits to implement:
 
