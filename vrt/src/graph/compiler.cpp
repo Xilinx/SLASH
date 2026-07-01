@@ -2176,48 +2176,39 @@ CompiledConditionalOutputPlacement validateConditionalOutputPlacements(
 std::string resolveKernelDevice(
     const KernelOp& node,
     const std::map<std::string, std::shared_ptr<IDevice>>& devices) {
-    if (!node.deviceHint.empty()) {
-        if (devices.find(node.deviceHint) == devices.end()) {
-            throw std::runtime_error(
-                "GraphCompiler: deviceHint '" + node.deviceHint +
-                "' for node '" + node.id + "' does not match any registered device");
-        }
-        return node.deviceHint;
+    if (node.device.empty()) {
+        throw std::runtime_error(
+            "GraphCompiler: node '" + node.id + "' must specify a device");
     }
 
-    for (const auto& [did, dev] : devices) {
-        if (dev->type() == node.kernel.type) return did;
+    if (devices.find(node.device) == devices.end()) {
+        throw std::runtime_error(
+            "GraphCompiler: device '" + node.device +
+            "' for node '" + node.id + "' does not match any registered device");
     }
-
-    throw std::runtime_error(
-        "GraphCompiler: no device of type matching kernel '" + node.kernel.name +
-        "' for node '" + node.id + "'");
+    return node.device;
 }
 
 std::string resolveReprogramDevice(
     const ReprogramOp& node,
     const std::map<std::string, std::shared_ptr<IDevice>>& devices) {
-    if (!node.deviceHint.empty()) {
-        auto it = devices.find(node.deviceHint);
-        if (it == devices.end()) {
-            throw std::runtime_error(
-                "GraphCompiler: deviceHint '" + node.deviceHint +
-                "' for reprogram node '" + node.id + "' does not match any registered device");
-        }
-        if (it->second->type() != DeviceType::FPGA) {
-            throw std::runtime_error(
-                "GraphCompiler: reprogram node '" + node.id +
-                "' must target an FPGA device");
-        }
-        return node.deviceHint;
+    if (node.device.empty()) {
+        throw std::runtime_error(
+            "GraphCompiler: reprogram node '" + node.id + "' must specify a device");
     }
 
-    for (const auto& [did, dev] : devices) {
-        if (dev->type() == DeviceType::FPGA) return did;
+    auto it = devices.find(node.device);
+    if (it == devices.end()) {
+        throw std::runtime_error(
+            "GraphCompiler: device '" + node.device +
+            "' for reprogram node '" + node.id + "' does not match any registered device");
     }
-
-    throw std::runtime_error(
-        "GraphCompiler: no FPGA device registered for reprogram node '" + node.id + "'");
+    if (it->second->type() != DeviceType::FPGA) {
+        throw std::runtime_error(
+            "GraphCompiler: reprogram node '" + node.id +
+            "' must target an FPGA device");
+    }
+    return node.device;
 }
 
 DGraphChild makeDGraphChild(std::string parentNodeId,
@@ -3196,7 +3187,7 @@ class RegionCompiler {
     }
 
     /// Topologically sort the region's ops and pin each one to a device
-    /// (kernels via deviceHint, control / boundary ops to the singleton CPU).
+    /// (kernels via required device, control / boundary ops to the singleton CPU).
     void assignDevices(RegionCompilation& rc) const {
         ProducerMapInfo bufferProducers;
         bufferProducers.producers = rc.bufferProducerMap;

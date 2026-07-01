@@ -182,6 +182,11 @@ class FpgaDevice : public IDevice {
      */
     std::size_t bufferSize(const std::string& bufferName) const;
 
+    /**
+     * @brief Returns true iff @p bufferName currently has device storage.
+     */
+    bool hasBuffer(const std::string& bufferName) const;
+
     // ---- BAR-backed scalar accessors (also used by scalar bridges) ----
 
     /// Scalar signal slots are 32-bit RP1 values. Wider FPGA output scalars are

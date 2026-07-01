@@ -349,6 +349,11 @@ class CpuDevice : public IDevice {
      */
     size_t bufferSize(const std::string& bufferName) const;
 
+    /**
+     * @brief Returns true iff @p bufferName currently has device storage.
+     */
+    bool hasBuffer(const std::string& bufferName) const;
+
     // --- Scalar accessors (also used by scalar bridges) ---
 
     void setInputScalar(const std::string& scalarKey, std::uint64_t bits);

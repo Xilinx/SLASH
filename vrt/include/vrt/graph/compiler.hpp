@@ -112,8 +112,8 @@ class GraphCompiler {
      * @throws std::runtime_error  If the graph is empty, has no registered
      *                             devices, is missing a required bridge
      *                             factory, contains a cycle, has an unbound
-     *                             mandatory port, has a deviceHint with no
-     *                             matching device, or `bridgeFor` rejects a
+     *                             mandatory port, has a required device with
+     *                             no matching device, or `bridgeFor` rejects a
      *                             needed pair.
      */
     std::vector<DGraph> compile(

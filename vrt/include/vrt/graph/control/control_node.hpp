@@ -67,7 +67,7 @@ struct BoundaryMappings {
 struct KernelOp {
     std::string id;
     KernelDescriptor kernel;
-    std::string deviceHint;
+    std::string device;
     IOMap ioMap;
     std::vector<std::string> afterOps;
 };
@@ -75,7 +75,7 @@ struct KernelOp {
 struct ReprogramSpec {
     std::string imageId;
     std::string pdiPath;
-    std::string deviceHint;
+    std::string device;
     uint32_t timeoutCycles = 0;
     std::vector<std::string> afterOps;
 };
@@ -84,7 +84,7 @@ struct ReprogramOp {
     std::string id;
     std::string imageId;
     std::string pdiPath;
-    std::string deviceHint;
+    std::string device;
     uint32_t timeoutCycles = 0;
     IOTypeMap ioType;
     IOMap ioMap;

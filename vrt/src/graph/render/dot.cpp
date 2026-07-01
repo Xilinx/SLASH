@@ -698,10 +698,7 @@ void emitAuthoredDeviceClusters(std::ostringstream& os,
     std::map<std::string, std::vector<const KernelOp*>> byDevice;
     for (const RegionOp& op : region.ops()) {
         if (const auto* kernel = std::get_if<KernelOp>(&op)) {
-            const std::string key = kernel->deviceHint.empty()
-                ? std::string{"_unassigned"}
-                : kernel->deviceHint;
-            byDevice[key].push_back(kernel);
+            byDevice[kernel->device].push_back(kernel);
         }
     }
 

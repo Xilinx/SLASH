@@ -157,14 +157,14 @@ GraphBuffer testInput(GraphRegion& region, BufferType type, const std::string& n
 std::string addOutputKernel(GraphRegion& region,
                             KernelDescriptor kernel,
                             BufferType bufferType,
-                            const std::string& deviceHint,
+                            const std::string& device,
                             std::optional<GraphScalar> size = std::nullopt) {
     IOMap kernelIo;
     GraphBuffer output;
     kernelIo.bindOutput("out", bufferType, output,
                         size ? *size : testSize(region),
                         region.scopeId());
-    return region.addKernel(std::move(kernel), std::move(kernelIo), deviceHint);
+    return region.addKernel(std::move(kernel), std::move(kernelIo), device);
 }
 
 class AddI32BufferKernel : public CpuKernel {
@@ -1522,13 +1522,13 @@ TEST(RegionCompilerTest, CompilerRejectsScalarBoundaryTypeMismatch) {
 std::string addI32ScalarProducerKernel(GraphRegion& region,
                                        const std::string& kernelName,
                                        const GraphScalar& target,
-                                       const std::string& deviceHint) {
+                                       const std::string& device) {
     IOTypeMap kernelType;
     kernelType.outputScalars.push_back({"out", ScalarType::I32});
     IOMap kernelIo;
     kernelIo.bindOutputScalar("out", target);
     return region.addKernel(cpuKernel(kernelName, std::move(kernelType)),
-                            std::move(kernelIo), deviceHint);
+                            std::move(kernelIo), device);
 }
 
 TEST(RegionCompilerTest, RootReaderDependsOnLoopForScalarExportedToParent) {

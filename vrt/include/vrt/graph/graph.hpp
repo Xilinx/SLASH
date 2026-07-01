@@ -424,8 +424,7 @@ class Graph {
      *
      * @param kernel      Kernel type and I/O signature.
      * @param ioMap       Concrete data bindings for this instantiation.
-     * @param deviceHint  Target device id (e.g. "fpga:0").  Empty = any device
-     *                    matching kernel.type.
+     * @param device      Required target device id (e.g. "fpga:0").
      * @param afterNodes  Additional ordering constraints (node ids).
      * @return            The new node's id; stable for the lifetime of the Graph.
      *
@@ -434,10 +433,10 @@ class Graph {
      */
     std::string addNode(KernelDescriptor         kernel,
                         IOMap                    ioMap,
-                        std::string              deviceHint = "",
+                        std::string              device,
                         std::vector<std::string> afterNodes = {}) {
         const std::string nodeId = rootRegion_->addKernel(
-            std::move(kernel), std::move(ioMap), std::move(deviceHint), std::move(afterNodes));
+            std::move(kernel), std::move(ioMap), std::move(device), std::move(afterNodes));
         return nodeId;
     }
 

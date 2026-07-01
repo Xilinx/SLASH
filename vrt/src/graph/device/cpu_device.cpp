@@ -863,6 +863,10 @@ size_t CpuDevice::bufferSize(const std::string& bufferName) const {
     return (it == buffers_.end()) ? 0 : it->second.size();
 }
 
+bool CpuDevice::hasBuffer(const std::string& bufferName) const {
+    return buffers_.find(normalizeUserBufferKey(bufferName)) != buffers_.end();
+}
+
 void CpuDevice::setInputScalar(const std::string& scalarKey, std::uint64_t bits) {
     if (!scalarValues_) {
         scalarValues_ = std::make_shared<std::map<std::string, uint64_t>>();

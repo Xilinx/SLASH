@@ -110,10 +110,13 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphScalar::ref(type, std::move(name), scopeId_);
     }
 
-    std::string addKernel(KernelDescriptor kernel, IOMap ioMap, std::string deviceHint = "",
+    std::string addKernel(KernelDescriptor kernel, IOMap ioMap, std::string device,
                           std::vector<std::string> afterOps = {}) {
+        if (device.empty()) {
+            throw std::invalid_argument("GraphRegion::addKernel: device must not be empty");
+        }
         std::string id = nextOpId(kernel.name.empty() ? std::string{"kernel"} : kernel.name);
-        KernelOp op{std::move(id), std::move(kernel), std::move(deviceHint),
+        KernelOp op{std::move(id), std::move(kernel), std::move(device),
                     std::move(ioMap), std::move(afterOps)};
         const std::string nodeId = op.id;
         addOp(std::move(op));
@@ -127,11 +130,14 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         if (spec.pdiPath.empty()) {
             throw std::invalid_argument("GraphRegion::addReprogram: PDI path must not be empty");
         }
+        if (spec.device.empty()) {
+            throw std::invalid_argument("GraphRegion::addReprogram: device must not be empty");
+        }
         ReprogramOp op;
         op.id = nextOpId("reprogram");
         op.imageId = std::move(spec.imageId);
         op.pdiPath = std::move(spec.pdiPath);
-        op.deviceHint = std::move(spec.deviceHint);
+        op.device = std::move(spec.device);
         op.timeoutCycles = spec.timeoutCycles;
         op.afterOps = std::move(spec.afterOps);
         const std::string id = op.id;

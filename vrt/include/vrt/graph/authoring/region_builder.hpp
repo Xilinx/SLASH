@@ -108,7 +108,7 @@ class RegionBuilder {
             io.bindExistingInout(rw.port, rw.port, rw.in, rw.out);
         }
         std::string id = region_->addKernel(std::move(desc), std::move(io),
-                                             spec.kernel.deviceId, idsOf(spec.after));
+                                             spec.kernel.device, idsOf(spec.after));
         return GraphNode{std::move(id)};
     }
 
@@ -117,7 +117,7 @@ class RegionBuilder {
         ReprogramSpec rp;
         rp.imageId = spec.image.imageId;
         rp.pdiPath = spec.image.pdiPath;
-        rp.deviceHint = spec.image.deviceId;
+        rp.device = spec.image.device;
         rp.afterOps = idsOf(spec.after);
         return GraphNode{region_->addReprogram(std::move(rp))};
     }

@@ -55,6 +55,7 @@
 
 #include <vrt/graph/core/graph_scalar.hpp>
 #include <vrt/graph/core/types.hpp>
+#include <vrt/graph/crossdevice/cpu_fpga_bridge.hpp>
 #include <vrt/graph/device/cpu_device.hpp>
 #include <vrt/graph/device/dgraph.hpp>
 #include <vrt/graph/node/compiled_node.hpp>
@@ -583,6 +584,18 @@ TEST_F(FpgaDeviceFixture, CpuToFpgaBufferEdgeCopiesIntoFpgaStore) {
     EXPECT_EQ(echoed, input);
 }
 
+TEST_F(FpgaDeviceFixture, CpuFpgaBridgeRejectsMissingProducerBuffer) {
+    CpuDevice cpu("cpu");
+    FpgaDevice fpga("fpga:0", window_, makeDiamondLookup());
+    CpuFpgaBridge bridge(cpu, fpga);
+
+    GraphBuffer missing = GraphBuffer::make(BufferType::I32, "missing", 0);
+    BridgeStepPair step = bridge.makeTransfer(
+        cpu, fpga, missing, /*sizeHintBytes=*/0, "producer", "consumer");
+
+    EXPECT_THROW(step.producerAction(), std::runtime_error);
+}
+
 TEST_F(FpgaDeviceFixture, CpuFpgaCpuBufferRoundTripUsesPackedBufferPointers) {
     auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
 
@@ -721,7 +734,7 @@ TEST_F(FpgaDeviceFixture, GraphReprogramNodeCompilesIntoFpgaDGraph) {
     ReprogramSpec spec;
     spec.imageId = "imageB";
     spec.pdiPath = "imageB.pdi";
-    spec.deviceHint = "fpga:0";
+    spec.device = "fpga:0";
 
     const std::string reprogramId = g.addReprogram(std::move(spec));
     auto exec = g.compile();

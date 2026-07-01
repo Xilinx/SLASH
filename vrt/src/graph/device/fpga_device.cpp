@@ -2614,6 +2614,13 @@ std::size_t FpgaDevice::bufferSize(const std::string& bufferName) const {
     return (it == buffers_.end()) ? 0 : it->second.size;
 }
 
+bool FpgaDevice::hasBuffer(const std::string& bufferName) const {
+    const std::string key = normalizeBufferKey(bufferName);
+    std::lock_guard<std::mutex> lk(bufferMutex_);
+    const std::string canonicalKey = canonicalBufferKey(key);
+    return buffers_.find(canonicalKey) != buffers_.end();
+}
+
 void FpgaDevice::setInputScalar(const std::string& scalarKey, std::uint64_t bits) {
     std::lock_guard<std::mutex> lk(scalarMutex_);
     auto [it, inserted] = scalarSlots_.emplace(scalarKey, 0u);

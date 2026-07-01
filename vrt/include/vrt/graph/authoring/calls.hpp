@@ -55,14 +55,14 @@ namespace vrt::graph {
  *
  * Produced by `Graph::cpu().add<T>()` / `elementwise<T>()` (CPU) or by
  * `image.kernel(...).scalarIn().in().out()` (FPGA). Carries the kernel
- * identity, its typed I/O signature, and the device it must run on.
+ * identity, its typed I/O signature, and the required device it must run on.
  */
 struct KernelHandle {
     std::string                name;
     DeviceType                 type = DeviceType::CPU;
     std::optional<std::string> image;
     IOTypeMap                  ioType;
-    std::string                deviceId;  ///< device hint ("cpu", "fpga:0", …)
+    std::string                device;  ///< required target device ("cpu", "fpga:0", ...)
 };
 
 /**
@@ -82,7 +82,7 @@ struct GraphNode {
 struct ImageRef {
     std::string imageId;
     std::string pdiPath;
-    std::string deviceId;
+    std::string device;
 };
 
 /** @brief An explicit reprogram (PDI_LOAD) node authored as a struct literal. */

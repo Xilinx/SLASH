@@ -920,8 +920,7 @@ TEST(GraphTest, NoDeviceThrows) {
     IOMap io;
     GraphBuffer out;
     io.bindInput("in", raw).bindOutput("out", BufferType::I32, out);
-    g.addNode(cpuKernel("k"), std::move(io));
-    EXPECT_THROW(g.compile(), std::runtime_error);
+    EXPECT_THROW(g.addNode(cpuKernel("k"), std::move(io), ""), std::invalid_argument);
 }
 
 TEST(GraphTest, MissingDeviceHintThrows) {

@@ -93,6 +93,12 @@ BridgeStepPair CpuFpgaBridge::makeTransfer(IDevice&            /*src*/,
 
     // Producer: snapshot the source buffer into staging and signal.
     auto producerClosure = [op, srcCpu, srcFpga, bufName]() {
+        const bool exists = srcCpu ? srcCpu->hasBuffer(bufName) : srcFpga->hasBuffer(bufName);
+        if (!exists) {
+            throw std::runtime_error(
+                "CpuFpgaBridge: producer-side buffer '" + bufName +
+                "' does not exist at transfer time");
+        }
         size_t sz = 0;
         if (srcCpu) {
             sz = srcCpu->bufferSize(bufName);
