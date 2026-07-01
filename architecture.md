@@ -164,13 +164,6 @@ TODO
     * Teardown: tear down each PF subsystem on REMOVE; the model process and control workers follow once the last PF is gone
     * PF0 is merely marked as up or down, with no other effects
 
-### Failure handling and forced user disconnects
-
-TODO:
-* How are model process deaths/timeouts to be accounted for?
-* How will forced disconnects look like to the user?
-* What failure states are there?
-
 ## User-facing UNIX domain socket protocol
 
 * Follows a "request/response" pattern
@@ -318,6 +311,19 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
 * Once the VBIN is written, VRTD REMOVEs at least PF2 (slash_ctl) and RESCANs
     * On RESCAN, the currently staged VBIN's model is launched
     * If successful, the staged VBIN replaces the old active VBIN
+
+### Failure handling
+
+* General rule: If the model process fails, the accelerator should "disappears" to the user
+    * Consistent with a real-world accelerator or the PCIe connection failing
+* If the model process terminates, the ZeroMQ socket is closed, or a ZeroMQ request times out
+    * The model process is assumed dead
+    * The daemon tears down the accelerator
+* ZeroMQ timeouts can be relatively short (~10s)
+    * Since the daemon executes no "blocking" requests on the ZeroMQ socket
+* libslash has to account for this scenario:
+    * Always expect that a request send or response receive may fail
+    * In these cases: Return -ENODEV to emulate the missing device
 
 ### Accepted inaccuracies
 
@@ -468,6 +474,15 @@ Other bits exist, but are not implemented in this sprint.
         * If successful, might lead to a tear-down and setup of the model process and model control workers
     * (Re)create the named socket, listener thread, and worker pool
 
+### Forced user disconnects
+
+* If the PF is REMOVEd while a user process still has an open FD
+    * Sending requests or receiving responses will fail
+    * Since the connection has been close unilateraly
+* libslash has to account for this scenario:
+    * Always expect that a request send or response receive may fail
+    * In these cases: Return -ENODEV to emulate the missing device
+
 ### Implementation notes on IOCTLs
 
 * Generally follows the same format as other subsystems:
@@ -519,6 +534,15 @@ Other bits exist, but are not implemented in this sprint.
     * Picks up the connection to the model process
     * Sets up worker pool and listener
     * Creates named UNIX socket
+
+### Forced user disconnects
+
+* If the PF is REMOVEd while a user process still has an open FD
+    * Sending requests or receiving responses will fail
+    * Since the connection has been close unilateraly
+* libslash has to account for this scenario:
+    * Always expect that a request send or response receive may fail
+    * In these cases: Return -ENODEV to emulate the missing device
 
 ### Mechanisms
 
