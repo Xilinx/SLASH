@@ -43,6 +43,9 @@ This architecture and the sprint that it describes is only supposed to implement
 ## Accelerator state and life cycle
 
 * The daemon manages multiple system-emulated accelerators
+* An accelerator is identified by its "board BDF"
+    * I.e. the full PCI BDF identifier without the function suffix
+    * For example, "0000:61:00", not "0000:61:00.2"
 * Each accelerator has five components who's state needs to be tracked:
 
 * *The main and staging VBIN files*
@@ -96,9 +99,6 @@ This architecture and the sprint that it describes is only supposed to implement
         * One worker thread for each compute kernel in the model
         * A worker thread that watches the clock wizard dmabuf
 
-* An accelerator is identified by its "board BDF"
-    * I.e. the full PCI BDF identifier without the function suffix
-    * For example, "0000:61:00", not "0000:61:00.2"
 * An accelerator is "absent" if no components are present, including the VBIN files
     * Only technically a state, since that's the state if the board BDF was never used by any accelerator during the runtime of the daemon
 * An accelerator is "inactive" if only the main and staging VBIN files exist
@@ -147,7 +147,7 @@ TODO
         * To be used when/if a RESCAN needs them
 * HOTPLUG:
     * Same as REMOVE'ing the targeted PF and then running a RESCAN
-        * But as one operation
+        * But as one operation on the lock
 * TOGGLE_SBR:
     * Same as REMOVE'ing all PFs of all devices as the same bus, RESCAN'ing, and then waiting 1s
     * Again, one operation on the lock
@@ -319,7 +319,7 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
 * Base directory, uid/gid of each file, and mode of each socket are configurable or given as CLI arguments
     * Default is `/run/slash_emu`, `vrtd:vrt`, 600
 
-## BAR access and device information (`slash_ctl<N>`)
+## BAR access subsystem (`slash_ctl<N>`)
 
 * First functionality: Providing information about the accelerator
 * However, primary functionality: Giving access to the BARs of PF2:
@@ -392,7 +392,6 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
     * Does not support COR registers, does not preserve read/write ordering, support other control states, etc.
     * However, suffices for most compute kernels and thus the MVP daemon
     * When the read/write-based BAR interface is implemented, each read/write can go directly to the model server
-* 
 * TODO: Decide on how to handle auto-restart
 
 #### Control register bits to implement:
@@ -461,7 +460,6 @@ Other bits exist, but are not implemented in this sprint.
 * Top-level control socket exposed as `slash_qdma_ctl<N>`, one for each accelerator.
 * Resources managed by the daemon, for each accelerator
     * Qpairs
-        * No inherent meaning for the daemon
         * Only a state machine per qpair to check that the user manages qpairs correctly
     * Transfer sessions
         * Created with the `QPAIR_GET_FD` IOCTL
@@ -471,8 +469,7 @@ Other bits exist, but are not implemented in this sprint.
     * A handle to the (locked) ZeroMQ socket
 * Host buffers need no inherent management by the daemon
     * They are created as memfds and passed to the user
-    * But the daemon can (and must) instantly forget about them
-        * Memfds don't need to be managed by the daemon
+    * But the daemon can must close them after passing them to the user
         * If the daemon keeps a reference to them, they are not released once the client closes their last FD to them
     * They will be passed back to the daemon as part of a transfer IOCTL later
 
@@ -524,7 +521,6 @@ Other bits exist, but are not implemented in this sprint.
 ### Accepted inaccuracies
 
 * The FDs used in a transfer IOCTL don't have to be necessarily created by `BUF_CREATE`
-    * Slight emulation error accepted for now, could be fixed in the future, but not necessary
 
 ### Messages over the socket:
 
