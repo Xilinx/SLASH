@@ -12,6 +12,34 @@ The following document describes the requirements for the system emulation daemo
 
 This endeavour introduces a new concept called "system emulation", independent of the existing "FPGA emulation" and "FPGA simulation" concepts. "System emulation" is the emulation of the entire accelerator in the host system, i.e. both the FPGA, it's memory, it's connection via PCIE, and how these components are handled by the user application, VRT, and VRTD. Contrarily, "FPGA emulation" and "FPGA simulation" describe ways to model the behavior of the programmable logic, i.e. the real FPGA, in software. How the behavior of the FPGA is modelled doesn't matter much for the system emulation that we want to introduce, and system emulation can be combined both with FPGA emulation or FPGA simulation. A process that emulates the system behavior of one or more accelerators is therefore called a "system emulation daemon", and a process that models the behavior of an FPGA, either by emulation or simulation, is called a "model process."
 
+## Scope
+
+This architecture and the sprint that it describes is only supposed to implement a minimum viable product. As such the following features are not to be implemented in this sprint, but the implementation should leave the necessary space to implement them in the future:
+
+* (Virtual) network setups
+    * The primary reason why system emulated accelerators are implemented like this in the first place
+    * The accelerator configuration should also cover network topologies to persistently connect accelerators into (virtual) networks
+* Non-polling BAR
+    * The dmabuf-based BAR interaction model requires that the daemon continuously polls the BAR
+    * Bad for performance, hard to implement clear-on-read or action-on-write registers
+    * However, a different interface that implements reads and writes as file reads or writes requires a kernel module refactor.
+* Support for emulation models
+    * Currently, emulation models provide no way to asynchronously check the state of a computation kernel
+        * As such, the current polling approach is not able to cater to FPGA emulation models
+    * Requires a non-trivial modification to the emulation model code
+* Hardened model process isolation
+    * The model executable is technically untrusted user code
+    * Should therefore be as isolated as possible
+    * However, certain holes need to left open, for example since simulation needs some Vivado libraries
+    * To be implemented in the future
+* Persisting/transferred HBM/DDR contents between model instances
+    * The contents of buffers are owned and stored by the model process
+    * When the model process terminates, the buffer contents are cleaned too
+    * This is technically incorrect, since HBM/DDR contents should persist across PL reconfigurations
+    * Thus: Some dumping and re-exporting mechanism, or daemon-owned memory is necessary
+    * However: Most applications don't reuse buffers across reconfigurations
+        * Thus a feature that can be deferred
+
 ## Accelerator state and life cycle
 
 * The daemon manages multiple system-emulated accelerators
@@ -22,14 +50,20 @@ This endeavour introduces a new concept called "system emulation", independent o
         * Used when (re)starting the model process and the staging VBIN file is empty or corrupted
     * The staging VBIN is written by the user to reconfigure the accelerator
         * Replaces the main VBIN file during BAR or full accelerator RESCAN
-    * Remain stored even when the accelerator and its model process is torn down
+    * Remains stored when the accelerator and its model process is torn down
     * Only cleaned during daemon startup and shutdown
         * Emulates a "cold reboot"
 
 * *The model process*
     * Models the behavior of the FPGA
     * Executes the `vpp_emu` or `vpp_sim` executable from the main VBIN file
-    * Communicates with the daemon via a ZeroMQ protocol
+    * The daemon communicates with it via a ZeroMQ protocol
+        * The protocol is specified in the reference documentation
+        * Request/Response based
+        * No concurrent requests in flight possible
+        * Thus: Each ZeroMQ socket is locked with a global lock
+            * Each request must fetch its response before releasing the lock
+            * Potentially with a queue of waiting threads
 
 * *The PF0 stub*
     * In the real world: Board management, handled by the AMI driver
@@ -42,8 +76,10 @@ This endeavour introduces a new concept called "system emulation", independent o
         * I.e. the user application and the model process
     * Owns:
         * A QDMA-specific UNIX domain socket (`slash_qdma_ctl<N>`)
-        * A listener, with a pool of threads managing connections
-        * To be extended
+        * A listener thread handling new connections to the socket
+        * A pool of worker threads handling established connections
+        * A list of qpair state machines
+        * A pool of worker threads managig transfer sessions
 
 * *The BAR and device info subsystem (PF2)*
     * Manages read and write access to the BAR
@@ -51,8 +87,14 @@ This endeavour introduces a new concept called "system emulation", independent o
         * Starting and fetching the state of kernels
     * Owns:
         * A BAR/control-specific UNIX domain socket (`slash_ctl<N>`)
-        * A listener, with a pool of threads managing connections
-        * To be extended
+        * A listener thread handling new connections to the socket
+        * A pool of worker threads handling established connections
+        * One dmabuf for each BAR
+            * BAR 0: The user region
+            * BAR 2: The service layer
+            * BAR 4: The clock wizard
+        * One worker thread for each compute kernel in the model
+        * A worker thread that watches the clock wizard dmabuf
 
 * An accelerator is identified by its "board BDF"
     * I.e. the full PCI BDF identifier without the function suffix
@@ -68,7 +110,7 @@ This endeavour introduces a new concept called "system emulation", independent o
 * An accelerator is "partially active" or "partial" if the model process is running, but at least one of the PF subsystems is down
     * Reached after a REMOVE operation on some, but not all PF subsystems
 
-### Configuration
+### Configuration file format
 
 TODO
 
@@ -127,17 +169,27 @@ TODO
     * Try to launch the model in the main VBIN
     * If successful, use the newly launched model process
     * If not, the accelerator instantiation has failed
-* Setup the QDMA and BAR sockets plus listeners and thread pools to handle communication
+* Setup the QDMA and BAR subsystems
 
 #### Removal and restoration of the BAR subsystem (PF2)
 
 * REMOVE:
-    * Stop accepting new connections, unlink socket, close existing connections, drain workers
-    * TODO: Expand on how to tear down internal state
+    * Stop accepting new connections
+    * Unlink socket
+    * Signal connection worker threads to close their connection
+    * The dmabufs and the compute kernel worker threads remain running
+        * Effect: The daemon never looses track of the compute kernel's state
 * RESCAN'ing on a partial accelerator with a running model process but no running PF2 triggers a "reconfiguration":
     * First, the daemon tries to unpack and launch the new model that has been previously written to the staging VBIN
-    * If successful, the old model process is stopped, and the staging VBIN and model process replace the old ones
-        * The connection of the QDMA subsystem is transparently swapped to the new model process
+    * If successful:
+        * Lock the ZeroMQ socket, so that no other operation can be in flight
+        * Stop the old model process
+        * Stop the old per-kernel register watching threads
+        * Launch the new per-kernel register wathing threads
+        * Replace the main VBIN with the staging VBIN
+        * Swap out the old ZeroMQ socket with the new one
+        * Release the ZeroMQ socket lock
+        * Effect: 
     * If not, the old model process remains active
     * In either case, the staging VBIN is emptied
 
@@ -250,6 +302,7 @@ TODO:
 * IOCTLs may pass file descriptors, both from the user to the kernel and back
 * But they may not pass pointers to user's virtual memory space
     * Reason: These can't be meaningfully transferred between processes over a UNIX domain socket
+* To be documented in the kernel ABI reference document
 
 ### Entry-level socket names
 
@@ -268,7 +321,140 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
 
 ## BAR access and device information (`slash_ctl<N>`)
 
-TODO
+* First functionality: Providing information about the accelerator
+* However, primary functionality: Giving access to the BARs of PF2:
+    * BAR 0: User region (128 MB)
+    * BAR 2: Service Layer (128 MB)
+    * BAR 4: Clock wizard (512 KB)
+    
+* The current driver creates custom dmabufs for each BAR
+    * Returns a FD to such a dmabuf on request
+    * User process mmaps it into its virtual memory space
+    * Reads and writes from the mapped memory space
+        * With SYNC ioctls as brackets
+    * Direct MMIO, each read and write immediately hit the device
+* The emulation daemon instead provides an anonymous memfd
+    * Difference resolved in libslash:
+        * Instead of using the `DMA_BUF_IOCTL_SYNC`, use `flock`
+        * Use a shared lock for reads, exclusive locks for write
+* Issue: The daemon is not notified when the user writes to the memfd
+    * Thus: A lot of polling needed
+* Long term solution: A rebuilt BAR interface where every register access is a read/write syscall
+    * Comes with a small overhead, but that's an accepted cost
+    * However, requires a major refactor of the driver
+    * Thus deferred for after the MVP daemon is done
+
+### Implementation notes on IOCTLs
+
+* Generally follows the same format as other subsystems:
+    * Named UNIX domain socket (`AF_UNIX`/`SOCK_SEQPACKET`)
+    * Request/Response format
+    * Supporting the IOCTLs of the kernel ABI as requests
+    * If not stated otherwise, the contracts stated in the kernel ABI specification apply
+
+* `SLASH_CTLDEV_IOCTL_GET_BAR_INFO`:
+    * BARs 0, 2, and 4 are always present and usable for MMIO, also never "in_use"
+    * Start address is zero
+        * Would be the physical start address of the PCIe bus
+        * However, nothing uses it, so synthesizing a plausible address is not necessary
+    * Length given as above
+* `SLASH_CTLDEV_IOCTL_GET_BAR_FD`:
+    * On success, the return value is zero, and the FD is sent to the user as ancillary data
+* `SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO`
+    * BDF based on the configured board BDF, with function index 2
+    * vendor_id=subsystem_vendor_id=0x10EE for AMD/Xilinx
+    * device_id=0x50B6 for PF2
+    * subsystem_device_id=0x000e
+
+### User region BAR / Compute kernel control
+
+* The system map provides information on which kernels exist, and which registers they have
+* One worker thread per compute kernel
+    * Also tracks the state of the compute kernel
+* Emulation is explicitly not supported in this sprint
+    * Thus, only support for the address-based `vpp_sim` dialect of the ZeroMQ protocol needed.
+* "Kernel idle" loop:
+    * Poll the control register in the memfd in regular intervals
+    * If ap_start is set:
+        * Fetch the parameters from the BAR memfd (according to the system map)
+        * Reset the control register to zero
+    * Checking the control register, fetching parameters, and resetting is one CPU transaction
+        * Otherwise, potential TOCTOU races
+    * Send the parameter registers to the model server, then send the control register value
+    * Transition to the "kernel busy" state
+* "Kernel busy" loop:
+    * Fetch the control register value of the model process in regular intervals
+    * If ap_done is set:
+        * Fetch the output/return/`ap_vld` registers from the model server
+        * Write the read control register and the output/return/`ap_vld` registers to the memfd
+    * Transition to the "kernel idle" loop
+* This emulation is rather crude
+    * Does not support COR registers, does not preserve read/write ordering, support other control states, etc.
+    * However, suffices for most compute kernels and thus the MVP daemon
+    * When the read/write-based BAR interface is implemented, each read/write can go directly to the model server
+* 
+* TODO: Decide on how to handle auto-restart
+
+#### Control register bits to implement:
+
+| Bit | Field |
+|-----|-------|
+| 0 | `ap_start` |
+| 1 | `ap_done` |
+
+Other bits exist, but are not implemented in this sprint.
+
+#### Accepted inaccuracies
+
+* Again, the daemon gets no notification when the user accesses a register, and in which order
+* Thus, anything that depends on these events is not modelled correctly
+    * Clear-on-handshake (i.e. the control register) does not instantly lead to an operation
+    * Clear-on-read registers are not cleared by the daemon
+    * Write-only registers are not write-only, the user can change their values
+        * output, return, and `ap_vld` registers are set once the kernel is complete
+        * not latched/write protected
+
+### Service Layer
+
+* The service layer isn't used by any software consumer right now
+    * Exporting a memfd without a worker listening to it does the job
+
+### Clock wizard
+
+* BAR 4 exposes two independent Xilinx Clocking-Wizard register windows
+    * User region wizard at BAR 4 + `0x00000000` (user-logic clock)
+    * Service region wizard at BAR 4 + `0x00010000` (service/infrastructure clock)
+* The only client is the vrtd clock driver (`vrt/vrtd/src/clock.c`)
+    * mmaps BAR 4 and does direct MMIO, just like the user-region BAR
+    * Frequency is derived as `f_out = (prim_in_hz * M) / (D * O)`
+        * `prim_in_hz` is a fixed 100 MHz constant in the driver, never read back from the BAR
+    * Both windows are only ever driven through output `clk_out1` (index 0)
+    * Highest register offset used is `REG26` at `0x3FC` within a window
+        * The service window therefore reaches up to `0x103FC`
+        * Thus BAR 4 must be at least ~64 KiB; the 512 KB above leaves ample headroom
+* The FPGA model is clock-agnostic, so no real frequency synthesis is emulated
+    * Only the register interface must be modelled well enough that the driver does not error out
+* Two access patterns exist, both pure MMIO against the memory-backed dmabuf:
+    * GET (read current rate): only reads the M/D/O divider registers and decodes a frequency
+        * A zero-initialized BAR decodes cleanly to 100 MHz (the driver clamps every divider to a minimum of 1), so a GET before any SET never divides badly or returns zero
+    * SET (program a rate): writes the M/D/O and tail registers, writes the reconfig trigger at offset `0x14`, then polls the lock bit
+        * Polls `REG4` (offset `0x33C`) bit 0 for up to 200 ms, at 100 µs intervals
+        * If the lock bit never reads 1, the driver returns `-ETIMEDOUT`, which surfaces to the application as an error
+* The client does not validate the achieved frequency
+    * It only logs a warning if the returned rate differs from the request and otherwise uses it
+    * Therefore the *only* functional requirement is that the lock bit becomes observable as 1 after a reconfig
+* Complication: the lock register aliases a data register
+    * `REG4` (offset `0x33C`) is both the lock-status register on read and the low half of the `clk_out1` divider leaf pair (`0x338`/`0x33C`) on write
+    * On real hardware these are distinct read/write registers sharing an address
+    * In a memory-backed dmabuf they are the same cell, so after a SET the lock bit reads back as `(O / 4) & 1`, which is frequently 0
+* Emulation in the polling-BAR model:
+    * Back both wizard windows with ordinary read/write memfd memory so all divider writes round-trip and GET reads back a plausible value
+    * In the BAR 4 poll loop, pin bit 0 of `0x0033C` (user) and `0x1033C` (service) to 1 on every cycle
+        * The driver's 200 ms / 100 µs lock poll tolerates the daemon re-asserting the bit a poll cycle or two later
+        * Forcing this bit only perturbs the low bit of the decoded frequency, which the client ignores
+    * No need to interpret the reconfig trigger (`0x14`) or model any M/D/O semantics
+* Long-term, once BAR access becomes read/write syscalls (see above), the two lock/status addresses can instead return `value | 1` on read while writes land in the data shadow
+    * Removes the aliasing race entirely and keeps the frequency readback exact
 
 ## QDMA subsystem (`slash_qdma_ctl<N>`)
 
@@ -340,18 +526,6 @@ TODO
 * The FDs used in a transfer IOCTL don't have to be necessarily created by `BUF_CREATE`
     * Slight emulation error accepted for now, could be fixed in the future, but not necessary
 
-### Necessary functional changes to other components
-
-* The info IOCTL now also has to return the BDF of the accelerator
-    * Necessary for the emulation daemon since it does not also export `/sys/` files
-    * Should also make the discovery for VRTD easier
-    * Requires changes in:
-        * The kernel driver (needs to report the BDF)
-        * The libslash library (needs to forward this information)
-        * VRTD (needs to change the discovery mechanism to use BDF returned by QDMA)
-* The memory ranges of HBM/DDR/Reconfiguration region should be added to the kernel ABI header
-* The reconfiguration writing protocol should be part of the kernel ABI documentation
-
 ### Messages over the socket:
 
 The QDMA subsystem accepts datagrams on two kinds of endpoint:
@@ -420,28 +594,17 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
         * Instead of the actual FD
     * Mechanism defined above
 
-## Future work
+## Necessary functional changes to other components
 
-This list contains future features of the system emulation daemon that would make it more useful, but also requires more work and possibly changes across the SLASH software stack. These features are therefore explicitly not part of this sprint, but implementation and testing agents should consider leaving space to make the implementation of these features possible in the future.
-
-* (Virtual) network setups
-    * The primary reason why system emulated accelerators are implemented like this in the first place
-    * The accelerator configuration should also cover network topologies to persistently connect accelerators into (virtual) networks
-* Hardened model process isolation
-    * The model executable is technically untrusted user code
-    * Should therefore be as isolated as possible
-    * However, certain holes need to left open, for example since simulation needs some Vivado libraries
-* Persisting/transferred HBM/DDR contents between model instances
-    * The contents of buffers are owned and stored by the model process
-    * When the model process terminates, the buffer contents are cleaned too
-    * This is technically incorrect, since HBM/DDR contents should persist across PL reconfigurations
-    * Thus: Some dumping and re-exporting mechanism, or daemon-owned memory is necessary
-    * However: Most applications don't reuse buffers across reconfigurations
-        * Thus a feature that can't be deferred
-* Support for emulation models
-    * Currently, emulation models expect kernels and registers to be referenced by name, not by address
-    * Either a change in the emulation models or a mechanism to reverse the name -> address mapping necessary
-* Non-polling BAR
-    * The DMABUF-based BAR interaction model requires that the daemon continuously polls the BAR
-    * Bad for performance, hard to implement clear-on-read or action-on-write registers
-    * However, a different interface that implements reads and writes as file reads or writes requires a kernel module refactor.
+* The QDMA info IOCTL now also has to return the BDF of the accelerator
+    * Necessary for the emulation daemon since it does not also export `/sys/` files
+    * Should also make the discovery for VRTD easier
+    * Requires changes in:
+        * The kernel driver (needs to report the BDF)
+        * The libslash library (needs to forward this information)
+* Device (re)discovery now needs to be done purely via the device files in `/dev/` or `/run/slash_emu/`
+    * Needs to be changed in VRTD
+    * On the one hand: Now possible since the QDMA info IOCTL returns the BDF
+    * On the other: Now necessary since the system emulation daemon does not provide `/sys/` files
+* The memory ranges of HBM/DDR/Reconfiguration region should be added to the kernel ABI header
+* The reconfiguration writing protocol should be part of the kernel ABI documentation
