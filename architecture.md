@@ -46,7 +46,7 @@ This architecture and the sprint that it describes is only supposed to implement
 * An accelerator is identified by its "board BDF"
     * I.e. the full PCI BDF identifier without the function suffix
     * For example, "0000:61:00", not "0000:61:00.2"
-* Each accelerator has five components who's state needs to be tracked:
+* Each accelerator has six components who's state needs to be tracked:
 
 * *The main and staging VBIN files*
     * The main VBIN contains the last successfully launched model program
@@ -68,6 +68,16 @@ This architecture and the sprint that it describes is only supposed to implement
             * Each request must fetch its response before releasing the lock
             * Potentially with a queue of waiting threads
 
+* *The model control worker threads*
+    * Orchestrate the execution of the compute kernels described in the system map
+    * One worker thread per compute kernel, one for the clock wizard
+    * Run for the entire lifetime of the model process
+        * Effect: The daemon never looses track of a kernel's state
+        * Set up and torn down together with their model process
+    * Drive the model process via the ZeroMQ socket
+    * Subsystem interface: BARs emulated by memfds
+        * One for the user region, one for the service layer, one for the clock wizard
+
 * *The PF0 stub*
     * In the real world: Board management, handled by the AMI driver
     * Removal and rescan however still done by the slash driver
@@ -85,29 +95,22 @@ This architecture and the sprint that it describes is only supposed to implement
         * A pool of worker threads managig transfer sessions
 
 * *The BAR and device info subsystem (PF2)*
-    * Manages read and write access to the BAR
-        * Reading and setting registers
-        * Starting and fetching the state of kernels
+    * Provide access to device information and BAR memfds
     * Owns:
         * A BAR/control-specific UNIX domain socket (`slash_ctl<N>`)
         * A listener thread handling new connections to the socket
         * A pool of worker threads handling established connections
-        * One dmabuf for each BAR
-            * BAR 0: The user region
-            * BAR 2: The service layer
-            * BAR 4: The clock wizard
-        * One worker thread for each compute kernel in the model
-        * A worker thread that watches the clock wizard dmabuf
 
 * An accelerator is "absent" if no components are present, including the VBIN files
     * Only technically a state, since that's the state if the board BDF was never used by any accelerator during the runtime of the daemon
 * An accelerator is "inactive" if only the main and staging VBIN files exist
     * This state is reached if an accelerator with the given board BDF existed
     * but was then shut down
-* An accelerator is "fully active" if the both the model process and all PF subsystems are up
+* An accelerator is "fully active" if the both the model process, the model control workers, and all PF subsystems are up
     * The main and staging VBIN files are a requirement to run the model process
     * Reached after a RESCAN operation
-* An accelerator is "partially active" or "partial" if the model process is running, but at least one of the PF subsystems is down
+* An accelerator is "partially active" or "partial" if the model process and the model control workers are running
+    * but at least one of the PF subsystems is down
     * Reached after a REMOVE operation on some, but not all PF subsystems
 
 ### Configuration file format
@@ -169,7 +172,10 @@ TODO
     * Try to launch the model in the main VBIN
     * If successful, use the newly launched model process
     * If not, the accelerator instantiation has failed
+* Launch the compute kernel worker threads against the BAR memfds and the model process
 * Setup the QDMA and BAR subsystems
+
+* TODO: Unify the reconfiguration flow
 
 #### Removal and restoration of the BAR subsystem (PF2)
 
@@ -177,15 +183,15 @@ TODO
     * Stop accepting new connections
     * Unlink socket
     * Signal connection worker threads to close their connection
-    * The dmabufs and the compute kernel worker threads remain running
+    * The BAR memfds remain, so the compute kernel worker threads keep running
         * Effect: The daemon never looses track of the compute kernel's state
 * RESCAN'ing on a partial accelerator with a running model process but no running PF2 triggers a "reconfiguration":
     * First, the daemon tries to unpack and launch the new model that has been previously written to the staging VBIN
     * If successful:
         * Lock the ZeroMQ socket, so that no other operation can be in flight
         * Stop the old model process
-        * Stop the old per-kernel register watching threads
-        * Launch the new per-kernel register wathing threads
+        * Stop the old compute kernel worker threads
+        * Launch the new compute kernel worker threads
         * Replace the main VBIN with the staging VBIN
         * Swap out the old ZeroMQ socket with the new one
         * Release the ZeroMQ socket lock
@@ -319,13 +325,12 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
 * Base directory, uid/gid of each file, and mode of each socket are configurable or given as CLI arguments
     * Default is `/run/slash_emu`, `vrtd:vrt`, 600
 
-## BAR access subsystem (`slash_ctl<N>`)
+## Model control worker subsystem
 
-* First functionality: Providing information about the accelerator
-* However, primary functionality: Giving access to the BARs of PF2:
-    * BAR 0: User region (128 MB)
-    * BAR 2: Service Layer (128 MB)
-    * BAR 4: Clock wizard (512 KB)
+* Orchestrate the execution of the compute kernels of the model and the clock wizard
+* Runs for the entire lifetime of the model process, independently of the BAR subsystem
+    * The BAR subsystem may be REMOVE'd and restored while the kernels keep running
+* Dependency chain: model process -[ZeroMQ socket]-> kernel worker threads -[memfds]-> BAR subsystem
     
 * The current driver creates custom dmabufs for each BAR
     * Returns a FD to such a dmabuf on request
@@ -334,9 +339,8 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
         * With SYNC ioctls as brackets
     * Direct MMIO, each read and write immediately hit the device
 * The emulation daemon instead provides an anonymous memfd
-    * Difference resolved in libslash:
-        * Instead of using the `DMA_BUF_IOCTL_SYNC`, use `flock`
-        * Use a shared lock for reads, exclusive locks for write
+    * Instead of starting and ending transactions with `DMA_BUF_IOCTL_SYNC`,
+        * Use `flock` with a shared lock for reads and exclusive locks for write
 * Issue: The daemon is not notified when the user writes to the memfd
     * Thus: A lot of polling needed
 * Long term solution: A rebuilt BAR interface where every register access is a read/write syscall
@@ -344,30 +348,9 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
     * However, requires a major refactor of the driver
     * Thus deferred for after the MVP daemon is done
 
-### Implementation notes on IOCTLs
-
-* Generally follows the same format as other subsystems:
-    * Named UNIX domain socket (`AF_UNIX`/`SOCK_SEQPACKET`)
-    * Request/Response format
-    * Supporting the IOCTLs of the kernel ABI as requests
-    * If not stated otherwise, the contracts stated in the kernel ABI specification apply
-
-* `SLASH_CTLDEV_IOCTL_GET_BAR_INFO`:
-    * BARs 0, 2, and 4 are always present and usable for MMIO, also never "in_use"
-    * Start address is zero
-        * Would be the physical start address of the PCIe bus
-        * However, nothing uses it, so synthesizing a plausible address is not necessary
-    * Length given as above
-* `SLASH_CTLDEV_IOCTL_GET_BAR_FD`:
-    * On success, the return value is zero, and the FD is sent to the user as ancillary data
-* `SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO`
-    * BDF based on the configured board BDF, with function index 2
-    * vendor_id=subsystem_vendor_id=0x10EE for AMD/Xilinx
-    * device_id=0x50B6 for PF2
-    * subsystem_device_id=0x000e
-
 ### User region BAR / Compute kernel control
 
+* BAR/memfd size: 128 MiB
 * The system map provides information on which kernels exist, and which registers they have
 * One worker thread per compute kernel
     * Also tracks the state of the compute kernel
@@ -415,11 +398,13 @@ Other bits exist, but are not implemented in this sprint.
 
 ### Service Layer
 
+* BAR/memfd size: 128 MiB
 * The service layer isn't used by any software consumer right now
     * Exporting a memfd without a worker listening to it does the job
 
 ### Clock wizard
 
+* BAR/memfd size: 512 KiB
 * BAR 4 exposes two independent Xilinx Clocking-Wizard register windows
     * User region wizard at BAR 4 + `0x00000000` (user-logic clock)
     * Service region wizard at BAR 4 + `0x00010000` (service/infrastructure clock)
@@ -454,6 +439,33 @@ Other bits exist, but are not implemented in this sprint.
     * No need to interpret the reconfig trigger (`0x14`) or model any M/D/O semantics
 * Long-term, once BAR access becomes read/write syscalls (see above), the two lock/status addresses can instead return `value | 1` on read while writes land in the data shadow
     * Removes the aliasing race entirely and keeps the frequency readback exact
+
+## BAR access and device information subsystem (`slash_ctl<N>`)
+
+* First functionality: Providing information about the accelerator
+* Second functionality: Giving access to the BARs of PF2:
+
+### Implementation notes on IOCTLs
+
+* Generally follows the same format as other subsystems:
+    * Named UNIX domain socket (`AF_UNIX`/`SOCK_SEQPACKET`)
+    * Request/Response format
+    * Supporting the IOCTLs of the kernel ABI as requests
+    * If not stated otherwise, the contracts stated in the kernel ABI specification apply
+
+* `SLASH_CTLDEV_IOCTL_GET_BAR_INFO`:
+    * BARs 0, 2, and 4 are always present and usable for MMIO, also never "in_use"
+    * Start address is zero
+        * Would be the physical start address of the PCIe bus
+        * However, nothing uses it, so synthesizing a plausible address is not necessary
+    * Length given as above
+* `SLASH_CTLDEV_IOCTL_GET_BAR_FD`:
+    * On success, the return value is zero, and a new FD to the requested BAR memfd is sent to the user as ancillary data
+* `SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO`
+    * BDF based on the configured board BDF, with function index 2
+    * vendor_id=subsystem_vendor_id=0x10EE for AMD/Xilinx
+    * device_id=0x50B6 for PF2
+    * subsystem_device_id=0x000e
 
 ## QDMA subsystem (`slash_qdma_ctl<N>`)
 
