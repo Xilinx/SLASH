@@ -130,21 +130,25 @@ TODO
     * Only difference: Blocks for 1s to emulate the link training
 * All operations synchronized with one lock
     * Result: Only one life cycle operation in flight at a time
+* These operations only orchestrate the per-subsystem setup and teardown
+    * The exact behavior lives in each subsystem's own section
+    * The model process and VBIN behavior lives in "Model process and reconfiguration"
 
 * RESCAN:
     * (Re)loads the daemon configuration file
     * Iterates over all accelerator configurations
     * (Re)instantiates all configurations who's board BDF does not conflict with a (partially) active accelerator
+        * Instantiation launches the model process and then sets up every subsystem
+        * See "Model process and reconfiguration" and the per-subsystem sections
     * Active accelerators remain running
         * Even if no matching configuration entry exists
     * Also restores all removed PFs of partial accelerators
         * New/changed configurations are not applied when restoring a partial accelerator
         * Instead, the configuration from the original instantiation is used
-    * Exact (re)instantiation and per-PF behavior specified below
+        * Restoring PF2 on a running model process triggers a reconfiguration (see "Model process and reconfiguration")
 * REMOVE:
-    * Removes a specific PF
-        * Exact per-PF behavior specified below
-    * If the REMOVE removes the last active PF, the model process is torn down too
+    * Removes a specific PF, per the teardown in that PF's subsystem section
+    * If the REMOVE removes the last active PF, the model process and its control workers are torn down too
         * Includes PF0, which also has to be REMOVEd to stay accurate
     * The main and staging VBIN remain as they are
         * To be used when/if a RESCAN needs them
@@ -155,86 +159,10 @@ TODO
     * Same as REMOVE'ing all PFs of all devices as the same bus, RESCAN'ing, and then waiting 1s
     * Again, one operation on the lock
 
-#### Accelerator instantiation
-
-* Executed during daemon startup, or as part of a RESCAN operation if no (partial) accelerator with the configured BDF exists
-* If no current VBIN buffer file for the BDF exists:
-    * Copy the "default" VBIN, instantiate an empty staging VBIN buffer
-    * The default VBIN contains a model that supports round-trip BAR/HBM/DDR read/writes, but no executable kernels
-    * Built and shipped as part of the system emulation daemon, but can be changed in the configuration
-* If the staging VBIN file is not empty:
-    * Try to unpack and interpret the staging VBIN
-    * Try to launch the model in the staging VBIN
-    * If successful, replace the main VBIN with the staging VBIN and use the new model process
-    * In either case, clear the staging VBIN
-* If the staging VBIN file is empty or the attempt to use it failed:
-    * Try to unpack and interpret the main VBIN
-    * Try to launch the model in the main VBIN
-    * If successful, use the newly launched model process
-    * If not, the accelerator instantiation has failed
-* Launch the compute kernel worker threads against the BAR memfds and the model process
-* Setup the QDMA and BAR subsystems
-
-* TODO: Unify the reconfiguration flow
-
-#### Removal and restoration of the BAR subsystem (PF2)
-
-* REMOVE:
-    * Stop accepting new connections
-    * Unlink socket
-    * Signal connection worker threads to close their connection
-    * The BAR memfds remain, so the compute kernel worker threads keep running
-        * Effect: The daemon never looses track of the compute kernel's state
-* RESCAN'ing on a partial accelerator with a running model process but no running PF2 triggers a "reconfiguration":
-    * First, the daemon tries to unpack and launch the new model that has been previously written to the staging VBIN
-    * If successful:
-        * Lock the ZeroMQ socket, so that no other operation can be in flight
-        * Stop the old model process
-        * Stop the old compute kernel worker threads
-        * Launch the new compute kernel worker threads
-        * Replace the main VBIN with the staging VBIN
-        * Swap out the old ZeroMQ socket with the new one
-        * Release the ZeroMQ socket lock
-        * Effect: 
-    * If not, the old model process remains active
-    * In either case, the staging VBIN is emptied
-
-#### Removal and restoration of the QDMA subsystem
-
-* REMOVE:
-    * Stop accepting new connections, unlink socket, close existing connections, drain workers
-    * Also "forgets" any previously known qpairs
-    * No need to remove buffers since they aren't owned by the QDMA subsystem anyway
-* RESCAN:
-    * (Re)intializes the qpairs list
-    * Picks up the connection to the model process
-    * Sets up worker pool and listener
-    * Creates named UNIX socket
-
-#### Removal and restoration of the PF0 stop
-
-* PF0 is merely marked as up or down, no other effects
-
-### Writing the staging VBIN
-
-* In real hardware:
-    * Hardware DCPs/PDIs are written in sequence to the board management via QDMA
-* Difference between emulation and hardware: Accelerator model is reconfigured with the full VBIN, not just DCPs/PDIs
-    * And only VBINs with either "emulation" or "simulation" target platforms, with a `vpp_emu` or `vpp_sim` executable
-* Full VBIN is necessary because:
-    * The daemon needs the system map
-        * to tell whether the target platform is emulation or simulation
-        * to reverse the register -> address mapping (if the `vpp_emu` dialect of the ZeroMQ protocol doesn't change)
-    * The simulation model is shipped as a separate shared object
-        * The `vpp_sim` executable is only a wrapper for it
-
-* VRTD writes the VBIN into the staging VBIN file via QDMA
-    * Writes in chunks of up to 64KiB
-        * Always at device address 0x102100000
-    * Each written chunk is appended to the staging VBIN file
-* Once the VBIN is written, VRTD REMOVEs at least PF2 (slash_ctl) and RESCANs
-    * On RESCAN, the currently staged VBIN's model is launched
-    * If successful, the staged VBIN replaces the old active VBIN
+* Instantiation and teardown order across subsystems:
+    * Instantiation: launch the model process (with its control workers), then set up the QDMA and BAR subsystems
+    * Teardown: tear down each PF subsystem on REMOVE; the model process and control workers follow once the last PF is gone
+    * PF0 is merely marked as up or down, with no other effects
 
 ### Failure handling and forced user disconnects
 
@@ -242,22 +170,6 @@ TODO:
 * How are model process deaths/timeouts to be accounted for?
 * How will forced disconnects look like to the user?
 * What failure states are there?
-
-### Accepted inaccuracies (compared to real hardware)
-
-* Multiple issues around the non-atomicity of the reconfiguration process:
-    * Simultaneous writing to the reconfiguration buffer and RESCANing leads to a race
-        * More precisely: Writing some, but not all chunks and then launching a RESCAN
-            * Result: PF2 restoration may evaluate incomplete data
-        * Must be avoided by the user
-            * The daemon can't safeguard against it apart from rejecting incomplete models
-    * Reconfiguration only becomes active once the BAR subsystem has been restored
-        * In hardware, the new behavior might already be available earlier
-
-* The contents of the HBM and DDR do not persist across reconfiguration
-    * I.e.: When the model processes are replaced, the new model process will not have the memory contents of the old one
-    * This requires some (efficient) dumping and importing mechanism in emulation/simulation VBINs
-    * To be done later
 
 ## User-facing UNIX domain socket protocol
 
@@ -324,6 +236,104 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
 
 * Base directory, uid/gid of each file, and mode of each socket are configurable or given as CLI arguments
     * Default is `/run/slash_emu`, `vrtd:vrt`, 600
+
+## Model process and reconfiguration
+
+* This section defines the exact lifecycle of the model process and the main/staging VBIN files
+* The top-level life cycle operations only reference this behavior
+
+### State
+
+* *The main and staging VBIN files*
+    * The main VBIN contains the last successfully launched model program
+        * Used when (re)starting the model process and the staging VBIN file is empty or corrupted
+    * The staging VBIN is written by the user to reconfigure the accelerator
+        * Replaces the main VBIN file during BAR or full accelerator RESCAN
+    * Remains stored when the accelerator and its model process is torn down
+    * Only cleaned during daemon startup and shutdown
+        * Emulates a "cold reboot"
+* *The model process*
+    * Models the behavior of the FPGA
+    * Executes the `vpp_emu` or `vpp_sim` executable from the main VBIN file
+    * The daemon communicates with it via a ZeroMQ protocol
+        * The protocol is specified in the reference documentation
+        * Request/Response based
+        * No concurrent requests in flight possible
+        * Thus: Each ZeroMQ socket is locked with a global lock
+            * Each request must fetch its response before releasing the lock
+            * Potentially with a queue of waiting threads
+
+### Launching the model process and reconfiguration
+
+* The reconfiguration can be triggered by:
+    * The full instantiation of the accelerator
+    * The restoration of the the BAR/device info subsystem (PF2)
+* Procedure defined as follows:
+    * If no current VBIN buffer file for the BDF exists:
+        * Copy the "default" VBIN, instantiate an empty staging VBIN buffer
+        * The default VBIN contains a model that supports round-trip BAR/HBM/DDR read/writes, but no executable kernels
+        * Built and shipped as part of the system emulation daemon, but can be changed in the configuration
+    * If the staging VBIN file is not empty:
+        * Try to unpack and interpret the staging VBIN
+        * Try to launch the model in the staging VBIN
+        * If successful, replace the main VBIN with the staging VBIN and use the new model process
+        * In either case, clear the staging VBIN
+    * If the no model process is currently running, and the staging VBIN file is either empty or using the staging VBIN has failed:
+        * Try to unpack and interpret the main VBIN
+        * Try to launch the model in the main VBIN
+        * If successful, use the newly launched model process
+        * If not, the reconfiguration has failed
+            * An error is logged, and the accelerator is torn down again
+            * That's the expected behavior for an accelerator with a corrupted configuration
+* If setting up a new model process was successful:
+    * Tear down the existing model control workers
+    * Initialize and start the new model control workers
+* Effect:
+    * If a model process is already running and the staging VBIN is either empty or corrupted
+        * The old model remains running
+        * Reconfiguration is essentially a no-op
+
+### Teardown
+
+* The model process and its model control workers are torn down once the last PF has been REMOVE'd
+* The main and staging VBIN files remain stored for a later RESCAN
+
+### Writing the staging VBIN
+
+* In real hardware:
+    * Hardware DCPs/PDIs are written in sequence to the board management via QDMA
+* Difference between emulation and hardware: Accelerator model is reconfigured with the full VBIN, not just DCPs/PDIs
+    * And only VBINs with either "emulation" or "simulation" target platforms, with a `vpp_emu` or `vpp_sim` executable
+* Full VBIN is necessary because:
+    * The daemon needs the system map
+        * to tell whether the target platform is emulation or simulation
+        * to reverse the register -> address mapping (if the `vpp_emu` dialect of the ZeroMQ protocol doesn't change)
+    * The simulation model is shipped as a separate shared object
+        * The `vpp_sim` executable is only a wrapper for it
+
+* VRTD writes the VBIN into the staging VBIN file via QDMA
+    * Writes in chunks of up to 64KiB
+        * Always at device address 0x102100000
+    * Each written chunk is appended to the staging VBIN file
+* Once the VBIN is written, VRTD REMOVEs at least PF2 (slash_ctl) and RESCANs
+    * On RESCAN, the currently staged VBIN's model is launched
+    * If successful, the staged VBIN replaces the old active VBIN
+
+### Accepted inaccuracies
+
+* Multiple issues around the non-atomicity of the reconfiguration process:
+    * Simultaneous writing to the reconfiguration buffer and RESCANing leads to a race
+        * More precisely: Writing some, but not all chunks and then launching a RESCAN
+            * Result: PF2 restoration may evaluate incomplete data
+        * Must be avoided by the user
+            * The daemon can't safeguard against it apart from rejecting incomplete models
+    * Reconfiguration only becomes active once the BAR subsystem has been restored
+        * In hardware, the new behavior might already be available earlier
+
+* The contents of the HBM and DDR do not persist across reconfiguration
+    * I.e.: When the model processes are replaced, the new model process will not have the memory contents of the old one
+    * This requires some (efficient) dumping and importing mechanism in emulation/simulation VBINs
+    * To be done later
 
 ## Model control worker subsystem
 
@@ -445,6 +455,19 @@ Other bits exist, but are not implemented in this sprint.
 * First functionality: Providing information about the accelerator
 * Second functionality: Giving access to the BARs of PF2:
 
+### Removal and restoration
+
+* REMOVE:
+    * Stop accepting new connections
+    * Unlink socket
+    * Signal connection worker threads to close their connection
+    * The BAR memfds remain, so the model control workers keep running
+        * Effect: The daemon never looses track of the compute kernel's state
+* RESCAN (restoration):
+    * On a running model process, trigger a reconfiguration (see "Model process and reconfiguration")
+        * If successful, might lead to a tear-down and setup of the model process and model control workers
+    * (Re)create the named socket, listener thread, and worker pool
+
 ### Implementation notes on IOCTLs
 
 * Generally follows the same format as other subsystems:
@@ -484,6 +507,18 @@ Other bits exist, but are not implemented in this sprint.
     * But the daemon can must close them after passing them to the user
         * If the daemon keeps a reference to them, they are not released once the client closes their last FD to them
     * They will be passed back to the daemon as part of a transfer IOCTL later
+
+### Removal and restoration
+
+* REMOVE:
+    * Stop accepting new connections, unlink socket, close existing connections, drain workers
+    * Also "forgets" any previously known qpairs
+    * No need to remove buffers since they aren't owned by the QDMA subsystem anyway
+* RESCAN:
+    * (Re)intializes the qpairs list
+    * Picks up the connection to the model process
+    * Sets up worker pool and listener
+    * Creates named UNIX socket
 
 ### Mechanisms
 
