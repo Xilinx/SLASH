@@ -670,3 +670,197 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
     * On the other: Now necessary since the system emulation daemon does not provide `/sys/` files
 * The memory ranges of HBM/DDR/Reconfiguration region should be added to the kernel ABI header
 * The reconfiguration writing protocol should be part of the kernel ABI documentation
+
+## Implementation plan
+
+### Team workflow
+
+* The team lead drives the steps below strictly in order
+    * A step is only started once the previous step has been signed off
+* For each step, the lead spawns one implementation agent
+    * The implementation agent builds the new components for that step
+    * It writes and runs unit tests as it goes, to catch errors early
+* The lead then hands the work to an adversary agent
+    * The adversary's explicit goal is to find bugs and bad design decisions
+    * It reports concrete feedback on how to improve the implementation
+* The implementation and adversary agents then iterate back and forth
+    * They continue until they converge on a solution both consider sound
+* The lead then hands the work to a reviewing agent
+* The reviewer checks that the implementation is correct and complete
+    * It also checks that the work aligns with this architecture document
+    * It uses the coverage reports to judge the rigor of the unit testing
+* If the reviewer does not sign off, the step returns to the implementer and adversary
+* The flagged issues are resolved before the reviewer is asked again
+* A step is only complete once the reviewer signs off
+    * Every step keeps the normal, ASan, and UBSan builds green
+    * Every step leaves the full test suite passing before hand-off
+    * Later steps reuse the components and test doubles built by earlier ones
+
+### Steps
+
+#### Step 1: Project scaffolding and test harness
+
+* Create the `slash_emu` folder and the CMake project
+* Set up the normal, ASan, and UBSan build directories
+* Wire up GTest and a placeholder test target
+* Set up gcov/lcov coverage reporting
+* Add a minimal daemon entry point that starts and cleanly shuts down
+* Complete once all three builds compile and a trivial test passes
+
+#### Step 2: Socket transport and protocol framing
+
+* Implement an `AF_UNIX`/`SOCK_SEQPACKET` message wrapper
+* Serialize and deserialize `struct slash_emu_socket_header`
+* Pass file descriptors as `SCM_RIGHTS` ancillary data
+* Map between FD indices in argument structs and transferred FDs
+* Provide request/response helpers with sequence-id matching
+* Test over `socketpair`, including FD passing and truncation/error cases
+* Complete once the framing round-trips headers, payloads, and FDs correctly
+
+#### Step 3: Configuration and CLI
+
+* Parse CLI arguments with CLI11 (base directory, uid/gid, mode)
+* Parse the configuration file with libinih
+* Represent the list of accelerator configurations and their board BDFs
+* Resolve socket paths, ownership, and permissions with the documented defaults
+* Validate and report configuration errors clearly
+* Test with valid, malformed, and missing configuration inputs
+* Complete once a sample configuration parses into a validated in-memory model
+
+#### Step 4: VBIN and system map parsing
+
+* Unpack a VBIN and locate its `vpp_emu`/`vpp_sim` executable and system map
+* Parse the system map with libxml2
+* Classify the target platform as emulation or simulation
+* Extract the kernels, their registers, and the register->address mapping
+* Reject corrupted or unsupported VBINs with clear errors
+* Test with valid simulation VBINs and deliberately broken ones
+* Complete once a system map yields the kernel/register model needed downstream
+
+#### Step 5: ZeroMQ model client
+
+* Implement the `vpp_sim` address-based dialect of the ZeroMQ protocol
+* Enforce a single in-flight request via a global per-socket lock
+* Queue waiting threads and release the lock only after the response
+* Apply a short (~10s) request timeout
+* Surface transport failures and timeouts as a distinct error
+* Build a reusable mock model server for testing
+* Test that concurrent callers are correctly serialized against the mock
+* Complete once the client drives the mock model correctly under contention
+
+#### Step 6: Model process lifecycle and reconfiguration
+
+* Manage the main and staging VBIN files per "Model process and reconfiguration"
+* Provide the default VBIN and the empty-staging bootstrap path
+* Launch the `vpp_sim` executable from the selected VBIN
+* Implement the staging-then-main reconfiguration procedure and its failure handling
+* Detect model process death and treat it as accelerator loss
+* Tear the process down while preserving the VBIN files as specified
+* Test with a fake model executable covering success and failure paths
+* Complete once reconfiguration selects, launches, and replaces VBINs correctly
+
+#### Step 7: BAR memfds
+
+* Create sized memfds for the user region, service layer, and clock wizard
+* Implement shared-lock reads and exclusive-lock writes via `flock`
+* Expose helpers to read and write registers by offset
+* Test concurrent readers and writers for correctness
+* Complete once BAR memfds round-trip register access under locking
+
+#### Step 8: Model control workers
+
+* Spawn one worker per compute kernel and one for the clock wizard
+* Implement the kernel idle and busy loops against the control register bits
+* Fetch parameters, forward them, and write back outputs via the ZeroMQ client
+* Pin the clock-wizard lock bit as described in the clock wizard section
+* Track each kernel's state for the lifetime of the process
+* Set up and tear down the workers together with the model process
+* Test end-to-end against the mock model server and BAR memfds
+* Complete once a simulated `ap_start` drives a full idle->busy->idle cycle
+
+#### Step 9: BAR and device info subsystem (PF2)
+
+* Create the named socket, listener thread, and worker pool
+* Implement `GET_BAR_INFO`, `GET_BAR_FD`, and `GET_DEVICE_INFO` per spec
+* Return BAR memfds to the user as ancillary data
+* Implement REMOVE (stop, unlink, drop connections) and RESCAN restoration
+* Keep the BAR memfds and model workers alive across REMOVE
+* Test the IOCTLs, FD passing, and forced disconnects
+* Complete once a client can enumerate and map BARs across remove/rescan
+
+#### Step 10: QDMA subsystem (PF1)
+
+* Create the control socket, listener thread, and worker pool
+* Implement the qpair state machine and its transitions
+* Implement `INFO`, `QPAIR_ADD`, `Q_OP`, `QPAIR_GET_FD`, and `BUF_CREATE`
+* Create per-session transfer workers over anonymous sockets
+* Implement `TRANSFER` for H2C/C2H to HBM/DDR and H2C to the reconfiguration aperture
+* Serialize model transfers globally per model process
+* Implement REMOVE and RESCAN, forgetting qpairs on REMOVE
+* Test transfers, qpair validation, and forced disconnects against the mock model
+* Complete once data round-trips host<->model and staging writes append correctly
+
+#### Step 11: Accelerator lifecycle and hotplug
+
+* Model the accelerator state machine (absent/inactive/active/partial)
+* Create the daemon-level `slash_hotplug` socket
+* Implement RESCAN, REMOVE, HOTPLUG, and TOGGLE_SBR under a single lock
+* Enforce the instantiation and teardown ordering across subsystems
+* Trigger a RESCAN automatically on daemon startup
+* Emulate the 1s TOGGLE_SBR link-training delay
+* Test each operation and the resulting subsystem states
+* Complete once the full state machine is driven correctly from the hotplug socket
+
+#### Step 12: libslash integration
+
+* Add the control-file-vs-socket flag at device open and propagate it
+* Translate IOCTLs into datagrams and back for socket-backed devices
+* Pass FDs by index via `SCM_RIGHTS` in both directions
+* Return `-ENODEV` on any send or receive failure
+* Forward the QDMA BDF from the new INFO field
+* Test libslash against the running daemon
+* Complete once a consumer works unchanged over both control files and sockets
+
+#### Step 13: Kernel driver and VRTD changes
+
+* Return the QDMA BDF from the driver's INFO IOCTL
+* Add the HBM/DDR/reconfiguration memory ranges to the kernel ABI header
+* Document the reconfiguration writing protocol in the ABI reference
+* Switch VRTD device discovery to `/dev/` and `/run/slash_emu/` scanning
+* Test discovery against both the real driver and the daemon
+* Complete once VRTD discovers and drives emulated accelerators
+
+#### Step 14: End-to-end integration
+
+* Run a real `vpp_sim` model under the daemon
+* Exercise BAR/HBM/DDR round trips, kernel execution, and the clock wizard
+* Exercise reconfiguration via staging VBIN writes and RESCAN
+* Exercise hotplug operations under concurrent user activity
+* Run the suite under ASan and UBSan
+* Complete once a representative application runs unmodified against the daemon
+
+### Development guidelines for the system emulation daemon
+
+* New folder in the git repo: `slash_emu`
+    * `slash_emu/build/normal` to be used as the normal build directory
+    * `slash_emu/build/asan` to be used as the build directory with ASan enabled
+    * `slash_emu/build/ubsan` to be used as the build directory with UBSan enabled
+* Programming language: C++20
+    * Use as little raw pointer handling as necessary
+    * If raw/external pointers have to be handled, create dedicated wrapping functionalities
+* Usable dependencies:
+    * libxml2
+    * libzmq3
+    * libjsoncpp
+    * libsystemd
+    * libinih
+    * libcli11
+    * POSIX threads
+    * New dependencies need to be reviewed by the user
+* Build management using CMake
+* Unit testing with GTest
+    * All units, components, and subsystems need rigorous testing
+    * With options to build and run the test with the address and UB sanitizers
+* Coverage reporting using gcov/lcov
+    * 100% coverage not an explicit goal
+    * But to be used by adversary and reviewing agents to check unit testing coverage
