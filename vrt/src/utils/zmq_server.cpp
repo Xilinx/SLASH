@@ -25,7 +25,7 @@
 
 namespace vrt {
 
-ZmqServer::ZmqServer() : context(1), socket(context, ZMQ_REQ) { socket.connect(address); }
+ZmqServer::ZmqServer(std::string address) : context(1), socket(context, ZMQ_REQ), address(address) { socket.connect(address); }
 
 void ZmqServer::sendBuffer(const std::string& name, const std::vector<uint8_t>& buffer) {
     Json::Value command;
