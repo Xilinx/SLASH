@@ -643,6 +643,76 @@ TEST_F(FpgaDeviceFixture, CpuFpgaCpuBufferRoundTripUsesPackedBufferPointers) {
     EXPECT_GE(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 5u);
 }
 
+TEST_F(FpgaDeviceFixture, CarriedBufferAliasStaysCoherentAfterGrowth) {
+    FpgaDevice dev("fpga:0", window_,
+                   [](const std::string&) { return FpgaKernelLocation{kKernelA_R5, 0}; });
+
+    GraphScalar elements = GraphScalar::ref(ScalarType::U64, "elements");
+    GraphBuffer parent = GraphBuffer::make(BufferType::I32, "state", 0, elements);
+    GraphBuffer local = GraphBuffer::make(BufferType::I32, "state", 1, elements);
+
+    const std::int32_t seed = 42;
+    dev.setInputBuffer(scopedBufferKey(parent.scopeId(), parent.name()),
+                       &seed, sizeof(seed));
+
+    CompiledBoundaryNode importB;
+    importB.id = "import";
+    importB.deviceId = "fpga:0";
+    importB.side = CompiledBoundaryNode::Side::Start;
+    importB.bufferCopies.push_back({/*sourceName=*/parent.name(),
+                                    /*sourceScopeId=*/parent.scopeId(),
+                                    /*targetName=*/local.name(),
+                                    /*targetScopeId=*/local.scopeId()});
+
+    IOTypeMap bodyType;
+    bodyType.inputs.push_back({"in", BufferType::I32});
+    CompiledKernelNode bodyK;
+    bodyK.id = "body";
+    bodyK.deviceId = "fpga:0";
+    bodyK.kernel = fpgaKernel("body", bodyType);
+    bodyK.ioMap.bindInput("in", local);
+
+    auto body = std::make_shared<DGraph>();
+    body->deviceId = "fpga:0";
+    body->nodes.push_back(importB);
+    body->nodes.push_back(bodyK);
+    body->scalarValues = std::make_shared<std::map<std::string, std::uint64_t>>();
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.scalarValues = std::make_shared<std::map<std::string, std::uint64_t>>();
+    (*dg.scalarValues)[scopedScalarKey(0, "elements")] = 2;
+    CompiledLoopNode loop;
+    loop.id = "loop0";
+    loop.deviceId = "fpga:0";
+    loop.loopKind = CompiledLoopKind::FixedCount;
+    loop.tripCount = bindTripCount(dg, 1);
+    dg.nodes.emplace_back(loop);
+    DGraphChild child;
+    child.parentNodeId = "loop0";
+    child.role = DGraphChildRole::LoopBody;
+    child.dgraphs.push_back(body);
+    dg.childDGraphs.push_back(child);
+
+    auto plan = dev.compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+    plan->launch();
+    plan->wait();
+
+    const std::int32_t grown[] = {7, 9};
+    dev.setInputBuffer(scopedBufferKey(local.scopeId(), local.name()),
+                       grown, sizeof(grown));
+
+    EXPECT_EQ(dev.bufferSize(scopedBufferKey(parent.scopeId(), parent.name())),
+              sizeof(grown))
+        << "growing an alias must update the canonical source buffer record";
+    std::int32_t readback[] = {0, 0};
+    ASSERT_NO_THROW(dev.getOutputBuffer(scopedBufferKey(parent.scopeId(), parent.name()),
+                                        readback, sizeof(readback)));
+    EXPECT_EQ(readback[0], grown[0]);
+    EXPECT_EQ(readback[1], grown[1]);
+}
+
 TEST_F(FpgaDeviceFixture, GraphReprogramNodeCompilesIntoFpgaDGraph) {
     auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
     Graph g = Graph::withDefaults();
@@ -1185,6 +1255,68 @@ TEST_F(FpgaDeviceFixture, OutputScalarPortsEmitScalarRead) {
     EXPECT_EQ(ddr_.nodes()[1].payload.scalar_read.source_addr, kKernelA_R5 + 0x10u);
 }
 
+TEST_F(FpgaDeviceFixture, WideOutputScalarPortsAreRejected) {
+    IOTypeMap iot;
+    iot.outputScalars.push_back({"result", ScalarType::U64});
+
+    auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.device = dev;
+    CompiledKernelNode k;
+    k.id        = "kA";
+    k.deviceId  = "fpga:0";
+    k.kernel    = fpgaKernel("kA", iot);
+    dg.nodes.push_back(k);
+
+    EXPECT_THROW(dev->compilePlan(dg), std::runtime_error);
+}
+
+TEST_F(FpgaDeviceFixture, ReferencedSignalSlotsAreReservedForHostScalarIo) {
+    auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.device = dev;
+
+    CompiledSignalNode sg;
+    sg.id = "reserved";
+    sg.deviceId = "fpga:0";
+    sg.slot = 0;
+    sg.value = 7;
+    sg.operation = RP1_SIGOP_SET;
+    dg.nodes.emplace_back(sg);
+
+    IOTypeMap iot;
+    iot.outputScalars.push_back({"result", ScalarType::U32});
+    CompiledKernelNode k;
+    k.id = "kA";
+    k.deviceId = "fpga:0";
+    k.kernel = fpgaKernel("kA", iot);
+    dg.nodes.emplace_back(k);
+
+    auto plan = dev->compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+
+    dev->setInputScalar(scopedScalarKey(0, "fresh"), 123);
+    EXPECT_EQ(ddr_.signals()[0].value, 0u)
+        << "host scalar allocation must not reuse an RP1 signal slot referenced by the plan";
+
+    plan->launch();
+    plan->wait();
+    EXPECT_EQ(ddr_.signals()[0].value, 7u);
+
+    bool sawScalarRead = false;
+    for (std::uint32_t i = 0; i < ddr_.ctrl().node_count; ++i) {
+        if (ddr_.nodes()[i].opcode != RP1_OP_SCALAR_READ) continue;
+        sawScalarRead = true;
+        EXPECT_NE(ddr_.nodes()[i].payload.scalar_read.target_slot, 0u)
+            << "plan-local scalar reads must not reuse a preassigned rendezvous slot";
+    }
+    EXPECT_TRUE(sawScalarRead);
+}
+
 TEST_F(FpgaDeviceFixture, SentinelSlotAndValueAreCustomisable) {
     auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
     dev->setSentinelSlot(42);
@@ -1646,6 +1778,66 @@ TEST(FpgaControlExecution, WhileLoopCarriesScalarInputViaScalarCopy) {
         << "carried scalar should have been copied into the kernel input register";
 }
 
+TEST(FpgaControlExecution, ScalarCopyUsesContiguousOffsetsForMultipleCarriedInputs) {
+    std::vector<std::byte> backing(kBarSize, std::byte{0});
+    DdrView ddr{backing.data()};
+    primeAsReady(ddr);
+    auto window =
+        std::make_shared<fpga::Rp1BarWindow>(backing.data(), backing.size(), kWindowOff);
+    FaithfulRp1 rp1(ddr);
+
+    constexpr std::uint32_t kBodyBase = 0x88010000u;
+    FpgaDevice dev("fpga:0", window,
+                   [](const std::string&) { return FpgaKernelLocation{kBodyBase, 0}; });
+
+    IOTypeMap bodyType;
+    bodyType.inputScalars.push_back({"a", ScalarType::U32});
+    bodyType.inputScalars.push_back({"b", ScalarType::U32});
+    CompiledKernelNode bodyK;
+    bodyK.id = "bk";
+    bodyK.deviceId = "fpga:0";
+    bodyK.kernel = fpgaKernel("bodyK", bodyType);
+    bodyK.ioMap.bindInputScalar("a", GraphScalar::ref(ScalarType::U32, "la", 1));
+    bodyK.ioMap.bindInputScalar("b", GraphScalar::ref(ScalarType::U32, "lb", 1));
+
+    CompiledBoundaryNode importB;
+    importB.id = "import";
+    importB.deviceId = "fpga:0";
+    importB.side = CompiledBoundaryNode::Side::Start;
+    importB.scalarCopies.push_back({/*src*/"pa", 0, /*tgt*/"la", 1});
+    importB.scalarCopies.push_back({/*src*/"pb", 0, /*tgt*/"lb", 1});
+
+    auto body = std::make_shared<DGraph>();
+    body->deviceId = "fpga:0";
+    body->nodes.push_back(importB);
+    body->nodes.push_back(bodyK);
+    body->scalarValues = std::make_shared<std::map<std::string, std::uint64_t>>();
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.scalarValues = std::make_shared<std::map<std::string, std::uint64_t>>();
+    CompiledLoopNode loop;
+    loop.id = "loop0";
+    loop.deviceId = "fpga:0";
+    loop.loopKind = CompiledLoopKind::FixedCount;
+    loop.tripCount = bindTripCount(dg, 1);
+    dg.nodes.emplace_back(loop);
+    DGraphChild child;
+    child.parentNodeId = "loop0";
+    child.role = DGraphChildRole::LoopBody;
+    child.dgraphs.push_back(body);
+    dg.childDGraphs.push_back(child);
+
+    auto plan = dev.compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+    plan->launch();
+    plan->wait();
+
+    EXPECT_NE(rp1.scalarCopyTo(kBodyBase + 0x10u), 0xFFFFFFFFu);
+    EXPECT_NE(rp1.scalarCopyTo(kBodyBase + 0x14u), 0xFFFFFFFFu)
+        << "the second carried input scalar must copy into the second AXI-Lite register";
+}
+
 // Phase F.2: an autonomous FPGA conditional gates exactly one branch via
 // RP1_OP_COND.  A main-line producer's output scalar (captured to a slot via
 // SCALAR_READ; FaithfulRp1 models it as 1) drives the predicate; the COND-gated
@@ -1860,12 +2052,12 @@ TEST(FpgaControlExecution, OutputScalarEmitsScalarReadInControlImage) {
 
     // Main-line producer kernel with an output scalar.
     IOTypeMap producerType;
-    producerType.outputScalars.push_back({"parity", ScalarType::U64});
+    producerType.outputScalars.push_back({"parity", ScalarType::U32});
     CompiledKernelNode producer;
     producer.id       = "prod";
     producer.deviceId = "fpga:0";
     producer.kernel   = fpgaKernel("producer", producerType);
-    producer.ioMap.bindOutputScalar("parity", GraphScalar::ref(ScalarType::U64, "parity"));
+    producer.ioMap.bindOutputScalar("parity", GraphScalar::ref(ScalarType::U32, "parity"));
 
     CompiledKernelNode bodyK;
     bodyK.id       = "bk";

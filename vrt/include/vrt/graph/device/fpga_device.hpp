@@ -184,6 +184,8 @@ class FpgaDevice : public IDevice {
 
     // ---- BAR-backed scalar accessors (also used by scalar bridges) ----
 
+    /// Scalar signal slots are 32-bit RP1 values. Wider FPGA output scalars are
+    /// rejected during plan compilation until the protocol grows a multi-slot read.
     void setInputScalar(const std::string& scalarKey, std::uint64_t bits);
     std::uint64_t getOutputScalar(const std::string& scalarKey) const;
 
@@ -246,6 +248,7 @@ class FpgaDevice : public IDevice {
     };
 
     static std::string normalizeBufferKey(const std::string& bufferName);
+    std::string canonicalBufferKey(const std::string& key) const;
 
     /// Make @p targetName resolve to the same device buffer (offset/size/region
     /// backing) as @p sourceName.  Used to honour loop/conditional carried-buffer
@@ -310,6 +313,7 @@ class FpgaDevice : public IDevice {
 
     mutable std::mutex                     bufferMutex_;
     std::map<std::string, BufferRecord>    buffers_;
+    std::map<std::string, std::string>      bufferAliases_;
     std::map<std::string, ::vrt::MemoryConfig> bufferRegion_;
     std::uint32_t                          nextBufferOffset_ = 0;
     mutable std::mutex                     scalarMutex_;

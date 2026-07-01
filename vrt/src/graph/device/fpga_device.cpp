@@ -90,6 +90,34 @@ std::uint32_t scalarWidthInWords(ScalarType t) {
     return 1u;
 }
 
+bool scalarFitsSignalSlot(ScalarType t) {
+    return scalarWidthInWords(t) == 1u;
+}
+
+std::string scalarTypeName(ScalarType t) {
+    switch (t) {
+        case ScalarType::U8:  return "U8";
+        case ScalarType::U16: return "U16";
+        case ScalarType::U32: return "U32";
+        case ScalarType::U64: return "U64";
+        case ScalarType::I8:  return "I8";
+        case ScalarType::I16: return "I16";
+        case ScalarType::I32: return "I32";
+        case ScalarType::I64: return "I64";
+        case ScalarType::F32: return "F32";
+        case ScalarType::F64: return "F64";
+    }
+    return "?";
+}
+
+void requireSignalSlotScalar(const KernelDescriptor& kernel, const ScalarPort& port) {
+    if (scalarFitsSignalSlot(port.type)) return;
+    throw std::runtime_error(
+        "FpgaDevice: output scalar '" + port.name + "' on kernel '" + kernel.name +
+        "' has type " + scalarTypeName(port.type) +
+        ", but RP1 scalar-read signal slots carry only 32-bit values");
+}
+
 /// Zero-/sign-extend a value's raw bits to a sequence of 32-bit words.
 /// Output @p dst must point to at least scalarWidthInWords(type) entries.
 void writeScalarToArgWords(ScalarType type, std::uint64_t bits, std::uint32_t* dst) {
@@ -544,11 +572,44 @@ class FpgaDevicePlan : public IDevicePlan {
     const fpga::Rp1GraphImage& image() const noexcept { return image_; }
 
    private:
+    void reserveDeviceSignalSlot(std::uint32_t slot) {
+        if (!device_) return;
+        std::lock_guard<std::mutex> lk(device_->scalarMutex_);
+        device_->scalarSlotAlloc_.reserve(slot);
+    }
+
     void registerDeviceScalarSlot(const std::string& key, std::uint32_t slot) {
         if (!device_) return;
         std::lock_guard<std::mutex> lk(device_->scalarMutex_);
         device_->scalarSlots_[key] = slot;
         device_->scalarSlotAlloc_.reserve(slot);
+    }
+
+    void reserveSignalSlot(std::uint32_t slot, fpga::SignalSlotAllocator& slotAlloc) {
+        slotAlloc.reserve(slot);
+        reserveDeviceSignalSlot(slot);
+    }
+
+    void reserveReferencedSignalSlots(const DGraph& dg,
+                                      fpga::SignalSlotAllocator& slotAlloc) {
+        for (const CompiledNode& node : dg.nodes) {
+            if (const auto* sg = std::get_if<CompiledSignalNode>(&node)) {
+                reserveSignalSlot(sg->slot, slotAlloc);
+            } else if (const auto* wt = std::get_if<CompiledWaitNode>(&node)) {
+                reserveSignalSlot(wt->slot, slotAlloc);
+            } else if (const auto* loop = std::get_if<CompiledLoopNode>(&node)) {
+                if (loop->broadcastRole != SplitBroadcastRole::None) {
+                    reserveSignalSlot(loop->conditionBroadcastSlot, slotAlloc);
+                    reserveSignalSlot(loop->broadcastReadySlot, slotAlloc);
+                    reserveSignalSlot(loop->broadcastAckSlot, slotAlloc);
+                }
+            }
+        }
+        for (const DGraphChild& child : dg.childDGraphs) {
+            for (const auto& childDg : child.dgraphs) {
+                if (childDg) reserveReferencedSignalSlots(*childDg, slotAlloc);
+            }
+        }
     }
 
     void applyImageSideEffects() {
@@ -706,6 +767,16 @@ class FpgaDevicePlan : public IDevicePlan {
         return resolvedBufferSizeBytes(buffer, scalarValues_, "FpgaDevicePlan");
     }
 
+    std::map<std::string, std::uint32_t> inputScalarRegOffsets(
+        const KernelDescriptor& kernel) const {
+        ArgLayout layout(device_->kernelArgOffsets(kernel), kernel.name);
+        std::map<std::string, std::uint32_t> out;
+        for (const ScalarPort& port : kernel.ioType.inputScalars) {
+            out[port.name] = layout.take(port.name, scalarWidthInWords(port.type));
+        }
+        return out;
+    }
+
     void appendBufferAddress(fpga::Rp1GraphImage& image,
                              const CompiledKernelNode& node,
                              ArgLayout& layout,
@@ -736,6 +807,8 @@ class FpgaDevicePlan : public IDevicePlan {
         ArgLayout layout(device_->kernelArgOffsets(node.kernel), node.kernel.name);
 
         for (const ScalarPort& port : node.kernel.ioType.inputScalars) {
+            const std::uint32_t width = scalarWidthInWords(port.type);
+            const std::uint32_t base = layout.take(port.name, width);
             // A loop-carried scalar input is fed each iteration by a SCALAR_COPY
             // from its signal slot into this register, not by a static arg.
             if (skipInputScalars.count(port.name)) continue;
@@ -745,9 +818,7 @@ class FpgaDevicePlan : public IDevicePlan {
                     "FpgaDevice: kernel '" + node.kernel.name +
                     "' input scalar port '" + port.name + "' has no IOMap binding");
             }
-            const std::uint32_t width = scalarWidthInWords(port.type);
             std::uint32_t words[2] = {0u, 0u};
-            const std::uint32_t base = layout.take(port.name, width);
             const std::uint32_t firstValueWord =
                 appendArgWordsAsPairs(image.arg_buf, cursor_words, base, words, width,
                                       node.kernel.name, port.name);
@@ -961,6 +1032,7 @@ class FpgaDevicePlan : public IDevicePlan {
         const std::size_t N = dg.nodes.size();
         fpga::SignalSlotAllocator slotAlloc;
         slotAlloc.reserve(sentinelSlot_);
+        reserveReferencedSignalSlots(dg, slotAlloc);
         std::size_t totalWork = N;
         std::vector<bool> hasOutputScalarReads(N, false);
         for (std::size_t p = 0; p < N; ++p) {
@@ -1050,10 +1122,12 @@ class FpgaDevicePlan : public IDevicePlan {
                 std::uint8_t lastBucket = setBucket;
                 std::uint32_t lastMask = setMask;
                 for (const ScalarPort& sp : k->kernel.ioType.outputScalars) {
+                    requireSignalSlotScalar(k->kernel, sp);
                     const std::size_t rpos = nextExtraPos++;
                     const std::uint8_t rbucket = nodeBucketOf(rpos);
                     const std::uint32_t rmask = nodeBitOf(rpos);
                     const std::uint32_t slot = slotAlloc.alloc();
+                    reserveDeviceSignalSlot(slot);
                     const FpgaKernelLocation loc = device_->resolveKernelLocation(k->kernel);
                     const std::uint32_t off = device_->outputScalarRegOffset(k->kernel, sp.name);
                     rp1_node_t sr{};
@@ -1154,6 +1228,7 @@ class FpgaDevicePlan : public IDevicePlan {
         fpga::LoopIdAllocator loopIds;
         fpga::SignalSlotAllocator slotAlloc;
         slotAlloc.reserve(sentinelSlot_);
+        reserveReferencedSignalSlots(dg, slotAlloc);
 
         std::unordered_map<std::string, std::uint32_t> mainBit;  // id -> done bit (bucket 0)
         std::uint32_t nextMainBit  = 0;
@@ -1192,7 +1267,9 @@ class FpgaDevicePlan : public IDevicePlan {
                 std::uint32_t lastBit = bit;
                 std::string   lastId  = k->id;
                 for (const ScalarPort& sp : k->kernel.ioType.outputScalars) {
+                    requireSignalSlotScalar(k->kernel, sp);
                     const std::uint32_t slot = slotAlloc.alloc();
+                    reserveDeviceSignalSlot(slot);
                     const FpgaKernelLocation loc = device_->resolveKernelLocation(k->kernel);
                     const std::uint32_t off = device_->outputScalarRegOffset(k->kernel, sp.name);
                     const std::uint32_t rbit = allocMainBit();
@@ -1528,6 +1605,7 @@ class FpgaDevicePlan : public IDevicePlan {
             if (it != scalarSlots_.end()) return it->second;
             const std::uint32_t s = slotAlloc.alloc();
             scalarSlots_[parentKey] = s;
+            registerDeviceScalarSlot(parentKey, s);
             return s;
         };
 
@@ -1545,6 +1623,7 @@ class FpgaDevicePlan : public IDevicePlan {
                 std::set<std::string> carriedInputs;
                 std::vector<BarrierRef> kernelAwaits = bodyDomain.refsFor(k->dependsOn);
                 const FpgaKernelLocation kloc = device_->resolveKernelLocation(k->kernel);
+                const auto inputScalarOffsets = inputScalarRegOffsets(k->kernel);
                 for (const ScalarPort& ip : k->kernel.ioType.inputScalars) {
                     auto bindIt = k->ioMap.inputScalars().find(ip.name);
                     if (bindIt == k->ioMap.inputScalars().end()) continue;
@@ -1554,7 +1633,7 @@ class FpgaDevicePlan : public IDevicePlan {
                     if (impIt == scalarImport.end()) continue;
                     carriedInputs.insert(ip.name);
                     const std::uint32_t slot = carriedSlot(impIt->second);
-                    const std::uint32_t off  = device_->outputScalarRegOffset(k->kernel, ip.name);
+                    const std::uint32_t off  = inputScalarOffsets.at(ip.name);
                     const BarrierRef copyAwait = bodyDomain.awaitFor(kernelAwaits);
                     const BarrierRef copyDone = bodyDomain.define(k->id + ".scopy." + ip.name);
                     rp1_node_t cp{};
@@ -1581,6 +1660,7 @@ class FpgaDevicePlan : public IDevicePlan {
                 BarrierRef lastDone = kernelDone;
                 std::string   lastId  = k->id;
                 for (const ScalarPort& sp : k->kernel.ioType.outputScalars) {
+                    requireSignalSlotScalar(k->kernel, sp);
                     const FpgaKernelLocation loc = device_->resolveKernelLocation(k->kernel);
                     const std::uint32_t off  = device_->outputScalarRegOffset(k->kernel, sp.name);
                     auto bindIt = k->ioMap.outputScalars().find(sp.name);
@@ -1595,6 +1675,7 @@ class FpgaDevicePlan : public IDevicePlan {
                         slot = carriedSlot(expIt->second);          // export -> carried slot
                     } else {
                         slot = slotAlloc.alloc();
+                        reserveDeviceSignalSlot(slot);
                     }
                     const BarrierRef readDone = bodyDomain.define(k->id + ".sread." + sp.name);
                     rp1_node_t sr{};
@@ -2029,26 +2110,44 @@ std::string FpgaDevice::normalizeBufferKey(const std::string& bufferName) {
     return scopedBufferKey(0, bufferName);
 }
 
+std::string FpgaDevice::canonicalBufferKey(const std::string& key) const {
+    std::string current = key;
+    std::set<std::string> seen;
+    while (true) {
+        if (!seen.insert(current).second) {
+            throw std::runtime_error(
+                "FpgaDevice: cycle detected in buffer aliases for '" + key + "'");
+        }
+        auto it = bufferAliases_.find(current);
+        if (it == bufferAliases_.end()) return current;
+        current = it->second;
+    }
+}
+
 void FpgaDevice::aliasBufferKey(const std::string& targetName,
                                 const std::string& sourceName) {
     const std::string target = normalizeBufferKey(targetName);
     const std::string source = normalizeBufferKey(sourceName);
     if (target == source) return;
     std::lock_guard<std::mutex> lk(bufferMutex_);
-    auto it = buffers_.find(source);
+    const std::string canonicalSource = canonicalBufferKey(source);
+    auto it = buffers_.find(canonicalSource);
     if (it == buffers_.end()) {
         throw std::runtime_error(
             "FpgaDevice: cannot alias buffer '" + targetName + "' to unallocated source '" +
             sourceName + "' (carried-buffer boundary expects the source staged first)");
     }
-    // Share the source's backing (offset/region/mem) so the target token
-    // resolves to the same device memory -- a zero-copy carried-buffer alias.
-    buffers_[target] = it->second;
-    // The region mapping must follow so on-demand reallocation lands in the
-    // same place if the target is ever grown.
-    auto regionIt = bufferRegion_.find(source);
-    if (regionIt != bufferRegion_.end()) {
-        bufferRegion_[target] = regionIt->second;
+    // Keep aliases as canonical-key indirections, not BufferRecord copies, so
+    // later growth/reallocation of either name updates one shared record.
+    bufferAliases_[target] = canonicalSource;
+    // The region mapping can be known from either side: source for parent
+    // buffers already used by a kernel, target for loop-local carried buffers.
+    auto sourceRegion = bufferRegion_.find(canonicalSource);
+    auto targetRegion = bufferRegion_.find(target);
+    if (sourceRegion != bufferRegion_.end()) {
+        bufferRegion_[target] = sourceRegion->second;
+    } else if (targetRegion != bufferRegion_.end()) {
+        bufferRegion_[canonicalSource] = targetRegion->second;
     }
 }
 
@@ -2056,11 +2155,16 @@ FpgaDevice::BufferRecord FpgaDevice::ensureBufferByKey(const std::string& key,
                                                        BufferType type,
                                                        std::size_t sizeBytes) {
     // Caller must hold bufferMutex_.
-    auto regionIt = bufferRegion_.find(key);
+    const std::string canonicalKey = canonicalBufferKey(key);
+    auto requestedRegion = bufferRegion_.find(key);
+    if (requestedRegion != bufferRegion_.end()) {
+        bufferRegion_[canonicalKey] = requestedRegion->second;
+    }
+    auto regionIt = bufferRegion_.find(canonicalKey);
     const bool deviceMode = (pdiStagingDevice_ != nullptr) &&
                             (regionIt != bufferRegion_.end());
 
-    auto it = buffers_.find(key);
+    auto it = buffers_.find(canonicalKey);
     if (it != buffers_.end() && it->second.capacity >= sizeBytes &&
         ((it->second.mem != nullptr) == deviceMode)) {
         it->second.size = sizeBytes;
@@ -2088,13 +2192,13 @@ FpgaDevice::BufferRecord FpgaDevice::ensureBufferByKey(const std::string& key,
         if (end > fpga::Rp1BarWindow::kWindowSize) {
             throw std::out_of_range(
                 "FpgaDevice: BAR-backed buffer arena exhausted while allocating '" +
-                key + "' (" + std::to_string(sizeBytes) + " bytes)");
+                canonicalKey + "' (" + std::to_string(sizeBytes) + " bytes)");
         }
         rec.offset = alignedOffset;
         nextBufferOffset_ = static_cast<std::uint32_t>(end);
     }
 
-    buffers_[key] = rec;
+    buffers_[canonicalKey] = rec;
     return rec;
 }
 
@@ -2447,9 +2551,10 @@ void FpgaDevice::setInputBuffer(const std::string& bufferName,
                                 std::size_t        sizeBytes) {
     const std::string key = normalizeBufferKey(bufferName);
     std::lock_guard<std::mutex> lk(bufferMutex_);
+    const std::string canonicalKey = canonicalBufferKey(key);
 
     BufferType type = BufferType::U8;
-    if (auto existing = buffers_.find(key); existing != buffers_.end()) {
+    if (auto existing = buffers_.find(canonicalKey); existing != buffers_.end()) {
         type = existing->second.type;
     }
     const BufferRecord rec = ensureBufferByKey(key, type, sizeBytes);
@@ -2481,7 +2586,8 @@ void FpgaDevice::getOutputBuffer(const std::string& bufferName,
 
     const std::string key = normalizeBufferKey(bufferName);
     std::lock_guard<std::mutex> lk(bufferMutex_);
-    auto it = buffers_.find(key);
+    const std::string canonicalKey = canonicalBufferKey(key);
+    auto it = buffers_.find(canonicalKey);
     if (it == buffers_.end()) {
         throw std::runtime_error("FpgaDevice::getOutputBuffer: unknown buffer '" + bufferName + "'");
     }
@@ -2503,7 +2609,8 @@ void FpgaDevice::getOutputBuffer(const std::string& bufferName,
 std::size_t FpgaDevice::bufferSize(const std::string& bufferName) const {
     const std::string key = normalizeBufferKey(bufferName);
     std::lock_guard<std::mutex> lk(bufferMutex_);
-    auto it = buffers_.find(key);
+    const std::string canonicalKey = canonicalBufferKey(key);
+    auto it = buffers_.find(canonicalKey);
     return (it == buffers_.end()) ? 0 : it->second.size;
 }
 
