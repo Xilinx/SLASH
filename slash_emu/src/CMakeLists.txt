@@ -20,19 +20,33 @@
 
 # -------- slash_emu_core library --------
 
+find_package(CLI11 REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(INIH REQUIRED inih)
+
 add_library(slash_emu_core STATIC
   daemon.cpp
   transport.cpp
+  config.cpp
 )
 
 target_include_directories(slash_emu_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE
+    ${INIH_INCLUDE_DIRS}
 )
 
 target_compile_features(slash_emu_core PUBLIC cxx_std_20)
 
 target_compile_options(slash_emu_core PRIVATE -Wall -Wextra -Werror)
+
+target_link_libraries(slash_emu_core
+  PUBLIC
+    CLI11::CLI11
+  PRIVATE
+    ${INIH_LIBRARIES}
+)
 
 # -------- slash_emu_daemon executable --------
 

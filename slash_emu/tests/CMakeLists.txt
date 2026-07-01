@@ -43,3 +43,4 @@ endmacro()
 
 add_slash_emu_test(daemon_test     daemon_test.cpp)
 add_slash_emu_test(transport_test transport_test.cpp)
+add_slash_emu_test(config_test    config_test.cpp)
