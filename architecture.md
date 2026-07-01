@@ -705,6 +705,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
     * Every step keeps the normal, ASan, and UBSan builds green
     * Every step leaves the full test suite passing before hand-off
     * Later steps reuse the components and test doubles built by earlier ones
+* Commit to git after every completed step
 
 ### Steps
 
@@ -855,6 +856,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
     * `slash_emu/build/normal` to be used as the normal build directory
     * `slash_emu/build/asan` to be used as the build directory with ASan enabled
     * `slash_emu/build/ubsan` to be used as the build directory with UBSan enabled
+    * `slash_emu/build/aubsan` to be used as the build directory with both ASan and UBSan enabled
 * Programming language: C++20
     * Use as little raw pointer handling as necessary
     * If raw/external pointers have to be handled, create dedicated wrapping functionalities
@@ -871,6 +873,4 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 * Unit testing with GTest
     * All units, components, and subsystems need rigorous testing
     * With options to build and run the test with the address and UB sanitizers
-* Coverage reporting using gcov/lcov
-    * 100% coverage not an explicit goal
-    * But to be used by adversary and reviewing agents to check unit testing coverage
+    * To be registered and executed with ctest (ctest is allowed for agent use)
