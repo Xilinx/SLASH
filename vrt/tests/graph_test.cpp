@@ -117,7 +117,7 @@ TEST(GraphTest, WithDefaultsRegistersCpuAndKnownBridgeTypes) {
     cpu->setInputBuffer("raw", input.data(), input.size() * sizeof(int32_t));
 
     auto exec = graph.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
     ASSERT_NO_THROW(exec.run());
 
     std::vector<int32_t> output(input.size(), 0);
@@ -544,7 +544,7 @@ TEST(GraphTest, Rp1FullGraphShapeRunsWithMockCpuInsteadOfFpga) {
     }, bufferInOut));
     cpu->registerKernel(makeCpuKernel("rp1_cpu_parity", [](const CpuKernelArgs& args) {
         auto in = args.in<int32_t>("in");
-        args.setScalar("parity", static_cast<std::uint64_t>(in[0] & 1));
+        args.scalarOut<std::uint64_t>("parity") = static_cast<std::uint64_t>(in[0] & 1);
     }, IOTypeMap{}.in<int32_t>("in").scalarOut<std::uint64_t>("parity")));
     cpu->registerKernel(makeCpuKernel("rp1_cpu_report", [](const CpuKernelArgs& args) {
         auto in = args.in<int32_t>("in");
@@ -619,7 +619,7 @@ TEST(GraphTest, Rp1FullGraphShapeRunsWithMockCpuInsteadOfFpga) {
                      .inputs = {{"in", post}},
                      .outputScalars = {{"parity", parity}}});
 
-    GraphBuffer out = g.buffer<int32_t>("mock_rp1_out", elements);
+    GraphBuffer out = g.output<int32_t>("mock_rp1_out", elements);
     auto [thenBranch, elseBranch] = g.addConditional({
         .condition = (parity == 0),
         .inputs = {{"x", post}},
@@ -638,8 +638,8 @@ TEST(GraphTest, Rp1FullGraphShapeRunsWithMockCpuInsteadOfFpga) {
     for (std::uint32_t i = 0; i < elementCount; ++i) input[i] = static_cast<int32_t>(i);
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(elementCount));
-    exec.setScalar(iterationsScalar, iterations);
+    exec.writeScalar(elements, static_cast<std::uint64_t>(elementCount));
+    exec.writeScalar(iterationsScalar, iterations);
     exec.write(raw, input);
     ASSERT_NO_THROW(exec.run());
 
@@ -659,13 +659,13 @@ TEST(GraphTest, HighLevelLoopBodyCanCaptureRootScalarInput) {
     cpu->registerKernel(makeCpuKernel("loop_add_offset", [](const CpuKernelArgs& args) {
         auto in = args.in<int32_t>("in");
         auto out = args.out<int32_t>("out");
-        const auto offset = static_cast<int32_t>(args.scalar("offset"));
+        const auto offset = args.scalarIn<int32_t>("offset");
         for (std::size_t i = 0; i < in.size(); ++i) out[i] = in[i] + offset;
     }, addOffsetType));
 
     GraphScalar elements = g.scalarInput<std::uint64_t>("capture_elements");
     GraphBuffer raw = g.input<int32_t>("capture_raw", elements);
-    GraphBuffer out = g.buffer<int32_t>("capture_out", elements);
+    GraphBuffer out = g.output<int32_t>("capture_out", elements);
     GraphScalar iterations = g.scalarInput<std::uint32_t>("capture_iterations");
     GraphScalar offset = g.scalarInput<int32_t>("capture_offset");
 
@@ -683,10 +683,10 @@ TEST(GraphTest, HighLevelLoopBodyCanCaptureRootScalarInput) {
 
     auto exec = g.compile();
     std::vector<int32_t> input = {1, 2, 3};
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
     exec.write(raw, input);
-    exec.setScalar(iterations, 1u);
-    exec.setScalar(offset, 7);
+    exec.writeScalar(iterations, 1u);
+    exec.writeScalar(offset, 7);
     ASSERT_NO_THROW(exec.run());
 
     std::vector<int32_t> output(input.size(), 0);
@@ -734,7 +734,7 @@ TEST(GraphTest, ThreeNodePipeline) {
         auto in  = args.buffer("in").as<const int32_t>();
         auto out = args.buffer("out").as<int32_t>();
         auto n   = args.buffer("in").sizeBytes / sizeof(int32_t);
-        auto offset = static_cast<int32_t>(args.scalar("offset"));
+        auto offset = args.scalarIn<int32_t>("offset");
         for (size_t i = 0; i < n; ++i) {
             out[i] = in[i] + offset;
         }
@@ -794,8 +794,8 @@ TEST(GraphTest, ThreeNodePipeline) {
 
     // Run.
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-    exec.setScalar(offset, 10);
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(offset, 10);
     exec.run();
 
     // Read output: (x + 10) * 2 * (-1)
@@ -890,7 +890,7 @@ TEST(GraphTest, DiamondDependency) {
     cpu->setInputBuffer("raw", input.data(), input.size() * sizeof(int32_t));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
     exec.run();
 
     // left = x+1, right = x*10, merge = left+right = x+1+x*10 = 11x+1
@@ -1096,12 +1096,12 @@ TEST(GraphTest, CpuGlobalScalarRoundTrip) {
     ioType.outputScalars.push_back({"out", ScalarType::I32});
 
     cpu->registerKernel(makeCpuKernel("scalar_copy", [](const CpuKernelArgs& args) {
-        auto value = static_cast<int32_t>(args.scalar("in"));
-        args.setScalar("out", static_cast<uint64_t>(value + 1));
+        auto value = args.scalarIn<int32_t>("in");
+        args.scalarOut<int32_t>("out") = value + 1;
     }, ioType));
 
     GraphScalar input = g.globalScalar(ScalarType::I32, "input");
-    GraphScalar output = g.globalScalar(ScalarType::I32, "output");
+    GraphScalar output = g.outputScalar<int32_t>("output");
 
     IOMap io;
     io.bindInputScalar("in", input)
@@ -1109,10 +1109,10 @@ TEST(GraphTest, CpuGlobalScalarRoundTrip) {
     g.addNode(cpuKernel("scalar_copy", ioType), std::move(io), "cpu");
 
     auto exec = g.compile();
-    exec.setScalar<int32_t>("input", 41);
+    exec.writeScalar<int32_t>("input", 41);
     ASSERT_NO_THROW(exec.run());
 
-    EXPECT_EQ(exec.getScalar<int32_t>("output"), 42);
+    EXPECT_EQ(exec.readScalar<int32_t>("output"), 42);
 }
 
 TEST(GraphTest, CpuGlobalScalarUpdatesStayLiveAfterCompile) {
@@ -1125,12 +1125,12 @@ TEST(GraphTest, CpuGlobalScalarUpdatesStayLiveAfterCompile) {
     ioType.outputScalars.push_back({"out", ScalarType::I32});
 
     cpu->registerKernel(makeCpuKernel("live_scalar_copy", [](const CpuKernelArgs& args) {
-        auto value = static_cast<int32_t>(args.scalar("in"));
-        args.setScalar("out", static_cast<uint64_t>(value + 1));
+        auto value = args.scalarIn<int32_t>("in");
+        args.scalarOut<int32_t>("out") = value + 1;
     }, ioType));
 
     GraphScalar input = g.globalScalar(ScalarType::I32, "live_input");
-    GraphScalar output = g.globalScalar(ScalarType::I32, "live_output");
+    GraphScalar output = g.outputScalar<int32_t>("live_output");
 
     IOMap io;
     io.bindInputScalar("in", input)
@@ -1140,13 +1140,13 @@ TEST(GraphTest, CpuGlobalScalarUpdatesStayLiveAfterCompile) {
     auto exec = g.compile();
     ASSERT_FALSE(exec.dgraphs().empty());
 
-    exec.setScalar<int32_t>("live_input", 41);
+    exec.writeScalar<int32_t>("live_input", 41);
     ASSERT_NO_THROW(exec.run());
-    EXPECT_EQ(exec.getScalar<int32_t>("live_output"), 42);
+    EXPECT_EQ(exec.readScalar<int32_t>("live_output"), 42);
 
-    exec.setScalar<int32_t>("live_input", 100);
+    exec.writeScalar<int32_t>("live_input", 100);
     ASSERT_NO_THROW(exec.run());
-    EXPECT_EQ(exec.getScalar<int32_t>("live_output"), 101);
+    EXPECT_EQ(exec.readScalar<int32_t>("live_output"), 101);
 }
 
 TEST(GraphTest, CompiledGraphRunThrowsWhenInputScalarUnset) {
@@ -1157,7 +1157,7 @@ TEST(GraphTest, CompiledGraphRunThrowsWhenInputScalarUnset) {
     IOTypeMap ioType;
     ioType.inputScalars.push_back({"in", ScalarType::I32});
     cpu->registerKernel(makeCpuKernel("needs_scalar", [](const CpuKernelArgs& args) {
-        (void)args.scalar("in");
+        (void)args.scalarIn<int32_t>("in");
     }, ioType));
 
     GraphScalar input = g.scalarInput<int32_t>("unset_input_scalar");
@@ -1184,7 +1184,7 @@ TEST(GraphTest, CompiledGraphRunThrowsWhenInputBufferUnset) {
     g.addNode(cpuKernel("needs_buffer"), std::move(io), "cpu");
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(1));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(1));
     EXPECT_THROW(exec.run(), std::runtime_error);
 }
 
@@ -1201,26 +1201,26 @@ TEST(GraphTest, CompiledGraphDispatchesDifferentScalarAndBufferValues) {
         auto in = args.buffer("in").as<const int32_t>();
         auto out = args.buffer("out").as<int32_t>();
         auto n = args.buffer("in").sizeBytes / sizeof(int32_t);
-        auto offset = static_cast<int32_t>(args.scalar("offset"));
+        auto offset = args.scalarIn<int32_t>("offset");
         for (size_t i = 0; i < n; ++i) out[i] = in[i] + offset;
     }, ioType));
 
     GraphScalar elements = g.scalarInput<std::uint64_t>("elements");
     GraphBuffer raw = g.inputBuffer(BufferType::I32, "dispatch_raw", elements);
-    GraphBuffer out;
+    GraphBuffer out = g.output<int32_t>("dispatch_out", elements);
     GraphScalar offset = g.scalarInput<int32_t>("dispatch_offset");
     IOMap io;
     io.bindInput("in", raw)
-      .bindOutput("out", BufferType::I32, out)
+      .bindExistingOutput("out", out)
       .bindInputScalar("offset", offset);
     g.addNode(cpuKernel("offset_copy", ioType), std::move(io), "cpu");
 
     auto exec = g.compile();
 
     std::vector<int32_t> first = {1, 2, 3};
-    exec.setScalar(elements, static_cast<std::uint64_t>(first.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(first.size()));
     exec.write(raw, first);
-    exec.setScalar(offset, 10);
+    exec.writeScalar(offset, 10);
     ASSERT_NO_THROW(exec.run());
     std::vector<int32_t> firstOut(first.size(), 0);
     exec.read(out, firstOut);
@@ -1228,7 +1228,7 @@ TEST(GraphTest, CompiledGraphDispatchesDifferentScalarAndBufferValues) {
 
     std::vector<int32_t> second = {4, 5, 6};
     exec.write(raw, second);
-    exec.setScalar(offset, -1);
+    exec.writeScalar(offset, -1);
     ASSERT_NO_THROW(exec.run());
     std::vector<int32_t> secondOut(second.size(), 0);
     exec.read(out, secondOut);
@@ -1247,15 +1247,15 @@ TEST(GraphTest, CpuScalarDependencyOrdersNodes) {
     consumerType.outputScalars.push_back({"result", ScalarType::I32});
 
     cpu->registerKernel(makeCpuKernel("produce_scalar", [](const CpuKernelArgs& args) {
-        args.setScalar("value", static_cast<uint64_t>(41));
+        args.scalarOut<int32_t>("value") = 41;
     }, producerType));
     cpu->registerKernel(makeCpuKernel("consume_scalar", [](const CpuKernelArgs& args) {
-        auto value = static_cast<int32_t>(args.scalar("value"));
-        args.setScalar("result", static_cast<uint64_t>(value + 1));
+        auto value = args.scalarIn<int32_t>("value");
+        args.scalarOut<int32_t>("result") = value + 1;
     }, consumerType));
 
     GraphScalar value = g.globalScalar(ScalarType::I32, "value");
-    GraphScalar result = g.globalScalar(ScalarType::I32, "result");
+    GraphScalar result = g.outputScalar<int32_t>("result");
 
     IOMap consumeIo;
     consumeIo.bindInputScalar("value", value)
@@ -1268,7 +1268,7 @@ TEST(GraphTest, CpuScalarDependencyOrdersNodes) {
 
     auto exec = g.compile();
     ASSERT_NO_THROW(exec.run());
-    EXPECT_EQ(exec.getScalar<int32_t>("result"), 42);
+    EXPECT_EQ(exec.readScalar<int32_t>("result"), 42);
 }
 
 TEST(GraphTest, UndeclaredGlobalScalarThrows) {
@@ -1384,7 +1384,7 @@ TEST(GraphTest, CrossDevicePipeline) {
     cpu->setInputBuffer("raw", input.data(), input.size() * sizeof(int32_t));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
     exec.run();
 
     // ((x + 10) * 2 * (-1)) + 1
@@ -1465,7 +1465,7 @@ TEST(GraphTest, CrossDeviceDiamond) {
     cpu->setInputBuffer("raw", input.data(), input.size() * sizeof(int32_t));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
     exec.run();
 
     // left = (x+1)*2, right = (x*10)*2, merge = 2(x+1) + 2(10x) = 22x + 2
@@ -1523,8 +1523,8 @@ TEST(GraphTest, CpuLoopRunsCrossDeviceChildBody) {
     cpu->setInputBuffer(state.name(), input.data(), input.size() * sizeof(int32_t));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-    exec.setScalar(loopCount, 3);
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(loopCount, 3);
     ASSERT_NO_THROW(exec.run());
 
     std::vector<int32_t> output(input.size(), 0);
@@ -1628,8 +1628,8 @@ TEST(GraphTest, CpuConditionalRunsSelectedCrossDeviceChildBranch) {
                          std::vector<int32_t> expected) {
         cpu->setInputBuffer(source.name(), input.data(), input.size() * sizeof(int32_t));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-        exec.setScalar(flag, branchFlag);
+        exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+        exec.writeScalar(flag, branchFlag);
         ASSERT_NO_THROW(exec.run());
         std::vector<int32_t> output(input.size(), 0);
         cpu->getOutputBuffer(result.name(), output.data(), output.size() * sizeof(int32_t));
@@ -1716,8 +1716,8 @@ TEST(GraphTest, CpuLoopPublishesRemoteBufferOutputToCpuParentConsumer) {
     auto runCase = [&](std::vector<int32_t> input, std::vector<int32_t> expected) {
         cpu->setInputBuffer(source.name(), input.data(), input.size() * sizeof(int32_t));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-        exec.setScalar(loopCount, 1);
+        exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+        exec.writeScalar(loopCount, 1);
         ASSERT_NO_THROW(exec.run());
         std::vector<int32_t> output(input.size(), 0);
         cpu->getOutputBuffer(finalOutput.name(), output.data(),
@@ -1835,8 +1835,8 @@ TEST(GraphTest, CpuConditionalPublishesRemoteBufferOutputToCpuParentConsumer) {
                        std::vector<int32_t> expected) {
         cpu->setInputBuffer(source.name(), input.data(), input.size() * sizeof(int32_t));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-        exec.setScalar(flag, branchFlag);
+        exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+        exec.writeScalar(flag, branchFlag);
         ASSERT_NO_THROW(exec.run());
         std::vector<int32_t> output(input.size(), 0);
         cpu->getOutputBuffer(finalOutput.name(), output.data(),
@@ -1930,7 +1930,7 @@ TEST(GraphTest, CompilerPopulatesDependsOnAcrossDevices) {
 
     auto exec = g.compile();
     std::vector<int32_t> in = {1};
-    exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(in.size()));
     exec.write(raw, in);
     exec.run();
 
@@ -2022,7 +2022,7 @@ TEST(GraphTest, CompilerHonoursCrossDeviceAfterNodesViaBarrier) {
     cpu->setInputBuffer("raw",  in.data(), sizeof(int32_t));
     mcpu->setInputBuffer("rawB", in.data(), sizeof(int32_t));
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(in.size()));
     exec.run();
 
     // Phase 2: cross-device afterNodes materialises a barrier op pair.
@@ -2097,7 +2097,7 @@ TEST(GraphTest, CompilerChainsBounceLegsViaDependsOn) {
     std::vector<int32_t> in = {1};
     mcpu0->setInputBuffer("raw", in.data(), sizeof(int32_t));
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(in.size()));
     exec.run();
 
     // The bounce intermediary lives on the cpu DGraph: there must be one
@@ -2216,7 +2216,7 @@ TEST(GraphTest, CpuExecutorRunsDiamondAcrossTwoBranches) {
     cpu->setInputBuffer("raw", in.data(), in.size() * sizeof(int32_t));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(in.size()));
     exec.run();
 
     std::vector<int32_t> out(3);
@@ -2249,7 +2249,7 @@ TEST(GraphTest, CpuExecutorResetsDependencyStateAcrossRuns) {
     auto runOnce = [&](int32_t value) {
         cpu->setInputBuffer("raw", &value, sizeof(value));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(1));
+        exec.writeScalar(elements, static_cast<std::uint64_t>(1));
         exec.run();
         int32_t out = 0;
         cpu->getOutputBuffer(finalBuf.name(), &out, sizeof(out));
@@ -2322,8 +2322,8 @@ TEST(GraphTest, CpuDevicePlansHaveIndependentScalarMaps) {
     addOneType.inputScalars.push_back({"in", ScalarType::I32});
     addOneType.outputScalars.push_back({"out", ScalarType::I32});
     cpu->registerKernel(makeCpuKernel("add_one", [](const CpuKernelArgs& args) {
-        auto value = static_cast<int32_t>(args.scalar("in"));
-        args.setScalar("out", static_cast<uint64_t>(value + 1));
+        auto value = args.scalarIn<int32_t>("in");
+        args.scalarOut<int32_t>("out") = value + 1;
     }, addOneType));
 
     auto buildDGraph = [&](const std::string& nodeId,
@@ -2374,7 +2374,7 @@ TEST(GraphTest, CpuFixedCountLoopWithZeroIterationsAndNoOutputsNoops) {
     g.addLoop(fixedLoopSpec(tripCount(loopCount), body));
 
     auto exec = g.compile();
-    exec.setScalar(loopCount, 0);
+    exec.writeScalar(loopCount, 0);
     EXPECT_NO_THROW(exec.run());
 }
 
@@ -2405,8 +2405,8 @@ TEST(GraphTest, CpuFixedCountLoopWithZeroIterationsAndOutputsThrows) {
                             tripCount(loopCount), body));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(1));
-    exec.setScalar(loopCount, 0);
+    exec.writeScalar(elements, static_cast<std::uint64_t>(1));
+    exec.writeScalar(loopCount, 0);
     EXPECT_THROW(exec.run(), std::runtime_error);
 }
 
@@ -2447,8 +2447,8 @@ TEST(GraphTest, CpuFixedCountLoopPublishesFinalBufferOutput) {
     cpu->setInputBuffer(loopInput.name(), input.data(), input.size() * sizeof(int32_t));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-    exec.setScalar(loopCount, 3);
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(loopCount, 3);
     ASSERT_NO_THROW(exec.run());
 
     std::vector<int32_t> output(2);
@@ -2476,17 +2476,17 @@ TEST(GraphTest, CpuScalarTripCountLoopResetsAcrossRuns) {
         body));
 
     auto execOneCount = g.compile();
-    execOneCount.setScalar(tripCount, 1);
+    execOneCount.writeScalar(tripCount, 1);
     ASSERT_NO_THROW(execOneCount.run());
     EXPECT_EQ(*calls, 1);
 
     auto execThreeCount = g.compile();
-    execThreeCount.setScalar(tripCount, 3);
+    execThreeCount.writeScalar(tripCount, 3);
     ASSERT_NO_THROW(execThreeCount.run());
     EXPECT_EQ(*calls, 4);
 
     auto execTwoCount = g.compile();
-    execTwoCount.setScalar(tripCount, 2);
+    execTwoCount.writeScalar(tripCount, 2);
     ASSERT_NO_THROW(execTwoCount.run());
     EXPECT_EQ(*calls, 6);
 }
@@ -2554,8 +2554,8 @@ TEST(GraphTest, CpuConditionalUsesScalarConditionAndPublishesSelectedBranch) {
     cpu->setInputBuffer(elseSource.name(), &elseValue, sizeof(elseValue));
 
     auto execThenBranch = g.compile();
-    execThenBranch.setScalar(elements, static_cast<std::uint64_t>(1));
-    execThenBranch.setScalar(flag, 1);
+    execThenBranch.writeScalar(elements, static_cast<std::uint64_t>(1));
+    execThenBranch.writeScalar(flag, 1);
     ASSERT_NO_THROW(execThenBranch.run());
     int32_t output = 0;
     cpu->getOutputBuffer(conditionalOutput.name(), &output, sizeof(output));
@@ -2564,8 +2564,8 @@ TEST(GraphTest, CpuConditionalUsesScalarConditionAndPublishesSelectedBranch) {
     EXPECT_EQ(*elseCalls, 0);
 
     auto execElseBranch = g.compile();
-    execElseBranch.setScalar(elements, static_cast<std::uint64_t>(1));
-    execElseBranch.setScalar(flag, 0);
+    execElseBranch.writeScalar(elements, static_cast<std::uint64_t>(1));
+    execElseBranch.writeScalar(flag, 0);
     ASSERT_NO_THROW(execElseBranch.run());
     cpu->getOutputBuffer(conditionalOutput.name(), &output, sizeof(output));
     EXPECT_EQ(output, 202);
@@ -2610,8 +2610,8 @@ TEST(GraphTest, CpuFixedCountLoopBufferBoundaryCarriesUpdatedStateAcrossRuns) {
     auto runWithCount = [&](int32_t count, std::vector<int32_t> input) {
         cpu->setInputBuffer(state.name(), input.data(), input.size() * sizeof(int32_t));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-        exec.setScalar(tripCount, count);
+        exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+        exec.writeScalar(tripCount, count);
         ASSERT_NO_THROW(exec.run());
         std::vector<int32_t> output(input.size(), 0);
         cpu->getOutputBuffer(state.name(), output.data(), output.size() * sizeof(int32_t));
@@ -2685,8 +2685,8 @@ TEST(GraphTest, CpuConditionalBufferBoundaryExportsOnlySelectedBranch) {
     auto runBranch = [&](int32_t branchFlag, int32_t input, int32_t expected) {
         cpu->setInputBuffer(source.name(), &input, sizeof(input));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(1));
-        exec.setScalar(flag, branchFlag);
+        exec.writeScalar(elements, static_cast<std::uint64_t>(1));
+        exec.writeScalar(flag, branchFlag);
         ASSERT_NO_THROW(exec.run());
         int32_t output = 0;
         cpu->getOutputBuffer(result.name(), &output, sizeof(output));
@@ -2717,18 +2717,18 @@ TEST(GraphTest, CpuConditionalScalarBoundaryExportsOnlySelectedBranch) {
     auto elseCalls = std::make_shared<int32_t>(0);
     cpu->registerKernel(makeCpuKernel("then_scalar_boundary", [thenCalls](const CpuKernelArgs& args) {
         ++*thenCalls;
-        auto value = static_cast<int32_t>(args.scalar("in"));
-        args.setScalar("out", static_cast<uint64_t>(value + 100));
+        auto value = args.scalarIn<int32_t>("in");
+        args.scalarOut<int32_t>("out") = value + 100;
     }, scalarInOutType));
     cpu->registerKernel(makeCpuKernel("else_scalar_boundary", [elseCalls](const CpuKernelArgs& args) {
         ++*elseCalls;
-        auto value = static_cast<int32_t>(args.scalar("in"));
-        args.setScalar("out", static_cast<uint64_t>(value + 200));
+        auto value = args.scalarIn<int32_t>("in");
+        args.scalarOut<int32_t>("out") = value + 200;
     }, scalarInOutType));
 
     GraphScalar flag = g.globalScalar(ScalarType::I32, "scalar_branch_flag");
     GraphScalar source = g.globalScalar(ScalarType::I32, "scalar_branch_source");
-    GraphScalar result = g.globalScalar(ScalarType::I32, "scalar_branch_result");
+    GraphScalar result = g.outputScalar<int32_t>("scalar_branch_result");
 
     auto thenRegion = g.rootRegion().createChild();
     GraphScalar thenInput = thenRegion->scalar(ScalarType::I32, "input");
@@ -2759,26 +2759,26 @@ TEST(GraphTest, CpuConditionalScalarBoundaryExportsOnlySelectedBranch) {
     g.addConditional(ifElseSpec(std::move(condition), thenRegion, elseRegion));
 
     auto execThen = g.compile();
-    execThen.setScalar(flag, 1);
-    execThen.setScalar(source, 7);
+    execThen.writeScalar(flag, 1);
+    execThen.writeScalar(source, 7);
     ASSERT_NO_THROW(execThen.run());
-    EXPECT_EQ(execThen.getScalar<int32_t>("scalar_branch_result"), 107);
+    EXPECT_EQ(execThen.readScalar<int32_t>("scalar_branch_result"), 107);
     EXPECT_EQ(*thenCalls, 1);
     EXPECT_EQ(*elseCalls, 0);
 
     auto execElse = g.compile();
-    execElse.setScalar(flag, 0);
-    execElse.setScalar(source, 11);
+    execElse.writeScalar(flag, 0);
+    execElse.writeScalar(source, 11);
     ASSERT_NO_THROW(execElse.run());
-    EXPECT_EQ(execElse.getScalar<int32_t>("scalar_branch_result"), 211);
+    EXPECT_EQ(execElse.readScalar<int32_t>("scalar_branch_result"), 211);
     EXPECT_EQ(*thenCalls, 1);
     EXPECT_EQ(*elseCalls, 1);
 
     auto execThenAgain = g.compile();
-    execThenAgain.setScalar(flag, 1);
-    execThenAgain.setScalar(source, 3);
+    execThenAgain.writeScalar(flag, 1);
+    execThenAgain.writeScalar(source, 3);
     ASSERT_NO_THROW(execThenAgain.run());
-    EXPECT_EQ(execThenAgain.getScalar<int32_t>("scalar_branch_result"), 103);
+    EXPECT_EQ(execThenAgain.readScalar<int32_t>("scalar_branch_result"), 103);
     EXPECT_EQ(*thenCalls, 2);
     EXPECT_EQ(*elseCalls, 1);
 }
@@ -2813,11 +2813,11 @@ TEST(GraphTest, CpuWhileLoopScalarBoundaryCarriesUpdatedCondition) {
     auto calls = std::make_shared<int32_t>(0);
     cpu->registerKernel(makeCpuKernel("increment_scalar", [calls](const CpuKernelArgs& args) {
         ++*calls;
-        auto value = static_cast<int32_t>(args.scalar("in"));
-        args.setScalar("out", static_cast<uint64_t>(value + 1));
+        auto value = args.scalarIn<int32_t>("in");
+        args.scalarOut<int32_t>("out") = value + 1;
     }, incrementType));
 
-    GraphScalar counter = g.globalScalar(ScalarType::I32, "boundary_counter");
+    GraphScalar counter = g.outputScalar<int32_t>("boundary_counter");
     GraphScalar limit = g.globalScalar(ScalarType::I32, "boundary_limit");
 
     auto body = g.rootRegion().createChild();
@@ -2840,24 +2840,24 @@ TEST(GraphTest, CpuWhileLoopScalarBoundaryCarriesUpdatedCondition) {
     g.addLoop(whileLoopSpec(std::move(condition), body));
 
     auto execOne = g.compile();
-    execOne.setScalar(counter, 0);
-    execOne.setScalar(limit, 1);
+    execOne.writeScalar(counter, 0);
+    execOne.writeScalar(limit, 1);
     ASSERT_NO_THROW(execOne.run());
-    EXPECT_EQ(execOne.getScalar<int32_t>("boundary_counter"), 1);
+    EXPECT_EQ(execOne.readScalar<int32_t>("boundary_counter"), 1);
     EXPECT_EQ(*calls, 1);
 
     auto execThree = g.compile();
-    execThree.setScalar(counter, 0);
-    execThree.setScalar(limit, 3);
+    execThree.writeScalar(counter, 0);
+    execThree.writeScalar(limit, 3);
     ASSERT_NO_THROW(execThree.run());
-    EXPECT_EQ(execThree.getScalar<int32_t>("boundary_counter"), 3);
+    EXPECT_EQ(execThree.readScalar<int32_t>("boundary_counter"), 3);
     EXPECT_EQ(*calls, 4);
 
     auto execTwo = g.compile();
-    execTwo.setScalar(counter, 0);
-    execTwo.setScalar(limit, 2);
+    execTwo.writeScalar(counter, 0);
+    execTwo.writeScalar(limit, 2);
     ASSERT_NO_THROW(execTwo.run());
-    EXPECT_EQ(execTwo.getScalar<int32_t>("boundary_counter"), 2);
+    EXPECT_EQ(execTwo.readScalar<int32_t>("boundary_counter"), 2);
     EXPECT_EQ(*calls, 6);
 }
 
@@ -2887,7 +2887,7 @@ TEST(GraphTest, CpuExecutorBlocksConsumerUntilProducerSignals) {
 
     auto exec = g.compile();
     std::vector<int32_t> in = {3, 5, 9};
-    exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(in.size()));
     exec.write(raw, in);
     exec.run();
 
@@ -2942,7 +2942,7 @@ TEST(GraphTest, CpuExecutorSharedRemoteBufferFanoutUsesSameConsumerBridge) {
 
     auto exec = g.compile();
     std::vector<int32_t> in = {3, 5};
-    exec.setScalar(elements, static_cast<std::uint64_t>(in.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(in.size()));
     exec.write(raw, in);
     ASSERT_NO_THROW(exec.run());
 
@@ -3098,8 +3098,8 @@ TEST(GraphTest, CpuConditionalSelectedBranchSharedRemoteFanoutUsesSameConsumerBr
                          std::vector<int32_t> expected) {
         cpu->setInputBuffer(source.name(), input.data(), input.size() * sizeof(int32_t));
         auto exec = g.compile();
-        exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-        exec.setScalar(flag, branchFlag);
+        exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+        exec.writeScalar(flag, branchFlag);
         ASSERT_NO_THROW(exec.run());
         std::vector<int32_t> output(input.size(), 0);
         cpu->getOutputBuffer(result.name(), output.data(), output.size() * sizeof(int32_t));
@@ -3204,7 +3204,7 @@ TEST(GraphTest, CpuExecutorMultipleConsumersOutOfOrderSignals) {
 
     auto exec = g.compile();
     std::vector<int32_t> a = {1, 2}, b = {3, 4}, c = {5, 6};
-    exec.setScalar(elements, static_cast<std::uint64_t>(a.size()));
+    exec.writeScalar(elements, static_cast<std::uint64_t>(a.size()));
     exec.write(rawA, a);
     exec.write(rawB, b);
     exec.write(rawC, c);

@@ -2334,7 +2334,7 @@ TEST(RegionCompilerTest, GraphRunExecutesEmptyStructuredControlOnCpu) {
     graph.addLoop(fixedLoopSpec(tripCount(loopCount), body));
 
     auto exec = graph.compile();
-    exec.setScalar(loopCount, 1);
+    exec.writeScalar(loopCount, 1);
     EXPECT_NO_THROW(exec.run());
 }
 
@@ -2386,8 +2386,8 @@ TEST(RegionCompilerTest, GraphRunCarriesLoopBufferStateAcrossIterations) {
     cpu->setInputBuffer(raw.name(), input.data(), input.size() * sizeof(input[0]));
 
     auto exec = graph.compile();
-    exec.setScalar(raw.sizeScalar(), static_cast<std::uint64_t>(input.size()));
-    exec.setScalar(loopCount, 3);
+    exec.writeScalar(raw.sizeScalar(), static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(loopCount, 3);
     ASSERT_NO_THROW(exec.run());
 
     std::vector<std::int32_t> output(input.size(), 0);
@@ -2607,7 +2607,7 @@ TEST(RegionCompilerTest, CompiledGraphSurvivesGraphStructuralMutation) {
     std::vector<std::int32_t> input = {1, 2};
     cpu->setInputBuffer(raw.name(), input.data(), input.size() * sizeof(input[0]));
     auto oldSnapshot = graph.compile();
-    oldSnapshot.setScalar(raw.sizeScalar(), static_cast<std::uint64_t>(input.size()));
+    oldSnapshot.writeScalar(raw.sizeScalar(), static_cast<std::uint64_t>(input.size()));
     EXPECT_NO_THROW(oldSnapshot.run());
 
     IOMap secondIo;
@@ -2622,7 +2622,7 @@ TEST(RegionCompilerTest, CompiledGraphSurvivesGraphStructuralMutation) {
     EXPECT_EQ(oldOutput, (std::vector<std::int32_t>{2, 3}));
 
     auto newSnapshot = graph.compile();
-    newSnapshot.setScalar(raw.sizeScalar(), static_cast<std::uint64_t>(input.size()));
+    newSnapshot.writeScalar(raw.sizeScalar(), static_cast<std::uint64_t>(input.size()));
     EXPECT_NO_THROW(newSnapshot.run());
     std::vector<std::int32_t> newOutput(input.size(), 0);
     cpu->getOutputBuffer(secondOut.name(), newOutput.data(), newOutput.size() * sizeof(newOutput[0]));

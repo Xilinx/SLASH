@@ -3466,33 +3466,24 @@ class RegionCompiler {
         if (!rc.topLevel) return;
         if (!rc.cpuDevice) return;
 
-        std::map<std::string, std::set<std::string>> consumedBuffers;
-        std::map<std::string, std::set<std::string>> consumedScalars;
-        for (const RegionOp* opPtr : rc.ops) {
-            const std::string consumerId = regionOpId(*opPtr);
-            for (const ConsumedBufferRef& ref : consumedBufferRefs(*opPtr)) {
-                consumedBuffers[ref.key].insert(consumerId);
-            }
-            for (const ConsumedScalarRef& ref : consumedScalarRefs(*opPtr)) {
-                consumedScalars[ref.key].insert(consumerId);
-            }
-        }
-
-        for (const auto& [key, producer] : rc.bufferProducerMap) {
-            if (rc.graphInputBufferKeys.count(key)) continue;
-            auto cIt = consumedBuffers.find(key);
-            if (cIt != consumedBuffers.end() &&
-                !(cIt->second.size() == 1 && cIt->second.count(producer))) {
-                continue;
+        for (const std::string& name : rc.region->declaredOutputBufferNames()) {
+            const std::string key = scopedBufferKey(rc.region->scopeId(), name);
+            auto prodIt = rc.bufferProducerMap.find(key);
+            if (prodIt == rc.bufferProducerMap.end() || prodIt->second == rc.graphStartId) {
+                throw std::runtime_error(
+                    "GraphCompiler: declared graph output buffer '" + key +
+                    "' is never produced");
             }
             rc.graphOutputBufferKeys.insert(key);
         }
-        for (const auto& [key, producer] : rc.scalarProducerMap) {
-            if (producer == rc.graphStartId) continue;
-            auto cIt = consumedScalars.find(key);
-            if (cIt != consumedScalars.end() &&
-                !(cIt->second.size() == 1 && cIt->second.count(producer))) {
-                continue;
+        for (const auto& [name, type] : rc.region->declaredOutputScalars()) {
+            (void)type;
+            const std::string key = scopedScalarKey(rc.region->scopeId(), name);
+            auto prodIt = rc.scalarProducerMap.find(key);
+            if (prodIt == rc.scalarProducerMap.end() || prodIt->second == rc.graphStartId) {
+                throw std::runtime_error(
+                    "GraphCompiler: declared graph output scalar '" + key +
+                    "' is never produced");
             }
             rc.graphOutputScalarKeys.insert(key);
         }

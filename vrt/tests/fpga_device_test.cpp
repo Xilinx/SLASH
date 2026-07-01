@@ -568,7 +568,7 @@ TEST_F(FpgaDeviceFixture, CpuToFpgaBufferEdgeCopiesIntoFpgaStore) {
     g.cpuDevice()->setInputBuffer("raw", input.data(), input.size() * sizeof(input[0]));
 
     auto debugExec = g.compile();
-    debugExec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
+    debugExec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
     for (const DGraph& dg : debugExec.dgraphs()) {
         std::cerr << "DEBUG DG " << dg.deviceId << "\n";
         for (const auto& node : dg.nodes) {
@@ -641,8 +641,8 @@ TEST_F(FpgaDeviceFixture, CpuFpgaCpuBufferRoundTripUsesPackedBufferPointers) {
     g.cpuDevice()->setInputBuffer("raw", input.data(), input.size() * sizeof(input[0]));
 
     auto exec = g.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(input.size()));
-    exec.setScalar(copyBytes, kBytes);
+    exec.writeScalar(elements, static_cast<std::uint64_t>(input.size()));
+    exec.writeScalar(copyBytes, kBytes);
     std::vector<std::int32_t> output(input.size(), 0);
     for (int attempt = 0; attempt < 3; ++attempt) {
         ASSERT_NO_THROW(exec.run());
@@ -912,8 +912,8 @@ TEST_F(FpgaDeviceFixture, ScalarArgsAreConstantsBakedAtCompileTime) {
     g.addNode(fpgaKernel("kA", iot), std::move(io), "fpga:0");
 
     auto exec = g.compile();
-    exec.setScalar(size, 123u);
-    exec.setScalar<std::uint8_t>(flags, 7u);
+    exec.writeScalar(size, 123u);
+    exec.writeScalar<std::uint8_t>(flags, 7u);
     exec.launch();
     exec.wait();
 
@@ -941,7 +941,7 @@ TEST_F(FpgaDeviceFixture, U64ScalarArgsConsumeTwoArgWords) {
     g.addNode(fpgaKernel("kA", iot), std::move(io), "fpga:0");
 
     auto exec = g.compile();
-    exec.setScalar(addr, static_cast<std::uint64_t>(0xDEAD'BEEF'CAFE'BABEull));
+    exec.writeScalar(addr, static_cast<std::uint64_t>(0xDEAD'BEEF'CAFE'BABEull));
     exec.launch();
     exec.wait();
 
@@ -975,7 +975,7 @@ TEST_F(FpgaDeviceFixture, GlobalScalarOnFpgaKernelUsesDeferredLaunchValue) {
     g.addNode(fpgaKernel("kA", iot), std::move(io), "fpga:0");
 
     auto exec = g.compile();
-    exec.setScalar<std::uint32_t>("size", 0x1234u);
+    exec.writeScalar<std::uint32_t>("size", 0x1234u);
     exec.launch();
     exec.wait();
     EXPECT_EQ(ddr_.args()[1], 0x1234u);
@@ -1038,7 +1038,7 @@ TEST_F(FpgaDeviceFixture, ArgBufferIsContiguousAcrossMultipleKernels) {
 
     auto exec = g.compile();
     for (const auto& [scalar, value] : scalarValues) {
-        exec.setScalar(scalar, value);
+        exec.writeScalar(scalar, value);
     }
     exec.launch();
     exec.wait();

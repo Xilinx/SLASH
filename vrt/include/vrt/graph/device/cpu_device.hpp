@@ -172,9 +172,9 @@ class CpuKernelArgs {
     }
 
     /**
-     * @brief Get a scalar argument value by port name.
+     * @brief Get a scalar argument's raw bits by port name.
      */
-    uint64_t scalar(const std::string& portName) const {
+    uint64_t scalarBits(const std::string& portName) const {
         auto it = scalars_.find(portName);
         if (it != scalars_.end()) {
             return it->second;
@@ -189,15 +189,15 @@ class CpuKernelArgs {
     }
 
     /**
-     * @brief Write an output scalar argument by port name (raw bits).
+     * @brief Get a writable scalar argument's raw storage by port name.
      */
-    void setScalar(const std::string& portName, uint64_t value) const {
+    uint64_t& scalarBitsOut(const std::string& portName) const {
         auto it = writableScalars_.find(portName);
         if (it == writableScalars_.end()) {
             throw std::out_of_range(
                 "CpuKernelArgs: unknown writable scalar port '" + portName + "'");
         }
-        *it->second = value;
+        return *it->second;
     }
 
     // --- Typed accessors (RFC run(Args&) surface) ------------------------
@@ -226,18 +226,22 @@ class CpuKernelArgs {
     /** @brief Typed value of an input scalar port. */
     template <typename T>
     T scalarIn(const std::string& portName) const {
-        uint64_t bits = scalar(portName);
+        static_assert(std::is_arithmetic_v<T>,
+                      "CpuKernelArgs::scalarIn only supports arithmetic types");
+        uint64_t bits = scalarBits(portName);
         T value{};
         std::memcpy(&value, &bits, sizeof(T));
         return value;
     }
 
-    /** @brief Write an output scalar port from a typed value. */
+    /** @brief Typed writable reference to an output scalar port. */
     template <typename T>
-    void setScalarValue(const std::string& portName, T value) const {
-        uint64_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(T));
-        setScalar(portName, bits);
+    T& scalarOut(const std::string& portName) const {
+        static_assert(std::is_arithmetic_v<T>,
+                      "CpuKernelArgs::scalarOut only supports arithmetic types");
+        static_assert(sizeof(T) <= sizeof(uint64_t),
+                      "CpuKernelArgs::scalarOut scalar type is wider than raw storage");
+        return *reinterpret_cast<T*>(&scalarBitsOut(portName));
     }
 
    private:

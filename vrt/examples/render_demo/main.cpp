@@ -468,8 +468,8 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> data(64, 0xAA);
     auto exec = g.compile();
     exec.write(raw, data);
-    exec.setScalar(renderBranchFlag, 1);
-    exec.setScalar(renderLoopCount, 2);
+    exec.writeScalar(renderBranchFlag, 1);
+    exec.writeScalar(renderLoopCount, 2);
     exec.run();
 
     // --- Verify the executed pipeline ---

@@ -179,7 +179,7 @@ TEST(GpuGraphTest, SingleGpuKernel) {
     gpu->setInputBuffer("b", b.data(), b.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.setScalar(n, 4ull);
+    exec.writeScalar(n, 4ull);
     exec.run();
 
     // Read output
@@ -248,7 +248,7 @@ TEST(GpuGraphTest, GpuPipeline) {
     gpu->setInputBuffer("b", b.data(), b.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.setScalar(n, 4ull);
+    exec.writeScalar(n, 4ull);
     exec.run();
 
     // Expected: -((a + b) * 2) = {-22, -44, -66, -88}
@@ -306,7 +306,7 @@ TEST(GpuGraphTest, CpuToGpuCrossDevice) {
     cpu->setInputBuffer("input", data.data(), data.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.setScalar(n, 4ull);
+    exec.writeScalar(n, 4ull);
     exec.run();
 
     // Expected: (x + 10) * 2 = {22, 24, 26, 28}
@@ -384,7 +384,7 @@ TEST(GpuGraphTest, GpuDiamondDag) {
     gpu->setInputBuffer("input", data.data(), data.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.setScalar(n, 4ull);
+    exec.writeScalar(n, 4ull);
     exec.run();
 
     // split:  left = x+1 = {2,3,4,5},  right = x*10 = {10,20,30,40}

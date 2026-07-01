@@ -391,7 +391,7 @@ TEST(RenderDotTest, DGraphRendersAfterCompile) {
     std::vector<uint8_t> data(16, 0xAB);
     c.cpu->setInputBuffer("raw", data.data(), data.size());
     auto exec = c.g.compile();
-    exec.setScalar(c.size, static_cast<std::uint64_t>(data.size()));
+    exec.writeScalar(c.size, static_cast<std::uint64_t>(data.size()));
     exec.run();
 
     ASSERT_FALSE(exec.dgraphs().empty());
@@ -545,7 +545,7 @@ TEST(RenderDotTest, WriteToDotFileWritesGraphAndDGraph) {
     std::vector<uint8_t> data(8, 0xCD);
     c.cpu->setInputBuffer("raw", data.data(), data.size());
     auto exec = c.g.compile();
-    exec.setScalar(c.size, static_cast<std::uint64_t>(data.size()));
+    exec.writeScalar(c.size, static_cast<std::uint64_t>(data.size()));
     exec.run();
 
     char gpath[]  = "/tmp/vrt_render_test_graph_XXXXXX.dot";

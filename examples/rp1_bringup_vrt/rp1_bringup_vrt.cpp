@@ -217,8 +217,8 @@ int main(int argc, char** argv) try {
               bindArgs(), "fpga:0", {idB, idC});
 
     auto exec = g.compile();
-    exec.setScalar(sharedSize, kSharedArg0);
-    exec.setScalar(sharedAddr, kSharedAddr);
+    exec.writeScalar(sharedSize, kSharedArg0);
+    exec.writeScalar(sharedAddr, kSharedAddr);
     std::cout << "[rp1_bringup_vrt] compiled diamond ("
               << "A=0x" << std::hex << kKernelA_R5
               << " B=0x" << kKernelB_R5

@@ -142,29 +142,29 @@ class CompiledGraph {
     }
 
     template <class T>
-    void setScalar(const std::string& name, T value) {
+    void writeScalar(const std::string& name, T value) {
         static_assert(std::is_arithmetic_v<T>,
-                      "CompiledGraph::setScalar only supports arithmetic types");
-        requireScalarType<T>(name, "CompiledGraph::setScalar");
+                      "CompiledGraph::writeScalar only supports arithmetic types");
+        requireScalarType<T>(name, "CompiledGraph::writeScalar");
         setScalarBits(name, detail::valueToBits(value));
     }
 
     template <class T>
-    void setScalar(const GraphScalar& scalar, T value) {
+    void writeScalar(const GraphScalar& scalar, T value) {
         static_assert(std::is_arithmetic_v<T>,
-                      "CompiledGraph::setScalar only supports arithmetic types");
-        requireScalarType<T>(scalar, "CompiledGraph::setScalar");
+                      "CompiledGraph::writeScalar only supports arithmetic types");
+        requireScalarType<T>(scalar, "CompiledGraph::writeScalar");
         setScalarBits(scalar, detail::valueToBits(value));
     }
 
     template <class T>
-    T getScalar() const = delete;
+    T readScalar() const = delete;
 
     template <class T>
-    T getScalar(const std::string& name) const {
+    T readScalar(const std::string& name) const {
         static_assert(std::is_arithmetic_v<T>,
-                      "CompiledGraph::getScalar only supports arithmetic types");
-        requireScalarType<T>(name, "CompiledGraph::getScalar");
+                      "CompiledGraph::readScalar only supports arithmetic types");
+        requireScalarType<T>(name, "CompiledGraph::readScalar");
         uint64_t bits = scalarBits(name);
         T value{};
         std::memcpy(&value, &bits, sizeof(T));
@@ -172,10 +172,10 @@ class CompiledGraph {
     }
 
     template <class T>
-    T getScalar(const GraphScalar& scalar) const {
+    T readScalar(const GraphScalar& scalar) const {
         static_assert(std::is_arithmetic_v<T>,
-                      "CompiledGraph::getScalar only supports arithmetic types");
-        requireScalarType<T>(scalar, "CompiledGraph::getScalar");
+                      "CompiledGraph::readScalar only supports arithmetic types");
+        requireScalarType<T>(scalar, "CompiledGraph::readScalar");
         uint64_t bits = scalarBits(scalar);
         T value{};
         std::memcpy(&value, &bits, sizeof(T));

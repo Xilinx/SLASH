@@ -166,7 +166,7 @@ class CpuParity : public CpuKernel {
     }
     void run(Args& a) override {
         auto in = a.in<int32_t>("in");
-        a.setScalar("parity", static_cast<std::uint64_t>(in[0] & 1));
+        a.scalarOut<std::uint64_t>("parity") = static_cast<std::uint64_t>(in[0] & 1);
     }
 };
 
@@ -223,13 +223,13 @@ TEST(GraphAuthoringTest, ElementwiseShorthandRoundTrips) {
 
     GraphScalar size = graph.scalarInput<std::uint64_t>("n");
     GraphBuffer raw = graph.input<int32_t>("raw", size);
-    GraphBuffer out = graph.buffer<int32_t>("out", size);
+    GraphBuffer out = graph.output<int32_t>("out", size);
     graph.addKernelCall({.kernel = addOne, .inputs = {{"in", raw}}, .outputs = {{"out", out}}});
 
     std::vector<int32_t> input(n);
     for (std::size_t i = 0; i < n; ++i) input[i] = static_cast<int32_t>(i);
     auto exec = graph.compile();
-    exec.setScalar(size, static_cast<std::uint64_t>(n));
+    exec.writeScalar(size, static_cast<std::uint64_t>(n));
     exec.write(raw, input);
 
     exec.run();
@@ -247,12 +247,12 @@ TEST(GraphAuthoringTest, InoutKernelMutatesInPlace) {
 
     GraphScalar size = graph.scalarInput<std::uint64_t>("n");
     GraphBuffer raw = graph.input<int32_t>("raw", size);
-    GraphBuffer bumped = graph.buffer<int32_t>("bumped", size);
+    GraphBuffer bumped = graph.output<int32_t>("bumped", size);
     graph.addKernelCall({.kernel = sparse, .inouts = {{"data", raw, bumped}}});
 
     std::vector<int32_t> input(n, 0);
     auto exec = graph.compile();
-    exec.setScalar(size, static_cast<std::uint64_t>(n));
+    exec.writeScalar(size, static_cast<std::uint64_t>(n));
     exec.write(raw, input);
 
     exec.run();
@@ -306,7 +306,7 @@ TEST(GraphAuthoringTest, LoopConditionalInplaceFullPipeline) {
                          .inputs = {{"in", post}},
                          .outputScalars = {{"parity", parity}}});
 
-    GraphBuffer out = graph.buffer<int32_t>("out", size);
+    GraphBuffer out = graph.output<int32_t>("out", size);
     {
         auto [thenBranch, elseBranch] = graph.addConditional({
             .condition = (parity == 0), .inputs = {{"x", post}}, .outputs = {{"y", out}}});
@@ -321,8 +321,8 @@ TEST(GraphAuthoringTest, LoopConditionalInplaceFullPipeline) {
     std::vector<int32_t> input(n);
     for (std::uint32_t i = 0; i < n; ++i) input[i] = static_cast<int32_t>(i);
     auto exec = graph.compile();
-    exec.setScalar(size, static_cast<std::uint64_t>(n));
-    exec.setScalar(loopCount, iters);
+    exec.writeScalar(size, static_cast<std::uint64_t>(n));
+    exec.writeScalar(loopCount, iters);
     exec.write(raw, input);
 
     exec.run();

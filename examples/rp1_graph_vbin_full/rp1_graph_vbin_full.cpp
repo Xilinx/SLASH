@@ -70,6 +70,17 @@
 #include <vrt/graph/graph.hpp>
 
 using namespace std::chrono_literals;
+using std::uint8_t;
+using std::uint16_t;
+using std::uint32_t;
+using std::uint64_t;
+
+using std::int8_t;
+using std::int16_t;
+using std::int32_t;
+using std::int64_t;
+
+using std::size_t;
 using vrt::graph::CpuKernel;
 using vrt::graph::Graph;
 using vrt::graph::GraphBuffer;
@@ -83,8 +94,8 @@ struct Cli {
     std::string bdf;
     std::string vbinA;
     std::string vbinB;
-    std::uint32_t iterations = 2;
-    std::uint32_t elementCount = 16;
+    uint32_t iterations = 2;
+    uint32_t elementCount = 16;
 };
 
 std::filesystem::path executableDir(const char* argv0) {
@@ -122,9 +133,9 @@ Cli parseArgs(int argc, char** argv) {
         else if (arg == "--bdf") cli.bdf = need("--bdf");
         else if (arg == "--vbin-a") cli.vbinA = need("--vbin-a");
         else if (arg == "--vbin-b") cli.vbinB = need("--vbin-b");
-        else if (arg == "--iterations") cli.iterations = static_cast<std::uint32_t>(
+        else if (arg == "--iterations") cli.iterations = static_cast<uint32_t>(
             std::stoul(need("--iterations")));
-        else if (arg == "--elements") cli.elementCount = static_cast<std::uint32_t>(
+        else if (arg == "--elements") cli.elementCount = static_cast<uint32_t>(
             std::stoul(need("--elements")));
         else if (arg == "--help" || arg == "-h") {
             usage(argv[0]);
@@ -145,12 +156,12 @@ Cli parseArgs(int argc, char** argv) {
 }
 
 // Host-side reference for the same pipeline the graph runs.
-std::vector<std::int32_t> expectedOutput(std::uint32_t elementCount, std::uint32_t iterations) {
-    std::vector<std::int32_t> post(elementCount);
-    for (std::uint32_t i = 0; i < elementCount; ++i) {
-        std::int32_t v = static_cast<std::int32_t>(i);
+std::vector<int32_t> expectedOutput(uint32_t elementCount, uint32_t iterations) {
+    std::vector<int32_t> post(elementCount);
+    for (uint32_t i = 0; i < elementCount; ++i) {
+        int32_t v = static_cast<int32_t>(i);
         v = v + 10;  // cpu_preprocess
-        for (std::uint32_t iter = 0; iter < iterations; ++iter) {
+        for (uint32_t iter = 0; iter < iterations; ++iter) {
             v = v + 1;                       // cpu_stage
             v = v + 1;                       // image A FPGA kernel
             if (i % 10 == 0) v = v + 1;      // cpu_sparse (in place, every 10th element)
@@ -160,9 +171,9 @@ std::vector<std::int32_t> expectedOutput(std::uint32_t elementCount, std::uint32
         post[i] = v;  // loop-carried result
     }
 
-    const std::int32_t bias = (post[0] & 1) == 0 ? 100 : 200;
-    std::vector<std::int32_t> out(elementCount);
-    for (std::uint32_t i = 0; i < elementCount; ++i) {
+    const int32_t bias = (post[0] & 1) == 0 ? 100 : 200;
+    std::vector<int32_t> out(elementCount);
+    for (uint32_t i = 0; i < elementCount; ++i) {
         out[i] = post[i] + bias;
     }
     return out;
@@ -185,7 +196,7 @@ class CpuPreprocess : public CpuKernel {
         auto in = args.in<int32_t>("in");
         auto out = args.out<int32_t>("out");
         
-        for (std::size_t i = 0; i < in.size(); ++i) {
+        for (size_t i = 0; i < in.size(); ++i) {
             out[i] = in[i] + 10;
         }
     }
@@ -203,7 +214,7 @@ class CpuStage : public CpuKernel {
         auto in = args.in<int32_t>("in");
         auto out = args.out<int32_t>("out");
         
-        for (std::size_t i = 0; i < in.size(); ++i) {
+        for (size_t i = 0; i < in.size(); ++i) {
             out[i] = in[i] + 1;
         }
     }
@@ -218,7 +229,7 @@ class CpuSparse : public CpuKernel {
     void run(Args& args) override {
         auto data = args.inout<int32_t>("data");
 
-        for (std::size_t i = 0; i < data.size(); i += 10) {
+        for (size_t i = 0; i < data.size(); i += 10) {
             data[i] += 1;
         }
     }
@@ -234,7 +245,7 @@ class CpuFinalize : public CpuKernel {
         auto in = args.in<int32_t>("in");
         auto out = args.out<int32_t>("out");
 
-        for (std::size_t i = 0; i < in.size(); ++i) {
+        for (size_t i = 0; i < in.size(); ++i) {
             out[i] = in[i] - 4;
         }
     }
@@ -249,8 +260,9 @@ class CpuParity : public CpuKernel {
     }
     void run(Args& args) override {
         auto in = args.in<int32_t>("in");
+        auto& parity = args.scalarOut<uint64_t>("parity");
 
-        args.setScalar("parity", static_cast<std::uint64_t>(in[0] & 1));
+        parity = static_cast<uint64_t>(in[0] & 1);
     }
 };
 
@@ -266,7 +278,7 @@ class CpuReport : public CpuKernel {
         auto in = args.in<int32_t>("in");
         auto out = args.out<int32_t>("out");
 
-        for (std::size_t i = 0; i < in.size(); ++i) {
+        for (size_t i = 0; i < in.size(); ++i) {
             out[i] = in[i] + 100;
         }
     }
@@ -284,7 +296,7 @@ class CpuReportOdd : public CpuKernel {
         auto in = args.in<int32_t>("in");
         auto out = args.out<int32_t>("out");
         
-        for (std::size_t i = 0; i < in.size(); ++i) {
+        for (size_t i = 0; i < in.size(); ++i) {
             out[i] = in[i] + 200;
         }
     }
@@ -327,10 +339,10 @@ int main(int argc, char** argv) try {
                      .out<int32_t>("out");
 
     // 3. Author the graph.
-    GraphScalar elements = graph.scalarInput<std::uint64_t>("elements");
+    GraphScalar elements = graph.scalarInput<uint64_t>("elements");
     GraphBuffer raw = graph.input<int32_t>("raw", elements);
     GraphScalar elementCount = graph.scalarInput<uint64_t>("elementCount");
-    GraphScalar loopIterations = graph.scalarInput<std::uint32_t>("loopIterations");
+    GraphScalar loopIterations = graph.scalarInput<uint32_t>("loopIterations");
 
     GraphBuffer pre = graph.buffer<int32_t>("pre", elements);
     graph.addKernelCall({
@@ -412,7 +424,7 @@ int main(int argc, char** argv) try {
         .outputScalars = {{"parity", parity}},
     });
 
-    GraphBuffer out = graph.buffer<int32_t>("out", elements);
+    GraphBuffer out = graph.output<int32_t>("out", elements);
     {
         auto [thenBranch, elseBranch] = graph.addConditional({
             .condition = (parity == 0),       // even -> then (+100), odd -> else (+200)
@@ -434,30 +446,30 @@ int main(int argc, char** argv) try {
     }
 
     // 4. Compile, bind dispatch inputs, run, read back -- all keyed by token.
-    std::vector<std::int32_t> input(cli.elementCount);
-    for (std::uint32_t i = 0; i < cli.elementCount; ++i) {
-        input[i] = static_cast<std::int32_t>(i);
+    std::vector<int32_t> input(cli.elementCount);
+    for (uint32_t i = 0; i < cli.elementCount; ++i) {
+        input[i] = static_cast<int32_t>(i);
     }
 
     std::cout << "[rp1_graph_vbin_full] compiling graph with "
               << cli.iterations << " loop iteration(s), "
               << cli.elementCount << " element(s)" << std::endl;
     auto exec = graph.compile();
-    exec.setScalar(elements, static_cast<std::uint64_t>(cli.elementCount));
-    exec.setScalar(elementCount, static_cast<std::uint64_t>(cli.elementCount));
-    exec.setScalar(loopIterations, cli.iterations);
+    exec.writeScalar(elements, static_cast<uint64_t>(cli.elementCount));
+    exec.writeScalar(elementCount, static_cast<uint64_t>(cli.elementCount));
+    exec.writeScalar(loopIterations, cli.iterations);
     exec.write(raw, input);
 
     std::cout << "[rp1_graph_vbin_full] running graph..." << std::endl;
     exec.run();
     std::cout << "[rp1_graph_vbin_full] graph run complete; checking output..." << std::endl;
 
-    std::vector<std::int32_t> output(cli.elementCount, 0);
+    std::vector<int32_t> output(cli.elementCount, 0);
     exec.read(out, output);
     const auto expected = expectedOutput(cli.elementCount, cli.iterations);
 
     std::cout << "[rp1_graph_vbin_full] output:";
-    for (std::size_t i = 0; i < std::min<std::size_t>(output.size(), 8); ++i) {
+    for (size_t i = 0; i < std::min<size_t>(output.size(), 8); ++i) {
         std::cout << ' ' << output[i];
     }
     if (output.size() > 8) std::cout << " ...";
@@ -465,7 +477,7 @@ int main(int argc, char** argv) try {
 
     if (output != expected) {
         std::cerr << "FAIL: output mismatch\nexpected:";
-        for (std::size_t i = 0; i < std::min<std::size_t>(expected.size(), 8); ++i) {
+        for (size_t i = 0; i < std::min<size_t>(expected.size(), 8); ++i) {
             std::cerr << ' ' << expected[i];
         }
         if (expected.size() > 8) std::cerr << " ...";

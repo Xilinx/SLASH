@@ -104,7 +104,7 @@
  *   g.addLoop(std::move(loop));
  *
  *   CompiledGraph exec = g.compile();
- *   exec.setScalar(iterations, 4);
+ *   exec.writeScalar(iterations, 4);
  *   exec.run();
  * @endcode
  */
@@ -492,6 +492,15 @@ class Graph {
     }
 
     /**
+     * @brief Declare a graph-level typed output buffer token.
+     */
+    template <class T>
+    GraphBuffer output(std::string name, GraphScalar size) {
+        return rootRegion_->outputBuffer(typeToBufferType<T>(), std::move(name),
+                                         std::move(size));
+    }
+
+    /**
      * @brief Declare a graph-level scalar input token.
      */
     template <class T>
@@ -500,7 +509,15 @@ class Graph {
     }
 
     /**
-     * @brief Declare a named scalar written once by a kernel (output scalar).
+     * @brief Declare a graph-level scalar output token.
+     */
+    template <class T>
+    GraphScalar outputScalar(std::string name) {
+        return rootRegion_->outputScalar(typeToScalarType<T>(), std::move(name));
+    }
+
+    /**
+     * @brief Declare a named scalar token at root scope.
      */
     template <class T>
     GraphScalar scalar(std::string name) {
