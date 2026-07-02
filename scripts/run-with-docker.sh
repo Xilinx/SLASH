@@ -22,7 +22,7 @@
 
 set -exo pipefail
 
-# Usage: scripts/run-with-docker.sh <run|package> <ubuntu|rocky>
+# Usage: scripts/run-with-docker.sh <run|package> <ubuntu|rocky> [version]
 #
 # Builds (if necessary) and runs one of the SLASH Docker containers defined by
 # scripts/Dockerfile.<run|package>-<ubuntu|rocky>. The current working
@@ -35,9 +35,25 @@ set -exo pipefail
 #   package   Run the matching distro's packaging script
 #             (scripts/package-deb.sh on Ubuntu, scripts/package-rpm.sh on
 #             Rocky) inside a clean container that only has the build
-#             dependencies installed.
+#             dependencies installed. The built packages are written to a
+#             per-distro+version directory under the working tree:
+#               docker-build/ubuntu-22.04/*.deb
+#               docker-build/ubuntu-24.04/*.deb
+#               docker-build/ubuntu-26.04/*.deb
+#               docker-build/rocky-9/*.rpm
+#               docker-build/rocky-10/*.rpm
 #   run       Drop into an interactive bash shell inside a container that has
 #             the freshly built SLASH packages already installed.
+#
+# Distro version (optional third argument):
+#   Selects the base image the container is built from. When omitted it
+#   defaults to the oldest supported release for the chosen distro.
+#     ubuntu   22.04 (default), 24.04, 26.04  -> ubuntu:<version>
+#     rocky    9 (default), 10                -> rockylinux:9 /
+#                                                rockylinux/rockylinux:10
+#   Each distro+version pair is built and tagged independently as
+#   slash-<run|package>-<distro>:<version>, so different versions do not
+#   clobber each other's images.
 #
 # Required environment variables:
 #   SLASH_XILINX_PATH   Path to the Xilinx tools install on the host
@@ -63,13 +79,15 @@ set -exo pipefail
 #                                     root-design build step.
 #
 # Examples:
-#   scripts/run-with-docker.sh package ubuntu   # build .deb packages
-#   scripts/run-with-docker.sh package rocky    # build .rpm packages
-#   scripts/run-with-docker.sh run     ubuntu   # interactive shell with
-#                                               # the .debs preinstalled
+#   scripts/run-with-docker.sh package ubuntu         # .deb on ubuntu 22.04
+#   scripts/run-with-docker.sh package ubuntu 24.04   # .deb on ubuntu 24.04
+#   scripts/run-with-docker.sh package rocky          # .rpm on rocky 9
+#   scripts/run-with-docker.sh package rocky 10       # .rpm on rocky 10
+#   scripts/run-with-docker.sh run     ubuntu         # interactive shell with
+#                                                     # the .debs preinstalled
 
-if [ $# -ne 2 ]; then
-    echo "Usage: <run|package> <ubuntu|rocky>" 2>&1
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+    echo "Usage: <run|package> <ubuntu|rocky> [version]" >&2
     exit 1
 fi
 
@@ -105,16 +123,52 @@ if [ -n $SLASH_PKG_SKIP_ROOT_DESIGN_BUILD ]; then
     DOCKER_RUN_ARGS+="-e SLASH_PKG_SKIP_ROOT_DESIGN_BUILD=$SLASH_PKG_SKIP_ROOT_DESIGN_BUILD "
 fi
 
+# Mount the git directory so version-stamping scripts that shell out to git
+# (e.g. AVED's getVersion.sh, which stamps GIT_HASH into the AMI package
+# release) work inside the container. For a normal checkout .git lives under
+# $PWD and is already mounted; for a git worktree .git is a file pointing at
+# the main repo's git dir, which is outside $PWD and must be mounted at the
+# same path. Without it git fails and the empty hash yields an illegal
+# "0..<date>" rpm release.
+if GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null)"; then
+    GIT_COMMON_DIR="$(cd "$GIT_COMMON_DIR" && pwd)"
+    case "$GIT_COMMON_DIR" in
+        "$PWD"/*) : ;; # already covered by the $PWD mount
+        *) DOCKER_RUN_ARGS+="-v $GIT_COMMON_DIR:$GIT_COMMON_DIR " ;;
+    esac
+fi
+
 CONTAINER=$1
 DISTRO=$2
+VERSION=${3:-}
 
-# Check the distro argument and set the relevant packaging script
-if [ $DISTRO = "ubuntu" ]; then
+# Check the distro argument and select the packaging script, the default
+# version, and the base image for the requested (distro, version) pair.
+# Rocky images are pulled from the team-maintained rockylinux/rockylinux repo
+# rather than the "rockylinux" Docker Official Image: the latter is unmaintained
+# and badly out of date (stuck near 9.3), and never published a 10 tag at all.
+if [ "$DISTRO" = "ubuntu" ]; then
     PACKAGE_SCRIPT="./scripts/package-deb.sh"
-elif [ $DISTRO = "rocky" ]; then
+    VERSION=${VERSION:-22.04}
+    case "$VERSION" in
+        22.04|24.04|26.04) BASE_IMAGE="ubuntu:$VERSION" ;;
+        *)
+            echo "Unsupported ubuntu version '$VERSION' (supported: 22.04, 24.04, 26.04)" >&2
+            exit 1
+            ;;
+    esac
+elif [ "$DISTRO" = "rocky" ]; then
     PACKAGE_SCRIPT="./scripts/package-rpm.sh"
+    VERSION=${VERSION:-9}
+    case "$VERSION" in
+        9|10) BASE_IMAGE="rockylinux/rockylinux:$VERSION" ;;
+        *)
+            echo "Unsupported rocky version '$VERSION' (supported: 9, 10)" >&2
+            exit 1
+            ;;
+    esac
 else
-    echo "Unknown Linux distro $DISTRO" 2>&1
+    echo "Unknown Linux distro $DISTRO" >&2
     exit 1
 fi
 
@@ -125,17 +179,30 @@ fi
 DOCKER_COMMAND="source $SLASH_XILINX_PATH/2025.1/Vivado/settings64.sh "
 DOCKER_COMMAND+="&& export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$SLASH_XILINX_PATH/2025.1/Vivado/lib/lnx64.o "
 if [ $CONTAINER = "package" ]; then
+    # Route the built packages into a per-distro+version subdirectory so the
+    # outputs of different builds do not clobber each other. Both packaging
+    # scripts honour ARTIFACTS_DIR. The path lives under $PWD, which is mounted
+    # at the same path in the container, so the artifacts are visible on the
+    # host once the container exits.
+    ARTIFACTS_DIR="$PWD/docker-build/$DISTRO-$VERSION"
+    DOCKER_RUN_ARGS+="-e ARTIFACTS_DIR=$ARTIFACTS_DIR "
     DOCKER_COMMAND+="&& $PACKAGE_SCRIPT "
 elif [ $CONTAINER = "run" ]; then
     DOCKER_COMMAND+="&& bash"
     DOCKER_RUN_ARGS+="-it "
 else
-    echo "Unknown container definition $CONTAINER" 2>&1
+    echo "Unknown container definition $CONTAINER" >&2
     exit 1
 fi
 
-# Build and run the container.
-docker build --build-arg USER_ID=$(id -u) -t "slash-$CONTAINER-$DISTRO" -f "scripts/Dockerfile.$CONTAINER-$DISTRO" .
+# Build and run the container. The image is tagged per distro+version so that
+# different versions do not clobber each other's images.
+IMAGE_TAG="slash-$CONTAINER-$DISTRO:$VERSION"
+docker build \
+    --build-arg USER_ID=$(id -u) \
+    --build-arg BASE_IMAGE="$BASE_IMAGE" \
+    -t "$IMAGE_TAG" \
+    -f "scripts/Dockerfile.$CONTAINER-$DISTRO" .
 docker run $DOCKER_RUN_ARGS \
-    "slash-$CONTAINER-$DISTRO" \
+    "$IMAGE_TAG" \
     bash -c "$DOCKER_COMMAND"

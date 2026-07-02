@@ -81,8 +81,8 @@ fi
 set -x
 
 # Clean build
-rm -rf deb
-mkdir -p deb
+rm -rf "${ARTIFACTS_DIR}"
+mkdir -p "${ARTIFACTS_DIR}"
 rm -rf pbuild
 rm -rf debian
 

@@ -94,9 +94,6 @@ const char *uid_to_username(uid_t uid, char *buf, size_t bufsz);
 #  endif
 #endif
 
-/** @brief Portable attribute to warn if a function's return value is discarded. */
-#define NODISCARD __attribute__((warn_unused_result))
-
 /* ---- type-specific helpers ---- */
 #if HAVE_STDBIT
 /**
@@ -183,6 +180,7 @@ static inline uint64_t bit_ceil_u64(uint64_t n) {
 /** @brief No-operation statement (void expression). */
 #define NOP() ((void) 0)
 
+/** @brief Portable attribute to warn if a function's return value is discarded. */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
     #define NODISCARD [[nodiscard]]
 #elif defined(__GNUC__) || defined(__clang__)

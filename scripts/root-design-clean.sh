@@ -27,5 +27,5 @@ cd "$(dirname "$0")/.."
 
 make -C linker/slashkit/resources/base/iprepo clean
 
-rm -rf linker/slashkit/install.prj
+rm -rf linker/install.prj
 rm -rf linker/slashkit/resources/static_shell

@@ -58,7 +58,7 @@ required on the build machine, not on every target:
 
 .. tab-set::
 
-   .. tab-item:: Ubuntu
+   .. tab-item:: Ubuntu 22.04
 
       .. code-block:: bash
 
@@ -68,6 +68,17 @@ required on the build machine, not on every target:
            python3 python3-pip \
            libcli11-dev libinih-dev libjsoncpp-dev \
            libsystemd-dev libxml2-dev libzmq3-dev zlib1g-dev
+
+   .. tab-item:: Ubuntu 24.04 / 26.04
+
+      .. code-block:: bash
+
+         sudo apt install \
+           build-essential cmake ninja-build pkg-config rsync \
+           debhelper dh-dkms dpkg-dev apt-utils \
+           python3 python3-pip \
+           libcli11-dev libinih-dev libjsoncpp-dev \
+           libsystemd-dev libxml2-dev libzmq3-dev cppzmq-dev zlib1g-dev
 
    .. tab-item:: RHEL 9 / Rocky Linux 9 / AlmaLinux 9
 

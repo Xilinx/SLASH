@@ -18,8 +18,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-proc build_project {{proj_name "user"}} {
-  puts "INFO: Using proj_name='$proj_name'"
+proc build_project {{proj_name "user"} {jobs 14}} {
+  puts "INFO: Using proj_name='$proj_name' and jobs='$jobs'"
 
   # Ensure top BD is generated
   generate_target all [get_files "top.bd"]
@@ -39,7 +39,7 @@ proc build_project {{proj_name "user"}} {
   set_property STEPS.WRITE_DEVICE_IMAGE.TCL.PRE  [get_files *write_device_image.pre.tcl]  [get_runs impl_1]
 
   # Launch and wait
-  launch_runs impl_1 -to_step write_bitstream -jobs 14
+  launch_runs impl_1 -to_step write_bitstream -jobs $jobs
   wait_on_run impl_1
   open_run impl_1
   
