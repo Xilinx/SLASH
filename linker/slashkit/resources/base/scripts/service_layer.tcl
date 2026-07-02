@@ -244,7 +244,7 @@ if { $bCheckIPsPassed != 1 } {
 
 set current_file [file normalize [info script]]
 set current_dir [file normalize ${current_file}]
-set versal_dcmac_root  [file normalize [file join $current_dir .. .. .. .. .. .. submodules versal_dcmac]]
+set versal_dcmac_root  [file normalize [file join $current_dir .. .. .. .. .. .. submodules Versal-DCMAC]]
 set ::slash_wrapper_tcl [file normalize [file join $current_dir .. .. .. dcmac tcl slash_wrapper.tcl]]
 
 source $::slash_wrapper_tcl

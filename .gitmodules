@@ -4,3 +4,6 @@
 [submodule "AVED"]
 	path = submodules/AVED
 	url = https://github.com/Xilinx/AVED.git
+[submodule "submodules/Versal-DCMAC"]
+	path = submodules/Versal-DCMAC
+	url = https://github.com/fpgasystems/Versal-DCMAC

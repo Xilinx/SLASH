@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _SLASH_ROOT = Path(__file__).resolve().parents[5]
-_DCMAC_VERSAL = _SLASH_ROOT / "submodules" / "versal_dcmac"
+_DCMAC_VERSAL = _SLASH_ROOT / "submodules" / "Versal-DCMAC"
 
 
 @dataclass(frozen=True)
