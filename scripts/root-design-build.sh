@@ -30,3 +30,10 @@ make -C linker/slashkit/resources/base/iprepo
 pushd linker
 python3 -m slashkit install --out-dir slashkit/resources
 popd
+
+# Vivado IP/synth logs capture the full environment (including RPM_BUILD_ROOT
+# during rpmbuild), which trips RPM's check-buildroot. They have no runtime
+# value, so drop them before they get packaged into the wheel.
+find linker/slashkit/resources -type d -name logs -prune -exec rm -rf {} +
+find linker/slashkit/resources \
+    -type f \( -name '*.log' -o -name '*.jou' -o -name 'vivado*.str' \) -delete

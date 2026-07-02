@@ -23,8 +23,9 @@
  * to provide queue-pair-based DMA transfers between host memory and the
  * FPGA fabric.
  *
- * The QDMA subsystem binds to PF1 (PCI device ID 0x50B5), while the
- * control device (slash_ctldev) binds to PF2 (device ID 0x50B6).
+ * The QDMA subsystem binds to PF1 (PCI device ID 0x50B5, or 0x50BD on
+ * AVED/V80P designs), while the control device (slash_ctldev) binds to
+ * PF2 (device ID 0x50B6).
  *
  * Queue pair lifecycle:
  *   add -> start -> I/O (via anon_inode fd) -> stop -> del
@@ -50,10 +51,16 @@
 
 #include <asm/cacheflush.h>
 #include <linux/bitops.h>
+#include <linux/completion.h>
+#include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/kernel.h>
 #include <linux/kref.h>
+#include <linux/ktime.h>
+#include <linux/limits.h>
 #include <linux/miscdevice.h>
 #include <linux/minmax.h>
 #include <linux/mutex.h>
@@ -64,6 +71,31 @@
 #include <linux/uaccess.h>
 #include <linux/xarray.h>
 #include <linux/anon_inodes.h>
+
+#if defined(SLASH_HAVE_URING_CMD)
+#include <linux/io_uring.h>
+#if __has_include(<linux/io_uring/cmd.h>)
+#include <linux/io_uring/cmd.h>
+#endif
+
+/**
+ * slash_qdma_uring_cmd_payload() - Pointer to a uring_cmd's inline SQE payload.
+ * @cmd: The io_uring command.
+ *
+ * Abstracts the kernel API change that removed struct io_uring_cmd::cmd in
+ * favour of ->sqe + io_uring_sqe_cmd().  The accessor is selected at build
+ * time by the kcompat probe (SLASH_HAVE_URING_SQE_CMD); both forms return the
+ * same inline command payload pointer.
+ */
+static inline const void *slash_qdma_uring_cmd_payload(struct io_uring_cmd *cmd)
+{
+#if defined(SLASH_HAVE_URING_SQE_CMD)
+    return io_uring_sqe_cmd(cmd->sqe);
+#else
+    return cmd->cmd;
+#endif
+}
+#endif
 
 /*
  * Direction bitmask constants.
@@ -100,6 +132,45 @@
     offsetofend(struct slash_qdma_qpair_op, op)
 #define SLASH_QDMA_QPAIR_GET_FD_MIN_SIZE \
     offsetofend(struct slash_qdma_qpair_fd_request, flags)
+#define SLASH_QDMA_BUF_CREATE_MIN_SIZE \
+    offsetofend(struct slash_qdma_buf_create, length)
+#define SLASH_QDMA_TRANSFER_MIN_SIZE \
+    offsetofend(struct slash_qdma_transfer, count)
+
+/*
+ * CPM5 Host Profile indirect-context programming.
+ *
+ * The Host Profile context tells the CPM5 QDMA how to route AXI4-MM
+ * traffic onto the Versal NoC.  It is programmed via the same indirect
+ * context command interface libqdma uses for queue contexts, but with
+ * the host-profile selector (0xA).  Register offsets and the command
+ * word layout mirror eqdma_cpm5_reg.h:
+ *
+ *   IND_CTXT_DATA  base 0x804 (8 x u32 context words)
+ *   IND_CTXT_MASK  base 0x824 (8 x u32 write masks)
+ *   IND_CTXT_CMD   0x844      (busy[0], sel[4:1], op[6:5], qid[18:7])
+ *
+ * We program two profiles so the per-queue SW-context host_id selects
+ * the NoC channel: Host ID 0 -> NoC Channel 0, Host ID 1 -> NoC Channel 1.
+ */
+#define SLASH_QDMA_HP_DATA_ADDR  0x804u
+#define SLASH_QDMA_HP_MASK_ADDR  0x824u
+#define SLASH_QDMA_HP_CMD_ADDR   0x844u
+#define SLASH_QDMA_HP_CMD_BUSY   BIT(0)
+#define SLASH_QDMA_HP_NUM_WORDS  8
+#define SLASH_QDMA_HP_SEL        0xAu   /* QDMA_CTXT_SELC_HOST_PROFILE */
+#define SLASH_QDMA_HP_OP_WR      0x1u   /* indirect context WR opcode */
+#define SLASH_QDMA_HP_OP_RD      0x2u   /* indirect context RD opcode */
+#define SLASH_QDMA_HP_SMID_BASE  0x100u /* bit 8 set; base AXI-MM master ID */
+#define SLASH_QDMA_HP_POLL_US    1000   /* busy-wait budget in microseconds */
+
+/*
+ * The qpair fd data path operates on spans of 4 KiB base pages.  Each
+ * scatter-gather entry is exactly one base page, so a whole transfer is
+ * submitted to libqdma as a single multi-descriptor request and libqdma
+ * refills the descriptor ring as needed -- the transfer size is not bounded
+ * by the ring depth.
+ */
 
 /**
  * SLASH_QDMA_QTYPE_COUNT - Number of queue types tracked per queue pair.
@@ -150,6 +221,18 @@
 #define SLASH_QDMA_OP_DEV_LOG(dev, fmt, ...) \
     do {                                      \
     } while (0)
+#endif
+
+/*
+ * Per-transfer timing instrumentation (compile-time flag).
+ *
+ * Retained for parity with the userspace SLASH_QDMA_TIMING knob.  With the
+ * kernel-owned buffer model all the expensive setup (page allocation, SGL
+ * build, DMA mapping) happens once at SLASH_QDMA_IOCTL_BUF_CREATE time, so the
+ * steady-state transfer cost is dominated by the libqdma submit/completion.
+ */
+#ifndef SLASH_QDMA_TIMING
+#define SLASH_QDMA_TIMING 0
 #endif
 
 /* Forward declaration; full definition follows. */
@@ -503,44 +586,57 @@ slash_qdma_qpair_remove(struct slash_qdma_dev *qdma_dev, u32 qid)
 
 /**
  * struct slash_qdma_qpair_file_ctx - Private data for an anon_inode qpair fd.
- * @qdma_dev: Back-pointer to the owning QDMA device (ref held).
- * @entry:    The queue pair entry this fd operates on (ref held).
- * @qid:      Queue pair ID, cached for debug logging.
+ * @qdma_dev:  Back-pointer to the owning QDMA device (ref held).
+ * @entries:   The queue pair entries this fd operates on (one ref each).
+ *             A transfer sub-transfer's qpair_index selects an entry here.
+ * @qids:      Queue pair IDs, cached for debug logging.
+ * @n_qpairs:  Number of valid entries in @entries / @qids
+ *             (1..SLASH_QDMA_FD_MAX_QPAIRS).
  *
  * Allocated in slash_qdma_ioctl_qpair_get_fd_w() and freed in
- * slash_qdma_qpair_release().  Both @qdma_dev and @entry have their
- * reference counts incremented when the ctx is created, and decremented
- * when the fd is closed.
+ * slash_qdma_qpair_release().  @qdma_dev and each entry have their reference
+ * counts incremented when the ctx is created, and decremented when the fd is
+ * closed.
  */
 struct slash_qdma_qpair_file_ctx {
     struct slash_qdma_dev *qdma_dev;
-    struct slash_qdma_qpair_entry *entry;
-    u32 qid;
+    struct slash_qdma_qpair_entry *entries[SLASH_QDMA_FD_MAX_QPAIRS];
+    u32 qids[SLASH_QDMA_FD_MAX_QPAIRS];
+    u32 n_qpairs;
 };
 
 /**
- * struct slash_qdma_io_cb - I/O control block for a single DMA transfer.
- * @buf:      User-space buffer address (source for H2C, destination for C2H).
- * @len:      Transfer length in bytes.
- * @pages_nr: Number of user pages pinned by get_user_pages_fast().
- * @sgl:      Scatter-gather list of qdma_sw_sg entries, one per pinned page.
- *            Allocated as a single contiguous block together with @pages.
- * @pages:    Array of struct page pointers for the pinned user pages.
- *            Points into the same allocation as @sgl (immediately after it).
- * @req:      The libqdma request structure submitted to qdma_request_submit().
+ * struct slash_qdma_buf - A kernel-owned, mmap-able DMA buffer.
+ * @ref:        Reference count.  The buffer fd holds one ref, each live VMA
+ *              (mmap) holds one ref, and each in-flight transfer holds a
+ *              temporary ref so a close cannot tear the buffer down under
+ *              active DMA or while userspace still has it mapped.
+ * @qdma_dev:   Device whose DMA mappings back this buffer (holds a device
+ *              reference for the lifetime of the buffer object).
+ * @length:     Buffer length in bytes (a multiple of @granule).
+ * @granule:    Bytes per SGL entry / page (PAGE_SIZE).  Uniform across all
+ *              entries, so transfer slices are computed by simple division.
+ * @pages_nr:   Number of base pages backing the buffer (length / granule).
+ * @pages:      Array of @pages_nr kernel pages (alloc_page()), not physically
+ *              contiguous.  Used both for the CPU mmap and the DMA SGL.
+ * @sgl:        Prebuilt scatter-gather list, one entry per page, each with its
+ *              dma_addr filled in once at creation so transfers submit with
+ *              req->dma_mapped = 1.
+ * @dma_mapped: True once @sgl entries have been DMA-mapped.
  *
- * This is a stack-local structure (allocated in slash_qdma_qpair_read_write)
- * that bundles all per-transfer state.  The SGL and page array are heap-
- * allocated in slash_qdma_map_user_buf_to_sgl() and freed in
- * slash_qdma_iocb_release().
+ * All expensive setup (page allocation, SGL construction, DMA mapping) happens
+ * once at creation; the transfer fast path only slices @sgl, syncs the touched
+ * pages, and submits.
  */
-struct slash_qdma_io_cb {
-    void __user *buf;
-    size_t len;
+struct slash_qdma_buf {
+    struct kref ref;
+    struct slash_qdma_dev *qdma_dev;
+    u64 length;
+    u32 granule;
     unsigned int pages_nr;
-    struct qdma_sw_sg *sgl;
     struct page **pages;
-    struct qdma_request req;
+    struct qdma_sw_sg *sgl;
+    bool dma_mapped;
 };
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -586,32 +682,37 @@ static int slash_qdma_ioctl_qpair_op_apply(struct slash_qdma_dev *qdma_dev,
 static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
                                            struct slash_qdma_dev *qdma_dev,
                                            void __user *uarg);
+static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
+                                          struct slash_qdma_dev *qdma_dev,
+                                          void __user *uarg);
+static void slash_qdma_buf_release(struct kref *ref);
+static void slash_qdma_buf_put(struct slash_qdma_buf *buf);
+static long slash_qdma_qpair_transfer(struct file *file, void __user *uarg);
 
-static ssize_t slash_qdma_qpair_read(struct file *file, char __user *buf,
-                                     size_t count, loff_t *ppos);
-static ssize_t slash_qdma_qpair_write(struct file *file, const char __user *buf,
-                                      size_t count, loff_t *ppos);
 static int slash_qdma_qpair_release(struct inode *inode, struct file *file);
 static long slash_qdma_qpair_ioctl(struct file *file,
                                    unsigned int cmd, unsigned long arg);
+#if defined(SLASH_HAVE_URING_CMD)
+static int slash_qdma_qpair_uring_cmd(struct io_uring_cmd *cmd,
+                                      unsigned int issue_flags);
+#endif
 
 /**
  * slash_qdma_qpair_fops - File operations for per-qpair anon_inode fds.
  *
- * read()  performs a C2H (card-to-host) DMA transfer.
- * write() performs an H2C (host-to-card) DMA transfer.
- * llseek  uses default_llseek so that pread/pwrite can set the
- *         device-side address via the file position.
- * ioctl   is a stub that returns -ENOTTY (no per-fd ioctls defined yet).
- * release drops the refs on the qpair entry and device.
+ * ioctl    performs buffer DMA transfers and buffer creation for clients that
+ *          only hold a queue-pair fd.
+ * uring_cmd (optional) is the asynchronous equivalent of the transfer ioctl,
+ *          available only on kernels with io_uring uring_cmd support.
+ * release  drops the refs on the bound qpair entries and device.
  */
 static const struct file_operations slash_qdma_qpair_fops = {
     .owner          = THIS_MODULE,
-    .read           = slash_qdma_qpair_read,
-    .write          = slash_qdma_qpair_write,
     .unlocked_ioctl = slash_qdma_qpair_ioctl,
+#if defined(SLASH_HAVE_URING_CMD)
+    .uring_cmd      = slash_qdma_qpair_uring_cmd,
+#endif
     .release        = slash_qdma_qpair_release,
-    .llseek         = default_llseek,
 };
 
 
@@ -625,10 +726,12 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc, struct slash_qdma_dev
 /**
  * slash_qdma_ids - PCI device ID table for the QDMA PF.
  *
- * Matches only PF1 (device ID 0x50B5) on AMD/Xilinx V80 cards.
+ * Matches PF1 QDMA functions on AMD/Xilinx V80 cards, including the
+ * AVED/V80P device ID.
  */
 static const struct pci_device_id slash_qdma_ids[] = {
     {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_QDMA_PCI_DEVICE_ID)},
+    {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_AVED_QDMA_PCI_DEVICE_ID)},
     {0,}
 };
 MODULE_DEVICE_TABLE(pci, slash_qdma_ids);
@@ -851,6 +954,287 @@ void slash_qdma_exit(void)
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+ * CPM5 Host Profile context programming
+ * ───────────────────────────────────────────────────────────────────── */
+
+/**
+ * slash_qdma_hp_set_field() - Set a bit field in the host profile context.
+ * @words: Array of SLASH_QDMA_HP_NUM_WORDS u32s holding the 256-bit context
+ *         (word i covers bits [32*i+31 : 32*i]).
+ * @hi:    Most-significant bit index of the field (inclusive).
+ * @lo:    Least-significant bit index of the field (inclusive).
+ * @val:   Value to place in [hi:lo]; bits outside the field width are masked.
+ *
+ * Handles fields that straddle a 32-bit word boundary (e.g. the C2H
+ * AXI4-MM steering field at bits [97:94], which spans words 2 and 3).
+ */
+static void slash_qdma_hp_set_field(u32 *words, unsigned int hi,
+                                    unsigned int lo, u32 val)
+{
+    unsigned int width = hi - lo + 1;
+    u32 fmask = (width >= 32) ? ~0u : ((1u << width) - 1u);
+    unsigned int word = lo >> 5;
+    unsigned int off = lo & 31;
+    u64 wmask = (u64)fmask << off;
+    u64 wval = (u64)(val & fmask) << off;
+
+    words[word] = (words[word] & ~(u32)(wmask & 0xFFFFFFFFu)) |
+                  (u32)(wval & 0xFFFFFFFFu);
+
+    if ((off + width) > 32 && (word + 1) < SLASH_QDMA_HP_NUM_WORDS)
+        words[word + 1] = (words[word + 1] & ~(u32)(wmask >> 32)) |
+                          (u32)(wval >> 32);
+}
+
+/**
+ * slash_qdma_hp_wait_ready() - Poll the indirect-context BUSY bit.
+ * @device:  QDMA device (provides the libqdma handle for register access).
+ * @val_out: If non-NULL, receives the last QDMA_IND_CTXT_CMD value read.
+ *
+ * Spins (up to SLASH_QDMA_HP_POLL_US microseconds) until the indirect
+ * context command BUSY bit clears.  Logging is left to the caller so the
+ * write path can treat a timeout as fatal while the readback path can treat
+ * it as a warning.
+ *
+ * Return: 0 once not busy, -ETIMEDOUT on timeout, or a negative errno from
+ *         the register read.
+ */
+static int slash_qdma_hp_wait_ready(struct slash_qdma_dev *device, u32 *val_out)
+{
+    unsigned int waited_us = 0;
+    u32 val = 0;
+    int err;
+
+    do {
+        err = qdma_device_read_config_register(device->qdma_handle,
+                SLASH_QDMA_HP_CMD_ADDR, &val);
+        if (err)
+            return err;
+        if (!(val & SLASH_QDMA_HP_CMD_BUSY)) {
+            if (val_out)
+                *val_out = val;
+            return 0;
+        }
+        udelay(1);
+    } while (++waited_us < SLASH_QDMA_HP_POLL_US);
+
+    if (val_out)
+        *val_out = val;
+    return -ETIMEDOUT;
+}
+
+/**
+ * slash_qdma_hp_get_field() - Read a bit field from the host profile context.
+ * @words: Array of SLASH_QDMA_HP_NUM_WORDS u32s holding the 256-bit context
+ *         (word i covers bits [32*i+31 : 32*i]).
+ * @hi:    Most-significant bit index of the field (inclusive).
+ * @lo:    Least-significant bit index of the field (inclusive).
+ *
+ * Inverse of slash_qdma_hp_set_field(); handles fields that straddle a
+ * 32-bit word boundary (e.g. the C2H AXI4-MM steering field at bits
+ * [97:94], which spans words 2 and 3).
+ *
+ * Return: the value held in [hi:lo].
+ */
+static u32 slash_qdma_hp_get_field(const u32 *words, unsigned int hi,
+                                   unsigned int lo)
+{
+    unsigned int width = hi - lo + 1;
+    u32 fmask = (width >= 32) ? ~0u : ((1u << width) - 1u);
+    unsigned int word = lo >> 5;
+    unsigned int off = lo & 31;
+    u64 two = (u64)words[word];
+
+    if ((word + 1) < SLASH_QDMA_HP_NUM_WORDS)
+        two |= (u64)words[word + 1] << 32;
+
+    return (u32)((two >> off) & fmask);
+}
+
+/**
+ * slash_qdma_read_host_profile() - Read one CPM5 Host Profile entry back.
+ * @device:  QDMA device (provides the libqdma handle for register access).
+ * @host_id: Host Profile index to read.
+ * @out:     Array of SLASH_QDMA_HP_NUM_WORDS u32s that receives the 256-bit
+ *           context.
+ *
+ * Issues an indirect-context RD command for the host-profile selector,
+ * waits for the controller to complete it, and copies the IND_CTXT_DATA
+ * words back.  Used to verify a preceding write.
+ *
+ * Return: 0 on success, negative errno on register-access error or
+ *         -ETIMEDOUT if the BUSY bit never clears.
+ */
+static int slash_qdma_read_host_profile(struct slash_qdma_dev *device,
+                                        u32 host_id, u32 *out)
+{
+    u32 cmd = (host_id << 7) | (SLASH_QDMA_HP_OP_RD << 5) |
+              (SLASH_QDMA_HP_SEL << 1);
+    int err;
+    int i;
+
+    err = qdma_device_write_config_register(device->qdma_handle,
+            SLASH_QDMA_HP_CMD_ADDR, cmd);
+    if (err)
+        return err;
+
+    err = slash_qdma_hp_wait_ready(device, NULL);
+    if (err)
+        return err;
+
+    for (i = 0; i < SLASH_QDMA_HP_NUM_WORDS; i++) {
+        err = qdma_device_read_config_register(device->qdma_handle,
+                SLASH_QDMA_HP_DATA_ADDR + (i * sizeof(u32)), &out[i]);
+        if (err)
+            return err;
+    }
+
+    return 0;
+}
+
+/**
+ * slash_qdma_write_host_profile() - Program and verify one CPM5 Host Profile.
+ * @device:  QDMA device (provides the libqdma handle for register access).
+ * @host_id: Host Profile index to program (also the AXI4-MM steering value,
+ *           i.e. the target NoC channel).
+ *
+ * Builds the 256-bit host profile context with the SMID and H2C/C2H
+ * AXI4-MM steering fields, writes it through the indirect-context
+ * registers via the libqdma-exported config register accessors, and
+ * polls the command BUSY bit until the controller completes the write.
+ *
+ * Once the write completes it reads the profile back and verifies the
+ * programmed fields (SMID and the two steering fields); a readback error
+ * or field mismatch is logged but is non-fatal (the profile is still
+ * considered applied).
+ *
+ * Only the SMID and the two steering fields are non-zero; the AXI
+ * prot/cache attributes are left at 0.
+ *
+ * Return: 0 on success, negative errno on register-access error or
+ *         -ETIMEDOUT if the BUSY bit never clears.
+ */
+static int slash_qdma_write_host_profile(struct slash_qdma_dev *device,
+                                         u32 host_id)
+{
+    u32 data[SLASH_QDMA_HP_NUM_WORDS] = {0};
+    u32 smid = SLASH_QDMA_HP_SMID_BASE + host_id;
+    u32 cmd;
+    u32 val = 0;
+    int err;
+    int i;
+
+    /* SMID [201:192]; H2C steering [181:178]; C2H steering [97:94]. */
+    slash_qdma_hp_set_field(data, 201, 192, smid);
+    slash_qdma_hp_set_field(data, 181, 178, host_id);
+    slash_qdma_hp_set_field(data, 97, 94, host_id);
+
+    /* Context data words. */
+    for (i = 0; i < SLASH_QDMA_HP_NUM_WORDS; i++) {
+        err = qdma_device_write_config_register(device->qdma_handle,
+                SLASH_QDMA_HP_DATA_ADDR + (i * sizeof(u32)), data[i]);
+        if (err)
+            goto err_reg;
+    }
+
+    /* Context masks: write every bit. */
+    for (i = 0; i < SLASH_QDMA_HP_NUM_WORDS; i++) {
+        err = qdma_device_write_config_register(device->qdma_handle,
+                SLASH_QDMA_HP_MASK_ADDR + (i * sizeof(u32)), 0xFFFFFFFFu);
+        if (err)
+            goto err_reg;
+    }
+
+    /* Command: qid=host_id, op=WR, sel=HOST_PROFILE (0x34 for id 0, 0xB4 for id 1). */
+    cmd = (host_id << 7) | (SLASH_QDMA_HP_OP_WR << 5) | (SLASH_QDMA_HP_SEL << 1);
+    err = qdma_device_write_config_register(device->qdma_handle,
+            SLASH_QDMA_HP_CMD_ADDR, cmd);
+    if (err)
+        goto err_reg;
+
+    /* Wait for the controller to consume the command. */
+    err = slash_qdma_hp_wait_ready(device, &val);
+    if (err == -ETIMEDOUT) {
+        dev_err(&device->pdev->dev,
+                "qdma: host profile %u programming timed out (cmd=0x%x)\n",
+                host_id, val);
+        return -ETIMEDOUT;
+    }
+    if (err)
+        goto err_reg;
+
+    /*
+     * Read the profile back and verify the programmed fields.  A readback
+     * error or field mismatch is non-fatal: the write itself completed, so
+     * the profile is still considered applied.
+     */
+    {
+        u32 rb[SLASH_QDMA_HP_NUM_WORDS] = {0};
+        int rerr = slash_qdma_read_host_profile(device, host_id, rb);
+
+        if (rerr) {
+            dev_warn(&device->pdev->dev,
+                     "slash: qdma: host profile %u applied (cmd=0x%02x) but readback failed: %d\n",
+                     host_id, cmd, rerr);
+        } else {
+            u32 smid_rb = slash_qdma_hp_get_field(rb, 201, 192);
+            u32 h2c_rb = slash_qdma_hp_get_field(rb, 181, 178);
+            u32 c2h_rb = slash_qdma_hp_get_field(rb, 97, 94);
+
+            if (smid_rb == smid && h2c_rb == host_id && c2h_rb == host_id) {
+                dev_info(&device->pdev->dev,
+                         "slash: qdma: host profile %u applied and readback verified: H2C/C2H AXI-MM steering=%u (NoC channel %u), smid=0x%03x (cmd=0x%02x)\n",
+                         host_id, host_id, host_id, smid, cmd);
+            } else {
+                dev_err(&device->pdev->dev,
+                        "slash: qdma: host profile %u readback MISMATCH: smid exp=0x%03x got=0x%03x, h2c exp=%u got=%u, c2h exp=%u got=%u\n",
+                        host_id, smid, smid_rb, host_id, h2c_rb,
+                        host_id, c2h_rb);
+            }
+        }
+    }
+    return 0;
+
+err_reg:
+    dev_err(&device->pdev->dev,
+            "qdma: host profile %u register access failed: %d\n",
+            host_id, err);
+    return err;
+}
+
+/**
+ * slash_qdma_program_host_profiles() - Program the CPM5 Host Profiles.
+ * @device: QDMA device.
+ *
+ * Programs Host Profile 0 (steer to NoC Channel 0) and Host Profile 1
+ * (steer to NoC Channel 1).  Must run after qdma_device_open() (which
+ * clears all contexts) and before any queue context is programmed, per
+ * the CPM5 requirement that the host profile exist before AXI4-MM
+ * queues are set up.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+static int slash_qdma_program_host_profiles(struct slash_qdma_dev *device)
+{
+    u32 host_id;
+    int err;
+
+    dev_info(&device->pdev->dev,
+             "slash: qdma: programming CPM5 host profiles (host_id 0 -> NoC channel 0, host_id 1 -> NoC channel 1)\n");
+
+    for (host_id = 0; host_id <= 1; host_id++) {
+        err = slash_qdma_write_host_profile(device, host_id);
+        if (err)
+            return err;
+    }
+
+    dev_info(&device->pdev->dev,
+             "slash: qdma: CPM5 host profiles programmed\n");
+
+    return 0;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * PCI probe / remove
  * ───────────────────────────────────────────────────────────────────── */
 
@@ -911,6 +1295,20 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
                           "qdma_device_open done: handle=%lu\n",
                           device->qdma_handle);
     device->have_qdma_handle = true;
+
+    /*
+     * Program the CPM5 Host Profiles before exposing the miscdevice, so
+     * they exist before userspace can add any queue.  Host ID 0 steers
+     * AXI4-MM traffic to NoC Channel 0 and Host ID 1 to NoC Channel 1;
+     * the per-queue SW-context host_id (mirrored from mm_channel = qid & 1)
+     * selects between them.
+     */
+    err = slash_qdma_program_host_profiles(device);
+    if (err) {
+        dev_err(&pdev->dev,
+                "slash: qdma: could not program host profiles: %d", err);
+        goto err_free;
+    }
 
     /* Register the management miscdevice so userspace can issue ioctls. */
     err = misc_register(&device->misc);
@@ -1236,12 +1634,14 @@ static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *
 static long slash_qdma_fop_ioctl(struct file *file, unsigned int op, unsigned long arg)
 {
     struct slash_qdma_dev *qdma_dev = file->private_data;
-    struct miscdevice *misc = &qdma_dev->misc;
+    struct miscdevice *misc;
     void __user *uarg = (void __user *)arg;
     long ret = 0;
 
     if (!qdma_dev)
         return -ENODEV;
+
+    misc = &qdma_dev->misc;
 
     SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev, "ioctl op=0x%x\n", op);
 
@@ -1270,6 +1670,10 @@ static long slash_qdma_fop_ioctl(struct file *file, unsigned int op, unsigned lo
         ret = slash_qdma_ioctl_qpair_get_fd_w(misc, qdma_dev, uarg);
         break;
 
+    case SLASH_QDMA_IOCTL_BUF_CREATE:
+        ret = slash_qdma_ioctl_buf_create_w(misc, qdma_dev, uarg);
+        break;
+
     default:
         ret = -ENOTTY;
         break;
@@ -1295,18 +1699,18 @@ static int slash_qdma_fop_open(struct inode *inode, struct file *file)
     struct miscdevice *misc = file->private_data;
     struct slash_qdma_dev *qdma_dev =
         container_of(misc, struct slash_qdma_dev, misc);
-    int ret = 0;
 
     mutex_lock(&qdma_dev->lock);
     if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
-        ret = -ENODEV;
-    } else {
-        kref_get(&qdma_dev->ref);
-        file->private_data = qdma_dev;
+        mutex_unlock(&qdma_dev->lock);
+        return -ENODEV;
     }
+    kref_get(&qdma_dev->ref);
     mutex_unlock(&qdma_dev->lock);
 
-    return ret;
+    file->private_data = qdma_dev;
+
+    return 0;
 }
 
 /**
@@ -1323,8 +1727,12 @@ static int slash_qdma_fop_release(struct inode *inode, struct file *file)
 {
     struct slash_qdma_dev *qdma_dev = file->private_data;
 
-    if (qdma_dev)
-        kref_put(&qdma_dev->ref, slash_qdma_dev_release);
+    if (!qdma_dev)
+        return 0;
+
+    kref_put(&qdma_dev->ref, slash_qdma_dev_release);
+
+    file->private_data = NULL;
 
     return 0;
 }
@@ -1481,6 +1889,12 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     if (req.h2c_ring_sz >= 16 || req.c2h_ring_sz >= 16 || req.cmpt_ring_sz >= 16)
         return -EINVAL;
 
+    /* Validate the per-queue AXI-MM channel selection. */
+    if (req.mm_channel != SLASH_QDMA_MM_CHANNEL_AUTO &&
+        req.mm_channel != SLASH_QDMA_MM_CHANNEL_0 &&
+        req.mm_channel != SLASH_QDMA_MM_CHANNEL_1)
+        return -EINVAL;
+
     mutex_lock(&qdma_dev->lock);
     if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
         mutex_unlock(&qdma_dev->lock);
@@ -1619,8 +2033,9 @@ rollback:
  *     (required for poll-mode operation per the reference driver).
  *   - qconf.cmpl_stat_en = 1: enable completion status generation
  *     (required for poll-mode operation per the reference driver).
- *   - qconf.aperture_size = 4096: page-granularity (4 KB) for descriptor
- *     addressing.  Each descriptor addresses one page-sized chunk.
+ *   - qconf.aperture_size = 0: disables libqdma keyhole mode so MM
+ *     transfers advance linearly through endpoint memory.  Non-zero
+ *     values are keyhole apertures and wrap addresses within that window.
  *   - qconf.desc_rng_sz_idx: CSR table index (0-15) selecting the
  *     descriptor ring depth.  Not a raw descriptor count — the actual
  *     count is looked up from the global CSR ring-size table.
@@ -1664,7 +2079,28 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
     qconf.cmpl_status_pend_chk = 1;                 /* Check pending completions (poll-mode req) */
     qconf.cmpl_stat_en = 1;                         /* Enable completion status generation */
 
-    qconf.aperture_size = 4096;                     /* Page-granularity descriptor addressing */
+    qconf.aperture_size = 0;                        /* Linear MM addressing; non-zero enables keyhole mode */
+    /*
+     * CPM5 exposes two MM channels.  The per-queue mm_channel selection
+     * (validated in slash_qdma_ioctl_qpair_add_w) chooses the channel: AUTO
+     * stripes across channels by (qid & 1); CHANNEL_0/CHANNEL_1 pin to a single
+     * channel.  libqdma mirrors mm_channel into the SW-context host_id, so this
+     * also selects the programmed Host Profile: channel 0 -> Host Profile 0
+     * (NoC Channel 0), channel 1 -> Host Profile 1 (NoC Channel 1).  See
+     * slash_qdma_program_host_profiles().
+     */
+    switch (req->mm_channel) {
+    case SLASH_QDMA_MM_CHANNEL_0:
+        qconf.mm_channel = 0;
+        break;
+    case SLASH_QDMA_MM_CHANNEL_1:
+        qconf.mm_channel = 1;
+        break;
+    case SLASH_QDMA_MM_CHANNEL_AUTO:
+    default:
+        qconf.mm_channel = req->qid & 1;
+        break;
+    }
 
     /* --- Per-direction ring configuration --- */
     switch (qtype) {
@@ -1688,8 +2124,9 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
     }
 
     SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
-                          "qdma_queue_add start: qid=%u type=%u mode=%u\n",
-                          req->qid, qtype, req->mode);
+                          "queue add qid=%u type=%u mode=%u mm_channel=%u (req=%u)\n",
+                          req->qid, qtype, req->mode, qconf.mm_channel,
+                          req->mm_channel);
     err = qdma_queue_add(qdma_dev->qdma_handle, &qconf, &qhndl,
                             errbuf, sizeof(errbuf));
     if (err) {
@@ -1704,6 +2141,38 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
     SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
                           "qdma_queue_add done: qid=%u type=%u qhndl=%lu\n",
                           req->qid, qtype, qhndl);
+
+    /*
+     * Reconfigure the queue immediately after adding it.
+     *
+     * qdma_queue_add() runs qdma_descq_config(..., reconfig=0), which on
+     * Versal hard IP does NOT mirror qconf.mm_channel into descq->channel --
+     * only the reconfig=1 branch does.  descq->channel feeds the SW-context
+     * mm_chn/host_id programmed when the queue is started; without this step
+     * it would stay 0 and collapse both queues onto NoC channel 0, defeating
+     * mm-channel selection.  Calling qdma_queue_config() here (the queue is in
+     * Q_STATE_ENABLED, before start) replays the same qconf through the
+     * reconfig=1 path, setting descq->channel.  This replaces the former
+     * 0002-libqdma-versal-channel.patch without modifying libqdma.
+     */
+    err = qdma_queue_config(qdma_dev->qdma_handle, qhndl, &qconf,
+                            errbuf, sizeof(errbuf));
+    if (err) {
+        SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
+                              "qdma_queue_config failed: qid=%u type=%u err=%d (%s)\n",
+                              req->qid, qtype, err, errbuf);
+        dev_err(&qdma_dev->pdev->dev,
+                "qdma: queue config failed (qid=%u, type=%u): %d (%s)\n",
+                req->qid, qtype, err, errbuf);
+        /*
+         * The queue was added but is not yet tracked in @entry, so the
+         * caller's rollback (keyed on its local added[] array) will not
+         * reach it.  Remove it here to avoid leaking the libqdma queue.
+         */
+        slash_qdma_queue_remove_safe(qdma_dev->qdma_handle, qhndl,
+                                     errbuf, sizeof(errbuf));
+        return err;
+    }
 
     /* Record the handle and mark this direction as active. */
     entry->qhndl[qtype] = qhndl;
@@ -1973,339 +2442,1022 @@ static int slash_qdma_ioctl_qpair_op_apply(struct slash_qdma_dev *qdma_dev,
 }
 
 /* ─────────────────────────────────────────────────────────────────────
- * DMA I/O: user buffer mapping, SGL construction, and transfer
+ * Kernel DMA buffers: page allocation, SGL, DMA mapping, mmap
+ *
+ * A buffer owns a set of individually-allocated 4 KiB base pages (not
+ * physically contiguous).  At creation time the pages are allocated, a
+ * one-descriptor-per-page SGL is built, and every page is DMA-mapped once;
+ * the steady-state transfer path then only slices the SGL, syncs the touched
+ * pages for the relevant DMA direction, and submits.  The same pages are also
+ * exposed to userspace through the buffer fd's mmap, so the CPU and the DMA
+ * engine share one allocation, coherent only at the transfer boundaries.
  * ───────────────────────────────────────────────────────────────────── */
 
 /**
- * slash_qdma_iocb_release() - Free resources in an I/O control block.
- * @iocb: The IOCB to clean up.
+ * slash_qdma_buf_dma_unmap() - Tear down the cached DMA mapping of a buffer.
+ * @buf: Buffer whose SGL entries were DMA-mapped.
  *
- * Frees the combined SGL + page-pointer allocation and clears the
- * pointers.  Does not unpin pages — that must be done separately via
- * slash_qdma_unmap_user_buf() before calling this.
+ * Unmaps every SGL entry that carries a non-zero dma_addr and clears it.
+ * Safe to call on a partially-mapped buffer (used on the create error path).
  */
-static inline void slash_qdma_iocb_release(struct slash_qdma_io_cb *iocb)
+static void slash_qdma_buf_dma_unmap(struct slash_qdma_buf *buf)
 {
-    if (iocb->pages)
-        iocb->pages = NULL;
+    struct device *dev = &buf->qdma_dev->pdev->dev;
+    unsigned int i;
 
-    kfree(iocb->sgl);
-    iocb->sgl = NULL;
-    iocb->buf = NULL;
-}
-
-/**
- * slash_qdma_unmap_user_buf() - Unpin user pages after a DMA transfer.
- * @iocb:  I/O control block with pinned pages.
- * @write: Transfer direction from the device's perspective.  If false
- *         (i.e., a C2H/read transfer), the pages were written to by the
- *         device and must be marked dirty so the VM knows the page
- *         contents have changed.
- *
- * Iterates over pinned pages, marks them dirty if this was a read (C2H)
- * transfer (because the device wrote data into those user pages), and
- * releases each page reference acquired by get_user_pages_fast().
- */
-static void slash_qdma_unmap_user_buf(struct slash_qdma_io_cb *iocb, bool write)
-{
-    int i;
-
-    if (!iocb->pages || !iocb->pages_nr)
+    if (!buf->sgl || !buf->dma_mapped)
         return;
 
-    for (i = 0; i < iocb->pages_nr; i++) {
-        if (iocb->pages[i]) {
-            /*
-             * For C2H (read) transfers (!write), the device wrote into
-             * these user pages, so mark them dirty to inform the VM.
-             */
-            if (!write)
-                set_page_dirty(iocb->pages[i]);
-            put_page(iocb->pages[i]);
-        } else {
-            break;
+    for (i = 0; i < buf->pages_nr; i++) {
+        struct qdma_sw_sg *sg = &buf->sgl[i];
+
+        if (sg->dma_addr) {
+            dma_unmap_page(dev, sg->dma_addr, sg->len, DMA_BIDIRECTIONAL);
+            sg->dma_addr = 0UL;
         }
     }
 
-    if (i != iocb->pages_nr)
-        pr_err("slash: qdma: sgl pages %d/%u.\n", i, iocb->pages_nr);
-
-    iocb->pages_nr = 0;
+    buf->dma_mapped = false;
 }
 
 /**
- * slash_qdma_map_user_buf_to_sgl() - Pin user pages and build a scatter-gather list.
- * @iocb:  I/O control block.  @iocb->buf and @iocb->len must be set
- *         before calling.  On success, @iocb->sgl, @iocb->pages, and
- *         @iocb->pages_nr are populated.
- * @write: Transfer direction (true = H2C write, false = C2H read).
+ * slash_qdma_buf_dma_map() - DMA-map every SGL entry of a buffer.
+ * @buf: Buffer with a freshly built SGL.
  *
- * Steps:
- *   1. Compute the number of pages spanned by the user buffer (accounting
- *      for the offset within the first page).
- *   2. Allocate a single contiguous block for the SGL entries and the
- *      page pointer array (avoids two allocations).
- *   3. Pin user pages via get_user_pages_fast() with write=1 (even for
- *      H2C, because libqdma may write status back).
- *   4. Build the qdma_sw_sg linked list: one entry per page, with the
- *      first entry's offset reflecting the sub-page position of the
- *      user buffer, and the last entry's length truncated to the
- *      remaining byte count.
- *   5. Flush the data cache for each page to ensure coherency between
- *      the CPU cache and the DMA engine's view of memory.
+ * Maps each page with DMA_BIDIRECTIONAL so the same cached mapping serves both
+ * H2C and C2H transfers.  On any failure all previously mapped entries are
+ * unmapped before returning.
  *
- * Return: 0 on success, negative errno on failure (pages are unpinned
- *         and the SGL is freed on error).
+ * Return: 0 on success, negative errno on failure.
  */
-static int slash_qdma_map_user_buf_to_sgl(struct slash_qdma_io_cb *iocb,
-                                          bool write)
+static int slash_qdma_buf_dma_map(struct slash_qdma_buf *buf)
 {
-    unsigned long len = iocb->len;
-    char *buf = (char *)iocb->buf;
-    struct qdma_sw_sg *sg;
-    unsigned int pg_off = offset_in_page(buf);
-    unsigned int pages_nr = (len + pg_off + PAGE_SIZE - 1) >> PAGE_SHIFT;
-    int i;
+    struct device *dev = &buf->qdma_dev->pdev->dev;
+    unsigned int i;
+
+    for (i = 0; i < buf->pages_nr; i++) {
+        struct qdma_sw_sg *sg = &buf->sgl[i];
+
+        sg->dma_addr = dma_map_page(dev, sg->pg, sg->offset, sg->len,
+                                    DMA_BIDIRECTIONAL);
+        if (dma_mapping_error(dev, sg->dma_addr)) {
+            sg->dma_addr = 0UL;
+            pr_err("slash: qdma: buffer DMA map failed at entry %u/%u\n",
+                   i, buf->pages_nr);
+            buf->dma_mapped = true; /* allow unmap of the entries done so far */
+            slash_qdma_buf_dma_unmap(buf);
+            return -ENOMEM;
+        }
+    }
+
+    buf->dma_mapped = true;
+    return 0;
+}
+
+/**
+ * slash_qdma_buf_free_pages() - Free a buffer's pages and SGL.
+ * @buf: Buffer to tear down.
+ *
+ * Releases each allocated page (put_page() so pages still mapped into a VMA
+ * stay alive until the last mapping is torn down) and frees the SGL/page
+ * arrays.  The DMA mapping must already have been removed.
+ */
+static void slash_qdma_buf_free_pages(struct slash_qdma_buf *buf)
+{
+    unsigned int i;
+
+    if (buf->pages) {
+        for (i = 0; i < buf->pages_nr; i++) {
+            if (buf->pages[i])
+                put_page(buf->pages[i]);
+        }
+    }
+
+    kvfree(buf->pages);
+    buf->pages = NULL;
+    kvfree(buf->sgl);
+    buf->sgl = NULL;
+    buf->pages_nr = 0;
+}
+
+/**
+ * slash_qdma_buf_alloc() - Allocate pages, build the SGL, and DMA-map.
+ * @buf: Buffer with @length and @qdma_dev set; @granule defaults to PAGE_SIZE.
+ *
+ * Allocates @length / PAGE_SIZE individual base pages (not contiguous), builds
+ * a one-page-per-entry SGL, and DMA-maps every page.  All of this is the
+ * amortised, do-it-once setup cost paid by SLASH_QDMA_IOCTL_BUF_CREATE.
+ *
+ * Return: 0 on success, negative errno on failure (partial state cleaned up).
+ */
+static int slash_qdma_buf_alloc(struct slash_qdma_buf *buf)
+{
+    size_t entries = buf->length / PAGE_SIZE;
+    unsigned int i;
     int rv;
 
-    if (len == 0)
-        pages_nr = 1;
-    if (pages_nr == 0)
+    if (buf->length == 0 || (buf->length % PAGE_SIZE) != 0 ||
+        entries == 0 || entries > UINT_MAX)
         return -EINVAL;
 
-    iocb->pages_nr = 0;
+    buf->granule = PAGE_SIZE;
+    buf->pages_nr = (unsigned int)entries;
 
-    /*
-     * Single allocation for both the SGL array and the page pointer
-     * array.  The page pointers are placed immediately after the SGL
-     * entries in memory.
-     */
-    sg = kmalloc(pages_nr * (sizeof(struct qdma_sw_sg) +
-                             sizeof(struct page *)), GFP_KERNEL);
-    if (!sg) {
-        pr_err("slash: qdma: sgl allocation failed for %u pages\n",
-               pages_nr);
+    buf->pages = kvcalloc(entries, sizeof(*buf->pages), GFP_KERNEL);
+    if (!buf->pages)
+        return -ENOMEM;
+
+    buf->sgl = kvcalloc(entries, sizeof(*buf->sgl), GFP_KERNEL);
+    if (!buf->sgl) {
+        kvfree(buf->pages);
+        buf->pages = NULL;
         return -ENOMEM;
     }
-    memset(sg, 0, pages_nr * (sizeof(struct qdma_sw_sg) +
-                              sizeof(struct page *)));
-    iocb->sgl = sg;
 
-    /* Page pointer array lives right after the SGL entries. */
-    iocb->pages = (struct page **)(sg + pages_nr);
+    for (i = 0; i < entries; i++) {
+        struct page *pg = alloc_page(GFP_KERNEL | __GFP_ZERO);
+        struct qdma_sw_sg *sg = &buf->sgl[i];
 
-    /*
-     * Pin the user pages into physical memory.  The write=1 flag tells
-     * the kernel these pages may be written to (needed for C2H, but we
-     * always request write permission for simplicity).
-     */
-    rv = get_user_pages_fast((unsigned long)buf, pages_nr,
-                             1 /* write */, iocb->pages);
-    if (rv < 0) {
-        pr_err("slash: qdma: unable to pin down %u user pages, %d\n",
-               pages_nr, rv);
-        goto err_out;
-    }
-    if (rv != pages_nr) {
-        pr_err("slash: qdma: unable to pin down all %u user pages, %d\n",
-               pages_nr, rv);
-        iocb->pages_nr = rv;
-        rv = -EFAULT;
-        goto err_out;
-    }
+        if (!pg) {
+            rv = -ENOMEM;
+            goto err_free;
+        }
 
-    /*
-     * Build the scatter-gather list.  Each entry describes one page's
-     * worth of data.  The first page may have a non-zero offset, and
-     * the last page may have fewer than PAGE_SIZE bytes.
-     */
-    sg = iocb->sgl;
-    for (i = 0; i < pages_nr; i++, sg++) {
-        unsigned int offset = offset_in_page(buf);
-        unsigned int nbytes = min_t(unsigned int,
-                                    PAGE_SIZE - offset, len);
-        struct page *pg = iocb->pages[i];
-
-        /* Ensure CPU cache is flushed so the DMA engine sees fresh data. */
-        flush_dcache_page(pg);
-
-        sg->next = sg + 1;
+        buf->pages[i] = pg;
+        sg->next = (i + 1 < entries) ? &buf->sgl[i + 1] : NULL;
         sg->pg = pg;
-        sg->offset = offset;
-        sg->len = nbytes;
+        sg->offset = 0;
+        sg->len = PAGE_SIZE;
         sg->dma_addr = 0UL;
-
-        buf += nbytes;
-        len -= nbytes;
     }
 
-    /* Terminate the linked list. */
-    iocb->sgl[pages_nr - 1].next = NULL;
-    iocb->pages_nr = pages_nr;
+    rv = slash_qdma_buf_dma_map(buf);
+    if (rv < 0)
+        goto err_free;
+
     return 0;
 
-err_out:
-    slash_qdma_unmap_user_buf(iocb, write);
-    slash_qdma_iocb_release(iocb);
-
+err_free:
+    slash_qdma_buf_free_pages(buf);
     return rv;
 }
 
 /**
- * slash_qdma_qpair_read_write() - Perform a DMA transfer via a qpair fd.
- * @file:  The anon_inode file for this queue pair.
- * @buf:   User-space buffer (source for write/H2C, destination for read/C2H).
- * @count: Number of bytes to transfer.
- * @ppos:  File position — used as the device-side (endpoint) address.
- *         Updated on success to reflect the bytes transferred, enabling
- *         sequential positional I/O.
- * @write: true for H2C (host-to-card write), false for C2H (card-to-host read).
+ * slash_qdma_buf_sync_for_device() - Hand a transfer slice to the device.
+ * @buf:         Buffer being transferred.
+ * @start_entry: First page index of the slice.
+ * @n_entries:   Number of pages in the slice.
+ * @dir:         DMA direction (DMA_TO_DEVICE for H2C, DMA_FROM_DEVICE for C2H).
  *
- * Transfer flow:
- *   1. Validate context and check that the required direction (H2C or C2H)
- *      is enabled on this queue pair.
- *   2. Pin user pages and build a scatter-gather list.
- *   3. Populate a qdma_request:
- *      - ep_addr = *ppos: the device-side address (FPGA memory offset).
- *      - h2c_eot = 1: signals end-of-transfer to the FPGA, allowing it to
- *        process the complete data packet.
- *      - timeout_ms = 10000 (10 seconds): if the transfer doesn't complete
- *        in this time, qdma_request_submit returns an error.
- *      - fp_done = NULL: synchronous mode — the call blocks until completion.
- *        If fp_done were set, libqdma would call it asynchronously.
- *      - dma_mapped = 0: libqdma handles the DMA mapping internally.
- *   4. Submit to libqdma via qdma_request_submit().
- *   5. On success, advance *ppos by the number of bytes transferred.
- *   6. Unpin pages and free the SGL.
- *
- * Return: Number of bytes transferred (>= 0) on success, negative errno
- *         on failure.
+ * Synchronises CPU-written data out to the device (and/or invalidates CPU
+ * caches) for exactly the pages a sub-transfer touches.  On cache-coherent
+ * hosts these are no-ops; on others they bound coherency to the transfer.
  */
-static ssize_t slash_qdma_qpair_read_write(struct file *file, char __user *buf,
-                                           size_t count, loff_t *ppos,
-                                           bool write)
+static void slash_qdma_buf_sync_for_device(struct slash_qdma_buf *buf,
+                                           u64 start_entry, u64 n_entries,
+                                           enum dma_data_direction dir)
 {
-    struct slash_qdma_qpair_file_ctx *ctx = file->private_data;
-    struct slash_qdma_dev *qdma_dev;
-    struct slash_qdma_qpair_entry *entry;
-    struct slash_qdma_io_cb iocb;
-    struct qdma_request *req;
-    unsigned long qhndl;
-    ssize_t res;
+    struct device *dev = &buf->qdma_dev->pdev->dev;
+    u64 i;
+
+    for (i = 0; i < n_entries; i++) {
+        struct qdma_sw_sg *sg = &buf->sgl[start_entry + i];
+
+        dma_sync_single_for_device(dev, sg->dma_addr, sg->len, dir);
+    }
+}
+
+/**
+ * slash_qdma_buf_sync_for_cpu() - Reclaim a transfer slice for the CPU.
+ * @buf:         Buffer being transferred.
+ * @start_entry: First page index of the slice.
+ * @n_entries:   Number of pages in the slice.
+ * @dir:         DMA direction (DMA_FROM_DEVICE for a completed C2H read).
+ *
+ * Makes device-written data visible to the CPU for exactly the pages a C2H
+ * sub-transfer touched.  Called after the transfer completes.
+ */
+static void slash_qdma_buf_sync_for_cpu(struct slash_qdma_buf *buf,
+                                        u64 start_entry, u64 n_entries,
+                                        enum dma_data_direction dir)
+{
+    struct device *dev = &buf->qdma_dev->pdev->dev;
+    u64 i;
+
+    for (i = 0; i < n_entries; i++) {
+        struct qdma_sw_sg *sg = &buf->sgl[start_entry + i];
+
+        dma_sync_single_for_cpu(dev, sg->dma_addr, sg->len, dir);
+    }
+}
+
+/**
+ * slash_qdma_buf_release() - kref release callback for a buffer.
+ * @ref: kref embedded in the slash_qdma_buf being freed.
+ *
+ * Runs when the last reference drops (fd ref, every live VMA ref, and any
+ * in-flight transfer ref).  Tears down the DMA mapping, frees the pages and
+ * SGL, drops the device reference, and frees the struct.
+ */
+static void slash_qdma_buf_release(struct kref *ref)
+{
+    struct slash_qdma_buf *buf =
+        container_of(ref, struct slash_qdma_buf, ref);
+    struct slash_qdma_dev *qdma_dev = buf->qdma_dev;
+
+    slash_qdma_buf_dma_unmap(buf);
+    slash_qdma_buf_free_pages(buf);
+    if (qdma_dev)
+        kref_put(&qdma_dev->ref, slash_qdma_dev_release);
+    kfree(buf);
+}
+
+static inline void slash_qdma_buf_get(struct slash_qdma_buf *buf)
+{
+    kref_get(&buf->ref);
+}
+
+static void slash_qdma_buf_put(struct slash_qdma_buf *buf)
+{
+    kref_put(&buf->ref, slash_qdma_buf_release);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Buffer fd: mmap support and lifetime
+ * ───────────────────────────────────────────────────────────────────── */
+
+/**
+ * slash_qdma_buf_vm_open() - VMA open callback (fork / VMA split).
+ * @vma: The VMA gaining an independent reference.
+ *
+ * Each live VMA holds one buffer reference so the pages (and DMA mapping)
+ * outlive the buffer fd if userspace keeps the mapping after close().
+ */
+static void slash_qdma_buf_vm_open(struct vm_area_struct *vma)
+{
+    struct slash_qdma_buf *buf = vma->vm_private_data;
+
+    if (buf)
+        slash_qdma_buf_get(buf);
+}
+
+/**
+ * slash_qdma_buf_vm_close() - VMA close callback (munmap / exit).
+ * @vma: The VMA being torn down.
+ */
+static void slash_qdma_buf_vm_close(struct vm_area_struct *vma)
+{
+    struct slash_qdma_buf *buf = vma->vm_private_data;
+
+    if (buf)
+        slash_qdma_buf_put(buf);
+}
+
+static const struct vm_operations_struct slash_qdma_buf_vm_ops = {
+    .open  = slash_qdma_buf_vm_open,
+    .close = slash_qdma_buf_vm_close,
+};
+
+/**
+ * slash_qdma_buf_mmap() - mmap a kernel buffer's pages into userspace.
+ * @file: The buffer fd.
+ * @vma:  The mapping request.
+ *
+ * Maps the whole buffer (offset 0, full length) into the calling process.
+ * The pages are ordinary kernel pages, so vm_map_pages_zero() inserts them
+ * directly; each VMA takes a buffer reference (initial one here, duplicated by
+ * the .open callback) so the pages stay valid for the life of the mapping.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+static int slash_qdma_buf_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    struct slash_qdma_buf *buf = file->private_data;
+    unsigned long span = vma->vm_end - vma->vm_start;
     int rv;
 
-    if (!ctx)
+    if (!buf)
+        return -ENODEV;
+
+    /* Only a full, offset-0 mapping of the buffer is supported. */
+    if (vma->vm_pgoff != 0)
+        return -EINVAL;
+    if (span != (unsigned long)buf->length)
         return -EINVAL;
 
-    qdma_dev = ctx->qdma_dev;
-    entry = ctx->entry;
+    /*
+     * Normal page mapping (no VM_PFNMAP): keep it from being expanded beyond
+     * the buffer and excluded from core dumps.
+     */
+    slash_vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
 
-    if (!qdma_dev || !entry)
-        return -ENODEV;
+    rv = vm_map_pages_zero(vma, buf->pages, buf->pages_nr);
+    if (rv)
+        return rv;
+
+    vma->vm_ops = &slash_qdma_buf_vm_ops;
+    vma->vm_private_data = buf;
+    slash_qdma_buf_get(buf); /* dropped by vm_close when this VMA goes away */
+
+    return 0;
+}
+
+/**
+ * slash_qdma_buf_fop_release() - Release callback for a buffer fd.
+ * @inode: Unused (anon inode).
+ * @file:  The buffer fd being closed.
+ *
+ * Drops the fd's buffer reference.  Pages survive until any remaining VMA
+ * references are dropped too.
+ *
+ * Return: Always 0.
+ */
+static int slash_qdma_buf_fop_release(struct inode *inode, struct file *file)
+{
+    struct slash_qdma_buf *buf = file->private_data;
+
+    (void)inode;
+
+    if (buf) {
+        slash_qdma_buf_put(buf);
+        file->private_data = NULL;
+    }
+
+    return 0;
+}
+
+/**
+ * slash_qdma_buf_fops - File operations for buffer fds.
+ *
+ * mmap     maps the buffer's pages for CPU access.
+ * release  drops the fd's reference on the buffer.
+ */
+static const struct file_operations slash_qdma_buf_fops = {
+    .owner   = THIS_MODULE,
+    .mmap    = slash_qdma_buf_mmap,
+    .release = slash_qdma_buf_fop_release,
+};
+
+/**
+ * slash_qdma_buf_from_file() - Resolve a buffer fd to its buffer object.
+ * @file: A file obtained from fget() on a candidate buffer fd.
+ *
+ * Return: The buffer if @file is a SLASH buffer fd, else NULL.
+ */
+static struct slash_qdma_buf *slash_qdma_buf_from_file(struct file *file)
+{
+    if (!file || file->f_op != &slash_qdma_buf_fops)
+        return NULL;
+    return file->private_data;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * IOCTL: buffer create
+ * ───────────────────────────────────────────────────────────────────── */
+
+/**
+ * slash_qdma_ioctl_buf_create_w() - Allocate a kernel buffer and return its fd.
+ * @misc:     Miscdevice handle (for logging).
+ * @qdma_dev: QDMA device the buffer is bound to (for DMA mapping).
+ * @uarg:     User pointer to a struct slash_qdma_buf_create.
+ *
+ * Allocates the buffer's pages, builds the SGL, and DMA-maps everything once,
+ * then wraps it in an anon_inode fd whose mmap exposes the pages for CPU
+ * access.  The fd is returned as the ioctl return value (same convention as
+ * the BAR/queue-pair fd ioctls).  Closing the fd (and unmapping any VMA)
+ * releases the buffer.
+ *
+ * Return: The new buffer fd (>= 0) on success, negative errno on failure.
+ */
+static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
+                                         struct slash_qdma_dev *qdma_dev,
+                                         void __user *uarg)
+{
+    struct slash_qdma_buf_create req;
+    struct slash_qdma_buf *buf;
+    struct file *file;
+    __u32 user_size = 0;
+    size_t copy_size;
+    int fd;
+    int rv;
+
+    if (copy_from_user(&user_size, uarg, sizeof(user_size)))
+        return -EFAULT;
+
+    if (user_size < SLASH_QDMA_BUF_CREATE_MIN_SIZE) {
+        dev_warn(misc->this_device,
+                 "qdma: BUF_CREATE size too small (%u)\n", user_size);
+        return -EINVAL;
+    }
+
+    memset(&req, 0, sizeof(req));
+    if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
+        return -EFAULT;
+
+    if (req.flags & ~O_CLOEXEC)
+        return -EINVAL;
+
+    if (req.length == 0 || (req.length % PAGE_SIZE) != 0)
+        return -EINVAL;
+
+    buf = kzalloc(sizeof(*buf), GFP_KERNEL);
+    if (!buf)
+        return -ENOMEM;
+
+    kref_init(&buf->ref);
+    /* The buffer holds a device reference for its whole lifetime. */
+    kref_get(&qdma_dev->ref);
+    buf->qdma_dev = qdma_dev;
+    buf->length = req.length;
+
+    rv = slash_qdma_buf_alloc(buf);
+    if (rv < 0) {
+        kref_put(&qdma_dev->ref, slash_qdma_dev_release);
+        kfree(buf);
+        return rv;
+    }
+
+    file = anon_inode_getfile("slash_qdma_buf", &slash_qdma_buf_fops, buf,
+                              O_RDWR | (req.flags & O_CLOEXEC));
+    if (IS_ERR(file)) {
+        rv = PTR_ERR(file);
+        slash_qdma_buf_put(buf); /* drops the only ref: frees buf + dev ref */
+        return rv;
+    }
+
+    fd = get_unused_fd_flags(req.flags & O_CLOEXEC);
+    if (fd < 0) {
+        fput(file); /* triggers buf release */
+        return fd;
+    }
+
+    SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
+                          "buf create: fd=%d len=%llu granule=%u pages=%u\n",
+                          fd, (unsigned long long)req.length,
+                          buf->granule, buf->pages_nr);
+
+    /* Fill the output fields before installing the fd. */
+    req.size = sizeof(req);
+    req.granule = buf->granule;
+    req.transfer_hint = SLASH_QDMA_TRANSFER_HINT_V80;
+    copy_size = min_t(size_t, user_size, sizeof(req));
+    if (copy_to_user(uarg, &req, copy_size)) {
+        put_unused_fd(fd);
+        fput(file);
+        return -EFAULT;
+    }
+    if (user_size > sizeof(req)) {
+        if (clear_user((void __user *)((unsigned long)uarg + sizeof(req)),
+                       user_size - sizeof(req))) {
+            put_unused_fd(fd);
+            fput(file);
+            return -EFAULT;
+        }
+    }
+
+    fd_install(fd, file);
+
+    return fd;
+}
+
+/**
+ * struct slash_qdma_xfer_req - Runtime state for one sub-transfer submission.
+ * @qreq:           libqdma request (built by slash_qdma_xfer_prep()).
+ * @done:           Completion signalled by @qreq.fp_done for async submissions.
+ * @buf:            Kernel buffer the transfer references (one ref held).
+ * @qhndl:          Resolved libqdma queue handle for the direction/qpair.
+ * @start_entry:    First page index of the buffer slice being transferred.
+ * @n_entries:      Number of pages in the slice (for the DMA sync).
+ * @dma_dir:        DMA direction for the streaming sync calls.
+ * @is_c2h:         True for a C2H (device-to-host) sub-transfer, so the slice
+ *                  is synced back for the CPU after completion.
+ * @bytes_done:     Bytes transferred, filled on completion.
+ * @err:            Negative errno if the sub-transfer failed, else 0.
+ * @async_inflight: True once queued asynchronously and awaiting fp_done.
+ *
+ * Allocated as an array (one per sub-transfer) for the duration of a transfer
+ * batch.  @qreq must outlive the in-flight async request, so the array stays
+ * alive until every async completion has fired.
+ */
+struct slash_qdma_xfer_req {
+    struct qdma_request qreq;
+    struct completion done;
+    struct slash_qdma_buf *buf;
+    unsigned long qhndl;
+    u64 start_entry;
+    u64 n_entries;
+    enum dma_data_direction dma_dir;
+    bool is_c2h;
+    unsigned int bytes_done;
+    int err;
+    bool async_inflight;
+};
+
+/**
+ * slash_qdma_xfer_done() - libqdma fp_done callback for async sub-transfers.
+ * @qreq:       The completed request (embedded in a slash_qdma_xfer_req).
+ * @bytes_done: Bytes transferred.
+ * @err:        Negative errno on failure, else 0.
+ *
+ * Records the result and wakes the submitter waiting on @done.  Runs in
+ * libqdma worker-thread context.
+ *
+ * Return: Always 0 (libqdma may free/re-task the request).
+ */
+static int slash_qdma_xfer_done(struct qdma_request *qreq,
+                                unsigned int bytes_done, int err)
+{
+    struct slash_qdma_xfer_req *xr =
+        container_of(qreq, struct slash_qdma_xfer_req, qreq);
+
+    xr->bytes_done = bytes_done;
+    xr->err = err;
+    complete(&xr->done);
+    return 0;
+}
+
+/**
+ * slash_qdma_xfer_prep() - Validate one sub-transfer and build its request.
+ * @qdma_dev: QDMA device.
+ * @entry:    Queue pair entry selected by the sub-transfer's qpair_index.
+ * @desc:     User-supplied sub-transfer descriptor.
+ * @xr:       [out] Receives a built (but not yet submitted) request, and a
+ *            reference on the kernel buffer it targets.
+ *
+ * Shared submit core used by both the synchronous transfer ioctl and the
+ * optional io_uring uring_cmd path.  Resolves the buffer fd named by the
+ * descriptor and refs the buffer, validates the slice against the buffer's
+ * page granule and length, resolves the queue handle for the requested
+ * direction, syncs the pages touched by the slice for the device, and fills the cached,
+ * pre-DMA-mapped SGL slice into @xr->qreq (dma_mapped = 1, fp_done = NULL).
+ * No pages are allocated or DMA-mapped here; that was amortised at creation.
+ *
+ * On success the caller owns the buffer ref in @xr->buf and must release it
+ * with slash_qdma_buf_put() once the request is no longer in flight.
+ *
+ * Return: 0 on success, negative errno on failure (no ref held on failure).
+ */
+static int slash_qdma_xfer_prep(struct slash_qdma_dev *qdma_dev,
+                                struct slash_qdma_qpair_entry *entry,
+                                const struct slash_qdma_subxfer *desc,
+                                struct slash_qdma_xfer_req *xr)
+{
+    struct slash_qdma_buf *buf;
+    struct file *file;
+    unsigned long qhndl;
+    bool write;
+    u32 dir_bit;
+    enum queue_type_t qtype;
+    enum dma_data_direction dma_dir;
+    u64 start_entry, n_entries;
+
+    switch (desc->direction) {
+    case SLASH_QDMA_XFER_H2C:
+        write = true;
+        dir_bit = SLASH_QDMA_DIR_H2C;
+        qtype = Q_H2C;
+        dma_dir = DMA_TO_DEVICE;
+        break;
+    case SLASH_QDMA_XFER_C2H:
+        write = false;
+        dir_bit = SLASH_QDMA_DIR_C2H;
+        qtype = Q_C2H;
+        dma_dir = DMA_FROM_DEVICE;
+        break;
+    default:
+        return -EINVAL;
+    }
+
+    /* libqdma's request count is a 32-bit byte count. */
+    if (desc->length == 0 || desc->length > UINT_MAX)
+        return -EINVAL;
+
+    /* Resolve the buffer fd and take a ref that outlives the fd. */
+    file = fget(desc->buf_fd);
+    if (!file)
+        return -EBADF;
+    buf = slash_qdma_buf_from_file(file);
+    if (!buf) {
+        fput(file);
+        return -EINVAL;
+    }
+    /* DMA mappings are device-specific: the buffer must belong to this device. */
+    if (buf->qdma_dev != qdma_dev) {
+        fput(file);
+        return -EINVAL;
+    }
+    slash_qdma_buf_get(buf);
+    fput(file);
+
+    /* The buffer offset must be page-aligned because SGL entries are page
+     * based.  The requested byte count may end within the final page; libqdma
+     * uses qreq.count for the exact byte count while sgcnt covers the touched
+     * pages. */
+    if (buf->granule == 0 ||
+        (desc->buf_offset % buf->granule) != 0) {
+        slash_qdma_buf_put(buf);
+        return -EINVAL;
+    }
+    if (desc->buf_offset > buf->length ||
+        desc->length > buf->length - desc->buf_offset) {
+        slash_qdma_buf_put(buf);
+        return -EINVAL;
+    }
+
+    start_entry = desc->buf_offset / buf->granule;
+    n_entries = (desc->length + buf->granule - 1) / buf->granule;
+    if (start_entry + n_entries > buf->pages_nr) {
+        slash_qdma_buf_put(buf);
+        return -EINVAL;
+    }
 
     /* Check device liveness and resolve the queue handle for the direction. */
     mutex_lock(&qdma_dev->lock);
     if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
         mutex_unlock(&qdma_dev->lock);
+        slash_qdma_buf_put(buf);
         return -ENODEV;
     }
-
-    if (write) {
-        /* H2C: writing data from host to card */
-        if (!(entry->dir_mask & SLASH_QDMA_DIR_H2C) ||
-            !slash_qdma_qhndl_is_valid(entry->qhndl[Q_H2C])) {
-            mutex_unlock(&qdma_dev->lock);
-            return -ENODEV;
-        }
-        qhndl = entry->qhndl[Q_H2C];
-    } else {
-        /* C2H: reading data from card to host */
-        if (!(entry->dir_mask & SLASH_QDMA_DIR_C2H) ||
-            !slash_qdma_qhndl_is_valid(entry->qhndl[Q_C2H])) {
-            mutex_unlock(&qdma_dev->lock);
-            return -ENODEV;
-        }
-        qhndl = entry->qhndl[Q_C2H];
+    if (!(entry->dir_mask & dir_bit) ||
+        !slash_qdma_qhndl_is_valid(entry->qhndl[qtype])) {
+        mutex_unlock(&qdma_dev->lock);
+        slash_qdma_buf_put(buf);
+        return -ENODEV;
     }
+    qhndl = entry->qhndl[qtype];
     mutex_unlock(&qdma_dev->lock);
 
-    /* Pin user pages and build the scatter-gather list. */
-    memset(&iocb, 0, sizeof(iocb));
-    iocb.buf = buf;
-    iocb.len = count;
-    rv = slash_qdma_map_user_buf_to_sgl(&iocb, write);
-    if (rv < 0)
-        return rv;
+    /*
+     * Hand the touched pages to the device.  The mapping is persistent
+     * (dma_mapped = 1); only this slice is synced, so coherency cost scales
+     * with the transfer, not the whole buffer.
+     */
+    slash_qdma_buf_sync_for_device(buf, start_entry, n_entries, dma_dir);
 
-    /* Populate the libqdma request structure. */
-    req = &iocb.req;
-    req->sgcnt = iocb.pages_nr;         /* Number of SGL entries */
-    req->sgl = iocb.sgl;                /* Scatter-gather list */
-    req->write = write ? 1 : 0;         /* Direction flag for libqdma */
-    req->dma_mapped = 0;                /* Let libqdma handle DMA mapping */
-    req->udd_len = 0;                   /* No user-defined data */
-    req->ep_addr = (u64)*ppos;           /* Device-side (endpoint) address */
-    req->count = count;                  /* Total byte count */
-    req->timeout_ms = 10 * 1000;         /* 10-second timeout */
-    req->fp_done = NULL;                 /* Synchronous: block until complete */
-    req->h2c_eot = 1;                   /* End-of-transfer marker for FPGA */
+    /*
+     * Build the request from the cached SGL slice.  dma_mapped = 1 tells
+     * libqdma the SGL is already DMA-mapped (dma_addr filled at creation),
+     * so it skips the per-request map/unmap entirely.
+     */
+    memset(&xr->qreq, 0, sizeof(xr->qreq));
+    xr->qreq.sgcnt = (unsigned int)n_entries;
+    xr->qreq.sgl = &buf->sgl[start_entry];
+    xr->qreq.write = write ? 1 : 0;
+    xr->qreq.dma_mapped = 1;
+    xr->qreq.udd_len = 0;
+    xr->qreq.ep_addr = (u64)desc->dev_addr;
+    xr->qreq.count = (unsigned int)desc->length;
+    xr->qreq.timeout_ms = 10 * 1000;
+    xr->qreq.fp_done = NULL;
+    xr->qreq.h2c_eot = 1;
 
-    SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
-                          "qdma_request_submit start: qid=%u qhndl=%lu write=%d count=%zu ep_addr=0x%llx\n",
-                          ctx->qid, qhndl, req->write, req->count,
-                          (unsigned long long)req->ep_addr);
-    res = qdma_request_submit(qdma_dev->qdma_handle, qhndl, req);
-    SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
-                          "qdma_request_submit done: qid=%u qhndl=%lu res=%zd\n",
-                          ctx->qid, qhndl, res);
-
-    /* Advance the file position by the number of bytes transferred. */
-    if (res > 0)
-        *ppos += res;
-
-    /* Unpin pages (marking dirty for C2H reads) and free the SGL. */
-    slash_qdma_unmap_user_buf(&iocb, write);
-    slash_qdma_iocb_release(&iocb);
-
-    return res;
+    xr->buf = buf;
+    xr->qhndl = qhndl;
+    xr->start_entry = start_entry;
+    xr->n_entries = n_entries;
+    xr->dma_dir = dma_dir;
+    xr->is_c2h = !write;
+    xr->bytes_done = 0;
+    xr->err = 0;
+    xr->async_inflight = false;
+    return 0;
 }
 
 /**
- * slash_qdma_qpair_read() - Read (C2H) file operation for a qpair fd.
- * @file:  Anon_inode file for the queue pair.
- * @buf:   User-space destination buffer.
- * @count: Number of bytes to read.
- * @ppos:  Device-side address to read from.
+ * slash_qdma_xfer_finish() - Post-completion DMA sync + buffer ref drop.
+ * @xr: A prepared (and now completed) sub-transfer request.
  *
- * Thin wrapper that delegates to slash_qdma_qpair_read_write() with
- * write=false (C2H direction).
- *
- * Return: Bytes transferred or negative errno.
+ * For a C2H sub-transfer that moved data, makes the device-written pages
+ * visible to the CPU before releasing the buffer reference taken in prep.
  */
-static ssize_t slash_qdma_qpair_read(struct file *file, char __user *buf,
-                                     size_t count, loff_t *ppos)
+static void slash_qdma_xfer_finish(struct slash_qdma_xfer_req *xr)
 {
-    return slash_qdma_qpair_read_write(file, buf, count, ppos, false);
+    if (xr->is_c2h && xr->bytes_done)
+        slash_qdma_buf_sync_for_cpu(xr->buf, xr->start_entry, xr->n_entries,
+                                    xr->dma_dir);
+    slash_qdma_buf_put(xr->buf);
 }
 
 /**
- * slash_qdma_qpair_write() - Write (H2C) file operation for a qpair fd.
- * @file:  Anon_inode file for the queue pair.
- * @buf:   User-space source buffer.
- * @count: Number of bytes to write.
- * @ppos:  Device-side address to write to.
+ * slash_qdma_qpair_transfer() - Buffer DMA transfer batch on a queue-pair fd.
+ * @file: Anon_inode file for the queue-pair collection.
+ * @uarg: User pointer to a struct slash_qdma_transfer (1..N sub-transfers).
  *
- * Thin wrapper that delegates to slash_qdma_qpair_read_write() with
- * write=true (H2C direction).
+ * Validates and prepares every sub-transfer, then submits them so those that
+ * target distinct queue pairs run concurrently: all but the last are submitted
+ * asynchronously (fp_done set), the last is submitted synchronously (blocking),
+ * and the async ones are then waited on.  A single sub-transfer therefore takes
+ * the plain blocking path with no async overhead.
  *
- * Return: Bytes transferred or negative errno.
+ * Return: total number of bytes transferred (>= 0) on success; the first
+ *         sub-transfer error (negative errno) on failure.
  */
-static ssize_t slash_qdma_qpair_write(struct file *file, const char __user *buf,
-                                      size_t count, loff_t *ppos)
+static long slash_qdma_qpair_transfer(struct file *file, void __user *uarg)
 {
-    return slash_qdma_qpair_read_write(file, (char __user *)buf,
-                                       count, ppos, true);
+    struct slash_qdma_qpair_file_ctx *ctx = file->private_data;
+    struct slash_qdma_dev *qdma_dev;
+    struct slash_qdma_transfer req;
+    struct slash_qdma_xfer_req *xrs;
+    __u32 user_size = 0;
+    u32 count, i, last;
+    u64 total = 0;
+    int first_err = 0;
+    ssize_t res;
+
+    if (!ctx)
+        return -EINVAL;
+
+    qdma_dev = ctx->qdma_dev;
+
+    if (!qdma_dev || ctx->n_qpairs == 0)
+        return -ENODEV;
+
+    if (copy_from_user(&user_size, uarg, sizeof(user_size)))
+        return -EFAULT;
+
+    if (user_size < SLASH_QDMA_TRANSFER_MIN_SIZE)
+        return -EINVAL;
+
+    memset(&req, 0, sizeof(req));
+    if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
+        return -EFAULT;
+
+    count = req.count;
+    if (count == 0 || count > SLASH_QDMA_FD_MAX_QPAIRS)
+        return -EINVAL;
+
+    xrs = kcalloc(count, sizeof(*xrs), GFP_KERNEL);
+    if (!xrs)
+        return -ENOMEM;
+
+    /* Validate and prepare every sub-transfer (each takes a buffer ref). */
+    for (i = 0; i < count; i++) {
+        const struct slash_qdma_subxfer *d = &req.xfers[i];
+        int rv;
+
+        if (d->qpair_index >= ctx->n_qpairs)
+            rv = -EINVAL;
+        else
+            rv = slash_qdma_xfer_prep(qdma_dev,
+                                      ctx->entries[d->qpair_index], d,
+                                      &xrs[i]);
+        if (rv) {
+            while (i-- > 0)
+                slash_qdma_buf_put(xrs[i].buf);
+            kfree(xrs);
+            return rv;
+        }
+
+        SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
+                              "transfer[%u]: qid=%u buf_fd=%d off=%llu dev=0x%llx len=%llu dir=%s\n",
+                              i, ctx->qids[d->qpair_index], d->buf_fd,
+                              (unsigned long long)d->buf_offset,
+                              (unsigned long long)d->dev_addr,
+                              (unsigned long long)d->length,
+                              d->direction == SLASH_QDMA_XFER_H2C ? "H2C" : "C2H");
+    }
+
+    last = count - 1;
+
+    /*
+     * Submit all but the last asynchronously so the sub-transfers run on their
+     * (distinct) queue pairs in parallel; libqdma calls fp_done on completion.
+     */
+    for (i = 0; i < last; i++) {
+        init_completion(&xrs[i].done);
+        xrs[i].qreq.fp_done = slash_qdma_xfer_done;
+        res = qdma_request_submit(qdma_dev->qdma_handle, xrs[i].qhndl,
+                                  &xrs[i].qreq);
+        if (res < 0)
+            xrs[i].err = (int)res; /* not queued: fp_done will not fire */
+        else
+            xrs[i].async_inflight = true;
+    }
+
+    /* Submit the last sub-transfer synchronously (blocks until complete). */
+    res = qdma_request_submit(qdma_dev->qdma_handle, xrs[last].qhndl,
+                              &xrs[last].qreq);
+    if (res < 0)
+        xrs[last].err = (int)res;
+    else
+        xrs[last].bytes_done = (unsigned int)res;
+
+    /* Wait for the async sub-transfers, then aggregate (first error wins). */
+    for (i = 0; i < last; i++) {
+        if (xrs[i].async_inflight)
+            wait_for_completion(&xrs[i].done);
+    }
+
+    for (i = 0; i < count; i++) {
+        if (xrs[i].err && !first_err)
+            first_err = xrs[i].err;
+        total += xrs[i].bytes_done;
+        slash_qdma_xfer_finish(&xrs[i]);
+    }
+
+    kfree(xrs);
+
+    if (first_err)
+        return (long)first_err;
+
+    return (long)total;
 }
+
+#if defined(SLASH_HAVE_URING_CMD)
+/**
+ * struct slash_qdma_uring_cmd_ctx - Async state for one uring_cmd transfer.
+ * @cmd:         The io_uring command being served.
+ * @xrs:         Per-sub-transfer requests (buffer refs held until completion).
+ * @count:       Number of sub-transfers.
+ * @outstanding: Sub-transfers not yet completed; the one that drops it to 0
+ *               schedules the completion task-work.
+ * @total_bytes: Aggregate bytes transferred.
+ * @first_err:   First negative errno seen, or 0.
+ *
+ * Heap-allocated for the lifetime of an asynchronous transfer; a pointer to it
+ * is stashed in cmd->pdu so the completion task-work can recover it.
+ */
+struct slash_qdma_uring_cmd_ctx {
+    struct io_uring_cmd *cmd;
+    struct slash_qdma_xfer_req xrs[SLASH_QDMA_FD_MAX_QPAIRS];
+    u32 count;
+    atomic_t outstanding;
+    atomic_long_t total_bytes;
+    atomic_t first_err;
+};
+
+/**
+ * slash_qdma_uring_cmd_complete() - Task-work that finishes a uring_cmd.
+ * @cmd:         The io_uring command.
+ * @issue_flags: io_uring issue flags for io_uring_cmd_done().
+ *
+ * Runs in task context once all sub-transfers have completed: drops the
+ * buffer refs, completes the CQE with the total bytes (or first error), and
+ * frees the command context.
+ */
+static void slash_qdma_uring_cmd_complete(struct io_uring_cmd *cmd,
+                                          unsigned int issue_flags)
+{
+    struct slash_qdma_uring_cmd_ctx *uc;
+    int err;
+    long ret;
+    u32 i;
+
+    memcpy(&uc, cmd->pdu, sizeof(uc));
+    err = atomic_read(&uc->first_err);
+    ret = err ? err : atomic_long_read(&uc->total_bytes);
+
+    for (i = 0; i < uc->count; i++)
+        slash_qdma_xfer_finish(&uc->xrs[i]);
+
+    io_uring_cmd_done(cmd, ret, 0, issue_flags);
+    kfree(uc);
+}
+
+/**
+ * slash_qdma_uring_xfer_done() - fp_done for async uring_cmd sub-transfers.
+ * @qreq:       Completed request (embedded in a slash_qdma_xfer_req).
+ * @bytes_done: Bytes transferred.
+ * @err:        Negative errno on failure, else 0.
+ *
+ * Accumulates the result and, when the last sub-transfer of the command
+ * completes, schedules the completion task-work.  Runs in libqdma worker
+ * context.
+ *
+ * Return: Always 0.
+ */
+static int slash_qdma_uring_xfer_done(struct qdma_request *qreq,
+                                      unsigned int bytes_done, int err)
+{
+    struct slash_qdma_xfer_req *xr =
+        container_of(qreq, struct slash_qdma_xfer_req, qreq);
+    struct slash_qdma_uring_cmd_ctx *uc =
+        (struct slash_qdma_uring_cmd_ctx *)qreq->uld_data;
+
+    xr->bytes_done = bytes_done;
+    xr->err = err;
+    if (bytes_done)
+        atomic_long_add(bytes_done, &uc->total_bytes);
+    if (err)
+        atomic_cmpxchg(&uc->first_err, 0, err);
+
+    if (atomic_dec_and_test(&uc->outstanding))
+        io_uring_cmd_complete_in_task(uc->cmd,
+                                      slash_qdma_uring_cmd_complete);
+    return 0;
+}
+
+/**
+ * slash_qdma_qpair_uring_cmd() - Asynchronous transfer batch via io_uring.
+ * @cmd:         The io_uring command; its inline SQE data is a single __u64
+ *               userspace pointer to a struct slash_qdma_transfer.
+ * @issue_flags: io_uring issue flags.
+ *
+ * The optional async sibling of SLASH_QDMA_QPAIR_IOCTL_TRANSFER: it prepares
+ * every sub-transfer, submits them all asynchronously (so they run on their
+ * distinct queue pairs concurrently), and completes the CQE from task-work
+ * once they all finish.  Many such commands can be in flight at once, which is
+ * the intended multi-buffer optimization.
+ *
+ * Return: -EIOCBQUEUED once submission is under way (completion arrives via
+ *         the CQE); a negative errno if the command is rejected before any
+ *         sub-transfer is queued; -EAGAIN to defer a non-blocking issue.
+ */
+static int slash_qdma_qpair_uring_cmd(struct io_uring_cmd *cmd,
+                                      unsigned int issue_flags)
+{
+    struct file *file = cmd->file;
+    struct slash_qdma_qpair_file_ctx *ctx = file->private_data;
+    struct slash_qdma_dev *qdma_dev;
+    struct slash_qdma_uring_cmd_ctx *uc;
+    struct slash_qdma_transfer req;
+    u64 uptr = 0;
+    u32 count, i;
+    ssize_t res;
+
+    if (cmd->cmd_op != SLASH_QDMA_URING_CMD_TRANSFER)
+        return -EOPNOTSUPP;
+
+    if (!ctx)
+        return -EINVAL;
+
+    qdma_dev = ctx->qdma_dev;
+    if (!qdma_dev || ctx->n_qpairs == 0)
+        return -ENODEV;
+
+    /*
+     * Copying the descriptor from userspace may fault and sleep, so defer a
+     * non-blocking issue to a blocking io_uring context.
+     */
+    if (issue_flags & IO_URING_F_NONBLOCK)
+        return -EAGAIN;
+
+    /* The SQE inline command carries the user pointer to the descriptor. */
+    memcpy(&uptr, slash_qdma_uring_cmd_payload(cmd), sizeof(uptr));
+
+    memset(&req, 0, sizeof(req));
+    if (copy_from_user(&req, u64_to_user_ptr(uptr), sizeof(req)))
+        return -EFAULT;
+
+    count = req.count;
+    if (count == 0 || count > SLASH_QDMA_FD_MAX_QPAIRS)
+        return -EINVAL;
+
+    uc = kzalloc(sizeof(*uc), GFP_KERNEL);
+    if (!uc)
+        return -ENOMEM;
+
+    uc->cmd = cmd;
+    uc->count = count;
+    atomic_set(&uc->outstanding, count);
+    atomic_long_set(&uc->total_bytes, 0);
+    atomic_set(&uc->first_err, 0);
+
+    /* Validate and prepare every sub-transfer before queueing any of them. */
+    for (i = 0; i < count; i++) {
+        const struct slash_qdma_subxfer *d = &req.xfers[i];
+        int rv;
+
+        if (d->qpair_index >= ctx->n_qpairs)
+            rv = -EINVAL;
+        else
+            rv = slash_qdma_xfer_prep(qdma_dev,
+                                      ctx->entries[d->qpair_index], d,
+                                      &uc->xrs[i]);
+        if (rv) {
+            while (i-- > 0)
+                slash_qdma_buf_put(uc->xrs[i].buf);
+            kfree(uc);
+            return rv;
+        }
+        uc->xrs[i].qreq.uld_data = (unsigned long)uc;
+        uc->xrs[i].qreq.fp_done = slash_qdma_uring_xfer_done;
+    }
+
+    /* Stash the context for the completion task-work. */
+    memcpy(cmd->pdu, &uc, sizeof(uc));
+
+    /*
+     * Submit all sub-transfers asynchronously.  Completion (success or the
+     * inline submit-failure path below) is funnelled through the outstanding
+     * counter so the CQE is posted exactly once from task-work.
+     */
+    for (i = 0; i < count; i++) {
+        res = qdma_request_submit(qdma_dev->qdma_handle, uc->xrs[i].qhndl,
+                                  &uc->xrs[i].qreq);
+        if (res < 0) {
+            /* Not queued: fp_done will not fire, account for it here. */
+            uc->xrs[i].err = (int)res;
+            atomic_cmpxchg(&uc->first_err, 0, (int)res);
+            if (atomic_dec_and_test(&uc->outstanding))
+                io_uring_cmd_complete_in_task(uc->cmd,
+                                              slash_qdma_uring_cmd_complete);
+        }
+    }
+
+    return -EIOCBQUEUED;
+}
+#endif /* SLASH_HAVE_URING_CMD */
 
 /**
  * slash_qdma_qpair_ioctl() - Ioctl handler for per-qpair anon_inode fds.
@@ -2313,19 +3465,31 @@ static ssize_t slash_qdma_qpair_write(struct file *file, const char __user *buf,
  * @cmd:  Ioctl command number.
  * @arg:  User-space argument.
  *
- * Currently a stub — no per-fd ioctls are defined.  Returns -ENOTTY
- * for all commands.
+ * Supports SLASH_QDMA_IOCTL_BUF_CREATE (allocate a kernel buffer for clients
+ * that hold only a queue-pair fd) and SLASH_QDMA_QPAIR_IOCTL_TRANSFER (buffer
+ * DMA transfer).
  *
- * Return: -ENOTTY (no valid ioctl).
+ * Return: bytes transferred (>= 0) for TRANSFER, a new fd for BUF_CREATE, or
+ *         -ENOTTY for any other command.
  */
 static long slash_qdma_qpair_ioctl(struct file *file,
                                    unsigned int cmd, unsigned long arg)
 {
-    (void)file;
-    (void)cmd;
-    (void)arg;
+    struct slash_qdma_qpair_file_ctx *ctx = file->private_data;
 
-    return -ENOTTY;
+    if (!ctx || !ctx->qdma_dev)
+        return -ENODEV;
+
+    switch (cmd) {
+    case SLASH_QDMA_IOCTL_BUF_CREATE:
+        return slash_qdma_ioctl_buf_create_w(&ctx->qdma_dev->misc,
+                                             ctx->qdma_dev,
+                                             (void __user *)arg);
+    case SLASH_QDMA_QPAIR_IOCTL_TRANSFER:
+        return slash_qdma_qpair_transfer(file, (void __user *)arg);
+    default:
+        return -ENOTTY;
+    }
 }
 
 /**
@@ -2346,12 +3510,15 @@ static long slash_qdma_qpair_ioctl(struct file *file,
 static int slash_qdma_qpair_release(struct inode *inode, struct file *file)
 {
     struct slash_qdma_qpair_file_ctx *ctx = file->private_data;
+    u32 i;
 
     (void)inode;
 
     if (ctx) {
-        if (ctx->entry)
-            slash_qdma_qpair_put(ctx->entry);
+        for (i = 0; i < ctx->n_qpairs; i++) {
+            if (ctx->entries[i])
+                slash_qdma_qpair_put(ctx->entries[i]);
+        }
         if (ctx->qdma_dev)
             kref_put(&ctx->qdma_dev->ref, slash_qdma_dev_release);
         kfree(ctx);
@@ -2366,24 +3533,26 @@ static int slash_qdma_qpair_release(struct inode *inode, struct file *file)
  * ───────────────────────────────────────────────────────────────────── */
 
 /**
- * slash_qdma_ioctl_qpair_get_fd_w() - Create an anon_inode fd for a queue pair.
+ * slash_qdma_ioctl_qpair_get_fd_w() - Create an anon_inode fd for queue I/O.
  * @misc:     Miscdevice handle (unused).
  * @qdma_dev: QDMA device.
  * @uarg:     User-space pointer to a slash_qdma_qpair_fd_request struct.
  *
- * Creates an anonymous inode file descriptor that userspace can use
- * for read() (C2H) and write() (H2C) DMA transfers on the specified
- * queue pair.  The fd holds references to both the qpair entry and the
- * device, preventing either from being freed while the fd is open.
+ * Creates an anonymous inode file descriptor that userspace can use for
+ * buffer transfer ioctls.  The fd is a collection of one or two queue pairs
+ * (see slash_qdma_qpair_fd_request): @qpair_count == 0 binds the single qpair
+ * named by @qid (back-compat), otherwise @qpair_count IDs from @qpair_ids are
+ * bound, their array index becoming the transfer qpair_index.
+ *
+ * The fd holds references to each bound qpair entry and the device, preventing
+ * either from being freed while the fd is open.  Each bound qpair keeps the
+ * per-qpair configuration (mm_channel, ring sizes, directions) it was given at
+ * add time, so the channels can differ.
  *
  * The only supported flag is O_CLOEXEC (close-on-exec).
  *
- * The file is created with FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE
- * enabled, allowing pread/pwrite and lseek to set the device-side
- * address for DMA transfers.
- *
- * Error handling: on any failure after resources are acquired, all
- * refs and allocations are cleaned up before returning.
+ * Error handling: on any failure after resources are acquired, all refs and
+ * allocations are cleaned up before returning.
  *
  * Return: The new fd (>= 0) on success, negative errno on failure.
  */
@@ -2393,8 +3562,10 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
 {
     struct slash_qdma_qpair_fd_request req;
     __u32 user_size = 0;
+    __u32 ids[SLASH_QDMA_FD_MAX_QPAIRS];
+    u32 n_qpairs;
+    u32 i;
     size_t copy_size;
-    struct slash_qdma_qpair_entry *entry;
     struct slash_qdma_qpair_file_ctx *ctx;
     struct file *file;
     int fd;
@@ -2418,54 +3589,74 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
     if (req.flags & ~O_CLOEXEC)
         return -EINVAL;
 
-    /* Look up the qpair entry and take refs while holding the lock. */
-    mutex_lock(&qdma_dev->lock);
-    if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
-        mutex_unlock(&qdma_dev->lock);
-        return -ENODEV;
-    }
-
-    entry = slash_qdma_qpair_lookup(qdma_dev, req.qid);
-    if (!entry || !entry->dir_mask) {
-        mutex_unlock(&qdma_dev->lock);
-        return -ENOENT;
-    }
-
     /*
-     * Take a ref on the entry and the device.  These refs are held by
-     * the file context and released when the fd is closed, ensuring
-     * neither the entry nor the device can be freed prematurely.
+     * Resolve the requested qpair-id set.  qpair_count == 0 is the legacy
+     * single-qpair form using @qid; otherwise bind @qpair_count ids.
      */
-    slash_qdma_qpair_get(entry);
-    kref_get(&qdma_dev->ref);
-    mutex_unlock(&qdma_dev->lock);
+    if (req.qpair_count == 0) {
+        n_qpairs = 1;
+        ids[0] = req.qid;
+    } else {
+        if (req.qpair_count > SLASH_QDMA_FD_MAX_QPAIRS)
+            return -EINVAL;
+        n_qpairs = req.qpair_count;
+        for (i = 0; i < n_qpairs; i++)
+            ids[i] = req.qpair_ids[i];
+    }
 
     /* Allocate the per-fd context. */
     ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
-    if (!ctx) {
-        slash_qdma_qpair_put(entry);
-        kref_put(&qdma_dev->ref, slash_qdma_dev_release);
+    if (!ctx)
         return -ENOMEM;
+
+    /* Look up each qpair entry and take refs while holding the lock. */
+    mutex_lock(&qdma_dev->lock);
+    if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
+        mutex_unlock(&qdma_dev->lock);
+        kfree(ctx);
+        return -ENODEV;
     }
 
+    for (i = 0; i < n_qpairs; i++) {
+        struct slash_qdma_qpair_entry *entry =
+            slash_qdma_qpair_lookup(qdma_dev, ids[i]);
+
+        if (!entry || !entry->dir_mask) {
+            /* Drop refs taken so far for the earlier entries. */
+            while (i-- > 0)
+                slash_qdma_qpair_put(ctx->entries[i]);
+            mutex_unlock(&qdma_dev->lock);
+            kfree(ctx);
+            return -ENOENT;
+        }
+
+        /*
+         * Take a ref on the entry.  These refs are held by the file context
+         * and released when the fd is closed, ensuring the entries cannot be
+         * freed prematurely.
+         */
+        slash_qdma_qpair_get(entry);
+        ctx->entries[i] = entry;
+        ctx->qids[i] = ids[i];
+    }
+    ctx->n_qpairs = n_qpairs;
+
+    kref_get(&qdma_dev->ref);
+    mutex_unlock(&qdma_dev->lock);
+
     ctx->qdma_dev = qdma_dev;
-    ctx->entry = entry;
-    ctx->qid = req.qid;
 
     /* Create the anonymous inode file with read/write access. */
     file = anon_inode_getfile("slash_qdma_qpair", &slash_qdma_qpair_fops,
                               ctx, O_RDWR | (req.flags & O_CLOEXEC));
     if (IS_ERR(file)) {
         err = PTR_ERR(file);
-        slash_qdma_qpair_put(entry);
+        for (i = 0; i < ctx->n_qpairs; i++)
+            slash_qdma_qpair_put(ctx->entries[i]);
         kref_put(&qdma_dev->ref, slash_qdma_dev_release);
         kfree(ctx);
         return err;
     }
-
-    /* Enable seek and positional read/write for device-address control. */
-    file->f_mode |= FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE;
-
 
     /* Allocate a file descriptor number. */
     fd = get_unused_fd_flags(req.flags & O_CLOEXEC);

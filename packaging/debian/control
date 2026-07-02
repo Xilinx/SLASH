@@ -48,7 +48,7 @@ Description: SLASH/VRT System for simulation and emulation
 
 Package: slash-dkms
 Architecture: all
-Depends: dkms, gcc, make, ${misc:Depends}
+Depends: dkms, gcc, make, patch, ${misc:Depends}
 Provides: slash-kernel-module
 Description: SLASH kernel module (DKMS)
 
@@ -89,7 +89,7 @@ Description: VRT Runtime (development files)
 
 Package: v80-smi
 Architecture: any
-Depends: libvrt (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Depends: libvrt (= ${binary:Version}), libslash (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
 Description: V80 System Management Interface
 
 Package: slashkit

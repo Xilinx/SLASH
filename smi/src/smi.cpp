@@ -27,6 +27,9 @@
 /// reset, validate, debug).
 
 #include <iostream>
+#include <limits>
+#include <map>
+#include <string>
 #include <string_view>
 
 #include <CLI/CLI.hpp>
@@ -108,11 +111,90 @@ static int smiMain(int argc, char **argv) {
     // -- validate (memory integrity + bandwidth) --
     auto* validateCommand = app.add_subcommand("validate", "Validate board memory (integrity + bandwidth)");
     Validate::Options validateOptions;
+    auto addValidateSizeOption = [&](const char* name, uint64_t* target, const char* description) {
+        return validateCommand->add_option_function<std::string>(
+            name,
+            [target, name, &validateOptions](const std::string& value) {
+                try {
+                    *target = Validate::parseByteSizeOption(value);
+                    validateOptions.placementExplicit = true;
+                } catch (const std::exception& e) {
+                    throw CLI::ValidationError(name, e.what());
+                }
+            },
+            description);
+    };
     validateCommand->add_option("-d,--device", validateOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
     validateCommand->add_option("-j,--threads", validateOptions.threads,
         "Number of parallel buffers/threads (1-64)")->default_val(8)->check(CLI::Range(1u, 64u));
     validateCommand->add_flag("-R,--no-reset", validateOptions.noReset,
         "Skip the device reset step before running memory tests");
+    validateCommand->add_option_function<std::string>("--mm-channel",
+        [&validateOptions](const std::string& value) {
+            try {
+                validateOptions.mmChannels = Validate::parseMmChannelSpec(value);
+            } catch (const std::exception& e) {
+                throw CLI::ValidationError("--mm-channel", e.what());
+            }
+        },
+        "AXI-MM/NoC channel per buffer: auto|0|1 applied to all buffers, or a "
+        "comma-separated list with exactly one entry per buffer position "
+        "(2 x --threads entries, e.g. -j 1 -> '0,1'); no repeating. "
+        "auto stripes across channels by qid&1. Default auto.")
+        ->default_str("auto");
+    addValidateSizeOption("--buffer-size", &validateOptions.bufferSize,
+        "Size of each validate buffer; accepts bytes or k/K/m/M suffixes (max 512M)")
+        ->default_str("512M");
+    addValidateSizeOption("--offset", &validateOptions.offset,
+        "Distance between logical validate buffer positions; accepts bytes or k/K/m/M suffixes")
+        ->default_str("512M");
+    addValidateSizeOption("--starting-offset", &validateOptions.startingOffset,
+        "Offset from each memory-space base for logical position 0; accepts bytes or k/K/m/M suffixes")
+        ->default_str("0");
+    auto* rawTransferFlag = validateCommand->add_flag("--raw-transfer-test", validateOptions.rawTransferTest,
+        "Use libslash raw QDMA transfers instead of VRTD buffers (implies --no-reset)");
+    auto* useQdmaDriverFlag = validateCommand->add_flag("--use-qdma-driver", validateOptions.useQdmaDriver,
+        "Run the raw transfer test over the off-the-shelf Xilinx QDMA driver "
+        "(/dev/qdma<idx>-MM-<qid>) instead of SLASH; requires the stock qdma driver "
+        "bound to the board. Implies --no-reset; mutually exclusive with --raw-transfer-test");
+    rawTransferFlag->excludes(useQdmaDriverFlag);
+    useQdmaDriverFlag->excludes(rawTransferFlag);
+    auto* ddrOnlyFlag = validateCommand->add_flag("--ddr-only", validateOptions.ddrOnly,
+        "Run only DDR memory tests (skip HBM)");
+    auto* hbmOnlyFlag = validateCommand->add_flag("--hbm-only", validateOptions.hbmOnly,
+        "Run only HBM memory tests (skip DDR)");
+    ddrOnlyFlag->excludes(hbmOnlyFlag);
+    hbmOnlyFlag->excludes(ddrOnlyFlag);
+    const std::map<std::string, Validate::Options::ChannelAllocation> channelAllocationMap{
+        {"auto", Validate::Options::ChannelAllocation::Auto},
+        {"paired", Validate::Options::ChannelAllocation::Paired},
+    };
+    validateCommand->add_option("--channel-allocation", validateOptions.channelAllocation,
+        "Raw-transfer NoC channel/memory placement (raw modes only): "
+        "auto (interleaved: mm-channel=qid&1, linear addressing; default) or "
+        "paired (couple mm-channel to a distinct memory region/NSU per "
+        "--channel-region-stride, mirroring dma-perf offset_ch0/offset_ch1)")
+        ->transform(CLI::CheckedTransformer(channelAllocationMap, CLI::ignore_case))
+        ->default_str("auto");
+    addValidateSizeOption("--channel-region-stride", &validateOptions.channelRegionStride,
+        "In --channel-allocation paired mode, byte distance between the two per-channel "
+        "memory regions (NSU/pseudo-channel stride); accepts k/K/m/M/g/G suffixes")
+        ->default_str("16G");
+    validateCommand->add_option_function<uint32_t>("--ring-size-index",
+        [&validateOptions](uint32_t value) {
+            validateOptions.ringSizeIndex = value;
+        },
+        "Raw-transfer queue descriptor-ring size index (0-15). Overrides the backend default.")
+        ->check(CLI::Range(0u, 15u))
+        ->default_str("backend default");
+    validateCommand->add_option("--bandwidth-iterations", validateOptions.bandwidthIterations,
+        "Raw-transfer bandwidth mode only: repeat each whole-buffer transfer this many times")
+        ->default_val(1)->check(CLI::Range(static_cast<uint64_t>(1),
+                                           std::numeric_limits<uint64_t>::max()));
+    validateCommand->add_option("--bandwidth-duration", validateOptions.bandwidthDuration,
+        "Raw-transfer bandwidth mode only: repeat whole-buffer transfers for this many seconds "
+        "(0 disables duration mode)")
+        ->default_val(0.0)->check(CLI::NonNegativeNumber);
 
     // -- debug (low-level debug utilities) --
     auto* debugCommand = app.add_subcommand("debug", "Low-level debug utilities");

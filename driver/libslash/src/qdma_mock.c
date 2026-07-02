@@ -257,3 +257,44 @@ int slash_qdma_mock_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flag
 
     return new_fd;
 }
+
+int slash_qdma_mock_qpair_get_fd_multi(struct slash_qdma *qdma,
+                                       const uint32_t *qids,
+                                       uint32_t qpair_count, int flags)
+{
+    struct slash_qdma_mock *ctx;
+    uint32_t i;
+    int new_fd;
+    (void) flags; /* O_CLOEXEC already set on the memfd */
+
+    if (qdma == NULL || qids == NULL ||
+        qpair_count == 0 || qpair_count > SLASH_QDMA_FD_MAX_QPAIRS) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ctx = mock_ctx(qdma);
+
+    for (i = 0; i < qpair_count; ++i) {
+        if (qids[i] >= QDMA_MOCK_MAX_QUEUES ||
+            !ctx->queues[qids[i]].in_use || !ctx->queues[qids[i]].started) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+
+    /*
+     * The mock backs the device address space with one memfd per queue pair.
+     * Both NoC channels address the same device memory, so a multi-qpair fd is
+     * emulated by a single backing store: dup the first queue pair's memfd and
+     * route every sub-transfer through it.  This keeps round-trips consistent
+     * regardless of which channel a sub-transfer used.
+     */
+    new_fd = dup(ctx->queues[qids[0]].fd);
+    if (new_fd < 0) {
+        return -1;
+    }
+
+    return new_fd;
+}
+

@@ -174,6 +174,33 @@ TEST_F(DesignWriterTest, SyncTransfer) {
     EXPECT_FALSE(design_writer_is_busy(writer_));
 }
 
+TEST_F(DesignWriterTest, SyncTransferNonPageAlignedLength) {
+    int fd = make_bitstream_fd(0xAB, 4097);
+    ASSERT_GE(fd, 0);
+
+    EXPECT_EQ(design_writer_submit_fd(writer_, fd), 0);
+    EXPECT_FALSE(design_writer_is_busy(writer_));
+}
+
+TEST_F(DesignWriterTest, SyncTransferLargerThanProgrammingAperture) {
+    int fd = make_bitstream_fd(0xAB, 128 * 1024 + 17);
+    ASSERT_GE(fd, 0);
+
+    EXPECT_EQ(design_writer_submit_fd(writer_, fd), 0);
+    EXPECT_FALSE(design_writer_is_busy(writer_));
+}
+
+TEST_F(DesignWriterTest, SyncTransferPropagatesWorkerFailure) {
+    int fd = make_bitstream_fd(0xAB, 4096);
+    ASSERT_GE(fd, 0);
+
+    ASSERT_EQ(close(writer_->fd), 0);
+    writer_->fd = -1;
+
+    EXPECT_EQ(design_writer_submit_fd(writer_, fd), -1);
+    EXPECT_FALSE(design_writer_is_busy(writer_));
+}
+
 TEST_F(DesignWriterTest, AsyncTransferPoll) {
     int fd = make_bitstream_fd(0xCD, 8192);
     ASSERT_GE(fd, 0);

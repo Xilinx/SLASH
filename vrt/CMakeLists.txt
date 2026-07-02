@@ -125,10 +125,6 @@ find_package(ZLIB REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(jsoncpp CONFIG REQUIRED)
 
-if(NOT TARGET JsonCpp::JsonCpp AND TARGET jsoncpp_lib)
-  add_library(JsonCpp::JsonCpp ALIAS jsoncpp_lib)
-endif()
-
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PC_ZMQ REQUIRED IMPORTED_TARGET libzmq)
 
@@ -137,7 +133,7 @@ target_link_libraries(vrt
     vrtd::libvrtdpp
     ZLIB::ZLIB
     LibXml2::LibXml2
-    JsonCpp::JsonCpp
+    jsoncpp_lib
     PkgConfig::PC_ZMQ
 )
 

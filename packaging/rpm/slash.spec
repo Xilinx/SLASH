@@ -90,7 +90,7 @@ SLASH/VRT System for simulation and emulation (development files)
 
 %package -n     slash-dkms
 Summary:        SLASH kernel module (DKMS)
-Requires:       dkms, gcc, make
+Requires:       dkms, gcc, make, patch
 BuildArch:      noarch
 
 %description -n slash-dkms
@@ -157,6 +157,7 @@ VRT Runtime (development files)
 %package -n     v80-smi
 Summary:        V80 System Management Interface
 Requires:       libvrt = %{version}-%{release}
+Requires:       libslash = %{version}-%{release}
 
 %description -n v80-smi
 V80 System Management Interface
@@ -210,6 +211,8 @@ install -m 0644 driver/*.h      %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_versi
 install -m 0644 driver/Makefile %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/
 
 cp -a driver/kcompat %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/
+
+cp -a driver/patches %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/
 
 cp -a driver/libslash/include/slash/uapi \
     %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_version}/driver/libslash/include/slash/

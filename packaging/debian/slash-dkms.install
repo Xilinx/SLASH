@@ -22,6 +22,7 @@ driver/*.c            usr/src/slash-@VERSION@/driver/
 driver/*.h            usr/src/slash-@VERSION@/driver/
 driver/Makefile       usr/src/slash-@VERSION@/driver/
 driver/kcompat        usr/src/slash-@VERSION@/driver/
+driver/patches        usr/src/slash-@VERSION@/driver/
 driver/libslash/include/slash/uapi  usr/src/slash-@VERSION@/driver/libslash/include/slash/
 
 submodules/qdma_drv/QDMA/linux-kernel/driver/libqdma/   usr/src/slash-@VERSION@/driver/

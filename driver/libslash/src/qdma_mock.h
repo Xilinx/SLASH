@@ -25,6 +25,8 @@
 
 #include <stdint.h>
 
+#include <sys/types.h>
+
 struct slash_qdma *slash_qdma_mock_open(void);
 int slash_qdma_mock_close(struct slash_qdma *qdma);
 int slash_qdma_mock_info_read(struct slash_qdma *qdma, struct slash_qdma_info *info);
@@ -33,5 +35,8 @@ int slash_qdma_mock_qpair_start(struct slash_qdma *qdma, uint32_t qid);
 int slash_qdma_mock_qpair_stop(struct slash_qdma *qdma, uint32_t qid);
 int slash_qdma_mock_qpair_del(struct slash_qdma *qdma, uint32_t qid);
 int slash_qdma_mock_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flags);
+int slash_qdma_mock_qpair_get_fd_multi(struct slash_qdma *qdma,
+                                       const uint32_t *qids,
+                                       uint32_t qpair_count, int flags);
 
 #endif /* LIBSLASH_QDMA_MOCK_H */

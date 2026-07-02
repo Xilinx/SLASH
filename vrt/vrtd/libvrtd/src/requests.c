@@ -56,13 +56,13 @@
 #include <vrtd/vrtd.h>
 
 /**
- * vrtd_recv_response() - Receive a response message from the daemon.
+ * vrtd_recv_response_fds() - Receive a response message from the daemon.
  * @fd:            Connection socket.
  * @resp_body_buf: Buffer for the response body (may be NULL if no body expected).
  * @resp_bufsz:    Size of @resp_body_buf.
- * @resp_fd:       If non-NULL, receives an out-of-band file descriptor
- *                 sent by the daemon via SCM_RIGHTS (e.g. a BAR fd or
- *                 QDMA qpair fd).  Set to -1 if no fd was received.
+ * @resp_fds:      Optional array receiving out-of-band file descriptors.
+ * @max_resp_fds:  Capacity of @resp_fds.
+ * @resp_fd_count: Optional output count of received fds.
  *
  * Uses recvmsg() with scatter-gather I/O: the header and body are read
  * into separate buffers in a single system call.  MSG_CMSG_CLOEXEC
@@ -70,11 +70,13 @@
  *
  * Return: VRTD_RET_OK on success, or an error code.
  */
-static enum vrtd_ret vrtd_recv_response(
+static enum vrtd_ret vrtd_recv_response_fds(
     int fd,
     void *resp_body_buf,
     size_t resp_bufsz,
-    int *resp_fd
+    int *resp_fds,
+    uint32_t max_resp_fds,
+    uint32_t *resp_fd_count
 )
 {
     struct vrtd_resp_header rh = {0};
@@ -85,16 +87,21 @@ static enum vrtd_ret vrtd_recv_response(
     riov[1].iov_base = resp_body_buf;
     riov[1].iov_len  = resp_bufsz;
 
-    char cbuf[CMSG_SPACE(sizeof(int))];
+    char cbuf[CMSG_SPACE(2 * sizeof(int))];
     struct msghdr rmsg = {
         .msg_iov        = riov,
         .msg_iovlen     = resp_bufsz ? 2 : 1,
-        .msg_control    = resp_fd ? cbuf : NULL,
-        .msg_controllen = resp_fd ? sizeof(cbuf) : 0,
+        .msg_control    = resp_fds ? cbuf : NULL,
+        .msg_controllen = resp_fds ? sizeof(cbuf) : 0,
     };
 
-    if (resp_fd) {
-        *resp_fd = -1;
+    if (resp_fd_count) {
+        *resp_fd_count = 0;
+    }
+    if (resp_fds) {
+        for (uint32_t i = 0; i < max_resp_fds; ++i) {
+            resp_fds[i] = -1;
+        }
     }
 
     ssize_t rn = recvmsg(fd, &rmsg, MSG_CMSG_CLOEXEC);
@@ -118,16 +125,40 @@ static enum vrtd_ret vrtd_recv_response(
         return VRTD_RET_BAD_CONN;
     }
 
-    /* Extract file descriptor from SCM_RIGHTS ancillary data, if any. */
+    /* Extract file descriptors from SCM_RIGHTS ancillary data, if any. */
     for (struct cmsghdr *c = CMSG_FIRSTHDR(&rmsg); c != NULL; c = CMSG_NXTHDR(&rmsg, c)) {
         if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len >= CMSG_LEN(sizeof(int))) {
-            assert(resp_fd != NULL);
-            memcpy(resp_fd, CMSG_DATA(c), sizeof(int));
+            assert(resp_fds != NULL);
+            size_t payload = c->cmsg_len - CMSG_LEN(0);
+            uint32_t n = (uint32_t)(payload / sizeof(int));
+            if (n > max_resp_fds) {
+                n = max_resp_fds;
+            }
+            memcpy(resp_fds, CMSG_DATA(c), n * sizeof(int));
+            if (resp_fd_count) {
+                *resp_fd_count = n;
+            }
             break;
         }
     }
 
     return (enum vrtd_ret) rh.ret;
+}
+
+static enum vrtd_ret vrtd_recv_response(
+    int fd,
+    void *resp_body_buf,
+    size_t resp_bufsz,
+    int *resp_fd
+)
+{
+    uint32_t count = 0;
+    enum vrtd_ret ret = vrtd_recv_response_fds(
+        fd, resp_body_buf, resp_bufsz, resp_fd, resp_fd ? 1u : 0u, &count);
+    if (resp_fd && count == 0) {
+        *resp_fd = -1;
+    }
+    return ret;
 }
 
 int vrtd_connect(const char *path)
@@ -230,6 +261,60 @@ enum vrtd_ret vrtd_raw_request(
     }
 
     return vrtd_recv_response(fd, resp_body_buf, resp_bufsz, resp_fd);
+}
+
+static enum vrtd_ret vrtd_raw_request_fds(
+    int fd,
+    uint16_t opcode,
+    const void *req_body, uint16_t req_size,
+    void *resp_body_buf, size_t resp_bufsz,
+    int *resp_fds, uint32_t max_resp_fds, uint32_t *resp_fd_count,
+    const int *req_fd
+)
+{
+    if (req_size > VRTD_MSG_MAX_SIZE - sizeof(struct vrtd_req_header)) { errno = EMSGSIZE; return -1; }
+
+    struct vrtd_req_header h = {
+        .size  = req_size,
+        .opcode= opcode,
+        .seqno = 1,
+    };
+
+    struct iovec siov[2];
+    siov[0].iov_base = &h;
+    siov[0].iov_len  = sizeof(h);
+    siov[1].iov_base = (void*) req_body;
+    siov[1].iov_len  = req_size;
+
+    char cbuf[CMSG_SPACE(sizeof(int))];
+    struct msghdr smsg = {
+        .msg_iov        = siov,
+        .msg_iovlen     = req_size ? 2 : 1,
+        .msg_control    = NULL,
+        .msg_controllen = 0,
+    };
+
+    if (req_fd && *req_fd >= 0) {
+        smsg.msg_control = cbuf;
+        smsg.msg_controllen = sizeof(cbuf);
+
+        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&smsg);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type  = SCM_RIGHTS;
+        cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
+        memcpy(CMSG_DATA(cmsg), req_fd, sizeof(int));
+    }
+
+    ssize_t sn = sendmsg(fd, &smsg, MSG_NOSIGNAL);
+    if (sn == -1) {
+        return VRTD_RET_BAD_CONN;
+    }
+    if ((size_t) sn != sizeof(h) + req_size) {
+        return VRTD_RET_BAD_CONN;
+    }
+
+    return vrtd_recv_response_fds(fd, resp_body_buf, resp_bufsz,
+                                  resp_fds, max_resp_fds, resp_fd_count);
 }
 
 
@@ -468,6 +553,7 @@ enum vrtd_ret vrtd_buffer_open(
     uint32_t alloc_dir,
     uint64_t alloc_arg,
     uint64_t size_in,
+    enum vrtd_mm_channel mm_channel,
     struct vrtd_buffer **buffer_out
 )
 {
@@ -480,21 +566,28 @@ enum vrtd_ret vrtd_buffer_open(
         .dev_number = dev,
         .alloc_type = alloc_type,
         .alloc_dir = alloc_dir,
+        .mm_channel = mm_channel,
         .alloc_arg = alloc_arg,
         .size = size_in,
     };
     struct vrtd_resp_buffer_open resp = {0};
 
+    /* The daemon sends a single transfer fd that owns resp.qpair_count qpairs. */
     int qpair_fd = -1;
-    int ret = vrtd_raw_request(fd, VRTD_REQ_BUFFER_OPEN,
-                               &req, sizeof(req),
-                               &resp, sizeof(resp),
-                               &qpair_fd, NULL);
+    uint32_t fd_count = 0;
+    int ret = vrtd_raw_request_fds(fd, VRTD_REQ_BUFFER_OPEN,
+                                   &req, sizeof(req),
+                                   &resp, sizeof(resp),
+                                   &qpair_fd, 1, &fd_count, NULL);
     if (ret != VRTD_RET_OK) {
         return ret;
     }
 
-    if (qpair_fd < 0) {
+    if (fd_count != 1 || qpair_fd < 0 ||
+        resp.qpair_count == 0 || resp.qpair_count > 2) {
+        if (qpair_fd >= 0) {
+            (void) close(qpair_fd);
+        }
         return VRTD_RET_INTERNAL_ERROR;
     }
 
@@ -507,6 +600,7 @@ enum vrtd_ret vrtd_buffer_open(
         resp.size,
         resp.phys_addr,
         qpair_fd,
+        resp.qpair_count,
         buffer_out
     );
     if (ret != VRTD_RET_OK) {
@@ -523,6 +617,7 @@ enum vrtd_ret vrtd_buffer_open_raw(
     uint64_t phys_addr,
     uint64_t size,
     uint32_t alloc_dir,
+    enum vrtd_mm_channel mm_channel,
     struct vrtd_buffer **buffer_out
 )
 {
@@ -534,21 +629,28 @@ enum vrtd_ret vrtd_buffer_open_raw(
     struct vrtd_req_buffer_open_raw req = {
         .dev_number = dev,
         .alloc_dir = alloc_dir,
+        .mm_channel = mm_channel,
         .phys_addr = phys_addr,
         .size = size,
     };
     struct vrtd_resp_buffer_open_raw resp = {0};
 
+    /* The daemon sends a single transfer fd that owns resp.qpair_count qpairs. */
     int qpair_fd = -1;
-    int ret = vrtd_raw_request(fd, VRTD_REQ_BUFFER_OPEN_RAW,
-                               &req, sizeof(req),
-                               &resp, sizeof(resp),
-                               &qpair_fd, NULL);
+    uint32_t fd_count = 0;
+    int ret = vrtd_raw_request_fds(fd, VRTD_REQ_BUFFER_OPEN_RAW,
+                                   &req, sizeof(req),
+                                   &resp, sizeof(resp),
+                                   &qpair_fd, 1, &fd_count, NULL);
     if (ret != VRTD_RET_OK) {
         return ret;
     }
 
-    if (qpair_fd < 0) {
+    if (fd_count != 1 || qpair_fd < 0 ||
+        resp.qpair_count == 0 || resp.qpair_count > 2) {
+        if (qpair_fd >= 0) {
+            (void) close(qpair_fd);
+        }
         return VRTD_RET_INTERNAL_ERROR;
     }
 
@@ -561,6 +663,7 @@ enum vrtd_ret vrtd_buffer_open_raw(
         size,
         phys_addr,
         qpair_fd,
+        resp.qpair_count,
         buffer_out
     );
     if (ret != VRTD_RET_OK) {

@@ -27,7 +27,7 @@ import re
 import shutil
 import subprocess
 import importlib.resources as resources
-from typing import Optional, Dict
+from typing import List, Optional, Dict
 from contextlib import ExitStack
 
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
@@ -139,6 +139,14 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
     return output_pdi
 
 
+def _first_existing(candidates: List[str]) -> Optional[str]:
+    """Return the first path in candidates that exists, or None."""
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
 def _environment_with_udev_ld_preload() -> Dict[str, str]:
     """
     Create a dictionary of environment variables (based on the current one),
@@ -147,13 +155,26 @@ def _environment_with_udev_ld_preload() -> Dict[str, str]:
     Details:
     https://adaptivesupport.amd.com/s/question/0D54U00005Sgst2SAB/failed-batch-mode-execution-in-linux-docker-running-under-windows-host?language=en_US
     https://community.flexera.com/t5/InstallAnywhere-Forum/Issues-when-running-Xilinx-tools-or-Other-vendor-tools-in-docker/m-p/245820#M10647
+
+    The preload is inherited by the bundled MicroBlaze cross-compiler that builds
+    the DDRMC firmware (phy_ddrmc.elf) under a restricted library path, so a
+    forced library must bring its own dependencies. On Ubuntu 24.04 libudev.so.1
+    needs libcap.so.2, so preloading libudev alone makes that compiler abort
+    ("libcap.so.2: cannot open shared object file") and silently drops the ELF.
+    Preload libcap alongside it. On 22.04 libudev has no libcap dependency, so
+    preloading it there has no effect.
     """
-    possible_paths = [
-        Path("/lib/x86_64-linux-gnu/libudev.so.1"), Path("/lib64/libudev.so.1")]
-    existing_paths = [str(path) for path in possible_paths if path.is_file()]
     env = dict(os.environ)
-    if len(existing_paths) > 0:
-        env["LD_PRELOAD"] = ":".join(existing_paths)
+    libudev = _first_existing(
+        ["/lib/x86_64-linux-gnu/libudev.so.1", "/lib64/libudev.so.1"])
+    if libudev is None:
+        return env
+    preload = [libudev]
+    libcap = _first_existing(
+        ["/lib/x86_64-linux-gnu/libcap.so.2", "/lib64/libcap.so.2"])
+    if libcap is not None:
+        preload.append(libcap)
+    env["LD_PRELOAD"] = ":".join(preload)
     return env
 
 

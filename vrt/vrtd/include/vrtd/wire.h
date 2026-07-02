@@ -276,8 +276,9 @@ struct vrtd_resp_qdma_qpair_op {
 /**
  * @brief Request a read/write file descriptor for a QDMA qpair.
  *
- * The qpair FD is sent out-of-band via SCM_RIGHTS when
- * @ref vrtd_resp_header::ret == VRTD_RET_OK.
+ * One or more qpair FDs are sent out-of-band via SCM_RIGHTS when
+ * @ref vrtd_resp_header::ret == VRTD_RET_OK.  The response body reports the
+ * number of descriptors attached.
  */
 struct vrtd_req_qdma_qpair_get_fd {
     uint32_t dev_number; ///< Device index (0-based).
@@ -299,6 +300,7 @@ struct vrtd_req_buffer_open {
     uint32_t dev_number; ///< Device index (0-based).
     uint32_t alloc_type; ///< One of enum vrtd_alloc_type.
     uint32_t alloc_dir;  ///< One of enum vrtd_alloc_dir.
+    uint32_t mm_channel; ///< AXI-MM/NoC channel selection (enum vrtd_mm_channel).
     uint64_t alloc_arg;  ///< Allocation argument (HBM region index for HBM).
     uint64_t size;       ///< Requested size in bytes.
 } __attribute__((packed));
@@ -306,6 +308,15 @@ struct vrtd_req_buffer_open {
 struct vrtd_resp_buffer_open {
     uint64_t size; ///< Allocated size in bytes (rounded up to subregion).
     uint64_t phys_addr; ///< Device physical address of the allocation.
+    /**
+     * Number of QDMA queue pairs (AXI-MM/NoC channels) owned by the single
+     * transfer FD sent via SCM_RIGHTS (1 or 2).  When two qpairs are bound
+     * (an mm_channel == AUTO request), their qpair_index ordering is fixed:
+     * index 0 is pinned to channel 0 and index 1 to channel 1, so the client
+     * can apply the V80 placement policy deterministically.  Exactly one FD is
+     * always sent regardless of this count.
+     */
+    uint32_t qpair_count;
 } __attribute__((packed));
 
 /**
@@ -327,18 +338,25 @@ struct vrtd_resp_buffer_close {
  * Bypasses the allocator entirely — the caller is responsible for ensuring the
  * address is valid and not in use.  Requires the @c raw-mem-access permission.
  *
- * The qpair FD is sent out-of-band via SCM_RIGHTS when
- * @ref vrtd_resp_header::ret == VRTD_RET_OK.
+ * A single transfer FD is sent out-of-band via SCM_RIGHTS when
+ * @ref vrtd_resp_header::ret == VRTD_RET_OK.  The response body reports how
+ * many queue pairs (channels) that FD owns.
  */
 struct vrtd_req_buffer_open_raw {
     uint32_t dev_number; ///< Device index (0-based).
     uint32_t alloc_dir;  ///< One of enum vrtd_alloc_dir.
+    uint32_t mm_channel; ///< AXI-MM/NoC channel selection (enum vrtd_mm_channel).
     uint64_t phys_addr;  ///< Caller-specified device physical address (bypasses allocator).
     uint64_t size;       ///< Size in bytes.
 } __attribute__((packed));
 
 struct vrtd_resp_buffer_open_raw {
-    uint8_t zero; ///< Placeholder; all data is carried via SCM_RIGHTS.
+    /**
+     * Number of QDMA queue pairs (channels) owned by the single transfer FD
+     * sent via SCM_RIGHTS (1 or 2).  Same qpair_index-to-channel ordering as
+     * @ref vrtd_resp_buffer_open.
+     */
+    uint32_t qpair_count;
 } __attribute__((packed));
 
 /**

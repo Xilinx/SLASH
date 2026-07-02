@@ -761,7 +761,7 @@ static int client_handle_in(struct client *client)
      * Allocate a cmsg buffer large enough for one fd.
      * CMSG_SPACE includes alignment padding required by the kernel.
      */
-    char cbuf[CMSG_SPACE(sizeof(int))];
+    char cbuf[CMSG_SPACE(2 * sizeof(int))];
     struct msghdr msg = {
         .msg_name       = NULL,
         .msg_namelen    = 0,
@@ -895,17 +895,24 @@ static int client_handle_out(struct client *client)
      * The cbuf is zeroed to satisfy kernel expectations about padding.
      */
     if (client->have_out_fd) {
+        uint32_t fd_count = client->out_fd_count ? client->out_fd_count : 1;
+
+        if (fd_count > 2) {
+            LOG(LOG_ERR, "Invalid outbound fd count %u", (unsigned int)fd_count);
+            return -1;
+        }
+
         memset(cbuf, 0, sizeof cbuf);
 
         msg.msg_control = cbuf;
-        msg.msg_controllen = sizeof cbuf;
+        msg.msg_controllen = CMSG_SPACE(fd_count * sizeof(int));
 
         struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
         cmsg->cmsg_level = SOL_SOCKET;
         cmsg->cmsg_type  = SCM_RIGHTS;
-        cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
+        cmsg->cmsg_len   = CMSG_LEN(fd_count * sizeof(int));
 
-        memcpy(CMSG_DATA(cmsg), &client->out_fd, sizeof(int));
+        memcpy(CMSG_DATA(cmsg), client->out_fds, fd_count * sizeof(int));
     }
 
     ssize_t n;
@@ -937,6 +944,7 @@ retry:
     /* Response sent -- clear state so the client can send a new request. */
     client->have_response = false;
     client->have_out_fd = false;
+    client->out_fd_count = 0;
 
     return 0;
 }
@@ -1040,7 +1048,7 @@ static int client_handle_request(struct client *client)
                 req_header->size,
                 CLIENT_OUT_BODY(*client, vrtd_resp_get_bar_fd),
                 &size,
-                &client->out_fd,
+                &client->out_fds[0],
                 &client->have_out_fd
             );
         break;
@@ -1082,7 +1090,7 @@ static int client_handle_request(struct client *client)
                 req_header->size,
                 CLIENT_OUT_BODY(*client, vrtd_resp_qdma_qpair_get_fd),
                 &size,
-                &client->out_fd,
+                &client->out_fds[0],
                 &client->have_out_fd
             );
         break;
@@ -1094,7 +1102,7 @@ static int client_handle_request(struct client *client)
                 req_header->size,
                 CLIENT_OUT_BODY(*client, vrtd_resp_buffer_open),
                 &size,
-                &client->out_fd,
+                &client->out_fds[0],
                 &client->have_out_fd
             );
         break;
@@ -1106,7 +1114,7 @@ static int client_handle_request(struct client *client)
                 req_header->size,
                 CLIENT_OUT_BODY(*client, vrtd_resp_buffer_open_raw),
                 &size,
-                &client->out_fd,
+                &client->out_fds[0],
                 &client->have_out_fd
             );
         break;
@@ -1966,6 +1974,12 @@ static uint16_t client_handle_request_buffer_open(
         return VRTD_RET_INVALID_ARGUMENT;
     }
 
+    if (req_body->mm_channel > SLASH_QDMA_MM_CHANNEL_1) {
+        LOG(LOG_WARNING, "Received buffer open request with invalid mm_channel %u",
+            (unsigned int)req_body->mm_channel);
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
     struct device *d = client->state->devices.d[req_body->dev_number];
     if (d == NULL || d->qdma == NULL || d->memory_map == NULL) {
         LOG(LOG_WARNING, "Received buffer open request for non-existent or non-functional device");
@@ -1992,6 +2006,7 @@ static uint16_t client_handle_request_buffer_open(
         req_body->size,
         req_body->alloc_arg,
         client_id,
+        req_body->mm_channel,
         NULL
     );
     if (buf == NULL) {
@@ -2009,14 +2024,16 @@ static uint16_t client_handle_request_buffer_open(
         return VRTD_RET_INTERNAL_ERROR;
     }
 
-    if (buf->fd < 0) {
-        LOG(LOG_ERR, "Buffer created without valid fd");
+    if (buf->qpair_count == 0 || buf->qpair_count > VRTD_BUFFER_MAX_QPAIR_FDS ||
+        buf->fd < 0) {
+        LOG(LOG_ERR, "Buffer created without valid qpair fd");
         return VRTD_RET_INTERNAL_ERROR;
     }
 
     uint64_t real_size = buf->size;
-    int fd = buf->fd;
     uint64_t phys_addr = buf->addr;
+    uint32_t qpair_count = buf->qpair_count;
+    int fd = buf->fd;
 
     /*
      * Transfer ownership of the buffer into the device's buffer list.
@@ -2030,6 +2047,11 @@ static uint16_t client_handle_request_buffer_open(
 
     resp_body->size = real_size;
     resp_body->phys_addr = phys_addr;
+    resp_body->qpair_count = qpair_count;
+    /* A single transfer fd owns all qpairs; the client selects channels by
+     * qpair_index per sub-transfer. */
+    client->out_fds[0] = fd;
+    client->out_fd_count = 1;
     *out_fd = fd;
     *have_out_fd = true;
     *resp_size = sizeof(*resp_body);
@@ -2104,10 +2126,22 @@ static uint16_t client_handle_request_buffer_open_raw(
         return VRTD_RET_INVALID_ARGUMENT;
     }
 
+    if (req_body->mm_channel > SLASH_QDMA_MM_CHANNEL_1) {
+        LOG(LOG_WARNING, "Received raw buffer open request with invalid mm_channel %u",
+            (unsigned int)req_body->mm_channel);
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
     struct device *d = client->state->devices.d[req_body->dev_number];
     if (d == NULL || d->qdma == NULL) {
         LOG(LOG_WARNING, "Received raw buffer open request for non-existent or non-functional device");
         return VRTD_RET_NOEXIST;
+    }
+
+    uint64_t client_id = client->conn_id;
+    if (client_id == 0) {
+        LOG(LOG_ERR, "Invalid client connection id");
+        return VRTD_RET_INTERNAL_ERROR;
     }
 
     _cleanup_(cleanup_bufferp)
@@ -2115,7 +2149,9 @@ static uint16_t client_handle_request_buffer_open_raw(
         d->qdma,
         req_body->phys_addr,
         req_body->size,
-        (enum vrtd_alloc_dir) req_body->alloc_dir
+        (enum vrtd_alloc_dir) req_body->alloc_dir,
+        client_id,
+        req_body->mm_channel
     );
     if (buf == NULL) {
         if (errno == EINVAL) {
@@ -2126,11 +2162,13 @@ static uint16_t client_handle_request_buffer_open_raw(
         return VRTD_RET_INTERNAL_ERROR;
     }
 
-    if (buf->fd < 0) {
-        LOG(LOG_ERR, "Raw buffer created without valid fd");
+    if (buf->qpair_count == 0 || buf->qpair_count > VRTD_BUFFER_MAX_QPAIR_FDS ||
+        buf->fd < 0) {
+        LOG(LOG_ERR, "Raw buffer created without valid qpair fd");
         return VRTD_RET_INTERNAL_ERROR;
     }
 
+    uint32_t qpair_count = buf->qpair_count;
     int fd = buf->fd;
 
     if (buffer_ptr_array_push_move(&d->buffers, &buf) != 0) {
@@ -2138,7 +2176,9 @@ static uint16_t client_handle_request_buffer_open_raw(
         return VRTD_RET_INTERNAL_ERROR;
     }
 
-    resp_body->zero = 0;
+    resp_body->qpair_count = qpair_count;
+    client->out_fds[0] = fd;
+    client->out_fd_count = 1;
     *out_fd = fd;
     *have_out_fd = true;
     *resp_size = sizeof(*resp_body);
@@ -2211,8 +2251,15 @@ static uint16_t client_handle_request_buffer_close(
         return VRTD_RET_NOEXIST;
     }
 
-    /* Search for the buffer by physical address. */
+    /*
+     * Search for the caller's buffer by physical address.  Raw buffers bypass
+     * the allocator and use caller-specified addresses, so distinct clients can
+     * hold buffers at the same address; scan all matches and pick the one owned
+     * by this connection rather than rejecting on the first address match.
+     */
     struct buffer *found = NULL;
+    bool addr_size_match_foreign = false; /* same addr+size, owned by another conn */
+    bool addr_match_size_mismatch = false; /* same addr, different size */
     for (size_t i = 0; i < d->buffers.len; ++i) {
         struct buffer *buf = d->buffers.d[i];
         if (buf == NULL) {
@@ -2221,15 +2268,20 @@ static uint16_t client_handle_request_buffer_close(
         if (buf->addr != req_body->phys_addr) {
             continue;
         }
-        /* Found a buffer at the right address -- verify size. */
         if (buf->size != req_body->size) {
-            LOG(LOG_WARNING, "buffer_close: size mismatch at addr=0x%llx (expected %llu, got %llu)",
-                (unsigned long long)req_body->phys_addr,
-                (unsigned long long)buf->size, (unsigned long long)req_body->size);
-            return VRTD_RET_INVALID_ARGUMENT;
+            addr_match_size_mismatch = true;
+            continue;
         }
-        /* Verify ownership: only the client that opened the buffer may close it. */
         if (buf->client_id != client->conn_id) {
+            addr_size_match_foreign = true;
+            continue;
+        }
+        found = buf;
+        break;
+    }
+
+    if (found == NULL) {
+        if (addr_size_match_foreign) {
             char pwbuf[1024];
             LOG(
                 LOG_WARNING,
@@ -2239,11 +2291,12 @@ static uint16_t client_handle_request_buffer_close(
             );
             return VRTD_RET_AUTH_ERROR;
         }
-        found = buf;
-        break;
-    }
-
-    if (found == NULL) {
+        if (addr_match_size_mismatch) {
+            LOG(LOG_WARNING, "buffer_close: size mismatch at addr=0x%llx (got %llu)",
+                (unsigned long long)req_body->phys_addr,
+                (unsigned long long)req_body->size);
+            return VRTD_RET_INVALID_ARGUMENT;
+        }
         LOG(LOG_NOTICE, "buffer_close: no buffer at addr=0x%llx on device %u",
             (unsigned long long)req_body->phys_addr, (unsigned int)req_body->dev_number);
         return VRTD_RET_NOEXIST;

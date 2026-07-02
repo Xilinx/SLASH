@@ -49,6 +49,18 @@ enum class BufferAllocDir : uint32_t {
 };
 
 /**
+ * @brief AXI-MM / NoC channel selection for a buffer's QDMA queue pair.
+ *
+ * Mirrors @c vrtd_mm_channel (values must stay in sync). @c Auto stripes across
+ * channels by (qid & 1); @c Ch0 / @c Ch1 pin to a single channel.
+ */
+enum class MmChannel : uint32_t {
+    Auto = 0, ///< Stripe across channels by (qid & 1).
+    Ch0  = 1, ///< Pin to AXI-MM/NoC channel 0.
+    Ch1  = 2, ///< Pin to AXI-MM/NoC channel 1.
+};
+
+/**
  * @brief RAII wrapper for a vrtd buffer allocation.
  *
  * A @c Buffer owns the underlying @c vrtd_buffer, including its qpair FD and

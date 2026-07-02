@@ -149,7 +149,8 @@ TEST(DeviceCleanupTest, CleanupWithBuffers) {
 
     /* Allocate a raw buffer on the mock QDMA and hand ownership to d->buffers. */
     struct buffer *buf = buffer_create_raw(d->qdma, DDR_START_ADDRESS, 4096,
-                                           VRTD_ALLOC_DIR_HOST_TO_DEVICE);
+                                           VRTD_ALLOC_DIR_HOST_TO_DEVICE, /*client_id=*/1,
+                                           SLASH_QDMA_MM_CHANNEL_AUTO);
     ASSERT_NE(buf, nullptr);
 
     int ret = buffer_ptr_array_push_move(&d->buffers, &buf);

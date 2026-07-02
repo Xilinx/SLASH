@@ -59,19 +59,21 @@ fi
 # Check build prerequisites
 _prereq_ok=1
 
-if ! command -v v++ > /dev/null 2>&1; then
-    echo "ERROR: v++ not found in PATH. Source Vitis 2025.1 before building:" >&2
-    echo "  source <path-to-vitis>/settings64.sh" >&2
-    echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
-    _prereq_ok=0
-fi
+if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
+    if ! command -v v++ >/dev/null 2>&1; then
+        echo "ERROR: v++ not found in PATH. Source Vitis 2025.1 before building:" >&2
+        echo "  source <path-to-vitis>/settings64.sh" >&2
+        echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
+        _prereq_ok=0
+    fi
 
-if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' > /dev/null 2>&1; then
-    echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/iprepo/." >&2
-    echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
-    echo "directory into linker/slashkit/resources/base/iprepo/ before building." >&2
-    echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
-    _prereq_ok=0
+    if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' >/dev/null 2>&1; then
+        echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/iprepo/." >&2
+        echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
+        echo "directory into linker/slashkit/resources/base/iprepo/ before building." >&2
+        echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
+        _prereq_ok=0
+    fi
 fi
 
 if [[ "${_prereq_ok}" -eq 0 ]]; then

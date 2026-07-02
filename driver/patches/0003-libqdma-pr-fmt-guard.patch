@@ -1,0 +1,43 @@
+SLASH local modification to the pinned QDMA submodule (libqdma).
+
+libqdma: make qdma_platform_env.h self-sufficient for pr_fmt
+
+SLASH force-includes driver/slash_compat.h into every TU (driver/Makefile) so
+kernel-API shims such as from_timer() reach the pinned libqdma sources. That
+header pulls in <linux/printk.h> early (via <linux/mm.h>) and then #undefs
+pr_fmt, so each libqdma .c that sets its own
+    #define pr_fmt(fmt) KBUILD_MODNAME ":%s: " fmt, __func__
+at the top compiles without a "pr_fmt redefined" warning.
+
+The qdma_access HAL files don't set their own pr_fmt -- they log via
+qdma_log_* -> pr_*, which expand pr_fmt at the call site -- so after that
+#undef they would reference an undefined pr_fmt (<linux/printk.h> is already
+include-guarded by the time they include it, so its guarded default can no
+longer re-arm). Re-arm the kernel default here, guarded by #ifndef so the
+libqdma sources that do set a custom pr_fmt before including this header keep
+it. Behaviour for the HAL files is unchanged (the kernel default is "fmt").
+
+Generated against qdma_drv @ e0168be (pinned submodule commit).
+Applied automatically by driver/Makefile (libqdma-patches target, patch -p1).
+diff --git a/qdma_platform_env.h b/qdma_platform_env.h
+index fa26c9a..c9e1082 100755
+--- a/qdma_platform_env.h
++++ b/qdma_platform_env.h
+@@ -25,6 +25,17 @@
+ #define QDMA_SNPRINTF_S(arg1, arg2, arg3, ...) \
+ 		snprintf(arg1, arg3, ##__VA_ARGS__)
+ 
++/*
++ * SLASH: re-arm the kernel-default pr_fmt for TUs that log via qdma_log_* ->
++ * pr_* but never set their own pr_fmt. SLASH force-includes a compat header
++ * that #undefs pr_fmt after <linux/printk.h> is already include-guarded, so the
++ * default can no longer re-arm on its own. Guarded with #ifndef so the libqdma
++ * sources that set a custom pr_fmt before including this header keep it.
++ */
++#ifndef pr_fmt
++#define pr_fmt(fmt) fmt
++#endif
++
+ #define qdma_log_info(x_, ...) pr_info(x_, ##__VA_ARGS__)
+ #define qdma_log_warning(x_, ...) pr_warn(x_, ##__VA_ARGS__)
+ #define qdma_log_error(x_, ...) pr_err(x_, ##__VA_ARGS__)

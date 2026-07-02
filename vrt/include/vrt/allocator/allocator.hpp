@@ -251,8 +251,9 @@ protected:
             }
             return buffer;
         }
-        
-        return nullptr;
+
+        // no free buddy of sufficient size, caller should fall through to next superblock
+        throw std::bad_alloc();
     }
 
     void deallocate(const UntypedBuffer& whole, UntypedBuffer buffer, const char* tooSmallError, const char* ownershipError) {

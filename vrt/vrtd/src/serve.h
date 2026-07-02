@@ -73,9 +73,11 @@ struct client {
     /** @brief True when @c in_fd contains a valid received file descriptor. */
     bool have_in_fd;
 
-    /** @brief File descriptor to send back to the client via SCM_RIGHTS ancillary data. */
-    int out_fd;
-    /** @brief True when @c out_fd contains a valid file descriptor to transmit. */
+    /** @brief File descriptors to send back to the client via SCM_RIGHTS ancillary data. */
+    int out_fds[2];
+    /** @brief Number of valid descriptors in @c out_fds. */
+    uint32_t out_fd_count;
+    /** @brief True when @c out_fds contains at least one valid file descriptor to transmit. */
     bool have_out_fd;
 
     /** @brief True when a complete request has been read into @c inb and is awaiting dispatch. */

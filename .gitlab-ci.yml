@@ -1,0 +1,142 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+
+variables:
+  SLURM_ACCOUNT: hpc-prf-cifi
+  GIT_SUBMODULE_STRATEGY: recursive
+
+default:
+  id_tokens:
+    CI_JOB_JWT:
+      aud: https://git.uni-paderborn.de
+  before_script:
+    - module reset
+    - ml fpga xilinx/vivado/25.1
+    - ml lang Python/3.13.5-GCCcore-14.3.0
+    - ml tools UnZip/6.0-GCCcore-14.3.0 gitlab-cli 
+    - ml devel CMake/4.0.3-GCCcore-14.3.0
+    - ml lib JsonCpp/1.9.6-GCCcore-14.3.0 CLI11/2.6.2-GCCcore-14.3.0 # lib/libxml2/2.14.3-GCCcore-14.3.0 implicitly loaded
+    - export LD_LIBRARY_PATH=$XILINX_VIVADO/lib/lnx64.o/:$LD_LIBRARY_PATH # Set the LD_LIBRARY_PATH for simulation
+    - python3 -m venv .venv
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+    - glab auth login --job-token $CI_JOB_TOKEN --hostname $CI_SERVER_FQDN --api-protocol $CI_SERVER_PROTOCOL
+  artifacts:
+    access: 'developer'
+
+package_linker:
+  tags:
+    - otus
+  when: manual
+  allow_failure: false
+  inputs:
+    build_base_design:
+      default: false
+      description: Build the base design from scratch?
+      type: boolean
+  variables:
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal -c 16 --mem 120G -t 12:00:00"
+    BASE_DESIGN_REF: dev
+  needs:
+    - project: $CI_PROJECT_PATH
+      job: package_linker
+      ref: $BASE_DESIGN_REF
+      artifacts: true
+  script:
+    - cd linker
+    # Unzipping the SMBus IP
+    - glab -R $CI_PROJECT_PATH securefile download --name "smbus_v1_1-20240328.zip"
+    - unzip smbus_v1_1-20240328.zip
+    - mv smbus_v1_1-20240328 slashkit/resources/base/iprepo/
+    # Building the other IP cores
+    - make -C slashkit/resources/base/iprepo -j16
+    # Building the base design
+    - if [ ${{ job.inputs.build_base_design }} = "true" -a -e slashkit/resources/static_shell ]; then rm -r slashkit/resources/static_shell; fi
+    - if [ ${{ job.inputs.build_base_design }} = "true" ]; then python3 -m slashkit install --jobs 16 --out-dir slashkit/resources/ > install.out.log 2> install.err.log; fi
+    # Packaging the linker
+    - pip wheel --no-deps .
+  artifacts:
+    public: false
+    when: always
+    paths:
+      - linker/install.out.log
+      - linker/install.err.log
+      - linker/slashkit/resources/static_shell
+      - linker/slashkit*.whl
+
+.integration_test:
+  tags:
+    - otus
+  needs:
+    - job: package_linker
+      artifacts: true
+  variables:
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p normal -c 8 --mem 80G -t 02:00:00"
+  before_script:
+    - !reference [default, before_script]
+    # Install the linker into the virtualenv
+    - pip install linker/slashkit*.whl
+    # Build and install VRT, VRTD, and libslash
+    - mkdir -p build/vrt build/cmake
+    - cd build/vrt
+    - cmake -DVRT_INCLUDE_VRTD=1 -DVRTD_INCLUDE_LIBSLASH=1 -DCMAKE_INSTALL_PREFIX=$(realpath ../../.venv/) -DCMAKE_INSTALL_LIBDIR=lib ../../vrt/
+    - make install -j8
+    # Install the cmake tools
+    - cd ../cmake
+    - cmake -DCMAKE_INSTALL_PREFIX=$(realpath ../../.venv/) -DCMAKE_INSTALL_LIBDIR=lib ../../cmake/
+    - make install -j8
+    - cd ../..
+    # Set all environment variables to point to the venv
+    - export C_INCLUDE_PATH=$(realpath ./.venv/include):$C_INCLUDE_PATH
+    - export CPLUS_INCLUDE_PATH=$(realpath ./.venv/include):$CPLUS_INCLUDE_PATH
+    - export LD_LIBRARY_PATH=$(realpath ./.venv/lib):$LD_LIBRARY_PATH
+    - export LIBRARY_PATH=$(realpath ./.venv/lib):$LIBRARY_PATH
+    - export CMAKE_MODULE_PATH=$(realpath ./.venv/lib/cmake):$CMAKE_MODULE_PATH
+
+test emulation/simulation:
+  extends: .integration_test
+  script:
+    # Building and testing all working examples in emulation and simulation
+    - ./scripts/test-examples.sh emu
+    - ./scripts/test-examples.sh sim
+
+.vbin_build:
+  extends: .integration_test
+  script:
+    - mkdir examples/${EXAMPLE_NO}_${EXAMPLE_NAME}/build
+    - cd examples/${EXAMPLE_NO}_${EXAMPLE_NAME}/build
+    - cmake ..
+    - make ${EXAMPLE_NAME}_hw > ${EXAMPLE_NAME}_hw.out 2> ${EXAMPLE_NAME}_hw.err
+  artifacts:
+    public: false
+    when: always
+    paths:
+      - examples/${EXAMPLE_NO}_${EXAMPLE_NAME}/build/*.vbin/
+      - examples/${EXAMPLE_NO}_${EXAMPLE_NAME}/build/*.out
+      - examples/${EXAMPLE_NO}_${EXAMPLE_NAME}/build/*.err
+
+build 00_axilite:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "00"
+    EXAMPLE_NAME: "axilite"
+
+build 01_aximm:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "01"
+    EXAMPLE_NAME: "aximm"
+
+build 02_chain:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "02"
+    EXAMPLE_NAME: "chain"
+
+build 04_freq:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "04"
+    EXAMPLE_NAME: "freq"

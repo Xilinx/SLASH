@@ -45,8 +45,8 @@
  *
  *   2. The worker thread (design_writer_thread) waits on the condvar for
  *      input_fd >= 0.  When signalled, it takes ownership of the fd, releases
- *      the mutex, reads the entire bitstream into a page-aligned buffer, and
- *      writes it to the QDMA device fd at the fixed bitstream address
+ *      the mutex, reads the entire bitstream into memory, copies it into a
+ *      kernel-owned QDMA buffer, and transfers it to the fixed bitstream address
  *      (VRTD_DESIGN_WRITER_SEEK_ADDR).
  *
  *   3. On completion (success or failure), the worker clears busy, stores any
@@ -65,12 +65,10 @@
  * ----------------------
  * At creation time, design_writer_open_qpair() allocates a QDMA queue pair in
  * Host-to-Card (H2C) memory-mapped mode, starts it, and obtains a file
- * descriptor for the queue.  The bitstream is then written via standard POSIX
- * write()/lseek() calls on that fd at offset VRTD_DESIGN_WRITER_SEEK_ADDR
- * (0x102100000), which the QDMA subsystem translates into DMA writes to the
- * FPGA's configuration memory.  The entire bitstream (up to 1 GiB) is read
- * into a contiguous, page-aligned userspace buffer first, then written out in
- * whatever chunks the kernel accepts.
+ * descriptor for the queue.  The bitstream is then copied into a kernel-owned
+ * QDMA buffer and submitted with slash_qdma_qpair_transfer() at offset
+ * VRTD_DESIGN_WRITER_SEEK_ADDR (0x102100000), which the QDMA subsystem
+ * translates into DMA writes to the FPGA's configuration memory.
  *
  * Error propagation
  * -----------------
@@ -98,6 +96,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <string.h>
 #include <stdlib.h>
 #include <sys/syslog.h>
 #include <unistd.h>
@@ -119,17 +118,59 @@
  */
 #define VRTD_DESIGN_WRITER_SEEK_ADDR 0x102100000ull
 
+/*
+ * The PDI boot stream is exposed as a 64 KiB aperture in the CIPS address map.
+ * Large PDI payloads must be fed through that aperture instead of linearly
+ * walking past it into unmapped NoC address space.
+ */
+#define VRTD_DESIGN_WRITER_APERTURE_BYTES 0x10000ull
+
 /* Maximum bitstream size accepted by the design writer (1 GiB). */
 #define VRTD_DESIGN_WRITER_MAX_BYTES (1ull * 1024 * 1024 * 1024) // 1 GiB
-
-/* Chunk size hint (currently unused in the write loop, which lets the kernel choose). */
-#define VRTD_DESIGN_WRITER_CHUNK_BYTES 4096u
 
 /* Allocation granularity when reading the bitstream file into memory (2 MiB steps). */
 #define READ_ENTIRE_FILE_ALLOCATION_STEP (2 * 1024 * 1024) // 2 MiB
 
 static int design_writer_open_qpair(struct design_writer *writer);
 static void design_writer_release_qpair(struct design_writer *writer);
+
+/**
+ * Cleanup helper for a libslash QDMA buffer.
+ */
+static void cleanup_qdma_buffer(struct slash_qdma_buffer *buf)
+{
+    if (buf == NULL) {
+        return;
+    }
+
+    (void) slash_qdma_buffer_destroy(buf);
+}
+
+/**
+ * Round a byte count up to the host page size for QDMA buffer allocation.
+ */
+static int round_up_to_page_size(size_t len, uint64_t *rounded_len)
+{
+    PROPAGATE_ERROR_NULL_LOG(rounded_len, LOG_ERR, "Invalid rounded_len output pointer");
+    if (len == 0) {
+        errno = EINVAL;
+        PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Design writer input file is empty");
+    }
+
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) {
+        page_size = 4096;
+    }
+
+    uint64_t granule = (uint64_t)page_size;
+    if ((uint64_t)len > UINT64_MAX - (granule - 1)) {
+        errno = EOVERFLOW;
+        PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Design writer input file is too large");
+    }
+
+    *rounded_len = (((uint64_t)len + granule - 1) / granule) * granule;
+    return 0;
+}
 
 /**
  * Reallocate a page-aligned buffer to a new size, copying existing data.
@@ -216,50 +257,65 @@ static ssize_t read_entire_file(int fd, void **bufp)
 }
 
 /**
- * Write the full contents of a buffer to a file descriptor at a fixed position.
+ * Transfer the full contents of a buffer through the programming aperture.
  *
- * Performs a seek-then-write loop, retrying on EINTR, until the entire buffer
- * has been written.  Each iteration logs progress for diagnostics.
+ * Copies the userspace bitstream into a kernel-owned QDMA buffer, then submits
+ * H2C MM transfers through the design writer queue-pair fd.  The device-side
+ * address wraps inside the boot-stream aperture so multi-megabyte PDIs do not
+ * walk past the 64 KiB mapped programming window.
  *
- * @param fd   The QDMA queue pair file descriptor to write to.
- * @param buf  Source buffer containing bitstream data.
- * @param len  Number of bytes to write.
- * @param pos  The device-side starting offset (VRTD_DESIGN_WRITER_SEEK_ADDR).
+ * @param writer The design writer instance.
+ * @param buf    Source buffer containing bitstream data.
+ * @param len    Number of bytes to transfer.
+ * @param pos    The device-side starting offset (VRTD_DESIGN_WRITER_SEEK_ADDR).
  * @return 0 on success, -1 on error (with errno set).
  */
-static int write_all_at_pos(int fd, const void *buf, size_t len, off_t pos)
+static int transfer_all_at_pos(struct design_writer *writer, const void *buf, size_t len, uint64_t pos)
 {
-    size_t off = 0;
+    uint64_t dma_len = 0;
+    int ret = round_up_to_page_size(len, &dma_len);
+    PROPAGATE_ERROR(ret);
 
-    while (off < len) {
-        LOG(
-            LOG_INFO,
-            "Attempting to write to design writer file descriptor at offset 0x%lx (progress: %zu/%zu)",
-            (unsigned long)(pos + off), off, len
-        );
+    _cleanup_(cleanup_qdma_buffer)
+    struct slash_qdma_buffer dma_buf = {
+        .fd = -1,
+    };
+    ret = slash_qdma_buffer_create(writer->qdma, dma_len, &dma_buf);
+    PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Failed to create design writer QDMA buffer");
 
-        off_t ret = lseek(fd, pos + off, SEEK_SET);
-        PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Failed to seek design writer file descriptor to position 0x%lx", (unsigned long)(pos + off));
+    memcpy(dma_buf.addr, buf, len);
 
-        ssize_t n = write(fd, (const uint8_t *)buf + off, len - off);
-        if (n == -1) {
-            if (errno == EINTR) {
-                continue;
-            }
-            PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Failed to write to design writer file descriptor");
+    LOG(
+        LOG_INFO,
+        "Transferring design writer payload to device offset 0x%llx (bytes=%zu buffer_bytes=%llu aperture_bytes=%llu)",
+        (unsigned long long)pos, len, (unsigned long long)dma_len,
+        (unsigned long long)VRTD_DESIGN_WRITER_APERTURE_BYTES
+    );
+
+    uint64_t off = 0;
+    while (off < (uint64_t)len) {
+        uint64_t aperture_offset = off % VRTD_DESIGN_WRITER_APERTURE_BYTES;
+        uint64_t chunk = VRTD_DESIGN_WRITER_APERTURE_BYTES - aperture_offset;
+        uint64_t remaining = (uint64_t)len - off;
+        if (chunk > remaining) {
+            chunk = remaining;
         }
-        if (n == 0) {
+
+        ssize_t transferred = slash_qdma_qpair_transfer(
+            writer->fd,
+            dma_buf.fd,
+            off,
+            pos + aperture_offset,
+            chunk,
+            SLASH_QDMA_XFER_H2C
+        );
+        PROPAGATE_ERROR_STDC_LOG(transferred, LOG_ERR, "Failed to transfer design writer payload");
+        if ((uint64_t)transferred != chunk) {
             errno = EIO;
-            PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Short write to design writer file descriptor");
+            PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Short design writer transfer");
         }
 
-        off += (size_t)n;
-
-        LOG(
-            LOG_INFO,
-            "Design writer: wrote %zu bytes at offset 0x%lx (total written: %zu/%zu)",
-            (size_t)n, (unsigned long)(pos + off), off, len
-        );
+        off += chunk;
     }
 
     return 0;
@@ -270,11 +326,8 @@ static int write_all_at_pos(int fd, const void *buf, size_t len, off_t pos)
  *
  * This is the core transfer routine called by the worker thread.  It:
  *   1. Reads the entire bitstream from @input_fd into a page-aligned buffer.
- *   2. Writes the buffer to the QDMA device fd at VRTD_DESIGN_WRITER_SEEK_ADDR.
- *
- * The commented-out qpair open/release calls indicate that the qpair is now
- * opened once at design_writer creation time and kept open for the lifetime
- * of the writer, rather than being opened and closed per-transfer.
+ *   2. Transfers the buffer through the QDMA device fd at
+ *      VRTD_DESIGN_WRITER_SEEK_ADDR.
  *
  * @param writer    The design_writer instance (provides the QDMA fd).
  * @param input_fd  File descriptor containing the bitstream data to program.
@@ -287,16 +340,10 @@ static int design_writer_transfer(struct design_writer *writer, int input_fd)
     ssize_t bytes_read = read_entire_file(input_fd, &file_data);
     PROPAGATE_ERROR_LOG(bytes_read, LOG_ERR, "Failed to read entire input file for design writer transfer");
 
-    // int ret = design_writer_open_qpair(writer);
-    // PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to initialize design writer qpair");
+    int ret = transfer_all_at_pos(writer, file_data, (size_t)bytes_read, VRTD_DESIGN_WRITER_SEEK_ADDR);
+    PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to transfer design writer payload");
 
-    int ret = write_all_at_pos(writer->fd, file_data, (size_t)bytes_read, VRTD_DESIGN_WRITER_SEEK_ADDR);
-    int saved_errno = errno;
-    // design_writer_release_qpair(writer);
-    // errno = saved_errno;
-    // PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to transfer design writer payload");
-
-    return 0;
+    return ret;
 }
 
 /**
@@ -583,8 +630,8 @@ static int design_writer_open_qpair(struct design_writer *writer)
     writer->qpair_started = true;
 
     /* Obtain the file descriptor for the started queue pair.
-     * Subsequent lseek()+write() calls on this fd perform DMA transfers
-     * to the device at the specified offset. */
+     * Subsequent transfer ioctls on this fd perform DMA transfers to the
+     * device at the specified offset. */
     writer->fd = slash_qdma_qpair_get_fd(writer->qdma, writer->qid, O_CLOEXEC);
     if (writer->fd == -1) {
         LOG(LOG_ERR, "Failed to get design writer QDMA file descriptor: %m");

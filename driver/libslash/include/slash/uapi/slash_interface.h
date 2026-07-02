@@ -154,6 +154,19 @@ struct slash_qdma_info {
 };
 
 /**
+ * @brief AXI-MM / NoC channel selection for a queue pair.
+ *
+ * Selects which CPM5 AXI-MM channel a queue pair uses.  libqdma mirrors the
+ * channel into the SW-context host_id, which selects the programmed Host
+ * Profile and hence the NoC channel.
+ */
+enum slash_qdma_mm_channel {
+    SLASH_QDMA_MM_CHANNEL_AUTO = 0, /**< Stripe across channels by (qid & 1). */
+    SLASH_QDMA_MM_CHANNEL_0    = 1, /**< Pin to AXI-MM/NoC channel 0. */
+    SLASH_QDMA_MM_CHANNEL_1    = 2, /**< Pin to AXI-MM/NoC channel 1. */
+};
+
+/**
  * @brief Add (allocate) a new QDMA queue pair.
  *
  * \@mode must be one of:
@@ -176,6 +189,7 @@ struct slash_qdma_qpair_add {
     /* Userspace to kernel */
     __u32 mode;          /**< [in]  Queue operating mode. */
     __u32 dir_mask;      /**< [in]  Direction bitmask — which directions to enable. */
+    __u32 mm_channel;    /**< [in]  AXI-MM/NoC channel selection (enum slash_qdma_mm_channel). */
 
     __u32 h2c_ring_sz;   /**< [in]  Host-to-card descriptor ring size. */
     __u32 c2h_ring_sz;   /**< [in]  Card-to-host descriptor ring size. */
@@ -209,23 +223,136 @@ struct slash_qdma_qpair_op {
 };
 
 /**
+ * @brief Maximum number of queue pairs a single transfer fd may own.
+ *
+ * A transfer fd is a collection of up to this many queue pairs (the intended
+ * use is one per AXI-MM/NoC channel).  A single transfer ioctl issued on the
+ * fd may fan a buffer transfer across all of them, running up to this many
+ * hardware DMAs in parallel.  Each bound qpair keeps whatever settings it was
+ * given at SLASH_QDMA_IOCTL_QPAIR_ADD time (mm_channel, ring sizes, etc.), so
+ * the two channels can be configured independently.
+ */
+#define SLASH_QDMA_FD_MAX_QPAIRS 2u
+
+/**
  * @brief Obtain a file descriptor for queue I/O.
  *
- * The returned fd can be used for read/write (or mmap) to transfer data
- * through the queue pair.
+ * The returned fd is a collection of one or two queue pairs.  It can be used
+ * for registered-buffer ioctls to transfer data through those queue pairs.
  *
- * The fd is returned as the ioctl return value (same convention as
- * the BAR fd ioctl).  A single fd is returned per queue pair;
- * read() on the fd performs C2H transfers and write() performs H2C
- * transfers, using whichever directions were enabled in \@dir_mask
- * when the queue pair was added.
+ * The fd is returned as the ioctl return value (same convention as the BAR fd
+ * ioctl).  Data movement is issued via SLASH_QDMA_QPAIR_IOCTL_TRANSFER, whose
+ * sub-transfers select a bound queue pair by index and a direction (which must
+ * have been enabled in \@dir_mask when that queue pair was added).
+ *
+ * Set \@qpair_count to the number of queue pairs to bind and list their IDs in
+ * \@qpair_ids; the array index becomes the qpair_index used by
+ * struct slash_qdma_subxfer.  For backward compatibility \@qpair_count == 0
+ * binds the single queue pair named by \@qid.
  */
 struct slash_qdma_qpair_fd_request {
     __u32 size;  /**< Struct size for ABI versioning. */
 
     /* Userspace to kernel */
-    __u32 qid;   /**< [in] Queue pair ID. */
+    __u32 qid;   /**< [in] Legacy single queue pair ID; used only when
+                  *        @qpair_count == 0. */
     __u32 flags; /**< [in] File descriptor flags.  Only O_CLOEXEC is honoured. */
+    __u32 qpair_count; /**< [in] Number of valid entries in @qpair_ids
+                        *        (1..SLASH_QDMA_FD_MAX_QPAIRS); 0 = use @qid. */
+    __u32 qpair_ids[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Queue pair IDs bound to
+                        *  this fd; the array index is the qpair_index. */
+};
+
+/**
+ * @brief Transfer direction for a registered-buffer DMA transfer.
+ */
+enum slash_qdma_transfer_dir {
+    SLASH_QDMA_XFER_H2C = 1, /**< Host-to-Card (write to device). */
+    SLASH_QDMA_XFER_C2H = 2, /**< Card-to-Host (read from device). */
+};
+
+/**
+ * @brief Advisory transfer topology for a registered QDMA buffer.
+ *
+ * The kernel returns this hint when a buffer is registered so userspace can
+ * choose a suitable transfer strategy without hard-coding hardware-specific
+ * scheduling policy.  The hint is advisory: transfers are still valid with any
+ * queue pair whose direction and ownership checks pass.
+ */
+enum slash_qdma_transfer_hint {
+    SLASH_QDMA_TRANSFER_HINT_SINGLE_QPAIR = 1, /**< Prefer a single qpair (all traffic on one channel). */
+    SLASH_QDMA_TRANSFER_HINT_V80          = 2, /**< Apply the V80 placement-aware channel policy. */
+};
+
+/**
+ * @brief Create a kernel-owned DMA buffer and return a mappable fd.
+ *
+ * The kernel allocates @length bytes of host memory as a set of 4 KiB base
+ * pages (not physically contiguous), builds the transfer scatter-gather list,
+ * and DMA-maps every page once.  All of this expensive setup happens here, at
+ * creation time, so the steady-state transfer path only slices the prebuilt
+ * SGL, syncs the relevant pages, and submits.
+ *
+ * The new buffer is returned as an fd (via the ioctl return value, same
+ * convention as the BAR/queue-pair fd ioctls).  Userspace maps it with
+ * mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, buf_fd, 0) to obtain
+ * a CPU pointer, and passes @buf_fd in struct slash_qdma_subxfer to move data.
+ * The pages stay alive as long as either the fd or any mapping exists, and the
+ * DMA mapping is torn down once both are gone and no transfer is in flight.
+ *
+ * The buffer is bound to the QDMA device of the fd it is created on (control
+ * fd or queue-pair fd); transfers must use a queue-pair fd of the same device.
+ *
+ * \@length must be a non-zero multiple of the host page size.  The kernel
+ * returns the page @granule (bytes per descriptor) and a @transfer_hint;
+ * current SLASH hardware returns SLASH_QDMA_TRANSFER_HINT_V80.
+ */
+struct slash_qdma_buf_create {
+    __u32 size;          /**< Struct size for ABI versioning. */
+
+    /* Userspace to kernel */
+    __u32 flags;         /**< [in]  File descriptor flags.  Only O_CLOEXEC is honoured. */
+    __u64 length;        /**< [in]  Buffer length in bytes (page multiple). */
+
+    /* Kernel to userspace */
+    __u32 granule;       /**< [out] Bytes per SGL descriptor (host page size). */
+    __u32 transfer_hint; /**< [out] enum slash_qdma_transfer_hint. */
+};
+
+/**
+ * @brief One per-queue-pair sub-transfer within a transfer batch.
+ *
+ * Moves \@length bytes between the kernel buffer named by \@buf_fd at
+ * \@buf_offset and the device endpoint address \@dev_addr, on the queue pair
+ * selected by \@qpair_index (an index into the fd's bound qpairs).
+ * \@buf_offset and \@length must be aligned to the buffer's 4 KiB page granule,
+ * and \@buf_offset + \@length must not exceed the buffer length.  \@direction
+ * must be one of enum slash_qdma_transfer_dir and must be enabled on the
+ * selected queue pair.
+ */
+struct slash_qdma_subxfer {
+    __u32 qpair_index; /**< [in] Index into the fd's bound qpairs. */
+    __u32 direction;   /**< [in] enum slash_qdma_transfer_dir (H2C or C2H). */
+    __s32 buf_fd;      /**< [in] Kernel buffer fd from SLASH_QDMA_IOCTL_BUF_CREATE. */
+    __u32 pad0;        /**< Padding for natural alignment. */
+    __u64 buf_offset;  /**< [in] Byte offset within the buffer. */
+    __u64 dev_addr;    /**< [in] Device-side (endpoint) address. */
+    __u64 length;      /**< [in] Number of bytes to transfer. */
+};
+
+/**
+ * @brief Perform one or more buffer DMA sub-transfers in one call.
+ *
+ * Issued on a queue-pair I/O fd (from SLASH_QDMA_IOCTL_QPAIR_GET_FD).  The
+ * kernel submits all \@count sub-transfers and waits for completion, running
+ * those that target distinct queue pairs concurrently (so a single syscall can
+ * drive both NoC channels in parallel).  The total number of bytes transferred
+ * across all sub-transfers is returned as the ioctl return value.
+ */
+struct slash_qdma_transfer {
+    __u32 size;        /**< Struct size for ABI versioning. */
+    __u32 count;       /**< [in] Number of sub-transfers (1..SLASH_QDMA_FD_MAX_QPAIRS). */
+    struct slash_qdma_subxfer xfers[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Sub-transfers. */
 };
 
 /** Query QDMA subsystem capabilities. */
@@ -239,5 +366,31 @@ struct slash_qdma_qpair_fd_request {
 
 /** Obtain an I/O file descriptor for a queue pair. */
 #define SLASH_QDMA_IOCTL_QPAIR_GET_FD  _IOWR('v', 0x53, struct slash_qdma_qpair_fd_request)
+
+/**
+ * Create a kernel-owned DMA buffer (allocate pages + build SGL + DMA-map once);
+ * returns a mappable buffer fd as the ioctl return value.  May be issued on the
+ * control device or a queue-pair I/O fd.
+ */
+#define SLASH_QDMA_IOCTL_BUF_CREATE    _IOWR('v', 0x54, struct slash_qdma_buf_create)
+
+/* 'v' 0x55 is reserved (previously SLASH_QDMA_IOCTL_BUF_UNREGISTER, removed:
+ * kernel buffers are released by closing their fd). */
+
+/**
+ * Perform a buffer DMA transfer.  Issued on a queue-pair I/O fd (not the
+ * control device); returns the number of bytes transferred.
+ */
+#define SLASH_QDMA_QPAIR_IOCTL_TRANSFER _IOWR('v', 0x56, struct slash_qdma_transfer)
+
+/**
+ * io_uring command opcode (SQE cmd_op) for an asynchronous buffer transfer
+ * batch, issued on a queue-pair I/O fd via IORING_OP_URING_CMD.  The SQE inline
+ * command carries a single __u64: the userspace pointer to a struct
+ * slash_qdma_transfer.  The completion CQE res holds the total bytes
+ * transferred (>= 0) or a negative errno.  This path is optional and only
+ * available on kernels with io_uring uring_cmd support.
+ */
+#define SLASH_QDMA_URING_CMD_TRANSFER 0x56u
 
 #endif

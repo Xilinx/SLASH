@@ -23,9 +23,9 @@
  *
  * The SLASH design exposes two PCI physical functions per card:
  *
- *   - **PF1** (device 0x50B5) — QDMA function.  Hosts the Xilinx QDMA
- *     IP used for high-throughput DMA transfers between host memory and
- *     the FPGA fabric.
+ *   - **PF1** (device 0x50B5, or 0x50BD on AVED/V80P designs) — QDMA
+ *     function.  Hosts the Xilinx QDMA IP used for high-throughput DMA
+ *     transfers between host memory and the FPGA fabric.
  *
  *   - **PF2** (device 0x50B6) — Control function.  Exposes PCI BARs
  *     that the host can mmap for register-level MMIO access to the
@@ -52,6 +52,8 @@
 #define SLASH_QDMA_PCI_VENDOR_ID 0x10EE
 /** PCI device ID for the V80 SLASH QDMA function. */
 #define SLASH_QDMA_PCI_DEVICE_ID 0x50B5
+/** PCI device ID for the V80P/AVED QDMA function. */
+#define SLASH_AVED_QDMA_PCI_DEVICE_ID 0x50BD
 /** Physical function number for the QDMA DMA engine. */
 #define SLASH_QDMA_PF 1
 

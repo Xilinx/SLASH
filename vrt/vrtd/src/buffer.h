@@ -48,6 +48,8 @@
 #include "array.h"
 #include "vrtd/wire.h"
 
+#define VRTD_BUFFER_MAX_QPAIR_FDS 2u
+
 /**
  * @brief A single DMA buffer allocated on a SLASH FPGA device.
  *
@@ -72,10 +74,13 @@ struct buffer {
     uint64_t addr;
     /** @brief Size of the allocated memory region in bytes (rounded up to subregion granularity). */
     uint64_t size;
-    /** @brief QDMA queue ID assigned to this buffer's queue pair. */
-    uint32_t qid;
-    /** @brief File descriptor for the QDMA queue pair character device.
-     *  Passed to the client via SCM_RIGHTS for direct data transfer. */
+    /** @brief Number of QDMA queue pairs created for this buffer (1 or 2). */
+    uint32_t qpair_count;
+    /** @brief QDMA queue IDs assigned to this buffer's queue pairs. */
+    uint32_t qids[VRTD_BUFFER_MAX_QPAIR_FDS];
+    /** @brief Single transfer fd that owns all @qpair_count queue pairs.
+     *  Passed to the client via SCM_RIGHTS for direct data transfer; the client
+     *  selects a channel per sub-transfer by qpair_index. -1 when not created. */
     int fd;
     /** @brief True if the address-space allocation in the memory map is valid and must be freed. */
     bool allocation_valid;
@@ -96,6 +101,7 @@ struct buffer {
  * @param size          Requested buffer size in bytes (may be rounded up).
  * @param alloc_arg     Type-specific argument (HBM region index for non-VNOC HBM).
  * @param client_id     Connection ID of the owning client.
+ * @param mm_channel    AXI-MM/NoC channel selection (enum slash_qdma_mm_channel).
  * @param qpair_params  QDMA queue pair configuration parameters.
  * @return Heap-allocated buffer on success, NULL on failure.
  */
@@ -106,6 +112,7 @@ struct buffer *buffer_create(struct slash_qdma *qdma,
                              uint64_t size,
                              uint64_t alloc_arg,
                              uint64_t client_id,
+                             uint32_t mm_channel,
                              const struct slash_qdma_qpair_add *qpair_params);
 
 /**
@@ -120,12 +127,17 @@ struct buffer *buffer_create(struct slash_qdma *qdma,
  * @param phys_addr  Caller-specified device physical address.
  * @param size       Size in bytes.
  * @param alloc_dir  DMA transfer direction.
+ * @param client_id  Connection ID of the owning client (for ownership checks
+ *                   and automatic cleanup on disconnect; must be non-zero).
+ * @param mm_channel AXI-MM/NoC channel selection (enum slash_qdma_mm_channel).
  * @return Heap-allocated buffer on success, NULL on failure (errno set).
  */
 struct buffer *buffer_create_raw(struct slash_qdma *qdma,
                                  uint64_t phys_addr,
                                  uint64_t size,
-                                 enum vrtd_alloc_dir alloc_dir);
+                                 enum vrtd_alloc_dir alloc_dir,
+                                 uint64_t client_id,
+                                 uint32_t mm_channel);
 
 /**
  * @brief Release all resources owned by a buffer.

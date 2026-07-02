@@ -54,6 +54,18 @@ extern "C" {
 
 struct vrtd_buffer;
 
+/**
+ * @brief AXI-MM / NoC channel selection for a buffer's QDMA queue pair.
+ *
+ * Sent to the daemon, which forwards it to the SLASH driver's qpair-add ioctl
+ * (the values mirror enum slash_qdma_mm_channel).
+ */
+enum vrtd_mm_channel {
+    VRTD_MM_CHANNEL_AUTO = 0, ///< Stripe across channels by (qid & 1).
+    VRTD_MM_CHANNEL_0    = 1, ///< Pin to AXI-MM/NoC channel 0.
+    VRTD_MM_CHANNEL_1    = 2, ///< Pin to AXI-MM/NoC channel 1.
+};
+
 
 /**
  * @brief Connect to the vrtd UNIX domain socket.
@@ -291,9 +303,10 @@ enum vrtd_ret vrtd_qdma_qpair_del(
 );
 
 /**
- * @brief Obtain a read/write file descriptor for a QDMA qpair.
+ * @brief Obtain an ioctl-only file descriptor for a QDMA qpair.
  *
- * The descriptor can be used with read()/write() for C2H/H2C data transfer.
+ * The descriptor can be used with registered-buffer transfer ioctls for
+ * C2H/H2C data transfer.
  *
  * @param fd        Connected vrtd socket file descriptor.
  * @param dev       Device index (0‑based).
@@ -325,6 +338,7 @@ enum vrtd_ret vrtd_qdma_qpair_get_fd(
  * @param alloc_dir  QDMA direction (one of enum vrtd_alloc_dir).
  * @param alloc_arg  Allocation argument (HBM region index for HBM).
  * @param size_in     Requested size in bytes.
+ * @param mm_channel  AXI-MM/NoC channel selection (one of enum vrtd_mm_channel).
  * @param buffer_out  Output pointer to receive the allocated buffer handle.
  *
  * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
@@ -338,6 +352,7 @@ enum vrtd_ret vrtd_buffer_open(
     uint32_t alloc_dir,
     uint64_t alloc_arg,
     uint64_t size_in,
+    enum vrtd_mm_channel mm_channel,
     struct vrtd_buffer **buffer_out
 );
 
@@ -352,6 +367,7 @@ enum vrtd_ret vrtd_buffer_open(
  * @param phys_addr   Caller-specified device physical address.
  * @param size        Size in bytes.
  * @param alloc_dir   One of #vrtd_alloc_dir.
+ * @param mm_channel  AXI-MM/NoC channel selection (one of enum vrtd_mm_channel).
  * @param buffer_out  Output parameter set to the new buffer handle on success.
  *
  * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
@@ -364,6 +380,7 @@ enum vrtd_ret vrtd_buffer_open_raw(
     uint64_t phys_addr,
     uint64_t size,
     uint32_t alloc_dir,
+    enum vrtd_mm_channel mm_channel,
     struct vrtd_buffer **buffer_out
 );
 
@@ -514,8 +531,17 @@ struct vrtd_buffer {
 
     uint64_t size;
     uint64_t phys_addr;
+    /* Single transfer fd that owns @qpair_count queue pairs (channels). */
     int qpair_fd;
+    /* Number of queue pairs (channels) the fd owns; selects 1- or 2-way split. */
+    uint32_t qpair_count;
+    /* Kernel-owned DMA buffer fd backing @buf (from slash_qdma_qpair_buffer_create). */
+    int buffer_fd;
+    enum slash_qdma_transfer_hint transfer_hint;
+    /* CPU mapping of the kernel buffer (mmap of @buffer_fd). */
     void *buf;
+    /* Internal DMA granule for the host mapping (4 KiB base pages). */
+    uint64_t transfer_step_size;
 };
 
 enum vrtd_ret vrtd_buffer_create_raw(
@@ -527,7 +553,23 @@ enum vrtd_ret vrtd_buffer_create_raw(
     uint64_t size,
     uint64_t phys_addr,
     int qpair_fd,
+    uint32_t qpair_count,
     struct vrtd_buffer **buffer_out
+);
+
+/**
+ * @brief Synchronize a range from the local host buffer to the device.
+ *
+ * The requested range may be smaller than the QDMA transfer granule. libvrtd
+ * handles any required internal alignment. Bidirectional buffers preserve
+ * device bytes outside the requested range with an internal read-modify-write;
+ * host-to-device-only buffers keep the historical behavior of expanding the
+ * transfer to the backing DMA granule.
+ */
+enum vrtd_ret vrtd_buffer_sync_to_device(
+    struct vrtd_buffer *buffer,
+    uint64_t offset,
+    uint64_t size
 );
 
 /**
@@ -540,12 +582,13 @@ enum vrtd_ret vrtd_buffer_destroy(
     struct vrtd_buffer *buffer
 );
 
-enum vrtd_ret vrtd_buffer_sync_to_device(
-    struct vrtd_buffer *buffer,
-    uint64_t offset,
-    uint64_t size
-);
-
+/**
+ * @brief Synchronize a range from the device into the local host buffer.
+ *
+ * The requested range may be smaller than the QDMA transfer granule. libvrtd
+ * handles any required internal alignment and preserves bytes outside the
+ * requested host range.
+ */
 enum vrtd_ret vrtd_buffer_sync_from_device(
     struct vrtd_buffer *buffer,
     uint64_t offset,

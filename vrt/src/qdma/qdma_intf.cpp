@@ -20,6 +20,8 @@
 
 #include <vrt/qdma/qdma_intf.hpp>
 
+#include <cstring>
+
 #include <slash/qdma.h>
 #include <vrtd/device.hpp>
 
@@ -56,61 +58,41 @@ QdmaIntf::~QdmaIntf() {
     }
 }
 
+namespace {
+constexpr uint64_t kQdmaPage = 4096ULL;
+inline uint64_t roundUpToPage(uint64_t v) { return (v + kQdmaPage - 1) & ~(kQdmaPage - 1); }
+}  // namespace
+
 ssize_t QdmaIntf::write_from_buffer(const char* fname, char* buffer, uint64_t size, uint64_t base) {
     if (qpairFd < 0) {
         utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
                            "QDMA streaming not initialized");
         return -EIO;
     }
-    int fd = qpairFd;
-    ssize_t rc;
-    uint64_t count = 0;
-    char* buf = buffer;
-    off_t offset = base;
+    if (size == 0) {
+        return 0;
+    }
 
-    do { /* Support zero byte transfer */
-        uint64_t bytes = size - count;
+    // The kernel buffer owns its DMA-mapped pages; stage the caller's data into
+    // the mapping, then transfer whole pages.
+    const uint64_t aligned = roundUpToPage(size);
+    struct slash_qdma_buffer buf{};
+    if (slash_qdma_qpair_buffer_create(qpairFd, aligned, &buf) != 0) {
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+                           "Could not create QDMA write buffer for {}", fname);
+        return -EIO;
+    }
+    std::memcpy(buf.addr, buffer, size);
 
-        if (bytes > RW_MAX_SIZE) bytes = RW_MAX_SIZE;
-
-        if (offset) {
-            rc = lseek(fd, offset, SEEK_SET);
-            if (rc < 0) {
-                utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
-                                   "Could not write to {}", fname);
-                return -EIO;
-            }
-            if (rc != offset) {
-                utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
-                                   "Could not write to {}", fname);
-                return -EIO;
-            }
-        }
-
-        /* write data to file from memory buffer */
-        rc = write(fd, buf, bytes);
-        if (rc < 0) {
-            utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Could not write to {}",
-                               fname);
-            return -EIO;
-        }
-        if (rc != bytes) {
-            utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Could not write to {}",
-                               fname);
-            return -EIO;
-        }
-
-        count += bytes;
-        buf += bytes;
-        offset += bytes;
-    } while (count < size);
-
-    if (count != size) {
+    ssize_t rc = slash_qdma_qpair_transfer(qpairFd, buf.fd, 0, base, aligned,
+                                           SLASH_QDMA_XFER_H2C);
+    (void)slash_qdma_buffer_destroy(&buf);
+    if (rc != (ssize_t)aligned) {
         utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Could not write to {}",
                            fname);
         return -EIO;
     }
-    return count;
+    return (ssize_t)size;
 }
 
 ssize_t QdmaIntf::read_to_buffer(const char* fname, char* buffer, uint64_t size, uint64_t base) {
@@ -119,55 +101,30 @@ ssize_t QdmaIntf::read_to_buffer(const char* fname, char* buffer, uint64_t size,
                            "QDMA streaming not initialized");
         return -EIO;
     }
-    int fd = qpairFd;
-    ssize_t rc;
-    uint64_t count = 0;
-    char* buf = buffer;
-    off_t offset = base;
+    if (size == 0) {
+        return 0;
+    }
 
-    do { /* Support zero byte transfer */
-        uint64_t bytes = size - count;
+    const uint64_t aligned = roundUpToPage(size);
+    struct slash_qdma_buffer buf{};
+    if (slash_qdma_qpair_buffer_create(qpairFd, aligned, &buf) != 0) {
+        utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
+                           "Could not create QDMA read buffer for {}", fname);
+        return -EIO;
+    }
 
-        if (bytes > RW_MAX_SIZE) bytes = RW_MAX_SIZE;
-
-        if (offset) {
-            rc = lseek(fd, offset, SEEK_SET);
-            if (rc < 0) {
-                utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
-                                   "Could not read from {}", fname);
-                return -EIO;
-            }
-            if (rc != offset) {
-                utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
-                                   "Could not read from {}", fname);
-                return -EIO;
-            }
-        }
-
-        /* read data from file into memory buffer */
-        rc = read(fd, buf, bytes);
-        if (rc < 0) {
-            utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
-                               "Could not read from {}", fname);
-            return -EIO;
-        }
-        if (rc != bytes) {
-            utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__,
-                               "Could not read from {}", fname);
-            return -EIO;
-        }
-
-        count += bytes;
-        buf += bytes;
-        offset += bytes;
-    } while (count < size);
-
-    if (count != size) {
+    ssize_t rc = slash_qdma_qpair_transfer(qpairFd, buf.fd, 0, base, aligned,
+                                           SLASH_QDMA_XFER_C2H);
+    if (rc == (ssize_t)aligned) {
+        std::memcpy(buffer, buf.addr, size);
+    }
+    (void)slash_qdma_buffer_destroy(&buf);
+    if (rc != (ssize_t)aligned) {
         utils::Logger::log(utils::LogLevel::ERROR, __PRETTY_FUNCTION__, "Could not read from {}",
                            fname);
         return -EIO;
     }
-    return count;
+    return (ssize_t)size;
 }
 
 void QdmaIntf::write_buff(char* buffer, uint64_t start_addr, uint64_t size) {

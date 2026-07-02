@@ -17,6 +17,7 @@
 
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/timer.h>
 
 /*
  * Compat shims selected by the kcompat probes in driver/kcompat/.
@@ -52,5 +53,44 @@ static inline void slash_vm_flags_set(struct vm_area_struct *vma, vm_flags_t fla
 #else
 #define SLASH_MODULE_IMPORT_NS(ns) MODULE_IMPORT_NS(#ns)
 #endif
+
+/*
+ * from_timer() was renamed to timer_container_of() upstream in v6.16
+ * (commit 41cb08555c41) and backported by RHEL/CentOS 9.8 (kernel
+ * 5.14.0-687; 9.7 / 5.14.0-611 and earlier still ship from_timer) into the
+ * 5.14 baseline, so a LINUX_VERSION_CODE / RHEL_RELEASE_CODE check is
+ * unreliable across the 9.x rebuilds. Both names are typeof()-based macros,
+ * so detect them directly and prefer the kernel's own API:
+ *   1. kernel still defines from_timer()          -> use it as-is (no redefine)
+ *   2. kernel renamed it to timer_container_of()  -> delegate to that
+ *   3. neither exists                             -> hand-roll the historical body
+ * <linux/timer.h> is included above so the guard sees whichever name the
+ * kernel defines, regardless of -include ordering.
+ */
+#ifndef from_timer
+#  ifdef timer_container_of
+#    define from_timer(var, callback_timer, timer_fieldname) \
+	timer_container_of(var, callback_timer, timer_fieldname)
+#  else
+#    define from_timer(var, callback_timer, timer_fieldname) \
+	container_of(callback_timer, typeof(*var), timer_fieldname)
+#  endif
+#endif
+
+/*
+ * The kernel headers included above (<linux/mm.h> -> <linux/printk.h>) install
+ * the default `#define pr_fmt(fmt) fmt` under an #ifndef guard. Because this
+ * header is force-included (-include, see driver/Makefile) ahead of every TU,
+ * that default lands before each pinned libqdma source's own top-of-file
+ *     #define pr_fmt(fmt) KBUILD_MODNAME ":%s: " fmt, __func__
+ * turning it into a redefinition ("pr_fmt redefined" warning). Undefine it here
+ * so each TU starts from the clean "nobody has defined pr_fmt yet" state the
+ * idiom relies on; the file's own #define is then the first and only one.
+ *
+ * TUs that never set their own pr_fmt and log via the kernel default (the
+ * qdma_access HAL, whose qdma_log_* macros expand to pr_*) re-arm that default
+ * from qdma_platform_env.h; see driver/patches/0003-libqdma-pr-fmt-guard.patch.
+ */
+#undef pr_fmt
 
 #endif /* SLASH_COMPAT_H */

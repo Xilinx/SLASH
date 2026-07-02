@@ -19,7 +19,7 @@
 # ##################################################################################################
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import re
 import os
 import shutil
@@ -229,13 +229,7 @@ class LinkerConfiguration(CommandConfiguration):
             self._build_dir.unlink()
         self._build_dir.mkdir(parents=True)
 
-        # Resolve and verify pre-synthesis TCLs (if any)
-        self._pre_synth_tcls: List[Path] = []
-        for path in args.pre_synth_tcls:
-            path: Path = path.expanduser().resolve()
-            if not path.is_file():
-                raise FileNotFoundError(path)
-            self._pre_synth_tcls.append(path)
+        # pre-synth Tcls are resolved below, once the config is parsed.
 
         # Misc. arguments
         self._platform = Platform(args.platform)
@@ -266,6 +260,20 @@ class LinkerConfiguration(CommandConfiguration):
             configuration_file)
         self._kernel_instances: List[KernelInstance] = apply_config_to_instances(
             self.configuration, self.kernels)
+
+        # merge config [user_region] pre_synth= entries with the --pre-synth-tcls
+        # flag. config entries source first, then CLI ones, with duplicates
+        # dropped at their first occurrence.
+        self._pre_synth_tcls: List[Path] = []
+        seen: Set[Path] = set()
+        for raw in [*self._configuration.user_region.pre_synth_tcls,
+                    *args.pre_synth_tcls]:
+            path = Path(raw).expanduser().resolve()
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            if path not in seen:
+                seen.add(path)
+                self._pre_synth_tcls.append(path)
 
     @property
     def block_design_ports(self) -> BlockDesignPorts:

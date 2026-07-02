@@ -197,7 +197,7 @@ elif [[ "${PKG_TYPE}" == "rpm" ]]; then
 
     if [[ ${#INSTALLED[@]} -gt 0 ]]; then
         echo "Removing: ${INSTALLED[*]}"
-        dnf remove -y "${INSTALLED[@]}"
+        dnf remove -y --setopt='*.skip_if_unavailable=True' "${INSTALLED[@]}"
     else
         echo "No SLASH packages currently installed."
     fi
@@ -226,7 +226,7 @@ elif [[ "${PKG_TYPE}" == "rpm" ]]; then
     # Exclude source, debuginfo, and debugsource RPMs
     mapfile -t RPMS < <(find "${ARTIFACTS_DIR}" -maxdepth 1 -name '*.rpm' \
         ! -name '*.src.rpm' ! -name '*-debuginfo-*' ! -name '*-debugsource-*')
-    dnf install -y "${RPMS[@]}"
+    dnf install -y  --setopt='*.skip_if_unavailable=True' "${RPMS[@]}"
 fi
 
 # =========================================================================

@@ -108,10 +108,23 @@ uint32_t qid = req.qid;
 
 slash_qdma_qpair_start(qdma, qid);
 
-/* Get an fd for data transfer — read() = C2H, write() = H2C */
+/* Get an ioctl-only qpair fd for buffer transfers. */
 int fd = slash_qdma_qpair_get_fd(qdma, qid, O_CLOEXEC);
-write(fd, buf, len);   /* H2C */
-read(fd, buf, len);    /* C2H */
+
+/* Create a kernel-owned DMA buffer (length must be a whole number of pages)
+ * and mmap it for CPU access via buf.addr.  Current SLASH hardware reports
+ * SLASH_QDMA_TRANSFER_HINT_V80 in buf.transfer_hint. */
+struct slash_qdma_buffer buf;
+slash_qdma_qpair_buffer_create(fd, len, &buf);
+/* ... fill buf.addr from the CPU for an H2C transfer ... */
+
+/* H2C: host -> device at dev_addr */
+slash_qdma_qpair_transfer(fd, buf.fd, /*buf_offset=*/0, dev_addr, len,
+                          SLASH_QDMA_XFER_H2C);
+/* C2H: device -> host */
+slash_qdma_qpair_transfer(fd, buf.fd, 0, dev_addr, len, SLASH_QDMA_XFER_C2H);
+
+slash_qdma_buffer_destroy(&buf);
 close(fd);
 
 slash_qdma_qpair_stop(qdma, qid);

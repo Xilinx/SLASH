@@ -32,6 +32,21 @@ add_executable(
     smi.cpp
 )
 
+if(SMI_ENABLE_QDMA_DRIVER_BACKEND)
+    target_sources(v80-smi PRIVATE qdma_driver_backend.cpp)
+
+    # Off-the-shelf Xilinx QDMA driver netlink UAPI header (qdma_nl.h), used by
+    # the --use-qdma-driver validate backend.
+    set(QDMA_DRV_APPS_INCLUDE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../submodules/qdma_drv/QDMA/linux-kernel/apps/include")
+    if(NOT EXISTS "${QDMA_DRV_APPS_INCLUDE}/qdma_nl.h")
+      message(FATAL_ERROR
+        "Missing ${QDMA_DRV_APPS_INCLUDE}/qdma_nl.h. "
+        "Initialize submodules (git submodule update --init submodules/qdma_drv), "
+        "or configure with -DSMI_ENABLE_QDMA_DRIVER_BACKEND=OFF.")
+    endif()
+endif()
+
 target_compile_features(v80-smi PRIVATE cxx_std_20)
 
 target_include_directories(
@@ -43,11 +58,17 @@ target_include_directories(
     ${CMAKE_CURRENT_BINARY_DIR}/../generated # For version.hpp
 )
 
+if(SMI_ENABLE_QDMA_DRIVER_BACKEND)
+    target_include_directories(v80-smi PRIVATE ${QDMA_DRV_APPS_INCLUDE})
+    target_compile_definitions(v80-smi PRIVATE SMI_ENABLE_QDMA_DRIVER_BACKEND=1)
+endif()
+
 target_link_libraries(
     v80-smi
 
     PRIVATE
 
     vrt::vrt
+    slash::slash
     CLI11::CLI11
 )
