@@ -792,5 +792,98 @@ TEST(AdversaryCliTest, DefaultUidGidFallbackWhenVrtdOrVrtAbsent) {
     if (!have_vrt)  { EXPECT_EQ(::getgid(), res.config.gid); }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 6: default VBIN configuration (default_vbin_path + per-device vbin_path)
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(DefaultVbinTest, PerDeviceVbinPathParsedFromConfig) {
+    TempFile f(
+        "[device.0000:61:00]\n"
+        "vbin_path = /opt/models/custom.vbin\n"
+    );
+    auto res = parse_config_file(f.path());
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_EQ(1u, res.accelerators.size());
+    ASSERT_TRUE(res.accelerators[0].vbin_path.has_value());
+    EXPECT_EQ("/opt/models/custom.vbin", *res.accelerators[0].vbin_path);
+}
+
+TEST(DefaultVbinTest, PerDeviceVbinPathAbsentIsNullopt) {
+    TempFile f("[device.0000:61:00]\n");
+    auto res = parse_config_file(f.path());
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_EQ(1u, res.accelerators.size());
+    EXPECT_FALSE(res.accelerators[0].vbin_path.has_value());
+}
+
+TEST(DefaultVbinTest, EmptyVbinPathValueIsNullopt) {
+    // An explicitly empty value is treated as "not set".
+    TempFile f(
+        "[device.0000:61:00]\n"
+        "vbin_path =\n"
+    );
+    auto res = parse_config_file(f.path());
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_EQ(1u, res.accelerators.size());
+    EXPECT_FALSE(res.accelerators[0].vbin_path.has_value());
+}
+
+TEST(DefaultVbinTest, PerDeviceVbinPathIsScopedToItsDevice) {
+    TempFile f(
+        "[device.0000:61:00]\n"
+        "vbin_path = /opt/a.vbin\n"
+        "[device.0000:62:00]\n"
+    );
+    auto res = parse_config_file(f.path());
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_EQ(2u, res.accelerators.size());
+    ASSERT_TRUE(res.accelerators[0].vbin_path.has_value());
+    EXPECT_EQ("/opt/a.vbin", *res.accelerators[0].vbin_path);
+    EXPECT_FALSE(res.accelerators[1].vbin_path.has_value());
+}
+
+TEST(DefaultVbinTest, CliDefaultVbinParsed) {
+    TempFile f("[device.0000:61:00]\n");
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path(),
+                   "--default-vbin", "/opt/models/default.vbin"}};
+    auto res = parse_cli(args.argc(), args.argv());
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_TRUE(res.config.default_vbin_path.has_value());
+    EXPECT_EQ("/opt/models/default.vbin", *res.config.default_vbin_path);
+}
+
+TEST(DefaultVbinTest, CliDefaultVbinAbsentIsNullopt) {
+    TempFile f("[device.0000:61:00]\n");
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
+    auto res = parse_cli(args.argc(), args.argv());
+    ASSERT_TRUE(res.ok) << res.error;
+    EXPECT_FALSE(res.config.default_vbin_path.has_value());
+}
+
+TEST(DefaultVbinTest, ResolvePrefersPerAcceleratorOverDaemonDefault) {
+    DaemonConfig cfg;
+    cfg.default_vbin_path = "/opt/daemon-default.vbin";
+
+    AcceleratorConfig with_override{*BoardBdf::parse("0000:61:00"),
+                                    std::string("/opt/accel-specific.vbin")};
+    AcceleratorConfig no_override{*BoardBdf::parse("0000:62:00"), std::nullopt};
+
+    // Per-accelerator vbin_path wins.
+    auto a = cfg.resolve_default_vbin(with_override);
+    ASSERT_TRUE(a.has_value());
+    EXPECT_EQ("/opt/accel-specific.vbin", *a);
+
+    // Falls back to the daemon-wide default when the accelerator has none.
+    auto b = cfg.resolve_default_vbin(no_override);
+    ASSERT_TRUE(b.has_value());
+    EXPECT_EQ("/opt/daemon-default.vbin", *b);
+}
+
+TEST(DefaultVbinTest, ResolveNulloptWhenNeitherConfigured) {
+    DaemonConfig cfg; // no default_vbin_path
+    AcceleratorConfig accel{*BoardBdf::parse("0000:61:00"), std::nullopt};
+    EXPECT_FALSE(cfg.resolve_default_vbin(accel).has_value());
+}
+
 } // namespace
 } // namespace slash_emu

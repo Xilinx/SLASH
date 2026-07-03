@@ -984,11 +984,62 @@ ctest suite passing.
     * Env note: TSan is unusable on this WSL2 host (runtime abort); the
       mutex-removal experiment gives equivalent (functional) race assurance.
 
-* **Steps 6–14 — NOT STARTED.** Next up: **Step 6 — Model process lifecycle
-  and reconfiguration**. Then 7 (BAR memfds), 8 (model control workers),
-  9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA subsystem), 11 (accelerator
-  lifecycle/hotplug), 12 (libslash integration), 13 (kernel driver + VRTD
-  changes), 14 (end-to-end integration).
+* **Step 6 — Model process lifecycle and reconfiguration — DONE**
+    * `src/vbin_store.{h,cpp}`: per-BDF on-disk store at `<base>/<bdf>/` with
+      `main.vbin` + `staging.vbin`. `bootstrap` (copy default→main + empty
+      staging if absent, without clobbering an existing main or a pending
+      staging), `append_staging`/`read_staging`/`clear_staging` (truncate, keep
+      file), `replace_main_with_staging` (atomic rename + recreate empty
+      staging), and `cold_reboot_cleanup` (removes the dir — Step 11 only; the
+      files PERSIST across per-accelerator teardown).
+    * `src/model_process.{h,cpp}`: RAII owner of one launched `vpp_sim`. Unpacks
+      the selected VBIN (its own `TempDir` copy), derives the `ipc://<dir>/
+      zmq.socket` endpoint (with an up-front `AF_UNIX sun_path` length guard →
+      clear Io error), launches via `posix_spawn` (`addchdir_np` to the
+      extraction dir, `SETSIGDEF`/`SETSIGMASK`), and treats launch success as
+      spawn + `ModelClient` connect + the one-time global `start` probe. A
+      single monitor thread is the sole reaper (`waitpid`); teardown escalates
+      `exit`→SIGTERM→SIGKILL with bounded waits. **Death detection** (process
+      exit / socket close / probe timeout) fires a death callback exactly once,
+      suppressed on intentional teardown. **Step 6→11 contract (documented on
+      `DeathCallback`):** `on_death` runs on the monitor thread; a caller must
+      NOT synchronously `teardown()` OR destroy the `ModelProcess` from within
+      it (destroy → UAF of the in-flight `std::function`) — Step 11 must post
+      teardown/destroy to another thread. A self-join guard (detach-not-join
+      when `teardown()` runs on the monitor thread) turns the would-be deadlock
+      into safe behavior as a backstop.
+    * `src/worker_controller.h`: abstract `WorkerController` (paired
+      `start(ModelClient&, const SystemMap&)` / `stop()`, nullable
+      `shared_ptr`); Step 8 implements the real one. `start` must NOT re-send
+      the global sim-clock `start` — the `ModelProcess` owns that one-time call.
+    * `src/reconfigure.{h,cpp}`: `ModelInstance::reconfigure()` implements the
+      "Launching the model process and reconfiguration" algorithm branch for
+      branch (no-main→bootstrap; staging-nonempty→launch→adopt→replace-main→
+      clear-staging; staging-fail→clear-staging→(fall back to main if idle |
+      keep old if running); main-fail→Failed; running+empty/corrupt-staging→
+      no-op). Adoption does worker stop→swap→start with rollback (full teardown
+      of the new process) on worker-start failure. On a rename failure after a
+      successful adoption it keeps the running process (NewProcess) and
+      best-effort clears staging (only the on-disk main is left stale).
+    * Additive config: `DaemonConfig::default_vbin_path` (+ `--default-vbin`),
+      per-device `vbin_path` parsed from the config file, and
+      `resolve_default_vbin(accel)` precedence (accelerator `vbin_path` >
+      daemon default). Step 3 semantics unchanged; `config_test` green. Also a
+      `VbinResult<void>` specialisation in `system_map.h`.
+    * Tests: `fake_model` executable (reuses `MockModelServer`; serve/exit/hang
+      variants + failure flags) and tar-packed fixture VBINs (default/staging/
+      unlaunchable/hang/corrupt). ~55 Step-6 tests across `vbin_store_test`,
+      `model_process_test`, `reconfigure_test`, and `DefaultVbinTest`. Coverage:
+      reconfigure.cpp 96.7% lines, config additions 97.8%, model_process.cpp
+      84.4%, vbin_store.cpp 83.8% (remainders are justified OS/IO
+      fault-injection + spawn-failure branches). Reviewer signed off;
+      normal/asan/ubsan/aubsan all green (308/308) with `-j16`; no zombies /
+      leftover ipc sockets / temp dirs.
+
+* **Steps 7–14 — NOT STARTED.** Next up: **Step 7 — BAR memfds**. Then
+  8 (model control workers), 9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA
+  subsystem), 11 (accelerator lifecycle/hotplug), 12 (libslash integration),
+  13 (kernel driver + VRTD changes), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -1005,6 +1056,13 @@ ctest suite passing.
   Protocol error taxonomy) and the scriptable `MockModelServer` test double —
   drive the model process in the model control workers (Step 8) and QDMA
   transfers (Step 10); the mock is the shared fixture for both.
+* `VbinStore`, `ModelProcess`, `WorkerController`, and `ModelInstance`
+  (reconfigure) — the per-accelerator model lifecycle. Step 8 implements the
+  real `WorkerController`; Step 10 appends reconfiguration chunks via
+  `append_staging`; Step 11 drives `reconfigure()`/teardown and owns
+  `cold_reboot_cleanup` — and MUST post model-death teardown to a thread other
+  than the death-callback (monitor) thread per the `DeathCallback` contract.
+  The `fake_model` executable + fixture VBINs are the shared end-to-end harness.
 
 ### Deferred / outstanding items
 
@@ -1026,6 +1084,13 @@ ctest suite passing.
   (`kMaxMemberBytes` tar-member cap, `kMaxArchiveBytes` gzip-bomb expansion cap)
   are correct but not yet exercised by a test; a crafted oversized tar `size`
   field / a highly compressible gzip payload would cover them in a later pass.
+* **Step 6 nits (non-blocking):** (a) `vbin_store.cpp` bootstrap branch
+  "main exists + staging *missing* → create empty staging" is a behavioral (not
+  fault-injection) branch that lacks a direct test — a one-line test would close
+  it. (b) `fake_model.cpp`'s `--never-bind` mode is currently unused dead
+  test-support (ZMQ ipc connect succeeds lazily, so the `hang_model` probe
+  timeout already covers the surfaced failure); prune or wire it to the
+  connect-failure branch later.
 
 ### Working agreements / environment notes (for the next session)
 

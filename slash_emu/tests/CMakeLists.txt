@@ -217,3 +217,80 @@ target_include_directories(system_map_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 add_slash_emu_test(vbin_test vbin_test.cpp)
 target_include_directories(vbin_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 add_dependencies(vbin_test slash_emu_fixtures)
+
+# -------- Step 6: VBIN file store --------
+add_slash_emu_test(vbin_store_test vbin_store_test.cpp)
+
+# ────────────────────────────────────────────────────────────────────────────
+# Step 6: fake vpp_sim model executables + launchable fixture VBINs
+#
+# The fake model reuses the Step 5 MockModelServer so a launched model behaves
+# exactly like the mock.  Three behaviour variants are compiled from one source
+# via FAKE_MODEL_DEFAULT_MODE, each later packed as `vpp_sim` into a VBIN:
+#   * fake_model            "serve" — normal model (launch succeeds)
+#   * fake_model_exit       "exit"  — quits immediately (launch fails: no serve)
+#   * fake_model_hang       "hang"  — binds but never replies (probe times out)
+# ────────────────────────────────────────────────────────────────────────────
+
+function(add_fake_model target mode)
+  add_executable(${target} fake_model.cpp)
+  target_compile_definitions(${target} PRIVATE FAKE_MODEL_DEFAULT_MODE="${mode}")
+  target_include_directories(${target} PRIVATE ${JSONCPP_INCLUDE_DIRS})
+  target_link_libraries(${target} PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+  set_target_properties(${target} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+endfunction()
+
+add_fake_model(fake_model      serve)
+add_fake_model(fake_model_exit exit)
+add_fake_model(fake_model_hang hang)
+
+set(STEP6_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_fixtures)
+
+# Assemble a VBIN that packs a fake-model executable as `vpp_sim` alongside a
+# system_map.xml.  Done at build time (after the exec is built) by staging the
+# two members into a scratch dir and tarring them.
+function(add_model_vbin out_name exec_target map_src)
+  add_custom_command(
+    OUTPUT ${STEP6_OUT_DIR}/${out_name}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${STEP6_OUT_DIR}/stage_${out_name}
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${exec_target}>
+            ${STEP6_OUT_DIR}/stage_${out_name}/vpp_sim
+    COMMAND ${CMAKE_COMMAND} -E copy ${map_src}
+            ${STEP6_OUT_DIR}/stage_${out_name}/system_map.xml
+    COMMAND ${TAR_EXECUTABLE} cf ${STEP6_OUT_DIR}/${out_name}
+            -C ${STEP6_OUT_DIR}/stage_${out_name} vpp_sim system_map.xml
+    DEPENDS ${exec_target} ${map_src}
+    COMMENT "Building Step 6 model VBIN ${out_name}"
+  )
+endfunction()
+
+add_model_vbin(default_model.vbin  fake_model      ${FIXTURE_SRC_DIR}/step6_default/system_map.xml)
+add_model_vbin(staging_good.vbin   fake_model      ${FIXTURE_SRC_DIR}/step6_staging/system_map.xml)
+add_model_vbin(unlaunchable.vbin   fake_model_exit ${FIXTURE_SRC_DIR}/step6_default/system_map.xml)
+add_model_vbin(hang_model.vbin     fake_model_hang ${FIXTURE_SRC_DIR}/step6_default/system_map.xml)
+
+# A corrupt "VBIN" that is not a valid tar/gzip container at all (unpack fails).
+add_custom_command(
+  OUTPUT ${STEP6_OUT_DIR}/corrupt.vbin
+  COMMAND ${CMAKE_COMMAND} -E echo "this is not a valid vbin container"
+          > ${STEP6_OUT_DIR}/corrupt.vbin
+  COMMENT "Building Step 6 corrupt.vbin"
+)
+
+add_custom_target(step6_fixtures ALL
+  DEPENDS
+    ${STEP6_OUT_DIR}/default_model.vbin
+    ${STEP6_OUT_DIR}/staging_good.vbin
+    ${STEP6_OUT_DIR}/unlaunchable.vbin
+    ${STEP6_OUT_DIR}/hang_model.vbin
+    ${STEP6_OUT_DIR}/corrupt.vbin
+)
+
+add_slash_emu_test(model_process_test model_process_test.cpp)
+target_include_directories(model_process_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+add_dependencies(model_process_test step6_fixtures)
+
+add_slash_emu_test(reconfigure_test reconfigure_test.cpp)
+target_include_directories(reconfigure_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+add_dependencies(reconfigure_test step6_fixtures)

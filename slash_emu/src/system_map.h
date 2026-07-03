@@ -89,6 +89,39 @@ private:
     std::variant<T, VbinError> storage_;
 };
 
+/**
+ * @brief Specialisation for void-like success results (mirrors Result<void>).
+ *
+ * Used by operations that either succeed or fail with a VbinError but carry no
+ * value on success (e.g. the VbinStore filesystem operations).
+ */
+template <>
+class VbinResult<void> {
+public:
+    static VbinResult ok() {
+        VbinResult r;
+        r.ok_ = true;
+        return r;
+    }
+
+    static VbinResult err(VbinError e) {
+        VbinResult r;
+        r.ok_ = false;
+        r.error_ = std::move(e);
+        return r;
+    }
+
+    [[nodiscard]] bool has_value() const noexcept { return ok_; }
+    [[nodiscard]] explicit operator bool() const noexcept { return ok_; }
+
+    [[nodiscard]] VbinError& error() & { return error_; }
+    [[nodiscard]] const VbinError& error() const& { return error_; }
+
+private:
+    bool      ok_{false};
+    VbinError error_;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Data model
 // ─────────────────────────────────────────────────────────────────────────────

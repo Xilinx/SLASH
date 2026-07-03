@@ -42,4 +42,11 @@ inline constexpr const char* kLongNameVbin     = "@FIXTURE_OUT_DIR@/longname.vbi
 // Standalone system_map.xml fixtures for the parser tests.
 inline constexpr const char* kMapDir = "@FIXTURE_SRC_DIR@/maps";
 
+// Step 6: launchable model VBIN fixtures (pack a fake vpp_sim executable).
+inline constexpr const char* kDefaultModelVbin = "@FIXTURE_OUT_DIR@/default_model.vbin";
+inline constexpr const char* kStagingGoodVbin  = "@FIXTURE_OUT_DIR@/staging_good.vbin";
+inline constexpr const char* kUnlaunchableVbin = "@FIXTURE_OUT_DIR@/unlaunchable.vbin";
+inline constexpr const char* kHangModelVbin    = "@FIXTURE_OUT_DIR@/hang_model.vbin";
+inline constexpr const char* kCorruptVbin      = "@FIXTURE_OUT_DIR@/corrupt.vbin";
+
 } // namespace slash_emu::test_fixtures

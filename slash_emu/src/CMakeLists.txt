@@ -32,6 +32,8 @@ pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 # dependency of vrt (see vrt/src/vrtbin.cpp) and ships with every toolchain we
 # target, so adding it here does not introduce a genuinely new system package.
 find_package(ZLIB REQUIRED)
+# std::thread in the model process monitor + ModelClient serialisation.
+find_package(Threads REQUIRED)
 
 add_library(slash_emu_core STATIC
   daemon.cpp
@@ -39,7 +41,10 @@ add_library(slash_emu_core STATIC
   config.cpp
   system_map.cpp
   vbin.cpp
+  vbin_store.cpp
   model_client.cpp
+  model_process.cpp
+  reconfigure.cpp
 )
 
 target_include_directories(slash_emu_core
@@ -64,6 +69,7 @@ target_link_libraries(slash_emu_core
     ZLIB::ZLIB
     PkgConfig::PC_ZMQ
     ${JSONCPP_LIBRARIES}
+    Threads::Threads
 )
 
 # -------- slash_emu_daemon executable --------

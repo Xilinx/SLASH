@@ -155,8 +155,33 @@ struct DaemonConfig {
     /** Path to the INI configuration file that was parsed. */
     std::string config_file;
 
+    /**
+     * @brief Daemon-wide default VBIN used to bootstrap a fresh accelerator.
+     *
+     * Step 6 (model process lifecycle) copies this into a new accelerator's
+     * main.vbin when it has none yet.  A per-accelerator
+     * AcceleratorConfig::vbin_path, when set, takes precedence over this
+     * daemon-wide default.  Empty when not configured (the shipped default-VBIN
+     * artifact is out of scope for the current sprint).
+     */
+    std::optional<std::string> default_vbin_path;
+
     /** Per-accelerator entries read from the configuration file. */
     std::vector<AcceleratorConfig> accelerators;
+
+    /**
+     * @brief Resolve the VBIN source used to bootstrap @p accel.
+     *
+     * Precedence: the accelerator's own vbin_path if set, else the daemon-wide
+     * default_vbin_path.  Returns nullopt if neither is configured.
+     */
+    [[nodiscard]] std::optional<std::string> resolve_default_vbin(
+        const AcceleratorConfig& accel) const {
+        if (accel.vbin_path.has_value()) {
+            return accel.vbin_path;
+        }
+        return default_vbin_path;
+    }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -28,6 +28,7 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <map>
 #include <unordered_set>
 
 #include <grp.h>
@@ -154,10 +155,25 @@ namespace {
 
 constexpr std::string_view kDevicePrefix = "device.";
 
-// ini_parse_file callback used solely for syntax validation.
-static int validate_only_handler(void* /*user*/, const char* /*section*/,
-                                 const char* /*name*/, const char* /*value*/) {
-    return 1; // continue — we only care about the return code of ini_parse_file
+// Accumulator for key=value pairs, keyed by section name, populated during the
+// inih parse pass.  Used to read per-device keys such as `vbin_path` without a
+// second file scan.  (Section discovery still relies on the line scan, since
+// inih does not report empty/keyless sections.)
+struct KeyValueCollector {
+    // section -> (key -> value); last write wins for duplicate keys.
+    std::map<std::string, std::map<std::string, std::string>> values;
+};
+
+// ini_parse_file callback: records every name=value pair under its section.
+// Still returns 1 (continue) so ini_parse_file's return code keeps reporting
+// syntax errors exactly as before.
+static int collect_handler(void* user, const char* section, const char* name,
+                           const char* value) {
+    auto* collector = static_cast<KeyValueCollector*>(user);
+    if (collector != nullptr && section != nullptr && name != nullptr) {
+        collector->values[section][name] = value != nullptr ? value : "";
+    }
+    return 1;
 }
 
 } // namespace
@@ -204,7 +220,8 @@ ConfigFileResult parse_config_file(const std::string& path) {
     // ini_parse_file returns >0 with the 1-based line number of a parse error,
     // or 0 on success.  We rewind the FILE* to reuse the same open file handle.
     std::rewind(fp);
-    int rc = ::ini_parse_file(fp, validate_only_handler, nullptr);
+    KeyValueCollector collector;
+    int rc = ::ini_parse_file(fp, collect_handler, &collector);
     std::fclose(fp);
 
     if (rc > 0) {
@@ -237,7 +254,18 @@ ConfigFileResult parse_config_file(const std::string& path) {
             return result;
         }
 
-        result.accelerators.push_back(AcceleratorConfig{std::move(*bdf), std::nullopt});
+        // Per-device optional `vbin_path` override (used by Step 6 as this
+        // accelerator's default VBIN source, taking precedence over the daemon
+        // wide default_vbin_path).  Absent or empty → nullopt.
+        std::optional<std::string> vbin_path;
+        if (auto sec_it = collector.values.find(section); sec_it != collector.values.end()) {
+            if (auto kv = sec_it->second.find("vbin_path");
+                kv != sec_it->second.end() && !kv->second.empty()) {
+                vbin_path = kv->second;
+            }
+        }
+
+        result.accelerators.push_back(AcceleratorConfig{std::move(*bdf), std::move(vbin_path)});
     }
 
     result.ok = true;
@@ -265,6 +293,14 @@ CliResult parse_cli(int argc, char* argv[]) {
     std::string base_dir = "/run/slash_emu";
     app.add_option("-d,--base-dir", base_dir,
                    "Base directory for emulation sockets (default: /run/slash_emu)");
+
+    // Daemon-wide default VBIN used to bootstrap a fresh accelerator (Step 6).
+    // Optional: left unset when not provided.
+    std::string default_vbin;
+    bool        default_vbin_set = false;
+    app.add_option("--default-vbin", default_vbin,
+                   "Daemon-wide default VBIN used to bootstrap a fresh accelerator")
+       ->each([&default_vbin_set](const std::string&) { default_vbin_set = true; });
 
     std::string uid_str = "vrtd";
     bool uid_is_default = true;
@@ -375,6 +411,9 @@ CliResult parse_cli(int argc, char* argv[]) {
     result.config.gid         = gid;
     result.config.mode        = mode;
     result.config.config_file = config_path;
+    if (default_vbin_set) {
+        result.config.default_vbin_path = std::move(default_vbin);
+    }
     result.config.accelerators = std::move(file_result.accelerators);
 
     result.ok = true;
