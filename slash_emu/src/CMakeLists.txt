@@ -24,6 +24,10 @@ find_package(CLI11 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(INIH REQUIRED inih)
 pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
+# libzmq drives the model process; matches how vrt/CMakeLists.txt links it.
+pkg_check_modules(PC_ZMQ REQUIRED IMPORTED_TARGET libzmq)
+# jsoncpp encodes/decodes the model protocol frames.
+pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 # zlib is used for gzip-compressed VBIN containers. It is already a transitive
 # dependency of vrt (see vrt/src/vrtbin.cpp) and ships with every toolchain we
 # target, so adding it here does not introduce a genuinely new system package.
@@ -35,6 +39,7 @@ add_library(slash_emu_core STATIC
   config.cpp
   system_map.cpp
   vbin.cpp
+  model_client.cpp
 )
 
 target_include_directories(slash_emu_core
@@ -43,6 +48,7 @@ target_include_directories(slash_emu_core
   PRIVATE
     ${INIH_INCLUDE_DIRS}
     ${LIBXML2_INCLUDE_DIRS}
+    ${JSONCPP_INCLUDE_DIRS}
 )
 
 target_compile_features(slash_emu_core PUBLIC cxx_std_20)
@@ -56,6 +62,8 @@ target_link_libraries(slash_emu_core
     ${INIH_LIBRARIES}
     ${LIBXML2_LIBRARIES}
     ZLIB::ZLIB
+    PkgConfig::PC_ZMQ
+    ${JSONCPP_LIBRARIES}
 )
 
 # -------- slash_emu_daemon executable --------

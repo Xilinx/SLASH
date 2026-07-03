@@ -952,11 +952,43 @@ ctest suite passing.
       82.6% branches (remainder are justified I/O fault-injection and DoS-guard
       branches). Reviewer signed off; all four builds green.
 
-* **Steps 5–14 — NOT STARTED.** Next up: **Step 5 — ZeroMQ model client**.
-  Then 6 (model process lifecycle/reconfiguration), 7 (BAR memfds), 8 (model
-  control workers), 9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA subsystem),
-  11 (accelerator lifecycle/hotplug), 12 (libslash integration), 13 (kernel
-  driver + VRTD changes), 14 (end-to-end integration).
+* **Step 5 — ZeroMQ model client — DONE**
+    * `src/model_client.{h,cpp}`: `ModelClient` implements the `vpp_sim`
+      address-keyed ZeroMQ dialect (`start`/`populate`/`fetch buffer`/`fetch
+      scalar`/`reg`/`exit`) over `ZMQ_REQ`→`ZMQ_REP` on an `ipc://` (or
+      `tcp://`) endpoint, using the libzmq C API wrapped in RAII (LINGER=0, no
+      ctx_term hang) and jsoncpp for frames. Frame 0 is encoded with the default
+      `Json::StreamWriterBuilder` to be **byte-for-byte identical** to the vrt
+      reference client (`vrt/src/utils/zmq_server.cpp`), so a real `vpp_sim`
+      interoperates; `populate` sends a second raw frame with the invariant
+      `size == payload length` (the sim reads exactly `size` bytes). A single
+      `std::mutex` is held across the whole send→recv cycle: one request in
+      flight, callers serialized (ZMQ sockets are not thread-safe and REQ
+      forbids overlap). Configurable ~10s timeout (`ZMQ_RCVTIMEO`/`SNDTIMEO`,
+      injectable for tests). Reuses `transport.h`'s `Result`/`ErrorKind`:
+      timeout / dead-or-closed socket / moved-from-or-unconnected client →
+      `Transport` (→ -ENODEV, "model assumed dead"); malformed-but-delivered
+      reply (not "OK"/"ERR"/JSON, wrong type, byte >255, buffer length
+      mismatch) → `Protocol`. Never throws across the API.
+    * `tests/mock_model_server.{h,cpp}`: reusable scriptable `ZMQ_REP` mock
+      `vpp_sim` (in-memory addr→byte + scalar maps, request recording, injectable
+      faults: WrongReply/ErrReply/MalformedJson/OversizedByte/ShortBuffer/Delay/
+      Silence/ExtraFrame/JsonStringReply/Close). Built as a static helper lib —
+      **Steps 8 and 10 reuse it**. Serialization is proven by a functional
+      per-thread keyed-readback concurrency test (removing the client mutex makes
+      it fail with ~1500 crossed replies), NOT by the mock's `max_in_flight`
+      (its REP loop is single-threaded, so that is only a sanity check).
+    * 40 `ModelClient*` tests. Coverage: model_client.cpp 92.9% lines / 95.2%
+      branches (remainder are justified libzmq-API-failure defensive branches).
+      Reviewer signed off; normal/asan/ubsan/aubsan all green (253/253).
+    * Env note: TSan is unusable on this WSL2 host (runtime abort); the
+      mutex-removal experiment gives equivalent (functional) race assurance.
+
+* **Steps 6–14 — NOT STARTED.** Next up: **Step 6 — Model process lifecycle
+  and reconfiguration**. Then 7 (BAR memfds), 8 (model control workers),
+  9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA subsystem), 11 (accelerator
+  lifecycle/hotplug), 12 (libslash integration), 13 (kernel driver + VRTD
+  changes), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -969,6 +1001,10 @@ ctest suite passing.
   model (with `VbinError` taxonomy and RAII `TempDir`) — feed the model process
   launch/reconfiguration (Step 6), the model control workers and the
   register→address mapping (Step 8), and QDMA target routing (Step 10).
+* `ModelClient` (vpp_sim ZeroMQ dialect, serialized + timed-out + Transport/
+  Protocol error taxonomy) and the scriptable `MockModelServer` test double —
+  drive the model process in the model control workers (Step 8) and QDMA
+  transfers (Step 10); the mock is the shared fixture for both.
 
 ### Deferred / outstanding items
 
@@ -1001,7 +1037,8 @@ ctest suite passing.
   throwaway programs); always verify from a clean `rm -rf build/<name>` build
   before reporting green (a stale-binary false-green slipped through once in
   Step 3); coverage via the lcov `coverage` target only; the lead commits after
-  each reviewer sign-off.
+  each reviewer sign-off. **Always build/test with a fixed `-j16` (e.g.
+  `cmake --build build/<name> -j16`, `ctest -j16`), never `-j"$(nproc)"`.**
 * **Tooling:** `lcov` 2.0 + `genhtml` + `gcov` are installed. `gcovr` is present
   at `~/miniforge3/bin/gcovr` but is **not** sanctioned tooling and was not
   installed intentionally for this project — do not use it; consider removing it.

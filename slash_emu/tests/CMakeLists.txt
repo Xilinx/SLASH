@@ -45,6 +45,29 @@ add_slash_emu_test(daemon_test     daemon_test.cpp)
 add_slash_emu_test(transport_test transport_test.cpp)
 add_slash_emu_test(config_test    config_test.cpp)
 
+# -------- reusable mock vpp_sim model server (test helper) --------
+# pkg_check_modules populates directory-scoped variables, so re-query here for
+# the tests subdirectory (the imported target PkgConfig::PC_ZMQ is global).
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PC_ZMQ REQUIRED IMPORTED_TARGET libzmq)
+pkg_check_modules(JSONCPP REQUIRED jsoncpp)
+
+# Built as a static library so later steps (8, 10) can link the same mock.
+add_library(mock_model_server STATIC mock_model_server.cpp)
+target_include_directories(mock_model_server
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+  PRIVATE
+    ${JSONCPP_INCLUDE_DIRS}
+)
+target_compile_features(mock_model_server PUBLIC cxx_std_20)
+target_compile_options(mock_model_server PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(mock_model_server PRIVATE PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+
+add_slash_emu_test(model_client_test model_client_test.cpp)
+target_link_libraries(model_client_test PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+target_include_directories(model_client_test PRIVATE ${JSONCPP_INCLUDE_DIRS})
+
 # ────────────────────────────────────────────────────────────────────────────
 # Fixture generation for VBIN / system-map tests
 #
