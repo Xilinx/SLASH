@@ -159,6 +159,8 @@ xilinx.com:ip:axi_gpio:2.0\
 xilinx.com:ip:xlconcat:2.1\
 xilinx.com:ip:util_reduced_logic:2.0\
 xilinx.com:ip:xlconstant:1.1\
+xilinx.com:ip:axi_bram_ctrl:4.1\
+xilinx.com:ip:emb_mem_gen:1.0\
 "
 
    set list_ips_missing ""
@@ -707,7 +709,7 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   # Create instance: smartconnect_0, and set properties
   set smartconnect_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0 ]
   set_property -dict [list \
-    CONFIG.NUM_MI {3} \
+    CONFIG.NUM_MI {5} \
     CONFIG.NUM_SI {1} \
   ] $smartconnect_0
 
@@ -742,6 +744,37 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
     CONFIG.CONST_WIDTH {32} \
     CONFIG.CONST_VAL $::build_id_hi \
   ] $build_id_hi
+
+
+  # Create instance: user_meta_bram_ctrl / user_meta_bram.
+  # 8 KiB writable RAM in the static shell holding the metadata (compressed XML)
+  # describing what was programmed into the user (slash) RM. Written by the
+  # runtime over AXI at program time; read back by SMI. Static-shell resident so
+  # partial reconfiguration of the RM does not erase it.
+  set user_meta_bram_ctrl [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 user_meta_bram_ctrl ]
+  set_property -dict [list \
+    CONFIG.DATA_WIDTH {32} \
+    CONFIG.SINGLE_PORT_BRAM {1} \
+  ] $user_meta_bram_ctrl
+
+  set user_meta_bram [ create_bd_cell -type ip -vlnv xilinx.com:ip:emb_mem_gen:1.0 user_meta_bram ]
+  set_property -dict [list \
+    CONFIG.MEMORY_TYPE {Single_Port_RAM} \
+  ] $user_meta_bram
+
+
+  # Create instance: service_meta_bram_ctrl / service_meta_bram.
+  # 8 KiB writable RAM for the service RM's metadata; see user_meta_bram above.
+  set service_meta_bram_ctrl [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 service_meta_bram_ctrl ]
+  set_property -dict [list \
+    CONFIG.DATA_WIDTH {32} \
+    CONFIG.SINGLE_PORT_BRAM {1} \
+  ] $service_meta_bram_ctrl
+
+  set service_meta_bram [ create_bd_cell -type ip -vlnv xilinx.com:ip:emb_mem_gen:1.0 service_meta_bram ]
+  set_property -dict [list \
+    CONFIG.MEMORY_TYPE {Single_Port_RAM} \
+  ] $service_meta_bram
 
 
   # Create instance: clk_wizard_slash, and set properties
@@ -820,6 +853,10 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins clk_wizard_slash/s_axi_lite] [get_bd_intf_pins smartconnect_0/M00_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins clk_wizard_service/s_axi_lite] [get_bd_intf_pins smartconnect_0/M01_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M02_AXI [get_bd_intf_pins build_id_gpio/S_AXI] [get_bd_intf_pins smartconnect_0/M02_AXI]
+  connect_bd_intf_net -intf_net smartconnect_0_M03_AXI [get_bd_intf_pins user_meta_bram_ctrl/S_AXI] [get_bd_intf_pins smartconnect_0/M03_AXI]
+  connect_bd_intf_net -intf_net smartconnect_0_M04_AXI [get_bd_intf_pins service_meta_bram_ctrl/S_AXI] [get_bd_intf_pins smartconnect_0/M04_AXI]
+  connect_bd_intf_net -intf_net user_meta_bram_ctrl_BRAM_PORTA [get_bd_intf_pins user_meta_bram_ctrl/BRAM_PORTA] [get_bd_intf_pins user_meta_bram/BRAM_PORTA]
+  connect_bd_intf_net -intf_net service_meta_bram_ctrl_BRAM_PORTA [get_bd_intf_pins service_meta_bram_ctrl/BRAM_PORTA] [get_bd_intf_pins service_meta_bram/BRAM_PORTA]
 
   # Create port connections
   connect_bd_net -net build_id_lo_dout  [get_bd_pins build_id_lo/dout] \
@@ -831,6 +868,8 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   [get_bd_pins clk_wizard_slash/s_axi_aresetn] \
   [get_bd_pins clk_wizard_service/s_axi_aresetn] \
   [get_bd_pins build_id_gpio/s_axi_aresetn] \
+  [get_bd_pins user_meta_bram_ctrl/s_axi_aresetn] \
+  [get_bd_pins service_meta_bram_ctrl/s_axi_aresetn] \
   [get_bd_pins proc_sys_reset_0/ext_reset_in] \
   [get_bd_pins proc_sys_reset_1/ext_reset_in]
   connect_bd_net -net clk_wizard_service_clk_out1  [get_bd_pins clk_wizard_service/clk_out1] \
@@ -850,7 +889,9 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   [get_bd_pins smartconnect_0/aclk] \
   [get_bd_pins clk_wizard_slash/s_axi_aclk] \
   [get_bd_pins clk_wizard_service/s_axi_aclk] \
-  [get_bd_pins build_id_gpio/s_axi_aclk]
+  [get_bd_pins build_id_gpio/s_axi_aclk] \
+  [get_bd_pins user_meta_bram_ctrl/s_axi_aclk] \
+  [get_bd_pins service_meta_bram_ctrl/s_axi_aclk]
   connect_bd_net -net pl3_ref_clk_1  [get_bd_pins refclk] \
   [get_bd_pins clk_wizard_slash/clk_in1] \
   [get_bd_pins clk_wizard_service/clk_in1]
@@ -4999,6 +5040,8 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020400010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_service/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_slash/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/build_id_gpio/S_AXI/Reg] -force
+  assign_bd_address -offset 0x020400030000 -range 0x00002000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/user_meta_bram_ctrl/S_AXI/Mem0] -force
+  assign_bd_address -offset 0x020400040000 -range 0x00002000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/service_meta_bram_ctrl/S_AXI/Mem0] -force
   assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/DCMAC_subsys/dcmac_0_core/s_axi/Reg] -force
   assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/DCMAC_subsys/dcmac_1_core/s_axi/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force
@@ -5156,6 +5199,8 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020400010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_service/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_slash/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/build_id_gpio/S_AXI/Reg] -force
+  assign_bd_address -offset 0x020400030000 -range 0x00002000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/user_meta_bram_ctrl/S_AXI/Mem0] -force
+  assign_bd_address -offset 0x020400040000 -range 0x00002000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/service_meta_bram_ctrl/S_AXI/Mem0] -force
   assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/DCMAC_subsys/dcmac_0_core/s_axi/Reg] -force
   assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/DCMAC_subsys/dcmac_1_core/s_axi/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force

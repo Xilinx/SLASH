@@ -252,6 +252,8 @@ Vrtbin::Vrtbin(std::string vrtbinPath, const std::string& bdf) {
     this->tempExtractPath =
         (FilesystemCache::getCachePath() / ("vrtbin_" + sanitizeForPath(bdf))).string();
     this->systemMapPath = (metadataPath / "system_map.xml").string();
+    this->userMapPath = (metadataPath / "user_map.xml").string();
+    this->serviceMapPath = (metadataPath / "service_map.xml").string();
 
     extract();
     discoverPdiFiles();
@@ -270,6 +272,22 @@ Vrtbin::Vrtbin(std::string vrtbinPath, const std::string& bdf) {
     if (!reportPath.empty()) {
         utilizationReportPath = (metadataPath / "report_utilization.xml").string();
         copy(reportPath.string(), utilizationReportPath);
+    }
+
+    // Split per-RM metadata maps written into the static-shell readback RAMs at
+    // program time. Optional: absent from older vbins, in which case the RAM
+    // write is simply skipped.
+    const std::filesystem::path tempUserMapPath = findExtractedFile("user_map.xml");
+    if (!tempUserMapPath.empty()) {
+        copy(tempUserMapPath.string(), userMapPath);
+    } else {
+        userMapPath.clear();
+    }
+    const std::filesystem::path tempServiceMapPath = findExtractedFile("service_map.xml");
+    if (!tempServiceMapPath.empty()) {
+        copy(tempServiceMapPath.string(), serviceMapPath);
+    } else {
+        serviceMapPath.clear();
     }
 
     if (this->platform == Platform::HARDWARE) {
@@ -469,6 +487,8 @@ void Vrtbin::copy(const std::string& source, const std::string& destination) {
 }
 
 std::string Vrtbin::getSystemMapPath() { return systemMapPath; }
+std::string Vrtbin::getUserMapPath() { return userMapPath; }
+std::string Vrtbin::getServiceMapPath() { return serviceMapPath; }
 std::string Vrtbin::getPdiPath() { return pdiPath; }
 std::vector<std::string> Vrtbin::getPdiPaths() { return pdiPaths; }
 

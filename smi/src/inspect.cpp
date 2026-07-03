@@ -39,6 +39,7 @@
 #include "bdf.hpp"
 
 #include "shell_build_id.hpp"
+#include "shell_meta.hpp"
 #include "utils.hpp"
 
 //. BDF string corresponding to the all-ones sentinel value (0xFFFF).
@@ -460,6 +461,22 @@ int Inspect::run(const Options& options) {
     const auto vbinData{getVbinData(options)};
 
     print(vbinData, options.jsonOutput, options.prettyJsonOutput);
+
+    // Dump the raw metadata read back from the static-shell RAMs, so the user
+    // can diff it against the host-side vbin. Device query only; best-effort.
+    if (options.dumpHwMetadata && options.isBdfQuery) {
+        const std::string bdf = resolveBoardBdf(options.bdf, "query");
+        for (const auto& [label, region] :
+             {std::pair{"user", MetaRegion::User},
+              std::pair{"service", MetaRegion::Service}}) {
+            std::cout << "\n=== Hardware metadata RAM (" << label << " RM) ===\n";
+            try {
+                std::cout << readShellMeta(bdf, region) << "\n";
+            } catch (const std::exception& e) {
+                std::cout << "(unavailable: " << e.what() << ")\n";
+            }
+        }
+    }
 
     return 0;
 }

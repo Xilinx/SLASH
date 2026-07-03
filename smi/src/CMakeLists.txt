@@ -22,6 +22,7 @@ add_executable(
     v80-smi
     
     shell_build_id.cpp
+    shell_meta.cpp
     debug/bar_poke.cpp
     debug/clockwiz.cpp
     debug/mem_poke.cpp

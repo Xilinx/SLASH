@@ -43,10 +43,12 @@ def build_vbin(config: LinkerConfiguration) -> Path:
     util_xml = config.build_dir / \
         f"report_utilization_{config.project_name}.xml"
     system_map = config.build_dir / "system_map.xml"
+    user_map = config.build_dir / "user_map.xml"
 
-    files = [slash_pdi_path, util_xml, system_map]
+    files = [slash_pdi_path, util_xml, system_map, user_map]
     if config.networking_enabled:
         files.append(service_layer_pdi_path)
+        files.append(config.build_dir / "service_map.xml")
 
     for file in files:
         if not file.exists():

@@ -327,6 +327,25 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     )
     logger.info("Rendered system map to %s", system_map_out)
 
+    # Split per-RM metadata: written into the static-shell readback RAMs at
+    # program time so inspection can be grounded in hardware rather than
+    # trusting the host-side vbin. Same context, filtered per region.
+    user_map_out = config.build_dir / "user_map.xml"
+    render_template(
+        template="user_map.xml",
+        out_path=user_map_out,
+        context=system_map_ctx,
+    )
+    logger.info("Rendered user map to %s", user_map_out)
+
+    service_map_out = config.build_dir / "service_map.xml"
+    render_template(
+        template="service_map.xml",
+        out_path=service_map_out,
+        context=system_map_ctx,
+    )
+    logger.info("Rendered service map to %s", service_map_out)
+
     svc_ctx = {}
     svc_ctx.update(build_service_layer_context(cfg.net))
     svc_ctx.update(build_service_axilite_ctx(cfg.net)

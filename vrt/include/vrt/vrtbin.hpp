@@ -45,6 +45,8 @@ namespace vrt {
 class Vrtbin {
     std::string vrtbinPath;                                         ///< Path to the VRTBIN tar file
     std::string systemMapPath;                                      ///< Path to the system map file
+    std::string userMapPath;                                        ///< Path to user-RM metadata map (may be empty)
+    std::string serviceMapPath;                                     ///< Path to service-RM metadata map (may be empty)
     std::string pdiPath;                                            ///< Path to the PDI file
     std::vector<std::string> pdiPaths;                              ///< Paths to all discovered PDI files
     std::string tempExtractPath;                                    ///< Temporary extraction path
@@ -83,6 +85,18 @@ class Vrtbin {
      * @return The path to the system map file.
      */
     std::string getSystemMapPath();
+
+    /**
+     * @brief Gets the path to the user-RM metadata map.
+     * @return The path, or an empty string if absent from the vbin.
+     */
+    std::string getUserMapPath();
+
+    /**
+     * @brief Gets the path to the service-RM metadata map.
+     * @return The path, or an empty string if absent from the vbin.
+     */
+    std::string getServiceMapPath();
 
     /**
      * @brief Gets the path to the PDI file.

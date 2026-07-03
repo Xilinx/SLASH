@@ -88,6 +88,7 @@ static int smiMain(int argc, char **argv) {
     queryCommand->add_option("-d,--device", queryOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
     queryCommand->add_flag("-j,--json", queryOptions.jsonOutput, "Print information as compact json (default is human-readable)");
     queryCommand->add_flag("-J,--pretty-json", queryOptions.prettyJsonOutput, "Print information as json with indentation (default is human-readable)");
+    queryCommand->add_flag("--dump-hw-metadata", queryOptions.dumpHwMetadata, "Dump raw metadata XML read back from the static-shell RAMs");
 
     // -- list (enumerate devices) --
     auto* listCommand = app.add_subcommand("list", "List V80 devices");

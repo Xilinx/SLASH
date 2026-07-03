@@ -46,6 +46,7 @@ public:
         bool isBdfQuery{};         ///< True when querying a device rather than a file.
         bool jsonOutput{};         ///< Emit compact JSON instead of human-readable text.
         bool prettyJsonOutput{};   ///< Emit indented JSON instead of human-readable text.
+        bool dumpHwMetadata{};     ///< Print raw metadata XML read back from the shell RAMs.
     };
 
     /// @brief Executes the inspect/query command.

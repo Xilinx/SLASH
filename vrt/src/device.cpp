@@ -34,10 +34,14 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <thread>
+#include <vector>
 #include <vrtd/bar.hpp>
+#include <vrtd/bar_file.hpp>
 
+#include <vrt/meta_ram.hpp>
 #include <vrt/utils/filesystem_cache.hpp>
 
 namespace vrt {
@@ -233,6 +237,8 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     this->systemMap = this->vrtbin.getSystemMapPath();
     this->pdiPath = this->vrtbin.getPdiPath();
     this->pdiPaths = this->vrtbin.getPdiPaths();
+    this->userMap = this->vrtbin.getUserMapPath();
+    this->serviceMap = this->vrtbin.getServiceMapPath();
     this->programType = programType;
     this->zmqServer = std::make_shared<ZmqServer>();
     this->platform = vrtbin.getPlatform();
@@ -375,7 +381,58 @@ void Device::programDevice() {
         utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                            "Programming PDI via vrtd design writer {}", pdi);
         getVrtdDevice().designWriteFile(pdi);
+
+        // Record what was programmed into the matching static-shell metadata RAM,
+        // so inspection can be grounded in hardware. Best-effort: a failure here
+        // must not abort programming.
+        const std::string name = std::filesystem::path(pdi).filename().string();
+        try {
+            if (name.find("_service_layer_") != std::string::npos) {
+                writeMetaRam(SERVICE_META_RAM_OFFSET, serviceMap);
+            } else if (name.find("_slash_") != std::string::npos) {
+                writeMetaRam(USER_META_RAM_OFFSET, userMap);
+            }
+        } catch (const std::exception& e) {
+            utils::Logger::log(utils::LogLevel::WARN, __PRETTY_FUNCTION__,
+                               "Failed to write metadata RAM for {}: {}", name, e.what());
+        }
     }
+}
+
+void Device::writeMetaRam(uint64_t ramOffset, const std::string& xmlPath) {
+    if (xmlPath.empty()) {
+        return;  // Older vbin without split metadata maps.
+    }
+
+    std::ifstream in(xmlPath, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Cannot open metadata map: " + xmlPath);
+    }
+    std::string xml((std::istreambuf_iterator<char>(in)),
+                    std::istreambuf_iterator<char>());
+
+    const std::vector<uint8_t> image = encodeMetaRam(xml);
+
+    auto bar = getVrtdDevice().getBar(META_RAM_BAR);
+    if (!bar.isUsable()) {
+        throw std::runtime_error("BAR4 not usable; cannot write metadata RAM");
+    }
+    vrtd::BarFile barFile = bar.openBarFile();
+    if (barFile.getLen() < ramOffset + image.size()) {
+        throw std::runtime_error("BAR4 too small for metadata RAM write");
+    }
+
+    auto ptr = barFile.getPtr<uint32_t>(vrtd::BarFile::Direction::Write,
+                                        static_cast<size_t>(ramOffset));
+    const uint32_t words = static_cast<uint32_t>(image.size() / sizeof(uint32_t));
+    const uint32_t* src = reinterpret_cast<const uint32_t*>(image.data());
+    for (uint32_t i = 0; i < words; ++i) {
+        ptr[i] = src[i];
+    }
+
+    utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
+                       "Wrote {} bytes of metadata to RAM at BAR4 offset 0x{:x}",
+                       image.size(), ramOffset);
 }
 
 void Device::setFrequency(uint64_t freq) {

@@ -101,6 +101,8 @@ class Device {
     std::string bdfFull;                                        ///< Domain:Bus:Device.Function identifier
     std::string pdiPath;                                        ///< Path to the PDI file
     std::vector<std::string> pdiPaths;                          ///< Paths to PDI files discovered in archive
+    std::string userMap;                                        ///< Path to user-RM metadata map (may be empty)
+    std::string serviceMap;                                     ///< Path to service-RM metadata map (may be empty)
     Vrtbin vrtbin;                                              ///< Vrtbin object for handling VRTBIN operations
     uint64_t clockFreq = 0;                                     ///< Clock frequency
     ProgramType programType{};                                  ///< Type of programming
@@ -147,6 +149,17 @@ class Device {
      * @brief Programs the device.
      */
     void programDevice();
+
+    /**
+     * @brief Writes an RM's metadata map into its static-shell readback RAM.
+     *
+     * Best-effort: does nothing if @p xmlPath is empty (older vbin without split
+     * maps). Reads the XML, compresses+encodes it, and writes it over BAR4.
+     *
+     * @param ramOffset Byte offset of the target RAM within BAR4.
+     * @param xmlPath   Path to the metadata XML file (may be empty).
+     */
+    void writeMetaRam(uint64_t ramOffset, const std::string& xmlPath);
 
     /**
      * @brief Destructor for Device.
