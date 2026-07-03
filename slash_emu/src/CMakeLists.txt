@@ -23,11 +23,18 @@
 find_package(CLI11 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(INIH REQUIRED inih)
+pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
+# zlib is used for gzip-compressed VBIN containers. It is already a transitive
+# dependency of vrt (see vrt/src/vrtbin.cpp) and ships with every toolchain we
+# target, so adding it here does not introduce a genuinely new system package.
+find_package(ZLIB REQUIRED)
 
 add_library(slash_emu_core STATIC
   daemon.cpp
   transport.cpp
   config.cpp
+  system_map.cpp
+  vbin.cpp
 )
 
 target_include_directories(slash_emu_core
@@ -35,17 +42,20 @@ target_include_directories(slash_emu_core
     ${CMAKE_CURRENT_SOURCE_DIR}
   PRIVATE
     ${INIH_INCLUDE_DIRS}
+    ${LIBXML2_INCLUDE_DIRS}
 )
 
 target_compile_features(slash_emu_core PUBLIC cxx_std_20)
 
-target_compile_options(slash_emu_core PRIVATE -Wall -Wextra -Werror)
+target_compile_options(slash_emu_core PRIVATE -Wall -Wextra -Werror ${LIBXML2_CFLAGS_OTHER})
 
 target_link_libraries(slash_emu_core
   PUBLIC
     CLI11::CLI11
   PRIVATE
     ${INIH_LIBRARIES}
+    ${LIBXML2_LIBRARIES}
+    ZLIB::ZLIB
 )
 
 # -------- slash_emu_daemon executable --------

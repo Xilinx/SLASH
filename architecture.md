@@ -874,3 +874,138 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
     * All units, components, and subsystems need rigorous testing
     * With options to build and run the test with the address and UB sanitizers
     * To be registered and executed with ctest (ctest is allowed for agent use)
+
+## Sprint status and deferred items
+
+*Snapshot as of 2026-07-03. This section is a running log so a
+fresh session can resume the sprint without re-deriving context.*
+
+### Progress
+
+Steps are executed strictly in order via the team workflow (implementer builds
+and unit-tests → adversary hunts bugs and folds every probe into the suite →
+they iterate to convergence → reviewer signs off → the lead commits). Each
+committed step keeps the normal/asan/ubsan/aubsan builds green and the full
+ctest suite passing.
+
+* **Step 1 — Project scaffolding and test harness — DONE** (commit `fcc3121b`)
+    * CMake C++20 project under `slash_emu/`; four build dirs
+      `build/{normal,asan,ubsan,aubsan}` plus a coverage build (coverage is
+      mutually exclusive with the sanitizers).
+    * GTest via FetchContent v1.17.0, `gtest_discover_tests`, run through ctest.
+    * gcov/lcov `coverage` custom target (extracts `src/*`; HTML under the
+      build dir).
+    * Minimal daemon entry point: `run_daemon()` with a `std::atomic<bool>`
+      shutdown flag and an injectable `SignalInstaller` seam so the
+      sigaction-failure path is unit-tested. `-Wall -Wextra -Werror` on all
+      targets.
+* **Step 2 — Socket transport and protocol framing — DONE** (commit `cb74d5d9`)
+    * `src/protocol.h`: `struct slash_emu_socket_header` (16 bytes,
+      static_assert-checked).
+    * `src/transport.{h,cpp}`: `Result<T>` / `Result<void>` with an `ErrorKind`
+      that distinguishes **Transport** (peer-closed / OS failures; later mapped
+      to `-ENODEV`) from **Protocol** (framing) errors; `UniqueFd` RAII owner;
+      `send_message`/`recv_message` over `SOCK_SEQPACKET` with SCM_RIGHTS FD
+      passing, `MSG_CMSG_CLOEXEC`, and `MSG_TRUNC`/`MSG_CTRUNC` detection;
+      FD-index collect/rewrite/resolve helpers (`kMaxFdsPerMessage` cap, atomic
+      rewrite); `send_request` with sequence-id + ioctl_op matching.
+    * 46 tests; 100% src line/function coverage.
+* **Step 3 — Configuration and CLI — DONE** (commit `5fe0b4a8`)
+    * `src/config.{h,cpp}`: `BoardBdf` value type (rejects function suffix and
+      trailing garbage); `AcceleratorConfig` (typed `BoardBdf` + optional
+      `vbin_path` reserved for Step 6); `DaemonConfig`; CLI11 `parse_cli`;
+      libinih `parse_config_file`; `socket_path_ctl/_qdma_ctl/_hotplug`
+      helpers. Defaults `/run/slash_emu`, `vrtd:vrt` (fallback to current
+      uid/gid with a warning when absent), mode `0600`.
+    * 115 tests; 98.9% src line / 100% function coverage (the 4 uncovered
+      lines are the vrtd/vrt fallback, reachable only where those accounts are
+      absent).
+
+* **Step 4 — VBIN and system map parsing — DONE**
+    * `src/vbin.{h,cpp}`: `unpack_vbin` reads the container (raw tar or
+      gzip-detected via magic), safely extracts into an RAII `TempDir`
+      (rejects absolute paths and `..` traversal, verifies tar checksums,
+      detects truncation, bounds member/archive size against decompression
+      bombs, handles GNU longnames, ustar prefix/name joining, and skips PAX
+      `x`/`g` headers), then locates `system_map.xml` and the
+      platform-appropriate `vpp_emu`/`vpp_sim`. Multi-member gzip streams are
+      fully consumed while trailing non-gzip bytes are tolerated. Hardware
+      VBINs are rejected with a clear error. Dedicated `VbinError` taxonomy
+      (Io/Archive/Contents/Parse), kept separate from transport's `ErrorKind`.
+    * `src/system_map.{h,cpp}`: libxml2 (RAII `XmlDocPtr`/`XmlCharPtr`) parse
+      of `<SystemMap>` → `Platform`, `ClockFrequency`, `Kernel`
+      (name/base_address/range + `Register` offset/access/bit_width, sorted
+      `FunctionalArg`s, port→memory `Connection`s), and `QdmaConnection`s.
+      `Kernel.base_address + Register.offset` gives the absolute address and
+      `register_at()` reverses it — the register→address mapping downstream
+      needs. Numbers parse as decimal unless an explicit `0x`/`0X` prefix
+      selects hex (no base-0 octal trap); attribute whitespace is trimmed;
+      leading `+`/`-` rejected; 32-bit width overflow is an error, not a silent
+      truncation. Duplicate kernel names and duplicate register offsets within a
+      kernel are rejected. Offset-0 control-register absence and zero bit_width
+      are deliberately accepted (documented Step 8 concerns).
+    * Tests: 33 `VbinTest` + 40 `SystemMapTest` (both real sample VBINs, raw
+      tar, gzip incl. multi-member/corrupt/truncated edges, traversal/absolute
+      rejection, GNU longname, Hardware rejection, every XML parse-error branch,
+      octal-trap/overflow/duplicate/XXE/billion-laughs probes). Coverage:
+      system_map.cpp 98.9% lines / 99.3% branches, vbin.cpp 89.0% lines /
+      82.6% branches (remainder are justified I/O fault-injection and DoS-guard
+      branches). Reviewer signed off; all four builds green.
+
+* **Steps 5–14 — NOT STARTED.** Next up: **Step 5 — ZeroMQ model client**.
+  Then 6 (model process lifecycle/reconfiguration), 7 (BAR memfds), 8 (model
+  control workers), 9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA subsystem),
+  11 (accelerator lifecycle/hotplug), 12 (libslash integration), 13 (kernel
+  driver + VRTD changes), 14 (end-to-end integration).
+
+### Reusable building blocks now available
+
+* `Result<T>`/`Result<void>` + `ErrorKind` (Transport vs Protocol) — the error
+  vocabulary for all subsystems; Transport failures become `-ENODEV`.
+* `UniqueFd` RAII fd owner; `send_message`/`recv_message`/`send_request` and the
+  FD-index helpers — the datagram transport for PF2/QDMA/hotplug.
+* `DaemonConfig` + socket-path helpers — feed the subsystem setup in Steps 9–11.
+* `unpack_vbin` + `SystemMap`/`Kernel`/`Register`/`FunctionalArg`/`Connection`
+  model (with `VbinError` taxonomy and RAII `TempDir`) — feed the model process
+  launch/reconfiguration (Step 6), the model control workers and the
+  register→address mapping (Step 8), and QDMA target routing (Step 10).
+
+### Deferred / outstanding items
+
+* **MVP scope exclusions** (see the "Scope" section) remain deferred by design:
+  virtual network setups, non-polling BAR, FPGA-emulation-model support,
+  hardened model-process isolation, and persisting HBM/DDR across
+  reconfigurations.
+* **Signal-handler async-signal-safety (from Step 1):** `run_daemon()` currently
+  calls `cv.notify_all()` from the signal handler, which is not formally
+  async-signal-safe (documented inline; safe on Linux/glibc in practice). To be
+  replaced with a self-pipe/eventfd when the real event loop lands in **Step 11**.
+* `main.cpp` (2 lines) is not unit-tested (daemon entry point); acceptable.
+* Residual cosmetic `geninfo mismatch` warnings on test files under GCC 13 +
+  lcov 2.0; downgraded via `--ignore-errors`, not a production concern.
+* **lcov 2.0 `--list` is unreliable on this GCC 13 toolchain** (reports ~8-9%
+  line / 0% function and an impossible 107% for headers). Trust `gcov -b` on the
+  `.gcda` directly for true per-file figures (surfaced during the Step 4 review).
+* **Step 4 optional hardening (non-blocking):** the two VBIN DoS-guard branches
+  (`kMaxMemberBytes` tar-member cap, `kMaxArchiveBytes` gzip-bomb expansion cap)
+  are correct but not yet exercised by a test; a crafted oversized tar `size`
+  field / a highly compressible gzip payload would cover them in a later pass.
+
+### Working agreements / environment notes (for the next session)
+
+* **Team:** `slash-emu-sprint` with teammates `implementer`, `adversary`,
+  `reviewer`. The team and its task list are recreated per session if they were
+  torn down; the 14 steps map 1:1 to tasks.
+* **Standing rules:** four build dirs incl. `aubsan`; tests registered and run
+  via ctest; the adversary must add every probe/check to the GTest suite (no
+  throwaway programs); always verify from a clean `rm -rf build/<name>` build
+  before reporting green (a stale-binary false-green slipped through once in
+  Step 3); coverage via the lcov `coverage` target only; the lead commits after
+  each reviewer sign-off.
+* **Tooling:** `lcov` 2.0 + `genhtml` + `gcov` are installed. `gcovr` is present
+  at `~/miniforge3/bin/gcovr` but is **not** sanctioned tooling and was not
+  installed intentionally for this project — do not use it; consider removing it.
+  Do not self-install packages; ask the user.
+* Deps confirmed installed: libxml2 2.9.14 (`/usr/include/libxml2`), libzmq
+  4.3.5, jsoncpp 1.9.5 (`/usr/include/jsoncpp`), libsystemd 255, inih/INIReader
+  55, CLI11 (`/usr/include/CLI/CLI.hpp`), pthreads.
