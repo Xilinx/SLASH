@@ -31,7 +31,7 @@ SANITIZE=false
 usage() {
     echo "Usage: $0 [--sanitize] <hw|sim|emu> [BDF]"
     echo ""
-    echo "  Build and run examples 0, 1, 2, and 4 for the specified platform."
+    echo "  Build and run examples 0, 1, 2, 4, and 5 for the specified platform."
     echo ""
     echo "  Options:"
     echo "    --sanitize   Build with AddressSanitizer and UBSan"
@@ -99,6 +99,7 @@ EXAMPLES=(
     "01_aximm:aximm:01_aximm"
     "02_chain:chain:02_chain"
     "04_freq:freq:04_freq"
+    "05_perf:perf:05_perf"
 )
 
 # =========================================================================

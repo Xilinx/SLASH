@@ -25,7 +25,7 @@
 typedef ap_uint<DATA_WIDTH> uint256_t;
 #define LENGTH 0x1000000
 
-extern "C" void perf(
+void perf(
     uint256_t* hbm_ptr,
     ap_uint<32> wr,
     ap_uint<32>& out_acc

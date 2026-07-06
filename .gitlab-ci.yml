@@ -140,3 +140,9 @@ build 04_freq:
   variables:
     EXAMPLE_NO: "04"
     EXAMPLE_NAME: "freq"
+
+build 05_perf:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "05"
+    EXAMPLE_NAME: "perf"
