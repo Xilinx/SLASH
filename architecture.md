@@ -877,7 +877,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 
 ## Sprint status and deferred items
 
-*Snapshot as of 2026-07-03. This section is a running log so a
+*Snapshot as of 2026-07-06. This section is a running log so a
 fresh session can resume the sprint without re-deriving context.*
 
 ### Progress
@@ -1069,10 +1069,72 @@ ctest suite passing.
     * Step 7→8 handoff: `BarMemfd` is internally thread-safe for concurrent
       daemon-side access; Step 8 workers may share the user-region `BarMemfd`.
 
-* **Steps 8–14 — NOT STARTED.** Next up: **Step 8 — Model control workers**.
-  Then 9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA subsystem),
-  11 (accelerator lifecycle/hotplug), 12 (libslash integration), 13 (kernel
-  driver + VRTD changes), 14 (end-to-end integration).
+* **Step 8 — Model control workers — DONE**
+    * `src/model_control_workers.{h,cpp}`: `ModelControlWorkers : public
+      WorkerController` — one worker thread per compute kernel + one clock-wizard
+      worker, spawned by `start(ModelClient&, const SystemMap&)` and joined by
+      `stop()`/dtor. Does NOT re-send the global `start` verb (the `ModelProcess`
+      owns that one-time sim-clock start). The BAR memfds (user region, clock
+      wizard) are INJECTED by reference (owned by Step 9/11, persist across model
+      restarts). `KernelState{Idle,Busy,Dead}` tracked per kernel for the process
+      lifetime; `kernel_state()`/`kernel_count()`/`running()` introspection.
+    * Kernel idle→busy→idle FSM: IDLE polls the control register at
+      `base_address + 0`; on `ap_start` (bit0) it captures-and-resets the control
+      word atomically via `update_u32`, forwards the WRITABLE parameter registers
+      (read-only outputs are skipped so their stale memfd value never clobbers the
+      model result), then the captured control value LAST → BUSY. BUSY polls
+      `fetch_scalar(control)`; on `ap_done` (bit1) fetches every READABLE register
+      back into the memfd and publishes the finished control word → IDLE. Only
+      bits 0/1 are interpreted. Address identity: memfd offset == model address ==
+      `base_address + register.offset` (matches `vrt/src/kernel.cpp`'s
+      `baseAddr + offset` for both the hardware BAR and the sim `reg`/`fetch`).
+      A kernel with no offset-0 register (`register_at(0)==nullptr`) spawns a
+      worker that idles forever (never starts, never crashes).
+    * Clock-wizard worker ORs bit0 into `0x0033C` (user) and `0x1033C` (service)
+      each poll cycle via `update_u32` (preserves the other bits); no model
+      interaction — just keeps the vrtd clock driver's lock poll from timing out.
+    * Error taxonomy: any `ModelClient` `Transport` error → `KernelState::Dead` +
+      clean worker exit (no spin on a dead socket); `Protocol` errors are
+      non-fatal (retried/skipped). Interruptible `wait_or_stop()` (cv) so teardown
+      never waits out a full poll interval. Nothing throws across the API.
+    * TOCTOU/atomicity: the architecture's "check control + fetch params + reset =
+      one CPU transaction" is met as an atomic capture-and-reset (`update_u32`)
+      with the params read in separate flock brackets AFTER — benign because VRT
+      writes all params BEFORE `ap_start` (documented at length in the .cpp);
+      resolved WITHOUT extending Step 7's `BarMemfd`. The busy→idle publish is also
+      `update_u32` and PRESERVES a re-armed `ap_start`, so a concurrent re-arm is
+      never silently dropped.
+    * Two adversary-found bugs fixed and folded into the suite as regression
+      tests: (1) a heap-use-after-free — lock-free `kernel_state()`/
+      `kernel_count()` reads racing `stop()`'s `kernels_.clear()`, fixed with a
+      `std::shared_mutex` (unique for mutate, shared for read) + join-before-clear;
+      (2) a dropped kernel re-arm — the `ap_done` publish blindly overwrote a
+      pipelined `ap_start`, fixed by the preserve-via-`update_u32` above.
+    * Tests: `tests/model_control_workers_test.cpp` (35 tests incl. 9 adversary
+      probes). Full idle→busy→idle with params-before-control ordering asserted via
+      `MockModelServer` records; multi-kernel + 6-kernel concurrent stress on the
+      shared user-region BAR (`max_in_flight==1` proves serialisation holds);
+      no-control-register kernel; zero-width/out-of-range register; autorestart
+      `0x81` whole-word forward; ap_done-already-set; RW double-handling; 32-kernel
+      clean teardown; clock-wizard both-windows pin / other-bits-preserved /
+      re-assert-after-clear; model death (Close) during idle-forward / param-
+      forward / mid-busy; Silence timeout; Protocol retry non-fatal; lifecycle
+      (double-start reject, stop-without-start, idempotent stop, dtor teardown,
+      restart); the two regression probes. Coverage: model_control_workers.cpp
+      92.41% lines / 97.47% branches (`gcov -b`; remainder are justified
+      OS-fault-injection + unreachable-default + nondeterministic output-fetch-
+      death branches). Reviewer signed off after independent clean builds;
+      normal/asan/ubsan/aubsan all green (381/381) with `-j16`, sanitizers PROVEN
+      active via `-fsanitize=` in flags.make.
+    * Step 8→9 handoff: the concrete `WorkerController` is now available for Step 6
+      reconfiguration to drive; Step 9/11 construct it with the accelerator's
+      `BarSet` user-region + clock-wizard memfds and manage its start/stop with the
+      model process.
+
+* **Steps 9–14 — NOT STARTED.** Next up: **Step 9 — BAR/device-info subsystem
+  (PF2)**. Then 10 (PF1 QDMA subsystem), 11 (accelerator lifecycle/hotplug),
+  12 (libslash integration), 13 (kernel driver + VRTD changes), 14 (end-to-end
+  integration).
 
 ### Reusable building blocks now available
 
@@ -1101,6 +1163,11 @@ ctest suite passing.
   `reopen()` (distinct open file description). Feed Step 8 (workers poll/handshake
   the user-region BAR; internally thread-safe so per-kernel workers share it) and
   Step 9 (GET_BAR_INFO via `by_index`/sizes; GET_BAR_FD sends a `reopen()`ed fd).
+* `ModelControlWorkers` (the concrete `WorkerController`) — per-kernel idle→busy→
+  idle FSM + clock-wizard lock-bit pinning, driven over `ModelClient` against the
+  injected user-region/clock-wizard `BarMemfd`s. Step 6 reconfiguration drives its
+  `start`/`stop`; Step 9/11 construct it with the accelerator's `BarSet` and bind
+  its lifetime to the model process.
 
 ### Deferred / outstanding items
 

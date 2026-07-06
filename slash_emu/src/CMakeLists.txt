@@ -46,6 +46,7 @@ add_library(slash_emu_core STATIC
   model_process.cpp
   reconfigure.cpp
   bar_memfd.cpp
+  model_control_workers.cpp
 )
 
 target_include_directories(slash_emu_core

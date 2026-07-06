@@ -224,6 +224,12 @@ add_slash_emu_test(vbin_store_test vbin_store_test.cpp)
 # -------- Step 7: BAR memfds --------
 add_slash_emu_test(bar_memfd_test bar_memfd_test.cpp)
 
+# -------- Step 8: model control workers --------
+add_slash_emu_test(model_control_workers_test model_control_workers_test.cpp)
+target_link_libraries(model_control_workers_test
+  PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+target_include_directories(model_control_workers_test PRIVATE ${JSONCPP_INCLUDE_DIRS})
+
 # ────────────────────────────────────────────────────────────────────────────
 # Step 6: fake vpp_sim model executables + launchable fixture VBINs
 #
