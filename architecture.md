@@ -1201,9 +1201,84 @@ ctest suite passing.
       drives `setup()`/`remove()` as part of the PF2 RESCAN/REMOVE lifecycle
       (calling `reconfigure()` before `setup()` on a PF2 restore).
 
-* **Steps 10–14 — NOT STARTED.** Next up: **Step 10 — QDMA subsystem (PF1)**.
-  Then 11 (accelerator lifecycle/hotplug), 12 (libslash integration), 13 (kernel
-  driver + VRTD changes), 14 (end-to-end integration).
+* **Step 10 — QDMA subsystem (PF1) — DONE**
+    * `src/qdma_subsystem.{h,cpp}`: `QdmaSubsystem` serves the `slash_qdma_ctl<N>`
+      named `AF_UNIX`/`SOCK_SEQPACKET` socket (emulated `/dev/slash_qdma_ctl<N>`).
+      Two endpoint kinds, dispatched by `(endpoint, ioctl_op)`: **CTL** (the
+      top-level socket) accepts `INFO` (0x50), `QPAIR_ADD` (0x51), `Q_OP` (0x52),
+      `QPAIR_GET_FD` (0x53), `BUF_CREATE` (0x54); **XFER** (a per-`GET_FD`
+      anonymous `SEQPACKET` socketpair) accepts `BUF_CREATE` (0x54) and `TRANSFER`
+      (0x56). Op on the wrong endpoint → `-EINVAL`; unknown op → `-ENOSYS`; workers
+      survive both. Threading mirrors `CtlSubsystem`: one `accept4` listener + one
+      worker per CTL connection; each `GET_FD` spawns a dedicated transfer-session
+      worker on the daemon end of the socketpair.
+    * Qpair state machine: `Initial -[ADD]-> Stopped`; `Stopped|Started -[START]->
+      Started`; `Started -[GET_FD]-> Used`; `Used -[last close on FD]-> Started`;
+      `Started|Stopped -[STOP]-> Stopped`; `Started|Stopped|Used -[DEL]-> removed`.
+      A `STOP`/`DEL` may land underneath a live session (models the driver not
+      invalidating a session); the transfer path then observes `-ENODEV`. Invalid
+      transitions → `-EINVAL`. Multi-qpair `GET_FD` is all-or-nothing (validate all
+      Started, then transition; revert on socketpair/teardown failure). **Lead
+      decision:** a `GET_FD` list naming the same qid twice is rejected with
+      `-EINVAL` (mirrors the driver; double-binding one qpair into a single session
+      has no legitimate caller). Session workers are keyed by a monotonic id, NOT
+      the fd, to dodge fd-reuse map collisions.
+    * `TRANSFER` (per sub-transfer, 64 KiB chunks): H2C to HBM/DDR = `pread` the
+      referenced fd → `ModelClient::populate`; C2H from HBM/DDR = `ModelClient::
+      fetch_buffer` → `pwrite` the fd; H2C to the reconfiguration aperture
+      (`dev_addr == kReconfigApertureAddr`, 0x102100000) = `pread` →
+      `VbinStore::append_staging` (NOT sent to the model, `dev_addr` NOT advanced).
+      `buf_fd` is an INDEX into the `SCM_RIGHTS` fd list (`resolve_fd_index`);
+      `return_value` = total bytes. Model serialisation leans ENTIRELY on
+      `ModelClient`'s per-socket mutex (one request in flight); `pread`/`pwrite`
+      are kept OUTSIDE that lock so sessions' file I/O overlaps while model requests
+      serialise. `INFO` returns `bdf = <board bdf>.1` + zeroed caps. `BUF_CREATE`
+      returns a page-granule memfd (hint `SINGLE_QPAIR`, a deliberate V80-driver
+      difference) via `SCM_RIGHTS`, closing the daemon's copy after send (no leak,
+      no daemon-side reference).
+    * `src/qdma_ioctls.h`: thin wrapper over the OFFICIAL libslash UAPI header
+      (same `SLASH_UAPI_INCLUDE_DIR` rule as Step 9), adding only PF1 identity
+      constants. **ABI change:** `char bdf[SLASH_PCI_BDF_LEN]` appended to
+      `slash_qdma_info` (sizeof 20→52) so userspace discovers the PF1 BDF without
+      sysfs (lead+user decision to extend the official struct now, not a local
+      mirror). `kReconfigApertureAddr` lives here for now; **Step 13 moves it +
+      the HBM/DDR/reconfig memory ranges into the kernel ABI header**.
+    * Ownership: `ModelClient` + `VbinStore` are BORROWED and untouched by
+      `remove()` (which forgets the qpair list, force-disconnects all CTL
+      connections + transfer sessions, and joins); `setup()` re-inits the qpair
+      list (RESCAN half). Idempotent setup/remove; dtor removes if active.
+    * Tests: `tests/qdma_subsystem_test.cpp` (70 tests: 53 implementer + 16
+      adversary + 1 user-requested end-to-end roundtrip), backed by the shared
+      `MockModelServer` (address-keyed memory) + a real `VbinStore`. Covers the full
+      state machine, both transfer directions incl. multi-chunk, the reconfig
+      aperture path (dev_addr pinned, model untouched), all-or-nothing multi-qpair
+      GET_FD + revert, wrong-endpoint/unknown-op routing, short/oversized/garbage
+      payloads on every op, SCM_RIGHTS fd-leak audits on error paths, `Used`-
+      underneath STOP/DEL, teardown/destructor races (remove while sessions busy /
+      mid-transfer), 200× concurrent STOP/START-vs-transfer (no torn result), and a
+      **full host→device→host roundtrip** (`RoundtripHostToDeviceToHostAEqualsB`):
+      host buffers A/B allocated via `BUF_CREATE`, device buffer C in the model,
+      A→C (H2C) then C→B (C2H) at 128 KiB (crosses the chunk boundary both ways),
+      asserting `A == B` and that C holds A's bytes. Adversary found NO real bugs;
+      all four lead-flagged suspicions (int32 return overflow, precondition/exec
+      race, fd-number done-flagging, `connection_count` counting sessions) were
+      investigated and confirmed safe/intended. Coverage: `qdma_subsystem.cpp`
+      ~89% lines / ~85% branches (`gcov -b`; remainder are un-injectable OS-fault
+      paths). Clean 4-dir builds green (492/492): normal `-j16`, asan/ubsan/aubsan
+      `-j8` (WSL2 full-suite -j16 is memory-pressure flaky), `-fsanitize` PROVEN
+      live in each `flags.make`.
+    * Step 10→11 handoff: Step 11 constructs `QdmaSubsystem` with the accelerator's
+      resolved `slash_qdma_ctl<N>` path + ownership + board BDF + its `ModelClient`
+      and `VbinStore`, and drives `setup()`/`remove()` as part of the PF1
+      RESCAN/REMOVE lifecycle. The reconfig-aperture H2C→`append_staging` path is
+      the daemon-side half of Step 6 reconfiguration; Step 11 owns promoting the
+      staged VBIN and restarting the model.
+
+* **Steps 11–14 — NOT STARTED.** Next up: **Step 11 — accelerator lifecycle /
+  hotplug (RESCAN/REMOVE orchestration across PF1+PF2 + model reconfiguration)**.
+  Then 12 (libslash integration), 13 (kernel driver + VRTD changes, incl. moving
+  `kReconfigApertureAddr` + memory ranges into the ABI header and driver-side QDMA
+  bdf), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -1245,6 +1320,14 @@ ctest suite passing.
   helpers, depend on the official UAPI header (`SLASH_UAPI_INCLUDE_DIR`), and keep
   BAR/model state borrowed so REMOVE leaves it running. Step 11 drives its
   lifecycle.
+* `QdmaSubsystem` + `qdma_ioctls.h` (thin UAPI wrapper) — the PF1
+  `slash_qdma_ctl<N>` named-socket subsystem: CTL + per-`GET_FD` XFER-session
+  endpoints, the qpair state machine, `SCM_RIGHTS` fd passing (host-buffer memfds
+  + session sockets), and H2C/C2H `TRANSFER` routing to `ModelClient` (HBM/DDR) or
+  `VbinStore::append_staging` (reconfig aperture) over a borrowed model + vbin
+  store. Serialisation leans on `ModelClient`'s per-socket lock with file I/O
+  outside it. Idempotent `setup()`/`remove()`. Step 11 drives its lifecycle and
+  owns staged-VBIN promotion + model restart.
 
 ### Deferred / outstanding items
 

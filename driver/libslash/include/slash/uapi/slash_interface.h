@@ -142,6 +142,11 @@ struct slash_ioctl_device_info {
  * @brief Query QDMA subsystem capabilities.
  *
  * \@caps is reserved for future use; the kernel currently sets it to 0.
+ *
+ * \@bdf returns the PCI BDF string of the QDMA physical function (PF 1),
+ * NUL-terminated, e.g. "0000:61:00.1".  It lets userspace discover the device's
+ * PCI identity without reading /sys/ (needed by the emulation daemon, which
+ * exposes no sysfs, and convenient for real-driver device pairing).
  */
 struct slash_qdma_info {
     __u32 size;          /**< Struct size for ABI versioning. */
@@ -151,6 +156,8 @@ struct slash_qdma_info {
     __u32 msix_qvecs;    /**< [out] Number of MSI-X vectors available for queues. */
     __u32 vf_max;        /**< [out] Maximum number of virtual functions. */
     __u32 caps;          /**< [out] Capability bitmask. */
+    char  bdf[SLASH_PCI_BDF_LEN]; /**< [out] PCI BDF string of the QDMA PF (PF 1),
+                                   *         NUL-terminated, e.g. "0000:61:00.1". */
 };
 
 /**

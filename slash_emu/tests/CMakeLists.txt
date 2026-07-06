@@ -227,6 +227,12 @@ add_slash_emu_test(bar_memfd_test bar_memfd_test.cpp)
 # -------- Step 9: BAR / device-info subsystem (PF2) --------
 add_slash_emu_test(ctl_subsystem_test ctl_subsystem_test.cpp)
 
+# -------- Step 10: QDMA subsystem (PF1) --------
+add_slash_emu_test(qdma_subsystem_test qdma_subsystem_test.cpp)
+target_link_libraries(qdma_subsystem_test
+  PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+target_include_directories(qdma_subsystem_test PRIVATE ${JSONCPP_INCLUDE_DIRS})
+
 # -------- Step 8: model control workers --------
 add_slash_emu_test(model_control_workers_test model_control_workers_test.cpp)
 target_link_libraries(model_control_workers_test

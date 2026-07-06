@@ -64,6 +64,7 @@ add_library(slash_emu_core STATIC
   bar_memfd.cpp
   model_control_workers.cpp
   ctl_subsystem.cpp
+  qdma_subsystem.cpp
 )
 
 target_include_directories(slash_emu_core
