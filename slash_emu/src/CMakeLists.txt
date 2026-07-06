@@ -35,6 +35,22 @@ find_package(ZLIB REQUIRED)
 # std::thread in the model process monitor + ModelClient serialisation.
 find_package(Threads REQUIRED)
 
+# The PF2 control-device IOCTL ABI (struct slash_ioctl_bar_info / _bar_fd_request
+# / _device_info and the SLASH_CTLDEV_IOCTL_* command numbers) is the OFFICIAL
+# kernel/userspace UAPI shipped with libslash.  slash_emu consumes it directly
+# rather than mirroring the structs, so the daemon's wire format is guaranteed to
+# stay byte-for-byte identical with what libslash (and the real driver) use.
+# Point SLASH_UAPI_INCLUDE_DIR at an installed libslash to override the in-tree
+# copy.
+set(SLASH_UAPI_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../driver/libslash/include"
+    CACHE PATH "Include directory containing <slash/uapi/slash_interface.h>")
+if(NOT EXISTS "${SLASH_UAPI_INCLUDE_DIR}/slash/uapi/slash_interface.h")
+  message(FATAL_ERROR
+    "slash_emu requires the libslash UAPI header "
+    "<slash/uapi/slash_interface.h>; not found under "
+    "SLASH_UAPI_INCLUDE_DIR='${SLASH_UAPI_INCLUDE_DIR}'")
+endif()
+
 add_library(slash_emu_core STATIC
   daemon.cpp
   transport.cpp
@@ -47,11 +63,13 @@ add_library(slash_emu_core STATIC
   reconfigure.cpp
   bar_memfd.cpp
   model_control_workers.cpp
+  ctl_subsystem.cpp
 )
 
 target_include_directories(slash_emu_core
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SLASH_UAPI_INCLUDE_DIR}
   PRIVATE
     ${INIH_INCLUDE_DIRS}
     ${LIBXML2_INCLUDE_DIRS}

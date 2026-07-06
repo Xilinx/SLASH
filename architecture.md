@@ -1131,10 +1131,79 @@ ctest suite passing.
       `BarSet` user-region + clock-wizard memfds and manage its start/stop with the
       model process.
 
-* **Steps 9–14 — NOT STARTED.** Next up: **Step 9 — BAR/device-info subsystem
-  (PF2)**. Then 10 (PF1 QDMA subsystem), 11 (accelerator lifecycle/hotplug),
-  12 (libslash integration), 13 (kernel driver + VRTD changes), 14 (end-to-end
-  integration).
+* **Step 9 — BAR/device-info subsystem (PF2) — DONE**
+    * `src/ctl_subsystem.{h,cpp}`: `CtlSubsystem` serves the `slash_ctl<N>` named
+      `AF_UNIX`/`SOCK_SEQPACKET` socket (the emulated `/dev/slash_ctl<N>` control
+      device). One listener thread (`accept4` loop) + one worker thread per
+      connection; each worker recv→dispatch-on-`ioctl_op`→send, mirroring
+      `sequence_id`/`ioctl_op` and setting `return_value` = 0 / `-errno`.
+      One-thread-per-connection chosen over a pool: PF2 concurrency is small and
+      every request is short and non-blocking (no model I/O on this PF), which
+      keeps shutdown trivial.
+    * IOCTLs (per architecture): `GET_BAR_INFO` (0x30) — BARs 0/2/4 present
+      (`usable=1`, `in_use` ALWAYS 0, `start_address=0`, length 128 MiB/128 MiB/
+      512 KiB from the `BarSet` sizes); others absent. `GET_BAR_FD` (0x31) — a
+      `BarMemfd::reopen()`ed DISTINCT open file description sent via `SCM_RIGHTS`,
+      `return_value=0`, length filled, daemon's copy closed after send (no fd
+      leak); absent → `-EINVAL`, no fd. `GET_DEVICE_INFO` (0x32) — bdf =
+      `<board bdf>.2`, vendor=subsystem_vendor=`0x10EE`, device=`0x50B6`,
+      subsystem_device=`0x000e`. Under-length payload → `-EINVAL` (worker
+      survives); over-length tolerated (forward-compat); unknown op → `-ENOSYS`.
+    * `src/ctl_ioctls.h`: thin wrapper over the OFFICIAL libslash UAPI header
+      (`driver/libslash/include/slash/uapi/slash_interface.h`) — a deliberate
+      project decision (no hand-mirrored structs, so no ABI drift). CMake adds a
+      `SLASH_UAPI_INCLUDE_DIR` cache var (default `<repo>/driver/libslash/include`,
+      overridable to an installed libslash) to `slash_emu_core`'s PUBLIC includes,
+      with a configure-time `FATAL_ERROR` guard if the header is absent. The
+      wrapper adds only the slash_emu-specific PF2 identity constants, clearly
+      separated from the ABI include. **Steps 10–12 follow the same rule** (QDMA +
+      hotplug structs from the same header).
+    * Lifecycle: `setup()` binds → `chmod(mode)` → `chown(uid,gid)` (EPERM
+      tolerated for an unprivileged daemon) → `listen`, unlinking any stale file
+      first. `remove()` flips a stop flag, unlinks the socket, `shutdown(SHUT_RDWR)`
+      + closes the listen fd (accept returns → listener joins), then
+      `shutdown()`s every live connection fd (the architecture's forced user
+      disconnect) and joins the workers. Connection fds are OWNED by their worker
+      (`UniqueFd`); `remove()` only `shutdown()`s them, never closes out from under
+      a worker. The `BarSet` is BORROWED (`const&`) and untouched by `remove()` —
+      the model control workers keep polling the memfds. Idempotent setup/remove;
+      dtor removes if active; setup→remove→setup cycles safe. The RESCAN
+      reconfiguration-trigger is deliberately DEFERRED to Step 11 (this is the
+      socket-lifecycle half only).
+    * Race-freedom (the risk area): `remove()` joins the LISTENER before
+      snapshotting the connection map, so no worker can register after the move-out
+      window; the listener re-checks `stop_` under the connection mutex after
+      `accept4` (closes the fd + breaks if stopping, never orphaning it); a reaper
+      drops done-connection entries before a reused fd number can collide; map
+      entries are moved out under the lock and joined outside it (no join-under-
+      lock, no deadlock). Reviewer independently reasoned through and found no
+      race, no fd/thread leak, no close-from-under-a-worker, no deadlock.
+    * Tests: `tests/ctl_subsystem_test.cpp` (41 tests: 23 implementer + 18
+      adversary). In-process SEQPACKET test client; covers bar_info present/absent
+      across the full `__u8` range, bar_fd SCM_RIGHTS + fstat/mmap round-trip + the
+      critical distinct-description flock-conflict proof for ALL three BARs + a
+      400× daemon-fd-leak loop, device_info exactness, under-length `-EINVAL` +
+      unknown-op survival, ownership/mode (mode always asserted; uid only when
+      privileged), REMOVE forced-disconnect with memfds-still-work + RESTORE + 5×
+      cycles, 16 concurrent clients, connect-storm racing remove at the
+      accept-before-register window, fd-number-reuse, destructor-while-connected,
+      fd/thread-leak checks. Coverage: ctl_subsystem.cpp 90.3% lines / 85.4%
+      branches (`gcov -b`; remainder are justified OS-fault-injection paths).
+      Reviewer signed off after independent clean builds; normal/asan/ubsan/aubsan
+      all green (422/422) with `-j16`, sanitizers PROVEN active (libasan/libubsan
+      confirmed linked), lifecycle stable 5× until-fail under aubsan.
+    * Non-blocking nits: (a) `remove()` may `shutdown()` a done-worker's already-
+      closed/reused fd number — benign (EBADF/ENOTSOCK ignored); could be tightened
+      by skipping done entries. (b) a cosmetic gcov line-split artifact on the
+      unknown-op default case.
+    * Step 9→11 handoff: Step 11 constructs `CtlSubsystem` with the accelerator's
+      resolved `slash_ctl<N>` path + ownership + board BDF + its `BarSet`, and
+      drives `setup()`/`remove()` as part of the PF2 RESCAN/REMOVE lifecycle
+      (calling `reconfigure()` before `setup()` on a PF2 restore).
+
+* **Steps 10–14 — NOT STARTED.** Next up: **Step 10 — QDMA subsystem (PF1)**.
+  Then 11 (accelerator lifecycle/hotplug), 12 (libslash integration), 13 (kernel
+  driver + VRTD changes), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -1168,6 +1237,14 @@ ctest suite passing.
   injected user-region/clock-wizard `BarMemfd`s. Step 6 reconfiguration drives its
   `start`/`stop`; Step 9/11 construct it with the accelerator's `BarSet` and bind
   its lifetime to the model process.
+* `CtlSubsystem` + `ctl_ioctls.h` (thin UAPI wrapper) — the PF2 `slash_ctl<N>`
+  named-socket subsystem: listener + per-connection workers, GET_BAR_INFO/
+  GET_BAR_FD/GET_DEVICE_INFO, SCM_RIGHTS BAR-fd passing (`reopen()`), and
+  idempotent `setup()`/`remove()` over a borrowed `BarSet`. The established
+  pattern for the QDMA (Step 10) and hotplug (Step 11) sockets: reuse the transport
+  helpers, depend on the official UAPI header (`SLASH_UAPI_INCLUDE_DIR`), and keep
+  BAR/model state borrowed so REMOVE leaves it running. Step 11 drives its
+  lifecycle.
 
 ### Deferred / outstanding items
 

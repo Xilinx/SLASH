@@ -224,6 +224,9 @@ add_slash_emu_test(vbin_store_test vbin_store_test.cpp)
 # -------- Step 7: BAR memfds --------
 add_slash_emu_test(bar_memfd_test bar_memfd_test.cpp)
 
+# -------- Step 9: BAR / device-info subsystem (PF2) --------
+add_slash_emu_test(ctl_subsystem_test ctl_subsystem_test.cpp)
+
 # -------- Step 8: model control workers --------
 add_slash_emu_test(model_control_workers_test model_control_workers_test.cpp)
 target_link_libraries(model_control_workers_test
