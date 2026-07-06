@@ -1036,10 +1036,43 @@ ctest suite passing.
       normal/asan/ubsan/aubsan all green (308/308) with `-j16`; no zombies /
       leftover ipc sockets / temp dirs.
 
-* **Steps 7–14 — NOT STARTED.** Next up: **Step 7 — BAR memfds**. Then
-  8 (model control workers), 9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA
-  subsystem), 11 (accelerator lifecycle/hotplug), 12 (libslash integration),
-  13 (kernel driver + VRTD changes), 14 (end-to-end integration).
+* **Step 7 — BAR memfds — DONE**
+    * `src/bar_memfd.{h,cpp}`: `BarMemfd` — an anonymous `memfd_create(MFD_CLOEXEC)`
+      window `ftruncate`d to size and persistently `mmap(MAP_SHARED)`ed
+      (RAII munmap), the daemon-side register store. Access via `flock` brackets
+      (LOCK_SH read / LOCK_EX write / LOCK_UN, replacing `DMA_BUF_IOCTL_SYNC`),
+      with `read_u32`/`write_u32` (explicit little-endian, no aliasing UB),
+      byte-range `read`/`write`, and an `update_u32` read-modify-write helper
+      (the atomic control-register handshake Step 8's idle loop needs) — all
+      overflow-safe bounds-checked (out-of-range → Protocol, OS failures →
+      Transport, never throws). `reopen()` = `open("/proc/self/fd/<n>",
+      O_RDWR|O_CLOEXEC)` returns a DISTINCT open file description (the fd Step 9
+      hands the user via SCM_RIGHTS) so daemon-vs-user flocks actually collide.
+      flock acquire AND LOCK_UN release retry on EINTR. A per-object internal
+      `std::mutex` (behind `unique_ptr` to stay movable) spans the ENTIRE flock
+      bracket, so multiple Step 8 kernel workers may safely share the one
+      user-region BAR (without it, one thread's LOCK_UN would drop the whole-file
+      flock another holds, breaking exclusion against the user).
+    * `BarSet` + `make_standard_bars()`: the standard trio — UserRegion 128 MiB
+      (idx 0), ServiceLayer 128 MiB (idx 2), ClockWizard 512 KiB (idx 4);
+      `by_kind`/`by_index` lookups (nullptr for absent 1/3/5) feed Step 9's
+      GET_BAR_INFO/GET_BAR_FD.
+    * ~38 `bar_memfd` tests: size/round-trip/bounds/overflow, u32 endianness,
+      cross-description flock collision (reopen) vs dup non-collision, shared-SH
+      compatibility, exclusive serialization, same-object concurrent RMW exact
+      count + no-tear, move/self-move safety under concurrency, EINTR retry, fd
+      hygiene. Coverage: bar_memfd.cpp 83.9% lines (remainder are justified
+      syscall-fault-injection + unreachable-default branches). Reviewer signed
+      off; normal/asan/ubsan/aubsan all green (346/346) with `-j16`, sanitizers
+      PROVEN active via `-fsanitize=` in flags.make (asan=address,
+      ubsan=undefined, aubsan=address+undefined).
+    * Step 7→8 handoff: `BarMemfd` is internally thread-safe for concurrent
+      daemon-side access; Step 8 workers may share the user-region `BarMemfd`.
+
+* **Steps 8–14 — NOT STARTED.** Next up: **Step 8 — Model control workers**.
+  Then 9 (PF2 BAR/device-info subsystem), 10 (PF1 QDMA subsystem),
+  11 (accelerator lifecycle/hotplug), 12 (libslash integration), 13 (kernel
+  driver + VRTD changes), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -1063,6 +1096,11 @@ ctest suite passing.
   `cold_reboot_cleanup` — and MUST post model-death teardown to a thread other
   than the death-callback (monitor) thread per the `DeathCallback` contract.
   The `fake_model` executable + fixture VBINs are the shared end-to-end harness.
+* `BarMemfd` + `BarSet`/`make_standard_bars()` — memfd-backed BAR windows with
+  flock brackets, `update_u32` handshake helper, internal per-BAR mutex, and
+  `reopen()` (distinct open file description). Feed Step 8 (workers poll/handshake
+  the user-region BAR; internally thread-safe so per-kernel workers share it) and
+  Step 9 (GET_BAR_INFO via `by_index`/sizes; GET_BAR_FD sends a `reopen()`ed fd).
 
 ### Deferred / outstanding items
 
@@ -1091,6 +1129,17 @@ ctest suite passing.
   test-support (ZMQ ipc connect succeeds lazily, so the `hang_model` probe
   timeout already covers the surfaced failure); prune or wire it to the
   connect-failure branch later.
+* **Step 7 nit (non-blocking):** the `const` overloads `BarSet::by_kind() const`
+  / `by_index() const` are uncovered (and `by_kind(ServiceLayer)` on the
+  non-const path); a couple of lines in `BarSetTest.LookupByKindAndIndex` would
+  close them. Relevant if Step 9 accesses a `const BarSet`.
+* **Sanitizer build-dir hazard (found resuming Step 7):** a `build/aubsan` dir
+  was once configured with EMPTY sanitizer flags — a silent non-sanitized
+  "green". Always configure the sanitizer dirs via the README options
+  (`-DENABLE_ASAN=ON` / `-DENABLE_UBSAN=ON`; aubsan = both) and, before trusting
+  a sanitizer run, PROVE instrumentation is active by confirming `-fsanitize=`
+  appears in the dir's `flags.make` (asan=address, ubsan=undefined,
+  aubsan=address+undefined). Do not rely on the build-dir name.
 
 ### Working agreements / environment notes (for the next session)
 
