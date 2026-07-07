@@ -46,8 +46,12 @@ const char* accel_state_name(AccelState s) noexcept {
 // Construction / destruction
 // ─────────────────────────────────────────────────────────────────────────────
 
-Accelerator::Accelerator(AcceleratorParams params, std::function<void(uint64_t)> post_model_death)
-    : params_(std::move(params)), post_model_death_(std::move(post_model_death)) {}
+Accelerator::Accelerator(AcceleratorParams params, std::function<void(uint64_t)> post_model_death,
+                         std::shared_ptr<std::atomic<uint64_t>> gen_counter)
+    : params_(std::move(params)),
+      post_model_death_(std::move(post_model_death)),
+      gen_counter_(gen_counter ? std::move(gen_counter)
+                               : std::make_shared<std::atomic<uint64_t>>(0)) {}
 
 Accelerator::~Accelerator() { teardown(); }
 

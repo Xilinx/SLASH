@@ -466,14 +466,19 @@ int HotplugSubsystem::rescan_locked() {
         };
 
         if (it == accels_.end()) {
-            auto acc = std::make_unique<Accelerator>(std::move(params), std::move(poster));
+            auto acc = std::make_unique<Accelerator>(std::move(params), std::move(poster),
+                                                     gen_counter_);
             auto [ins, ok] = accels_.emplace(board, std::move(acc));
             (void)ok;
             it = ins;
         } else {
             // Replace an Inactive/Absent accelerator with a fresh one using the
-            // reloaded config (the running-conflict case was skipped above).
-            it->second = std::make_unique<Accelerator>(std::move(params), std::move(poster));
+            // reloaded config (the running-conflict case was skipped above).  Pass
+            // the SHARED gen_counter_ so the replacement's first process gets a NEW
+            // generation rather than restarting at 0 and colliding with a still-
+            // pending stale death task for the old object.
+            it->second = std::make_unique<Accelerator>(std::move(params), std::move(poster),
+                                                       gen_counter_);
         }
 
         (void)it->second->instantiate(); // Failed → left Inactive; continue RESCAN

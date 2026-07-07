@@ -189,6 +189,13 @@ private:
     // Registry keyed by canonical board BDF.  Guarded by lifecycle_mu_.
     std::map<std::string, std::unique_ptr<Accelerator>> accels_;
 
+    // Daemon-lifetime model-generation counter, injected into EVERY Accelerator so
+    // launch generations stay unique across RESCAN replacing an Accelerator object
+    // (a per-object counter would restart at 0 and let a re-instantiated process
+    // reuse a dead process's generation, defeating the stale-death guard).
+    std::shared_ptr<std::atomic<uint64_t>> gen_counter_ =
+        std::make_shared<std::atomic<uint64_t>>(0);
+
     // Lifecycle work queue + its single worker thread.
     std::mutex                        q_mu_;
     std::condition_variable           q_cv_;

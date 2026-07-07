@@ -1478,24 +1478,27 @@ ctest suite passing.
   virtual network setups, non-polling BAR, FPGA-emulation-model support,
   hardened model-process isolation, and persisting HBM/DDR across
   reconfigurations.
-* **⚠️ Step 11 generation-guard race — OPEN, serious (deferred behind the systemd
-  work).** `HotplugTest.StaleDeathTaskDoesNotTearDownReadoptedModel` SEGFAULTs
-  intermittently — measured **~6/12** failures under a 12× stress on committed
-  Step-11 HEAD (`7d52144d`, normal build). It is a genuine pre-existing concurrency
-  bug, not a fluke: a systemd-refactor branch measured ~3/12 (parity, not a
-  regression). ASan root cause: the model-death **generation guard**
-  (`Accelerator::on_model_died(gen)`) still has a residual window that occasionally
-  lets a *stale* death-teardown through — it fails the `EXPECT_EQ(AccelState::
-  Active)` at `hotplug_subsystem_test.cpp:707` — after which the **test body**
-  dereferences `ModelInstance::process()` on the just-reset (null) `model_`, turning
-  the assertion failure into a null-deref SEGV. **Two fixes needed:** (1) close the
-  guard's remaining race window (a stale teardown must be impossible, not merely
-  improbable — likely the death task must re-check the generation *while holding
-  `lifecycle_mu_`*, atomically with the teardown, rather than the check and the
-  teardown being separable); (2) null-guard the test's post-assertion `process()`
-  read so a guard defect surfaces as a clean GTest failure, never a crash. See the
-  `project_death_generation_guard` memory. **The systemd refactor + packaging have
-  now landed, so this is the next thing to pick up** (before or alongside Step 12).
+* **Step 11 generation-guard race — RESOLVED.**
+  `HotplugTest.StaleDeathTaskDoesNotTearDownReadoptedModel` used to SEGFAULT ~6/12
+  under a 12× stress. **Root cause (the recorded ASan diagnosis was wrong — it was
+  a value collision, not a locking window):** the model-death generation is minted
+  from a counter that lived *inside* the `Accelerator` (`gen_counter_`, one per
+  object, starting at 0). It survives `model_` restarts within one `Accelerator`,
+  but **RESCAN replaces the whole `Accelerator` object** when a board goes Inactive
+  (`hotplug_subsystem.cpp` replace path), and the replacement started a *fresh*
+  counter at 0. So a re-instantiated process (P2) reused the dead process's (P1's)
+  generation `1`; a still-pending stale death task for P1 — keyed only by board BDF,
+  resolving to the *new* object — then found `death_generation == generation()` and
+  wrongly tore down the healthy P2. (The guard's check + teardown were *already*
+  atomic under `lifecycle_mu_`; there was no locking window.) After the wrong
+  teardown `model_` is null, so the test's `model()->process()` deref turned the
+  `EXPECT_EQ` failure into a SEGV. **Fix:** the generation counter is now owned by
+  `HotplugSubsystem` (daemon lifetime) and injected into *every* `Accelerator` it
+  constructs (fresh and RESCAN-replacement), so launch generations are strictly
+  monotonic per board and a stale task can never match — plus the test's
+  `model()`/`process()` chain is null-guarded so any future defect fails cleanly
+  instead of crashing. Verified with **420 stress cycles** (240 normal + 180 asan)
+  and clean 4-dir suites (553/553). See the `project_death_generation_guard` memory.
 * **Signal-handler async-signal-safety (from Step 1): RESOLVED (systemd refactor).**
   `run_daemon()` runs an `sd-event` loop; SIGTERM/SIGINT are handled via
   `sd_event_add_signal` (signalfd), and the programmatic `request_shutdown()` uses

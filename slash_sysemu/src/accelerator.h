@@ -124,8 +124,19 @@ public:
      *                          already-replaced process is a no-op.  The poster
      *                          MUST only enqueue work onto the daemon lifecycle
      *                          queue and return promptly — never tear down inline.
+     * @param gen_counter       The model-generation counter to draw launch
+     *                          generations from.  MUST be shared across every
+     *                          Accelerator the daemon constructs for the SAME board
+     *                          over its lifetime (RESCAN replaces the Accelerator
+     *                          object when a board goes Inactive; a fresh per-object
+     *                          counter would restart at 0 and let a re-instantiated
+     *                          process reuse a dead process's generation, defeating
+     *                          the staleness guard).  Defaults to a private counter
+     *                          (fine for a stand-alone Accelerator that is never
+     *                          replaced, e.g. in unit tests).
      */
-    Accelerator(AcceleratorParams params, std::function<void(uint64_t)> post_model_death);
+    Accelerator(AcceleratorParams params, std::function<void(uint64_t)> post_model_death,
+                std::shared_ptr<std::atomic<uint64_t>> gen_counter = nullptr);
 
     Accelerator(const Accelerator&)            = delete;
     Accelerator& operator=(const Accelerator&) = delete;
@@ -224,14 +235,18 @@ private:
     // Presence flags (the state-machine inputs).
     bool pf0_present_ = false;
 
-    // Shared, never-reset model-generation counter.  Held as a shared_ptr so it
-    // SURVIVES model_ being reset()/recreated across model restarts (the actual
-    // per-process generation and current_generation() live in ModelInstance,
-    // which draws from this counter at each launch).  Every launched process gets
-    // a globally-unique generation, so a stale death's generation can never equal
-    // any future current generation.
-    std::shared_ptr<std::atomic<uint64_t>> gen_counter_ =
-        std::make_shared<std::atomic<uint64_t>>(0);
+    // Model-generation counter.  Held as a shared_ptr so it SURVIVES model_ being
+    // reset()/recreated across model restarts within this Accelerator (the actual
+    // per-process generation and current_generation() live in ModelInstance, which
+    // draws from this counter at each launch).  CRUCIALLY it is INJECTED by the
+    // owner (HotplugSubsystem) and shared across every Accelerator constructed for
+    // the same board, so a re-instantiation after RESCAN replaces the Accelerator
+    // object keeps counting UP rather than restarting at 0.  Without that, a
+    // re-instantiated process could reuse a just-dead process's generation and a
+    // stale death task would wrongly match current generation() and tear the
+    // healthy re-adopted model down.  A private counter is created only when the
+    // caller injects none (a stand-alone, never-replaced Accelerator).
+    std::shared_ptr<std::atomic<uint64_t>> gen_counter_;
 };
 
 } // namespace slash_sysemu

@@ -706,7 +706,15 @@ TEST_F(HotplugTest, StaleDeathTaskDoesNotTearDownReadoptedModel) {
         ASSERT_TRUE(s.has_value());
         EXPECT_EQ(AccelState::Active, *s)
             << "iter " << iter << ": stale death task tore down the re-adopted model";
-        EXPECT_EQ(p2, hp.accelerator("0000:61:00")->model()->process()->pid())
+        // Null-guard the model()/process() chain: if a guard defect DID tear the
+        // accelerator down, model_ is null here — surface that as a clean GTest
+        // failure rather than a null-deref SEGV that masks which probe broke.
+        Accelerator* a2 = hp.accelerator("0000:61:00");
+        ASSERT_NE(nullptr, a2) << "iter " << iter;
+        ModelInstance* mi = a2->model();
+        ASSERT_NE(nullptr, mi)
+            << "iter " << iter << ": stale death task tore down the re-adopted model (no process)";
+        EXPECT_EQ(p2, mi->process()->pid())
             << "iter " << iter << ": re-adopted process changed (stale teardown + restart)";
     }
 }
