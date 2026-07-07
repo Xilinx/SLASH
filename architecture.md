@@ -154,9 +154,9 @@ This architecture and the sprint that it describes is only supposed to implement
 * Follows a "request/response" pattern
     * Each operation is initiated by the user process
     * Answered by the daemon
-* Each datagram first contains the `struct slash_emu_socket_header`
+* Each datagram first contains the `struct slash_sysemu_socket_header`
     ``` C
-    struct slash_emu_socket_header {
+    struct slash_sysemu_socket_header {
         __u32 ioctl_op;         /**< The IOCTL operation to emulate */
         __u32 sequence_id;      /**< A monotonically increasing sequence number */
         __u32 return_value;     /**< The return value of the IOCTL, can be set arbitrarly for requests */
@@ -213,7 +213,7 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
     * In practice: Tears down emulated accelerators, reloads the configuration file
 
 * Base directory, uid/gid of each file, and mode of each socket are configurable or given as CLI arguments
-    * Default is `/run/slash_emu`, `vrtd:vrt`, 600
+    * Default is `/run/slash_sysemu`, `vrtd:vrt`, 600
 
 ## Model process and reconfiguration
 
@@ -602,7 +602,7 @@ The QDMA subsystem accepts datagrams on two kinds of endpoint:
 * **XFER** — a per-transfer-session anonymous socket, the emulated equivalent of a qpair I/O fd
   returned by `QPAIR_GET_FD`. Created and serviced by a dedicated worker thread.
 
-Each opcode's `ioctl_op` field (in `struct slash_emu_socket_header`) carries the original IOCTL
+Each opcode's `ioctl_op` field (in `struct slash_sysemu_socket_header`) carries the original IOCTL
 command number. The table below states which endpoints accepts which operations:
 
 | Opcode | Cmd (`'v'`) | CTL | XFER |
@@ -670,7 +670,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
     * Requires changes in:
         * The kernel driver (needs to report the BDF)
         * The libslash library (needs to forward this information)
-* Device (re)discovery now needs to be done purely via the device files in `/dev/` or `/run/slash_emu/`
+* Device (re)discovery now needs to be done purely via the device files in `/dev/` or `/run/slash_sysemu/`
     * On the one hand: Now possible since the QDMA info IOCTL returns the BDF
     * On the other: Now necessary since the system emulation daemon does not provide `/sys/` files
     * Needs to be reimplemented in VRTD
@@ -711,7 +711,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 
 #### Step 1: Project scaffolding and test harness
 
-* Create the `slash_emu` folder and the CMake project
+* Create the `slash_sysemu` folder and the CMake project
 * Set up the normal, ASan, and UBSan build directories
 * Wire up GTest and a placeholder test target
 * Set up gcov/lcov coverage reporting
@@ -721,7 +721,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 #### Step 2: Socket transport and protocol framing
 
 * Implement an `AF_UNIX`/`SOCK_SEQPACKET` message wrapper
-* Serialize and deserialize `struct slash_emu_socket_header`
+* Serialize and deserialize `struct slash_sysemu_socket_header`
 * Pass file descriptors as `SCM_RIGHTS` ancillary data
 * Map between FD indices in argument structs and transferred FDs
 * Provide request/response helpers with sequence-id matching
@@ -837,7 +837,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 * Return the QDMA BDF from the driver's INFO IOCTL
 * Add the HBM/DDR/reconfiguration memory ranges to the kernel ABI header
 * Document the reconfiguration writing protocol in the ABI reference
-* Switch VRTD device discovery to `/dev/` and `/run/slash_emu/` scanning
+* Switch VRTD device discovery to `/dev/` and `/run/slash_sysemu/` scanning
 * Test discovery against both the real driver and the daemon
 * Complete once VRTD discovers and drives emulated accelerators
 
@@ -852,11 +852,11 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 
 ### Development guidelines for the system emulation daemon
 
-* New folder in the git repo: `slash_emu`
-    * `slash_emu/build/normal` to be used as the normal build directory
-    * `slash_emu/build/asan` to be used as the build directory with ASan enabled
-    * `slash_emu/build/ubsan` to be used as the build directory with UBSan enabled
-    * `slash_emu/build/aubsan` to be used as the build directory with both ASan and UBSan enabled
+* New folder in the git repo: `slash_sysemu`
+    * `slash_sysemu/build/normal` to be used as the normal build directory
+    * `slash_sysemu/build/asan` to be used as the build directory with ASan enabled
+    * `slash_sysemu/build/ubsan` to be used as the build directory with UBSan enabled
+    * `slash_sysemu/build/aubsan` to be used as the build directory with both ASan and UBSan enabled
 * Programming language: C++20
     * Use as little raw pointer handling as necessary
     * If raw/external pointers have to be handled, create dedicated wrapping functionalities
@@ -889,7 +889,7 @@ committed step keeps the normal/asan/ubsan/aubsan builds green and the full
 ctest suite passing.
 
 * **Step 1 — Project scaffolding and test harness — DONE** (commit `fcc3121b`)
-    * CMake C++20 project under `slash_emu/`; four build dirs
+    * CMake C++20 project under `slash_sysemu/`; four build dirs
       `build/{normal,asan,ubsan,aubsan}` plus a coverage build (coverage is
       mutually exclusive with the sanitizers).
     * GTest via FetchContent v1.17.0, `gtest_discover_tests`, run through ctest.
@@ -900,7 +900,7 @@ ctest suite passing.
       sigaction-failure path is unit-tested. `-Wall -Wextra -Werror` on all
       targets.
 * **Step 2 — Socket transport and protocol framing — DONE** (commit `cb74d5d9`)
-    * `src/protocol.h`: `struct slash_emu_socket_header` (16 bytes,
+    * `src/protocol.h`: `struct slash_sysemu_socket_header` (16 bytes,
       static_assert-checked).
     * `src/transport.{h,cpp}`: `Result<T>` / `Result<void>` with an `ErrorKind`
       that distinguishes **Transport** (peer-closed / OS failures; later mapped
@@ -915,7 +915,7 @@ ctest suite passing.
       trailing garbage); `AcceleratorConfig` (typed `BoardBdf` + optional
       `vbin_path` reserved for Step 6); `DaemonConfig`; CLI11 `parse_cli`;
       libinih `parse_config_file`; `socket_path_ctl/_qdma_ctl/_hotplug`
-      helpers. Defaults `/run/slash_emu`, `vrtd:vrt` (fallback to current
+      helpers. Defaults `/run/slash_sysemu`, `vrtd:vrt` (fallback to current
       uid/gid with a warning when absent), mode `0600`.
     * 115 tests; 98.9% src line / 100% function coverage (the 4 uncovered
       lines are the vrtd/vrt fallback, reachable only where those accounts are
@@ -1153,9 +1153,9 @@ ctest suite passing.
       (`driver/libslash/include/slash/uapi/slash_interface.h`) — a deliberate
       project decision (no hand-mirrored structs, so no ABI drift). CMake adds a
       `SLASH_UAPI_INCLUDE_DIR` cache var (default `<repo>/driver/libslash/include`,
-      overridable to an installed libslash) to `slash_emu_core`'s PUBLIC includes,
+      overridable to an installed libslash) to `slash_sysemu_core`'s PUBLIC includes,
       with a configure-time `FATAL_ERROR` guard if the header is absent. The
-      wrapper adds only the slash_emu-specific PF2 identity constants, clearly
+      wrapper adds only the slash_sysemu-specific PF2 identity constants, clearly
       separated from the ABI include. **Steps 10–12 follow the same rule** (QDMA +
       hotplug structs from the same header).
     * Lifecycle: `setup()` binds → `chmod(mode)` → `chown(uid,gid)` (EPERM
@@ -1336,7 +1336,7 @@ ctest suite passing.
       (WSL2 full-suite -j16 is memory-pressure flaky), `-fsanitize` PROVEN live in
       each `flags.make`; `qdma_subsystem.*` confirmed empty-diff vs Step 10.
     * Step 11→12 handoff: the daemon now stands up a full emulated board from an
-      empty `/run/slash_emu` and drives it through the hotplug socket; Step 12 points
+      empty `/run/slash_sysemu` and drives it through the hotplug socket; Step 12 points
       libslash at these sockets (control-file-vs-socket flag) and forwards the PF1
       BDF from the extended QDMA `INFO` field.
 
