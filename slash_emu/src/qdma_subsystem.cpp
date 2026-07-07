@@ -82,12 +82,9 @@ constexpr uint32_t kDirCmptBit = 0x4;
 // Construction / destruction
 // ─────────────────────────────────────────────────────────────────────────────
 
-QdmaSubsystem::QdmaSubsystem(std::string socket_path, uid_t uid, gid_t gid, mode_t mode,
-                             std::string board_bdf, ModelClient& model, VbinStore& vbin)
+QdmaSubsystem::QdmaSubsystem(std::string socket_path, std::string board_bdf,
+                             ModelClient& model, VbinStore& vbin)
     : socket_path_(std::move(socket_path)),
-      uid_(uid),
-      gid_(gid),
-      mode_(mode),
       device_bdf_(board_bdf + ".1"),
       model_(model),
       vbin_(vbin) {}
@@ -125,20 +122,8 @@ Result<void> QdmaSubsystem::setup() {
         return Result<void>::err(os_error("bind(" + socket_path_ + ")"));
     }
 
-    // Bind, then chmod/chown, then listen (apply configured ownership/mode).  A
-    // chown failure when unprivileged is tolerated (mirrors CtlSubsystem).
-    if (::chmod(socket_path_.c_str(), mode_) != 0) {
-        auto err = os_error("chmod(" + socket_path_ + ")");
-        ::unlink(socket_path_.c_str());
-        return Result<void>::err(std::move(err));
-    }
-    if (::chown(socket_path_.c_str(), uid_, gid_) != 0) {
-        if (errno != EPERM) {
-            auto err = os_error("chown(" + socket_path_ + ")");
-            ::unlink(socket_path_.c_str());
-            return Result<void>::err(std::move(err));
-        }
-    }
+    // No chown/chmod: under systemd the socket inherits the daemon's User=/Group=
+    // on bind() and the unit's UMask= fixes its mode atomically at creation.
 
     if (::listen(sock.get(), /*backlog=*/16) != 0) {
         auto err = os_error("listen(" + socket_path_ + ")");

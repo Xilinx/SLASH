@@ -67,12 +67,9 @@ Result<void> send_plain_response(int fd, const slash_emu_socket_header& req,
 // Construction / destruction
 // ─────────────────────────────────────────────────────────────────────────────
 
-CtlSubsystem::CtlSubsystem(std::string socket_path, uid_t uid, gid_t gid, mode_t mode,
-                           std::string board_bdf, const BarSet& bars)
+CtlSubsystem::CtlSubsystem(std::string socket_path, std::string board_bdf,
+                           const BarSet& bars)
     : socket_path_(std::move(socket_path)),
-      uid_(uid),
-      gid_(gid),
-      mode_(mode),
       device_bdf_(board_bdf + ".2"),
       bars_(bars) {}
 
@@ -109,25 +106,8 @@ Result<void> CtlSubsystem::setup() {
         return Result<void>::err(os_error("bind(" + socket_path_ + ")"));
     }
 
-    // Bind, then chmod/chown, then listen (architecture: apply configured
-    // ownership/mode).  A chown failure when unprivileged is tolerated (mirrors
-    // config_test's vrtd/vrt fallback): we still chmod so the mode is correct,
-    // but a failure to set ownership we do not own is not fatal.
-    if (::chmod(socket_path_.c_str(), mode_) != 0) {
-        auto err = os_error("chmod(" + socket_path_ + ")");
-        ::unlink(socket_path_.c_str());
-        return Result<void>::err(std::move(err));
-    }
-    if (::chown(socket_path_.c_str(), uid_, gid_) != 0) {
-        // Not fatal: an unprivileged daemon cannot chown to another owner.  The
-        // socket is still usable (owned by us, with the configured mode).  A
-        // privileged production daemon will succeed here.
-        if (errno != EPERM) {
-            auto err = os_error("chown(" + socket_path_ + ")");
-            ::unlink(socket_path_.c_str());
-            return Result<void>::err(std::move(err));
-        }
-    }
+    // No chown/chmod: under systemd the socket inherits the daemon's User=/Group=
+    // on bind() and the unit's UMask= fixes its mode atomically at creation.
 
     if (::listen(sock.get(), /*backlog=*/16) != 0) {
         auto err = os_error("listen(" + socket_path_ + ")");

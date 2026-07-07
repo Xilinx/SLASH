@@ -140,9 +140,6 @@ protected:
     DaemonConfig make_config(const std::vector<std::string>& bdfs) {
         DaemonConfig cfg;
         cfg.base_dir          = base_.string();
-        cfg.uid               = ::getuid();
-        cfg.gid               = ::getgid();
-        cfg.mode              = 0600;
         cfg.config_file       = write_config(bdfs);
         cfg.default_vbin_path = std::string(tf::kDefaultModelVbin);
         for (const auto& b : bdfs) {
@@ -177,6 +174,16 @@ TEST_F(HotplugTest, SetupOpensSocket) {
     ASSERT_EQ(0, ::stat(hp.socket_path().c_str(), &st));
     EXPECT_TRUE(S_ISSOCK(st.st_mode));
     EXPECT_TRUE(static_cast<bool>(connect_client(hp.socket_path())));
+}
+
+// The watchdog liveness probe: try_lock on the idle lifecycle mutex succeeds, so
+// healthy() is true.  (The wedged case — lock held across watchdog intervals —
+// withholds the keepalive; that path is exercised by the daemon watchdog test.)
+TEST_F(HotplugTest, HealthyWhenLifecycleIdle) {
+    HotplugSubsystem hp(make_config({"0000:61:00"}), fast_opts());
+    ASSERT_TRUE(hp.setup().has_value());
+    EXPECT_EQ(0, hp.op_rescan());
+    EXPECT_TRUE(hp.healthy());
 }
 
 TEST_F(HotplugTest, RescanInstantiatesAllConfigured) {

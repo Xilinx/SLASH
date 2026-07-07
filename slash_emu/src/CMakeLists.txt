@@ -28,6 +28,10 @@ pkg_check_modules(LIBXML2 REQUIRED libxml-2.0)
 pkg_check_modules(PC_ZMQ REQUIRED IMPORTED_TARGET libzmq)
 # jsoncpp encodes/decodes the model protocol frames.
 pkg_check_modules(JSONCPP REQUIRED jsoncpp)
+# libsystemd: sd-event main loop, sd_notify (readiness/watchdog/stopping), and
+# sd_journal logging.  The daemon is designed to run only under systemd, so this
+# is a hard dependency (present in both packaging Dockerfiles).
+pkg_check_modules(LIBSYSTEMD REQUIRED libsystemd)
 # zlib is used for gzip-compressed VBIN containers. It is already a transitive
 # dependency of vrt (see vrt/src/vrtbin.cpp) and ships with every toolchain we
 # target, so adding it here does not introduce a genuinely new system package.
@@ -83,6 +87,7 @@ target_include_directories(slash_emu_core
     ${INIH_INCLUDE_DIRS}
     ${LIBXML2_INCLUDE_DIRS}
     ${JSONCPP_INCLUDE_DIRS}
+    ${LIBSYSTEMD_INCLUDE_DIRS}
 )
 
 target_compile_features(slash_emu_core PUBLIC cxx_std_20)
@@ -98,6 +103,7 @@ target_link_libraries(slash_emu_core
     ZLIB::ZLIB
     PkgConfig::PC_ZMQ
     ${JSONCPP_LIBRARIES}
+    ${LIBSYSTEMD_LIBRARIES}
     Threads::Threads
 )
 

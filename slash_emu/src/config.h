@@ -82,27 +82,6 @@ private:
 bool is_valid_board_bdf(const std::string& bdf);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// uid/gid resolution
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * @brief Resolve a user name or numeric UID string to a uid_t.
- *
- * Accepts either a decimal numeric string (e.g. "1000") or a user name
- * (e.g. "vrtd").  On success, writes the resolved uid to @p out and returns
- * true.  Returns false if the name is not found or the string is invalid.
- */
-bool resolve_uid(const std::string& name_or_id, uid_t& out);
-
-/**
- * @brief Resolve a group name or numeric GID string to a gid_t.
- *
- * Accepts either a decimal numeric string or a group name (e.g. "vrt").
- * Returns false if not found or invalid.
- */
-bool resolve_gid(const std::string& name_or_id, gid_t& out);
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Per-accelerator configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -136,21 +115,21 @@ struct AcceleratorConfig {
 /**
  * @brief Complete resolved configuration for the emulation daemon.
  *
- * All path/ownership/permission values are fully resolved; callers do not need
- * to perform further lookups.  `base_dir` is always an absolute path.
+ * `base_dir` is always an absolute path.  Socket ownership and permissions are
+ * NOT part of this struct: under systemd the daemon runs as User=/Group= and
+ * the sockets inherit that identity, while their mode comes from the unit's
+ * UMask=.  The daemon therefore performs no chown/chmod of its own.
  */
 struct DaemonConfig {
-    /** Base directory where all sockets are created. Default: /run/slash_emu */
+    /**
+     * @brief Base directory where all sockets are created.
+     *
+     * Defaults to the systemd-provided `$RUNTIME_DIRECTORY` (i.e. /run/slash_emu
+     * for `RuntimeDirectory=slash_emu`) when set, else /run/slash_emu.  Always an
+     * absolute path.  systemd creates and tears down this directory, so the
+     * daemon neither creates nor cold-reboot-cleans it.
+     */
     std::string base_dir{"/run/slash_emu"};
-
-    /** UID that owns the created sockets.  Default: uid of user "vrtd". */
-    uid_t uid{0};
-
-    /** GID that owns the created sockets.  Default: gid of group "vrt". */
-    gid_t gid{0};
-
-    /** Permission mode for created sockets (octal).  Default: 0600. */
-    mode_t mode{0600};
 
     /** Path to the INI configuration file that was parsed. */
     std::string config_file;
@@ -262,21 +241,15 @@ struct CliResult {
  *
  * Recognised options:
  *   -c / --config   Path to the INI configuration file (required)
- *   -d / --base-dir Base directory for sockets, must be absolute (default: /run/slash_emu)
- *   -u / --uid      Owner UID, as a name or integer (default: "vrtd", falls back to current)
- *   -g / --gid      Owner GID, as a name or integer (default: "vrt", falls back to current)
- *   -m / --mode     Socket permission mode in octal (default: 600)
+ *   -d / --base-dir Base directory for sockets, must be absolute
+ *                   (default: $RUNTIME_DIRECTORY, else /run/slash_emu)
  *
- * Default resolution:
- *   - If the default user "vrtd" or group "vrt" does not exist in the system,
- *     the daemon falls back to the current process uid/gid and logs a warning to
- *     stderr.  This fallback only applies to the built-in defaults; explicitly
- *     specified names that don't resolve are hard errors.
+ * Socket ownership and permissions are owned by systemd (User=/Group= and
+ * UMask=), not by the daemon, so there are no uid/gid/mode options.
  *
  * Validation:
  *   - base_dir must be an absolute path.
  *   - At least one accelerator must be present in the configuration file.
- *   - Socket permission mode must be in the range [0, 07777].
  *
  * On --help or --version, returns ok==true, exit_code==0, and an empty config
  * (the caller should exit immediately).

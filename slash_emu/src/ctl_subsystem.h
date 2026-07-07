@@ -88,14 +88,14 @@ public:
      * @brief Construct an (inactive) PF2 subsystem.
      *
      * @param socket_path Absolute path of the slash_ctl<N> socket to create.
-     * @param uid         Owner uid to chown the socket to (see setup()).
-     * @param gid         Owner gid to chown the socket to.
-     * @param mode        Permission mode to chmod the socket to (e.g. 0600).
      * @param board_bdf   Board BDF ("DDDD:BB:DD"); GET_DEVICE_INFO appends ".2".
      * @param bars        Borrowed BAR set; must outlive this object.
+     *
+     * Socket ownership/permissions are systemd's responsibility (User=/Group= +
+     * UMask=): the socket inherits the daemon's identity on bind() and the unit's
+     * umask sets its mode, so the subsystem performs no chown/chmod.
      */
-    CtlSubsystem(std::string socket_path, uid_t uid, gid_t gid, mode_t mode,
-                 std::string board_bdf, const BarSet& bars);
+    CtlSubsystem(std::string socket_path, std::string board_bdf, const BarSet& bars);
 
     CtlSubsystem(const CtlSubsystem&)            = delete;
     CtlSubsystem& operator=(const CtlSubsystem&) = delete;
@@ -108,8 +108,8 @@ public:
      * @brief Create the socket, listener thread, and worker pool (RESCAN half).
      *
      * Creates the SEQPACKET socket, unlinks any stale file at the path, binds,
-     * chmods and chowns it (per the configured mode/uid/gid), listens, and
-     * starts the listener thread.  Idempotent: a no-op-success if already active.
+     * listens, and starts the listener thread (ownership/mode come from systemd).
+     * Idempotent: a no-op-success if already active.
      *
      * @return ok() on success, or ErrorKind::Transport on any OS failure (the
      *         subsystem is left inactive with no leftover socket file/threads).
@@ -148,9 +148,6 @@ private:
 
     // ── Immutable configuration ──────────────────────────────────────────────
     std::string   socket_path_;
-    uid_t         uid_;
-    gid_t         gid_;
-    mode_t        mode_;
     std::string   device_bdf_;   // board_bdf + ".2"
     const BarSet& bars_;
 

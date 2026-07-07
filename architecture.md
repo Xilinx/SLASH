@@ -1415,10 +1415,29 @@ ctest suite passing.
   virtual network setups, non-polling BAR, FPGA-emulation-model support,
   hardened model-process isolation, and persisting HBM/DDR across
   reconfigurations.
-* **Signal-handler async-signal-safety (from Step 1): RESOLVED in Step 11.**
-  `run_daemon()` now uses an async-signal-safe self-pipe (handler = atomic CAS +
-  `write` of 1 byte; main thread `read`/`poll`), replacing the earlier
-  `cv.notify_all()`-from-handler.
+* **⚠️ Step 11 generation-guard race — OPEN, serious (deferred behind the systemd
+  work).** `HotplugTest.StaleDeathTaskDoesNotTearDownReadoptedModel` SEGFAULTs
+  intermittently — measured **~6/12** failures under a 12× stress on committed
+  Step-11 HEAD (`7d52144d`, normal build). It is a genuine pre-existing concurrency
+  bug, not a fluke: a systemd-refactor branch measured ~3/12 (parity, not a
+  regression). ASan root cause: the model-death **generation guard**
+  (`Accelerator::on_model_died(gen)`) still has a residual window that occasionally
+  lets a *stale* death-teardown through — it fails the `EXPECT_EQ(AccelState::
+  Active)` at `hotplug_subsystem_test.cpp:707` — after which the **test body**
+  dereferences `ModelInstance::process()` on the just-reset (null) `model_`, turning
+  the assertion failure into a null-deref SEGV. **Two fixes needed:** (1) close the
+  guard's remaining race window (a stale teardown must be impossible, not merely
+  improbable — likely the death task must re-check the generation *while holding
+  `lifecycle_mu_`*, atomically with the teardown, rather than the check and the
+  teardown being separable); (2) null-guard the test's post-assertion `process()`
+  read so a guard defect surfaces as a clean GTest failure, never a crash. See the
+  `project_death_generation_guard` memory. Pick up once the systemd refactor +
+  packaging land.
+* **Signal-handler async-signal-safety (from Step 1): RESOLVED (systemd refactor).**
+  `run_daemon()` runs an `sd-event` loop; SIGTERM/SIGINT are handled via
+  `sd_event_add_signal` (signalfd), and the programmatic `request_shutdown()` uses
+  an eventfd source — no hand-rolled signal handler remains. (This superseded the
+  interim Step-11 self-pipe.)
 * `main.cpp` (2 lines) is not unit-tested (daemon entry point); acceptable.
 * Residual cosmetic `geninfo mismatch` warnings on test files under GCC 13 +
   lcov 2.0; downgraded via `--ignore-errors`, not a production concern.

@@ -114,17 +114,18 @@ public:
      * @brief Construct an (inactive) PF1 QDMA subsystem.
      *
      * @param socket_path Absolute path of the slash_qdma_ctl<N> socket to create.
-     * @param uid         Owner uid to chown the socket to (see setup()).
-     * @param gid         Owner gid to chown the socket to.
-     * @param mode        Permission mode to chmod the socket to (e.g. 0600).
      * @param board_bdf   Board BDF ("DDDD:BB:DD"); INFO returns board_bdf + ".1".
      * @param model       Borrowed model client; must outlive this object.  Used
      *                    for TRANSFER H2C/C2H to HBM/DDR.
      * @param vbin        Borrowed VBIN store; must outlive this object.  Used for
      *                    TRANSFER H2C to the reconfiguration aperture.
+     *
+     * Socket ownership/permissions are systemd's responsibility (User=/Group= +
+     * UMask=): the socket inherits the daemon's identity on bind() and the unit's
+     * umask sets its mode atomically, so the subsystem performs no chown/chmod.
      */
-    QdmaSubsystem(std::string socket_path, uid_t uid, gid_t gid, mode_t mode,
-                  std::string board_bdf, ModelClient& model, VbinStore& vbin);
+    QdmaSubsystem(std::string socket_path, std::string board_bdf,
+                  ModelClient& model, VbinStore& vbin);
 
     QdmaSubsystem(const QdmaSubsystem&)            = delete;
     QdmaSubsystem& operator=(const QdmaSubsystem&) = delete;
@@ -137,8 +138,8 @@ public:
      * @brief Create the socket, listener thread, and worker pool (RESCAN half).
      *
      * (Re)initialises the qpair list, creates the SEQPACKET socket, unlinks any
-     * stale file, binds/chmods/chowns/listens, and starts the listener thread.
-     * Idempotent: a no-op-success if already active.
+     * stale file, binds/listens, and starts the listener thread (ownership/mode
+     * come from systemd).  Idempotent: a no-op-success if already active.
      *
      * @return ok() on success, or ErrorKind::Transport on any OS failure (the
      *         subsystem is left inactive with no leftover socket file/threads).
@@ -214,9 +215,6 @@ private:
 
     // ── Immutable configuration ──────────────────────────────────────────────
     std::string  socket_path_;
-    uid_t        uid_;
-    gid_t        gid_;
-    mode_t       mode_;
     std::string  device_bdf_; // board_bdf + ".1"
     ModelClient& model_;      // borrowed
     VbinStore&   vbin_;       // borrowed

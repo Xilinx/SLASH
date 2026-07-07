@@ -113,8 +113,7 @@ protected:
     }
 
     std::unique_ptr<CtlSubsystem> make_subsystem() {
-        return std::make_unique<CtlSubsystem>(sock_path_, ::getuid(), ::getgid(),
-                                              mode_t{0600}, "0000:61:00", *bars_);
+        return std::make_unique<CtlSubsystem>(sock_path_, "0000:61:00", *bars_);
     }
 
     std::unique_ptr<BarSet> bars_;
@@ -159,7 +158,9 @@ int32_t ret_of(const ReceivedMessage& m) {
 // setup / socket lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_F(CtlSubsystemTest, SetupCreatesSocketWithConfiguredMode) {
+TEST_F(CtlSubsystemTest, SetupCreatesSocket) {
+    // Ownership + mode are systemd's (User=/Group= + UMask=), so the subsystem
+    // no longer chowns/chmods; it just creates the SEQPACKET socket at the path.
     auto sub = make_subsystem();
     ASSERT_TRUE(sub->setup().has_value());
     EXPECT_TRUE(sub->is_active());
@@ -167,13 +168,6 @@ TEST_F(CtlSubsystemTest, SetupCreatesSocketWithConfiguredMode) {
     struct stat st{};
     ASSERT_EQ(0, ::stat(sock_path_.c_str(), &st));
     EXPECT_TRUE(S_ISSOCK(st.st_mode));
-    EXPECT_EQ(0600u, st.st_mode & 07777);
-    // uid/gid: when unprivileged we can only assert the socket exists and is
-    // owned by us; a privileged daemon would chown to vrtd/vrt.  Mirror
-    // config_test's fallback handling: only assert ownership when it took.
-    if (::geteuid() == 0) {
-        EXPECT_EQ(::getuid(), st.st_uid);
-    }
 }
 
 TEST_F(CtlSubsystemTest, SetupIsIdempotent) {
@@ -195,7 +189,7 @@ TEST_F(CtlSubsystemTest, SetupUnlinksStaleSocketFile) {
 
 TEST_F(CtlSubsystemTest, SetupRejectsOverlongPath) {
     std::string long_path = (base_ / std::string(200, 'x')).string();
-    CtlSubsystem sub(long_path, ::getuid(), ::getgid(), 0600, "0000:61:00", *bars_);
+    CtlSubsystem sub(long_path, "0000:61:00", *bars_);
     auto r = sub.setup();
     ASSERT_FALSE(r.has_value());
     EXPECT_EQ(ErrorKind::Transport, r.error().kind);

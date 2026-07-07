@@ -22,12 +22,13 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <charconv>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <map>
 #include <unordered_set>
 
@@ -77,58 +78,6 @@ std::optional<BoardBdf> BoardBdf::parse(const std::string& raw) {
 
 bool is_valid_board_bdf(const std::string& bdf) {
     return BoardBdf::parse(bdf).has_value();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// uid/gid resolution
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool resolve_uid(const std::string& name_or_id, uid_t& out) {
-    if (name_or_id.empty()) return false;
-
-    // Try numeric parse first.
-    if (std::isdigit(static_cast<unsigned char>(name_or_id[0]))) {
-        unsigned long v{};
-        auto [ptr, ec] = std::from_chars(name_or_id.data(),
-                                         name_or_id.data() + name_or_id.size(), v);
-        if (ec == std::errc{} && ptr == name_or_id.data() + name_or_id.size()) {
-            out = static_cast<uid_t>(v);
-            return true;
-        }
-    }
-
-    // Name lookup.
-    errno = 0;
-    struct passwd* pw = ::getpwnam(name_or_id.c_str());
-    if (pw) {
-        out = pw->pw_uid;
-        return true;
-    }
-    return false;
-}
-
-bool resolve_gid(const std::string& name_or_id, gid_t& out) {
-    if (name_or_id.empty()) return false;
-
-    // Try numeric parse first.
-    if (std::isdigit(static_cast<unsigned char>(name_or_id[0]))) {
-        unsigned long v{};
-        auto [ptr, ec] = std::from_chars(name_or_id.data(),
-                                         name_or_id.data() + name_or_id.size(), v);
-        if (ec == std::errc{} && ptr == name_or_id.data() + name_or_id.size()) {
-            out = static_cast<gid_t>(v);
-            return true;
-        }
-    }
-
-    // Group name lookup.
-    errno = 0;
-    struct group* gr = ::getgrnam(name_or_id.c_str());
-    if (gr) {
-        out = gr->gr_gid;
-        return true;
-    }
-    return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,9 +239,19 @@ CliResult parse_cli(int argc, char* argv[]) {
        ->required()
        ->check(CLI::ExistingFile);
 
+    // Default the socket base directory to the systemd-provided RuntimeDirectory
+    // ($RUNTIME_DIRECTORY, e.g. /run/slash_emu) when present, else the well-known
+    // path.  systemd creates and tears down this directory; -d overrides it
+    // (used by tests, which run without a RuntimeDirectory).
     std::string base_dir = "/run/slash_emu";
+    if (const char* rd = std::getenv("RUNTIME_DIRECTORY"); rd != nullptr && rd[0] != '\0') {
+        // RUNTIME_DIRECTORY may be a colon-separated list; take the first entry.
+        std::string_view rv{rd};
+        base_dir.assign(rv.substr(0, rv.find(':')));
+    }
     app.add_option("-d,--base-dir", base_dir,
-                   "Base directory for emulation sockets (default: /run/slash_emu)");
+                   "Base directory for emulation sockets "
+                   "(default: $RUNTIME_DIRECTORY, else /run/slash_emu)");
 
     // Daemon-wide default VBIN used to bootstrap a fresh accelerator (Step 6).
     // Optional: left unset when not provided.
@@ -301,23 +260,6 @@ CliResult parse_cli(int argc, char* argv[]) {
     app.add_option("--default-vbin", default_vbin,
                    "Daemon-wide default VBIN used to bootstrap a fresh accelerator")
        ->each([&default_vbin_set](const std::string&) { default_vbin_set = true; });
-
-    std::string uid_str = "vrtd";
-    bool uid_is_default = true;
-    app.add_option("-u,--uid", uid_str,
-                   "Owner UID of created sockets; name or integer (default: vrtd)")
-       ->each([&uid_is_default](const std::string&) { uid_is_default = false; });
-
-    std::string gid_str = "vrt";
-    bool gid_is_default = true;
-    app.add_option("-g,--gid", gid_str,
-                   "Owner GID of created sockets; name or integer (default: vrt)")
-       ->each([&gid_is_default](const std::string&) { gid_is_default = false; });
-
-    // Accept mode as a string so we can parse it as octal.
-    std::string mode_str = "600";
-    app.add_option("-m,--mode", mode_str,
-                   "Permission mode for sockets in octal (default: 600)");
 
     // ---- Parse ----
 
@@ -343,54 +285,6 @@ CliResult parse_cli(int argc, char* argv[]) {
         return result;
     }
 
-    // ---- Resolve uid ----
-    uid_t uid{};
-    if (!resolve_uid(uid_str, uid)) {
-        if (uid_is_default) {
-            // The default "vrtd" doesn't exist — fall back to current uid with warning.
-            uid = ::getuid();
-            std::fprintf(stderr,
-                         "slash_emu: warning: user 'vrtd' not found; "
-                         "falling back to current uid %u\n",
-                         static_cast<unsigned>(uid));
-        } else {
-            result.error = "unknown user or invalid UID '" + uid_str + "'";
-            return result;
-        }
-    }
-
-    // ---- Resolve gid ----
-    gid_t gid{};
-    if (!resolve_gid(gid_str, gid)) {
-        if (gid_is_default) {
-            // The default "vrt" doesn't exist — fall back to current gid with warning.
-            gid = ::getgid();
-            std::fprintf(stderr,
-                         "slash_emu: warning: group 'vrt' not found; "
-                         "falling back to current gid %u\n",
-                         static_cast<unsigned>(gid));
-        } else {
-            result.error = "unknown group or invalid GID '" + gid_str + "'";
-            return result;
-        }
-    }
-
-    // ---- Parse mode (octal) ----
-    mode_t mode{};
-    {
-        unsigned long v{};
-        // strtoul with base 8 to parse octal strings like "600" or "0600".
-        char* endptr = nullptr;
-        errno = 0;
-        v = std::strtoul(mode_str.c_str(), &endptr, 8);
-        if (errno != 0 || endptr == mode_str.c_str() || *endptr != '\0' || v > 07777) {
-            result.error = "invalid permission mode '" + mode_str +
-                           "' (expected octal digits, e.g. 600 or 0600)";
-            return result;
-        }
-        mode = static_cast<mode_t>(v);
-    }
-
     // ---- Parse the config file ----
     auto file_result = parse_config_file(config_path);
     if (!file_result.ok) {
@@ -407,9 +301,6 @@ CliResult parse_cli(int argc, char* argv[]) {
 
     // ---- Assemble the config ----
     result.config.base_dir    = std::move(base_dir);
-    result.config.uid         = uid;
-    result.config.gid         = gid;
-    result.config.mode        = mode;
     result.config.config_file = config_path;
     if (default_vbin_set) {
         result.config.default_vbin_path = std::move(default_vbin);

@@ -164,8 +164,7 @@ Result<void> Accelerator::setup_ctl() {
         return Result<void>::err(err("setup_ctl: no BAR set"));
     }
     if (ctl_ == nullptr) {
-        ctl_ = std::make_unique<CtlSubsystem>(params_.ctl_socket_path, params_.uid,
-                                              params_.gid, params_.mode,
+        ctl_ = std::make_unique<CtlSubsystem>(params_.ctl_socket_path,
                                               params_.bdf.str(), *bars_);
     }
     return ctl_->setup();
@@ -183,8 +182,7 @@ Result<void> Accelerator::setup_qdma() {
     // down and reset() before any model swap, so qdma_ is null here whenever the
     // model may have changed, and this construction always binds the live client.
     if (qdma_ == nullptr) {
-        qdma_ = std::make_unique<QdmaSubsystem>(params_.qdma_socket_path, params_.uid,
-                                                params_.gid, params_.mode,
+        qdma_ = std::make_unique<QdmaSubsystem>(params_.qdma_socket_path,
                                                 params_.bdf.str(),
                                                 model_->process()->client(),
                                                 model_->store());

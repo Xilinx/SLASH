@@ -104,9 +104,6 @@ struct AcceleratorParams {
     std::filesystem::path default_vbin;     /**< Default VBIN to bootstrap a fresh card. */
     std::string          ctl_socket_path;   /**< slash_ctl<N> path (PF2). */
     std::string          qdma_socket_path;  /**< slash_qdma_ctl<N> path (PF1). */
-    uid_t                uid{0};
-    gid_t                gid{0};
-    mode_t               mode{0600};
     std::chrono::milliseconds worker_poll{ModelControlWorkers::kDefaultPollInterval};
     ModelProcessTimeouts timeouts{};
 };

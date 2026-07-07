@@ -136,8 +136,7 @@ protected:
     }
 
     std::unique_ptr<QdmaSubsystem> make_subsystem() {
-        return std::make_unique<QdmaSubsystem>(sock_path_, ::getuid(), ::getgid(),
-                                               mode_t{0600}, "0000:61:00",
+        return std::make_unique<QdmaSubsystem>(sock_path_, "0000:61:00",
                                                *model_, *vbin_);
     }
 

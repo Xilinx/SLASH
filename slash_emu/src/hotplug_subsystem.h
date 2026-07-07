@@ -88,9 +88,9 @@ public:
     /**
      * @brief Construct an (inactive) hotplug subsystem for @p cfg.
      *
-     * No side effects until setup().  @p cfg carries the base dir / ownership /
-     * mode / config-file path / accelerator list.  RESCAN re-reads @p
-     * cfg.config_file each time.
+     * No side effects until setup().  @p cfg carries the base dir / config-file
+     * path / accelerator list (socket ownership + mode are systemd's, not the
+     * daemon's).  RESCAN re-reads @p cfg.config_file each time.
      */
     explicit HotplugSubsystem(DaemonConfig cfg);
     HotplugSubsystem(DaemonConfig cfg, Options opts);
@@ -133,6 +133,21 @@ public:
     /** Number of tracked accelerators (for tests). */
     [[nodiscard]] std::size_t accelerator_count() const;
 
+    /**
+     * @brief Liveness probe for the systemd watchdog (health-gated keepalive).
+     *
+     * Attempts a non-blocking acquisition of the single daemon-wide lifecycle
+     * mutex and immediately releases it.  Returns true if the lock was free
+     * (the lifecycle path is making progress), false if it is currently held.
+     *
+     * The daemon's watchdog timer pings `WATCHDOG=1` only while this returns
+     * true; a lifecycle deadlock (lock held across watchdog intervals) therefore
+     * withholds the keepalive and lets systemd restart the daemon.  A briefly
+     * held-but-progressing lock is released well within one interval, so a
+     * healthy-but-busy daemon is never falsely killed.
+     */
+    [[nodiscard]] bool healthy() const noexcept;
+
 private:
     // ── Lifecycle work queue ──────────────────────────────────────────────────
     void lifecycle_thread_main();
@@ -165,7 +180,7 @@ private:
     // Extract the PCI bus token ("BB") from a canonical board BDF "DDDD:BB:DD".
     static std::string bus_of(const std::string& board_bdf);
 
-    DaemonConfig socket_cfg_; // for base_dir/uid/gid/mode + config_file (RESCAN reloads)
+    DaemonConfig socket_cfg_; // for base_dir + config_file (RESCAN reloads)
     Options      opts_;
     std::string  socket_path_;
 

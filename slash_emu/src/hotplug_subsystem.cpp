@@ -130,18 +130,8 @@ Result<void> HotplugSubsystem::setup() {
     if (::bind(sock.get(), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
         return Result<void>::err(os_error("bind(" + socket_path_ + ")"));
     }
-    if (::chmod(socket_path_.c_str(), socket_cfg_.mode) != 0) {
-        auto e = os_error("chmod(" + socket_path_ + ")");
-        ::unlink(socket_path_.c_str());
-        return Result<void>::err(std::move(e));
-    }
-    if (::chown(socket_path_.c_str(), socket_cfg_.uid, socket_cfg_.gid) != 0) {
-        if (errno != EPERM) {
-            auto e = os_error("chown(" + socket_path_ + ")");
-            ::unlink(socket_path_.c_str());
-            return Result<void>::err(std::move(e));
-        }
-    }
+    // No chown/chmod: under systemd the socket inherits the daemon's User=/Group=
+    // on bind() and the unit's UMask= fixes its mode atomically at creation.
     if (::listen(sock.get(), /*backlog=*/16) != 0) {
         auto e = os_error("listen(" + socket_path_ + ")");
         ::unlink(socket_path_.c_str());
@@ -450,9 +440,6 @@ int HotplugSubsystem::rescan_locked() {
             .default_vbin     = {},
             .ctl_socket_path  = socket_path_ctl(socket_cfg_, n),
             .qdma_socket_path = socket_path_qdma_ctl(socket_cfg_, n),
-            .uid              = socket_cfg_.uid,
-            .gid              = socket_cfg_.gid,
-            .mode             = socket_cfg_.mode,
         };
         params.timeouts = opts_.model_timeouts;
         if (auto dv = socket_cfg_.resolve_default_vbin(cfg_e); dv.has_value()) {
@@ -633,6 +620,15 @@ Accelerator* HotplugSubsystem::accelerator(const std::string& board_bdf) const {
 std::size_t HotplugSubsystem::accelerator_count() const {
     std::lock_guard<std::mutex> lk(lifecycle_mu_);
     return accels_.size();
+}
+
+bool HotplugSubsystem::healthy() const noexcept {
+    // Non-blocking probe of the lifecycle mutex: free → progressing → healthy.
+    if (lifecycle_mu_.try_lock()) {
+        lifecycle_mu_.unlock();
+        return true;
+    }
+    return false;
 }
 
 } // namespace slash_emu

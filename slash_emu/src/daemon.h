@@ -22,67 +22,41 @@
 
 #include "config.h"
 
-#include <csignal>
-#include <functional>
-
 namespace slash_emu {
-
-/**
- * @brief Callable type for installing a signal handler.
- *
- * Matches the signature of POSIX sigaction(2).  The default implementation
- * delegates directly to ::sigaction; tests may inject a stub that fails on
- * demand (e.g. for SIGKILL) or that records which signals were installed.
- */
-using SignalInstaller = std::function<int(int, const struct sigaction *, struct sigaction *)>;
 
 /**
  * @brief Request a clean shutdown of the running daemon.
  *
- * Thread-safe.  May be called from a signal handler or from test code.
- * Has no effect if the daemon is not currently running.
+ * Thread-safe.  Signals the running sd-event loop (via an eventfd) to exit; the
+ * request is latched, so a call that lands just before run_daemon() creates the
+ * eventfd is still honored.  Has no effect if no daemon is running.  Real
+ * SIGTERM/SIGINT delivery drives the same exit path via sd-event's signal
+ * handling; this is the programmatic equivalent (also used by tests).
  */
 void request_shutdown() noexcept;
 
 /**
- * @brief Run the emulation daemon.
- *
- * Installs SIGINT/SIGTERM handlers via @p install_signal (defaults to the
- * real ::sigaction), logs a startup line, blocks until request_shutdown() is
- * called (either directly or via a signal), then logs a shutdown line and
- * returns 0.
- *
- * Returns 0 on a clean shutdown, non-zero on a fatal error (e.g. signal
- * installation failure).
- *
- * Separated from main() so that it can be exercised directly from unit tests.
- * The injectable @p install_signal seam allows tests to exercise the
- * sigaction-failure path without needing to attempt installing SIGKILL.
- */
-int run_daemon(SignalInstaller install_signal = nullptr);
-
-/**
  * @brief Run the emulation daemon with a resolved configuration.
  *
- * Performs the full accelerator-lifecycle bring-up:
- *   1. Cold-reboot cleanup: remove any leftover per-BDF VBIN directories from a
- *      previous run (emulating a cold reboot; VBIN files only persist within one
- *      daemon lifetime).
- *   2. Create the base directory, bring up the daemon-level slash_hotplug socket
- *      and its lifecycle worker.
- *   3. Trigger the startup RESCAN (instantiates every configured accelerator).
- *   4. Install SIGINT/SIGTERM handlers and block until a shutdown is requested.
- *   5. On shutdown: tear down the hotplug subsystem (drains the lifecycle queue
- *      and tears down every accelerator in order), then cold-reboot-clean the
- *      VBIN directories again.
+ * The daemon runs only under systemd.  Bring-up:
+ *   1. Block SIGTERM/SIGINT (before any subsystem thread spawns) and create the
+ *      sd-event loop, its signal sources, and an eventfd source for
+ *      request_shutdown().
+ *   2. Bring up the daemon-level slash_hotplug socket and its lifecycle worker.
+ *   3. Trigger the startup RESCAN (instantiates every configured accelerator),
+ *      then notify systemd READY=1.
+ *   4. If the watchdog is enabled, arm a health-gated WATCHDOG=1 keepalive timer.
+ *   5. Run the sd-event loop until SIGTERM/SIGINT or request_shutdown().
+ *   6. Notify STOPPING=1, tear down the hotplug subsystem (drains the lifecycle
+ *      queue and tears down every accelerator in order).
  *
- * The signal handler remains async-signal-safe (atomic store + condvar notify);
- * all teardown runs on the normal thread after the wait returns.
+ * systemd owns the runtime directory (RuntimeDirectory=) and socket ownership /
+ * permissions (User=/Group= + UMask=), so the daemon neither creates its base
+ * directory, cold-reboot-cleans it, nor chowns/chmods its sockets.
  *
- * @param config         Fully-resolved daemon configuration.
- * @param install_signal Injectable sigaction seam (defaults to ::sigaction).
+ * @param config Fully-resolved daemon configuration.
  * @return 0 on a clean shutdown, non-zero on a fatal bring-up error.
  */
-int run_daemon(const DaemonConfig& config, SignalInstaller install_signal = nullptr);
+int run_daemon(const DaemonConfig& config);
 
 } // namespace slash_emu

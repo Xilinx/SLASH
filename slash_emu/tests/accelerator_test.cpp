@@ -112,9 +112,6 @@ protected:
             .default_vbin     = default_vbin,
             .ctl_socket_path  = (base_ / "slash_ctl0").string(),
             .qdma_socket_path = (base_ / "slash_qdma_ctl0").string(),
-            .uid              = ::getuid(),
-            .gid              = ::getgid(),
-            .mode             = 0600,
         };
         p.timeouts = fast();
         return p;

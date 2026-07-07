@@ -193,65 +193,9 @@ TEST(BdfTest, InvalidBdfWrongSeparator) {
     EXPECT_FALSE(is_valid_board_bdf("0000.61.00"));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// resolve_uid / resolve_gid
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST(UidGidTest, ResolveNumericUid) {
-    uid_t out{};
-    ASSERT_TRUE(resolve_uid("0", out));
-    EXPECT_EQ(0u, out);
-
-    ASSERT_TRUE(resolve_uid("1000", out));
-    EXPECT_EQ(1000u, out);
-}
-
-TEST(UidGidTest, ResolveNumericGid) {
-    gid_t out{};
-    ASSERT_TRUE(resolve_gid("0", out));
-    EXPECT_EQ(0u, out);
-}
-
-TEST(UidGidTest, ResolveCurrentUserByName) {
-    // The current user always exists.
-    struct passwd* pw = ::getpwuid(::getuid());
-    ASSERT_NE(nullptr, pw);
-
-    uid_t out{};
-    ASSERT_TRUE(resolve_uid(std::string(pw->pw_name), out));
-    EXPECT_EQ(pw->pw_uid, out);
-}
-
-TEST(UidGidTest, ResolveCurrentGroupByName) {
-    struct group* gr = ::getgrgid(::getgid());
-    ASSERT_NE(nullptr, gr);
-
-    gid_t out{};
-    ASSERT_TRUE(resolve_gid(std::string(gr->gr_name), out));
-    EXPECT_EQ(gr->gr_gid, out);
-}
-
-TEST(UidGidTest, ResolveNonexistentUserFails) {
-    uid_t out{};
-    EXPECT_FALSE(resolve_uid("__no_such_user_xyzzy__", out));
-}
-
-TEST(UidGidTest, ResolveNonexistentGroupFails) {
-    gid_t out{};
-    EXPECT_FALSE(resolve_gid("__no_such_group_xyzzy__", out));
-}
-
-TEST(UidGidTest, ResolveEmptyStringFails) {
-    uid_t u{};
-    gid_t g{};
-    EXPECT_FALSE(resolve_uid("", u));
-    EXPECT_FALSE(resolve_gid("", g));
-}
-
-TEST(UidGidTest, ResolveNonNumericDigitStringFails) {
-    uid_t out{};
-    EXPECT_FALSE(resolve_uid("12abc", out));
-}
+// Socket ownership/permissions (uid/gid/mode) are no longer daemon config —
+// systemd owns them (User=/Group= + UMask=) — so resolve_uid/resolve_gid and the
+// -u/-g/-m CLI options were removed along with their tests.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // parse_config_file — valid inputs
@@ -368,95 +312,32 @@ TEST(ConfigFileTest, MalformedIniReturnsError) {
 TEST(CliTest, MinimalValidArgs) {
     TempFile f("[device.0000:61:00]\n");
 
-    // Resolve current user/group names to use as valid uid/gid.
-    struct passwd* pw = ::getpwuid(::getuid());
-    ASSERT_NE(nullptr, pw);
-    struct group* gr = ::getgrgid(::getgid());
-    ASSERT_NE(nullptr, gr);
-
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", std::string(pw->pw_name),
-                   "-g", std::string(gr->gr_name)}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     ASSERT_TRUE(res.ok) << res.error;
     EXPECT_EQ(0, res.exit_code);
     EXPECT_EQ("/run/slash_emu", res.config.base_dir);
-    EXPECT_EQ(pw->pw_uid, res.config.uid);
-    EXPECT_EQ(gr->gr_gid, res.config.gid);
-    EXPECT_EQ(static_cast<mode_t>(0600), res.config.mode);
     ASSERT_EQ(1u, res.config.accelerators.size());
     EXPECT_EQ("0000:61:00", res.config.accelerators[0].board_bdf());
 }
 
 TEST(CliTest, CustomBaseDir) {
     TempFile f("[device.0000:61:00]\n");
-    struct passwd* pw = ::getpwuid(::getuid()); ASSERT_NE(nullptr, pw);
-    struct group*  gr = ::getgrgid(::getgid()); ASSERT_NE(nullptr, gr);
 
     FakeArgv args{{"slash_emu_daemon",
                    "-c", f.path(),
-                   "-d", "/tmp/my_emu",
-                   "-u", std::string(pw->pw_name),
-                   "-g", std::string(gr->gr_name)}};
+                   "-d", "/tmp/my_emu"}};
     auto res = parse_cli(args.argc(), args.argv());
     ASSERT_TRUE(res.ok) << res.error;
     EXPECT_EQ("/tmp/my_emu", res.config.base_dir);
 }
 
-TEST(CliTest, NumericUidAndGid) {
-    TempFile f("[device.0000:61:00]\n");
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", "0",
-                   "-g", "0"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    ASSERT_TRUE(res.ok) << res.error;
-    EXPECT_EQ(0u, res.config.uid);
-    EXPECT_EQ(0u, res.config.gid);
-}
-
-TEST(CliTest, OctalModeWithLeadingZero) {
-    TempFile f("[device.0000:61:00]\n");
-    struct passwd* pw = ::getpwuid(::getuid()); ASSERT_NE(nullptr, pw);
-    struct group*  gr = ::getgrgid(::getgid()); ASSERT_NE(nullptr, gr);
-
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", std::string(pw->pw_name),
-                   "-g", std::string(gr->gr_name),
-                   "-m", "0640"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    ASSERT_TRUE(res.ok) << res.error;
-    EXPECT_EQ(static_cast<mode_t>(0640), res.config.mode);
-}
-
-TEST(CliTest, OctalModeWithoutLeadingZero) {
-    TempFile f("[device.0000:61:00]\n");
-    struct passwd* pw = ::getpwuid(::getuid()); ASSERT_NE(nullptr, pw);
-    struct group*  gr = ::getgrgid(::getgid()); ASSERT_NE(nullptr, gr);
-
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", std::string(pw->pw_name),
-                   "-g", std::string(gr->gr_name),
-                   "-m", "644"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    ASSERT_TRUE(res.ok) << res.error;
-    EXPECT_EQ(static_cast<mode_t>(0644), res.config.mode);
-}
-
 TEST(CliTest, LongOptionsWork) {
     TempFile f("[device.0000:62:00]\n");
-    struct passwd* pw = ::getpwuid(::getuid()); ASSERT_NE(nullptr, pw);
-    struct group*  gr = ::getgrgid(::getgid()); ASSERT_NE(nullptr, gr);
 
     FakeArgv args{{"slash_emu_daemon",
                    "--config", f.path(),
-                   "--base-dir", "/tmp/long",
-                   "--uid", std::string(pw->pw_name),
-                   "--gid", std::string(gr->gr_name),
-                   "--mode", "660"}};
+                   "--base-dir", "/tmp/long"}};
     auto res = parse_cli(args.argc(), args.argv());
     ASSERT_TRUE(res.ok) << res.error;
     EXPECT_EQ("/tmp/long", res.config.base_dir);
@@ -466,7 +347,7 @@ TEST(CliTest, LongOptionsWork) {
 
 TEST(CliTest, ConfigFilePathStoredInConfig) {
     TempFile f("[device.0000:63:00]\n");
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0", "-g", "0"}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     ASSERT_TRUE(res.ok) << res.error;
     EXPECT_EQ(f.path(), res.config.config_file);
@@ -477,10 +358,22 @@ TEST(CliTest, MultipleAcceleratorsFromFile) {
         "[device.0000:61:00]\n"
         "[device.0000:62:00]\n"
     );
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0", "-g", "0"}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     ASSERT_TRUE(res.ok) << res.error;
     EXPECT_EQ(2u, res.config.accelerators.size());
+}
+
+TEST(CliTest, BaseDirDefaultsToRuntimeDirectoryEnv) {
+    // When -d is omitted, base_dir defaults to $RUNTIME_DIRECTORY (systemd), else
+    // /run/slash_emu.  Verify the env-var path; take the first colon-list entry.
+    TempFile f("[device.0000:61:00]\n");
+    ::setenv("RUNTIME_DIRECTORY", "/run/slash_emu_test:/run/other", 1);
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
+    auto res = parse_cli(args.argc(), args.argv());
+    ::unsetenv("RUNTIME_DIRECTORY");
+    ASSERT_TRUE(res.ok) << res.error;
+    EXPECT_EQ("/run/slash_emu_test", res.config.base_dir);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -496,56 +389,7 @@ TEST(CliTest, MissingConfigArgFails) {
 
 TEST(CliTest, NonexistentConfigFileFails) {
     // CLI11 with ExistingFile check rejects non-existent files at parse time.
-    FakeArgv args{{"slash_emu_daemon", "-c", "/nonexistent/config.ini",
-                   "-u", "0", "-g", "0"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    EXPECT_FALSE(res.ok);
-    EXPECT_FALSE(res.error.empty());
-}
-
-TEST(CliTest, UnknownUserFails) {
-    TempFile f("");
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", "__no_such_user_xyzzy__",
-                   "-g", "0"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    EXPECT_FALSE(res.ok);
-    EXPECT_FALSE(res.error.empty());
-}
-
-TEST(CliTest, UnknownGroupFails) {
-    TempFile f("");
-    struct passwd* pw = ::getpwuid(::getuid()); ASSERT_NE(nullptr, pw);
-
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", std::string(pw->pw_name),
-                   "-g", "__no_such_group_xyzzy__"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    EXPECT_FALSE(res.ok);
-    EXPECT_FALSE(res.error.empty());
-}
-
-TEST(CliTest, InvalidModeFails) {
-    TempFile f("");
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", "0",
-                   "-g", "0",
-                   "-m", "notanumber"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    EXPECT_FALSE(res.ok);
-    EXPECT_FALSE(res.error.empty());
-}
-
-TEST(CliTest, ModeAbove07777Fails) {
-    TempFile f("");
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", "0",
-                   "-g", "0",
-                   "-m", "10000"}}; // > 07777 in octal
+    FakeArgv args{{"slash_emu_daemon", "-c", "/nonexistent/config.ini"}};
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_FALSE(res.ok);
     EXPECT_FALSE(res.error.empty());
@@ -553,7 +397,7 @@ TEST(CliTest, ModeAbove07777Fails) {
 
 TEST(CliTest, InvalidBdfInConfigFilePropagatesError) {
     TempFile f("[device.0000:61:00.2]\n"); // function suffix
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0", "-g", "0"}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_FALSE(res.ok);
     EXPECT_FALSE(res.error.empty());
@@ -564,15 +408,23 @@ TEST(CliTest, DuplicateBdfInConfigFilePropagatesError) {
         "[device.0000:61:00]\n"
         "[device.0000:61:00]\n"
     );
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0", "-g", "0"}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_FALSE(res.ok);
 }
 
 TEST(CliTest, UnknownFlagFails) {
     TempFile f("");
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0", "-g", "0",
-                   "--unknown-option"}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "--unknown-option"}};
+    auto res = parse_cli(args.argc(), args.argv());
+    EXPECT_FALSE(res.ok);
+}
+
+// The removed -u/-g/-m options are now genuinely unknown flags: passing one is a
+// hard parse error (ownership/mode moved to systemd).
+TEST(CliTest, RemovedOwnershipFlagsAreRejected) {
+    TempFile f("[device.0000:61:00]\n");
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0"}};
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_FALSE(res.ok);
 }
@@ -591,38 +443,6 @@ TEST(CliTest, VersionFlagReturnsOkWithExitCode) {
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_TRUE(res.ok);
     EXPECT_EQ(0, res.exit_code);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// parse_cli — defaults
-// ─────────────────────────────────────────────────────────────────────────────
-
-TEST(CliTest, DefaultsAreApplied) {
-    // When vrtd/vrt exist, defaults should resolve correctly.
-    // If they don't exist in the test environment, skip gracefully.
-    uid_t vrtd_uid{};
-    gid_t vrt_gid{};
-    bool have_vrtd = resolve_uid("vrtd", vrtd_uid);
-    bool have_vrt  = resolve_gid("vrt",  vrt_gid);
-
-    if (!have_vrtd || !have_vrt) {
-        GTEST_SKIP() << "vrtd user or vrt group not available in test environment";
-    }
-
-    TempFile f("[device.0000:61:00]\n");
-    // Use explicit -u/-g because the defaults require vrtd/vrt which may not
-    // exist in all CI environments.  This test explicitly passes the default
-    // strings to verify the resolution path.
-    FakeArgv args{{"slash_emu_daemon",
-                   "-c", f.path(),
-                   "-u", "vrtd",
-                   "-g", "vrt"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    ASSERT_TRUE(res.ok) << res.error;
-    EXPECT_EQ("/run/slash_emu", res.config.base_dir);
-    EXPECT_EQ(vrtd_uid, res.config.uid);
-    EXPECT_EQ(vrt_gid, res.config.gid);
-    EXPECT_EQ(static_cast<mode_t>(0600), res.config.mode);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -649,7 +469,7 @@ TEST(AdversaryBdfTest, BoardBdfMethodAccessorReturnsCorrectString) {
 // Those tests were broken (fixed above).  This probe documents the requirement.
 TEST(AdversaryCliTest, EmptyConfigFileViaCliFailsNoAccelerators) {
     TempFile f("");
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(), "-u", "0", "-g", "0"}};
+    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_FALSE(res.ok);
     // Error message must mention the absence of accelerators.
@@ -661,7 +481,6 @@ TEST(AdversaryCliTest, RelativeBaseDirIsRejected) {
     TempFile f("[device.0000:61:00]\n");
     FakeArgv args{{"slash_emu_daemon",
                    "-c", f.path(),
-                   "-u", "0", "-g", "0",
                    "-d", "relative/path"}};
     auto res = parse_cli(args.argc(), args.argv());
     EXPECT_FALSE(res.ok);
@@ -673,7 +492,6 @@ TEST(AdversaryCliTest, EmptyBaseDirIsRejected) {
     TempFile f("[device.0000:61:00]\n");
     FakeArgv args{{"slash_emu_daemon",
                    "-c", f.path(),
-                   "-u", "0", "-g", "0",
                    "-d", ""}};
     auto res = parse_cli(args.argc(), args.argv());
     // CLI11 may reject empty string before we even get to the absolute-path check;
@@ -734,29 +552,6 @@ TEST(AdversaryBoardBdfParseTest, ParseMixedCasePreservesCase) {
     EXPECT_EQ("aBcD:eF:01", result->str());
 }
 
-// Finding A7: Octal digit '8' or '9' in mode string must be rejected.
-TEST(AdversaryCliTest, ModeWithNonOctalDigitRejected) {
-    TempFile f("[device.0000:61:00]\n");
-    // "8" is not a valid octal digit; strtoul with base 8 should fail.
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path(),
-                   "-u", "0", "-g", "0", "-m", "8"}};
-    auto res = parse_cli(args.argc(), args.argv());
-    EXPECT_FALSE(res.ok);
-    EXPECT_FALSE(res.error.empty());
-}
-
-// Finding A8: Numeric-looking UID with trailing garbage must be rejected.
-TEST(AdversaryUidGidTest, NumericUidWithTrailingGarbageIsRejected) {
-    uid_t out{};
-    // "12abc" starts with a digit but has non-numeric chars.
-    EXPECT_FALSE(resolve_uid("12abc", out));
-}
-
-TEST(AdversaryUidGidTest, NumericGidWithTrailingGarbageIsRejected) {
-    gid_t out{};
-    EXPECT_FALSE(resolve_gid("12abc", out));
-}
-
 // Finding A9: vbin_path field on AcceleratorConfig is std::optional — verify
 // it comes out as nullopt when not specified in the INI file.
 TEST(AdversaryBdfTest, VbinPathIsNulloptWhenAbsentFromIni) {
@@ -765,31 +560,6 @@ TEST(AdversaryBdfTest, VbinPathIsNulloptWhenAbsentFromIni) {
     ASSERT_TRUE(res.ok) << res.error;
     ASSERT_EQ(1u, res.accelerators.size());
     EXPECT_FALSE(res.accelerators[0].vbin_path.has_value());
-}
-
-// Finding A10: lines 315-316 and 331-332 in config.cpp (fallback uid/gid when
-// vrtd/vrt are absent) are unreachable in CI that has those accounts.  This test
-// exercises the fallback when the defaults are missing; it is skipped on systems
-// where both accounts exist (i.e., the production deployment).
-TEST(AdversaryCliTest, DefaultUidGidFallbackWhenVrtdOrVrtAbsent) {
-    uid_t dummy_uid{};
-    gid_t dummy_gid{};
-    bool have_vrtd = resolve_uid("vrtd", dummy_uid);
-    bool have_vrt  = resolve_gid("vrt",  dummy_gid);
-
-    if (have_vrtd && have_vrt) {
-        GTEST_SKIP() << "vrtd and vrt both exist; fallback path untestable here";
-    }
-
-    TempFile f("[device.0000:61:00]\n");
-    // Omit -u / -g so parse_cli uses its built-in "vrtd"/"vrt" defaults and
-    // triggers the fallback-to-current-process uid/gid logic.
-    FakeArgv args{{"slash_emu_daemon", "-c", f.path()}};
-    auto res = parse_cli(args.argc(), args.argv());
-    // The fallback is not an error — it returns ok==true.
-    EXPECT_TRUE(res.ok) << res.error;
-    if (!have_vrtd) { EXPECT_EQ(::getuid(), res.config.uid); }
-    if (!have_vrt)  { EXPECT_EQ(::getgid(), res.config.gid); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
