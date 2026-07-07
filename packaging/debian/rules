@@ -35,6 +35,12 @@ override_dh_auto_build:
 override_dh_auto_test:
 	true
 
+# The slash-sysemu default config ships without any [device.*] section, so the
+# daemon would exit immediately.  Install the unit but do not enable/start it;
+# the admin edits /etc/slash_sysemu/slash_sysemu.conf then enables it.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
 override_dh_auto_install:
 	bash scripts/pinstall.sh $(CURDIR)/debian/tmp
 

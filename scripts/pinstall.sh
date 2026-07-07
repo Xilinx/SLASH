@@ -33,6 +33,9 @@ fi
 # Install smi, vrt, vrtd, libvrt*, libslash
 DESTDIR="$1" cmake --build pbuild/smi --target install
 
+# Install slash_sysemu (slash_sysemud daemon + default VBIN)
+DESTDIR="$1" cmake --build pbuild/slash_sysemu --target install
+
 # Install CMake toolchain modules (SlashTools)
 DESTDIR="$1" cmake --build pbuild/cmake-tools --target install
 

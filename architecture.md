@@ -877,7 +877,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 
 ## Sprint status and deferred items
 
-*Snapshot as of 2026-07-06. This section is a running log so a
+*Snapshot as of 2026-07-07. This section is a running log so a
 fresh session can resume the sprint without re-deriving context.*
 
 ### Progress
@@ -1340,6 +1340,61 @@ ctest suite passing.
       libslash at these sockets (control-file-vs-socket flag) and forwards the PF1
       BDF from the extended QDMA `INFO` field.
 
+* **Post-Step-11 hardening & packaging (between Steps 11 and 12) — DONE.**
+  Four interleaved deliverables that make the daemon shippable and operable
+  before libslash integration:
+    * **Daemon on systemd** (commit `3c750c97`). `run_daemon()` was rebuilt on
+      `libsystemd`: an `sd-event` loop with `sd_event_add_signal` (SIGTERM/SIGINT
+      via signalfd) and an `eventfd` source behind `request_shutdown()` — the
+      hand-rolled self-pipe/atomic-flag machinery is gone. `sd_notify` reports
+      `READY=1`/`STOPPING=1` and a **health-gated watchdog** (`WATCHDOG=1` only
+      while `HotplugSubsystem::healthy()` — a non-blocking `try_lock` on
+      `lifecycle_mu_` — so a lifecycle deadlock lets systemd restart us). Journal
+      logging via `sd_journal_print` (`src/log.h`). Everything systemd owns was
+      **removed** from the daemon: socket uid/gid → `User=`/`Group=`; socket mode
+      → `UMask=`; base-dir creation + cold-reboot cleanup → `RuntimeDirectory=` +
+      `RuntimeDirectoryPreserve=no`; the `-u`/`-g`/`-m` CLI flags and the
+      chmod/chown in every subsystem are deleted. Net −296 lines.
+    * **Rename `slash_emu` → `slash_sysemu`** (commit `b026414e`). "slash_emu"
+      read as *FPGA* emulation; this is *system* emulation (see Nomenclature).
+      Directory, C++ namespace, `struct slash_sysemu_socket_header`, CMake
+      project/targets, and the `SLASH_SYSEMU_*` options/env were renamed; the
+      executable is now **`slash_sysemud`**. The FPGA-emulation tokens (`vpp_emu`,
+      `*_emu.vbin`, `system_map_emu`, the `Emulation` platform) are a distinct
+      concept and were deliberately left untouched.
+    * **Default VBIN built from source** (commit `12577f31`). A fresh accelerator
+      needs a VBIN to bootstrap its model, but none was shipped. `src/model/`
+      holds a clean production model server (`slash_sysemu_model`, packed as
+      `vpp_sim`) that serves round-trip memory/register traffic with no compute
+      kernels — the "default VBIN" model this document describes. It is a
+      first-class implementation of the happy-path dialect, **not** the test
+      `MockModelServer` (whose fault-injection stays test-only); both are pinned to
+      `ModelClient` (mock via `model_client_test`, the real binary via
+      `tests/model_server_test.cpp` — the divergence guard). CMake tars
+      `{vpp_sim, data/default/system_map.xml}` into `default.vbin` (installed to
+      `/usr/lib/slash-sysemu/default.vbin`), and `config.cpp` defaults
+      `--default-vbin` to that compiled-in path (`SLASH_SYSEMU_DEFAULT_VBIN_PATH`),
+      overridable by `$SLASH_SYSEMU_DEFAULT_VBIN` then the flag — so the daemon
+      boots a fresh board with no config knob. Guarded by `default_vbin_test`
+      (unpacks the built artifact) + the precedence tests in `config_test`.
+    * **Packaging (deb + rpm)** (commit `45f6fae8`). Ships `slash_sysemud` as a
+      systemd service mirroring the vrtd convention. Assets under
+      `slash_sysemu/packaging/`: `slash-sysemu.service` (`Type=notify`, runs
+      unprivileged as `slash-sysemu:vrt`, `UMask=0117` → sockets 0660/group `vrt`,
+      `RuntimeDirectory=slash_sysemu`, health-gated `WatchdogSec`; hardened but
+      **no** `MemoryDenyWriteExecute` since the daemon fork/execs the model),
+      a `disable`-by-default preset (the shipped config declares no `[device.*]`,
+      so an auto-started daemon would exit and — under `Restart=on-failure` —
+      loop), `sysusers` (`slash-sysemu` user + shared `vrt` group), a documented
+      config template, and an `EnvironmentFile`. Wired into
+      `scripts/pconfigure|pbuild|pinstall.sh`; new `slash-sysemu` deb/rpm
+      subpackages; the `slash-sim-emu` metapackage now pulls in **both**
+      `slash-sysemu` and `vrtd` (applications drive the emulator through vrtd).
+      The deb installs the unit `--no-enable --no-start`; both back-ends ship it
+      disabled. Build discipline held throughout: clean 4-dir builds, sanitizers
+      proven live, normal/asan/aubsan **553/553** (ubsan 552/553 — the one failure
+      is the deferred generation-guard flake below).
+
 * **Steps 12–14 — NOT STARTED.** Next up: **Step 12 — libslash integration**
   (control-file-vs-socket flag, IOCTL↔datagram translation, SCM_RIGHTS fd-by-index
   both directions, QDMA BDF forwarding). Then 13 (kernel driver + VRTD changes,
@@ -1404,10 +1459,18 @@ ctest suite passing.
   RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR (+ BDF targeting) and the posted death-teardown
   under one `lifecycle_mu_`, with a lifecycle thread for off-monitor death
   callbacks. Drives every `Accelerator`'s lifecycle.
-* `run_daemon()` + the self-pipe shutdown (`daemon.{h,cpp}`) — the real event-loop
-  entry point: cold-reboot cleanup → hotplug setup → startup RESCAN → async-signal-
-  safe self-pipe wait → REMOVE → cleanup; re-invocable, no fd leak. The Step-1
-  `cv.notify_all()`-from-handler note is now resolved.
+* `run_daemon()` on `sd-event` (`daemon.{h,cpp}`) — the real event-loop entry
+  point: hotplug setup → startup RESCAN → `sd_notify(READY=1)` → `sd_event_loop`
+  (signalfd SIGTERM/SIGINT + `eventfd`-backed `request_shutdown()` + health-gated
+  watchdog) → `sd_notify(STOPPING=1)` → REMOVE. systemd owns the runtime dir,
+  socket identity/mode, and logging (journal). Re-invocable, no fd leak. (This
+  replaced the interim Step-11 self-pipe; the Step-1 handler-safety note is
+  resolved.)
+* `slash_sysemu_model` (`src/model/`) + the CMake-built `default.vbin` — the
+  shipped default model (packed as `vpp_sim`): round-trip memory/registers, no
+  kernels. The daemon defaults `--default-vbin` to the installed artifact. The
+  production server and the test `MockModelServer` are independently pinned to
+  `ModelClient`; keep them green together.
 
 ### Deferred / outstanding items
 
@@ -1431,8 +1494,8 @@ ctest suite passing.
   `lifecycle_mu_`*, atomically with the teardown, rather than the check and the
   teardown being separable); (2) null-guard the test's post-assertion `process()`
   read so a guard defect surfaces as a clean GTest failure, never a crash. See the
-  `project_death_generation_guard` memory. Pick up once the systemd refactor +
-  packaging land.
+  `project_death_generation_guard` memory. **The systemd refactor + packaging have
+  now landed, so this is the next thing to pick up** (before or alongside Step 12).
 * **Signal-handler async-signal-safety (from Step 1): RESOLVED (systemd refactor).**
   `run_daemon()` runs an `sd-event` loop; SIGTERM/SIGINT are handled via
   `sd_event_add_signal` (signalfd), and the programmatic `request_shutdown()` uses
