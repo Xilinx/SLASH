@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "config.h"
+
 #include <csignal>
 #include <functional>
 
@@ -58,5 +60,29 @@ void request_shutdown() noexcept;
  * sigaction-failure path without needing to attempt installing SIGKILL.
  */
 int run_daemon(SignalInstaller install_signal = nullptr);
+
+/**
+ * @brief Run the emulation daemon with a resolved configuration.
+ *
+ * Performs the full accelerator-lifecycle bring-up:
+ *   1. Cold-reboot cleanup: remove any leftover per-BDF VBIN directories from a
+ *      previous run (emulating a cold reboot; VBIN files only persist within one
+ *      daemon lifetime).
+ *   2. Create the base directory, bring up the daemon-level slash_hotplug socket
+ *      and its lifecycle worker.
+ *   3. Trigger the startup RESCAN (instantiates every configured accelerator).
+ *   4. Install SIGINT/SIGTERM handlers and block until a shutdown is requested.
+ *   5. On shutdown: tear down the hotplug subsystem (drains the lifecycle queue
+ *      and tears down every accelerator in order), then cold-reboot-clean the
+ *      VBIN directories again.
+ *
+ * The signal handler remains async-signal-safe (atomic store + condvar notify);
+ * all teardown runs on the normal thread after the wait returns.
+ *
+ * @param config         Fully-resolved daemon configuration.
+ * @param install_signal Injectable sigaction seam (defaults to ::sigaction).
+ * @return 0 on a clean shutdown, non-zero on a fatal bring-up error.
+ */
+int run_daemon(const DaemonConfig& config, SignalInstaller install_signal = nullptr);
 
 } // namespace slash_emu

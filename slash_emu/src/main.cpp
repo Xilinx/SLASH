@@ -18,8 +18,24 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 // ################################################################################################
 
+#include "config.h"
 #include "daemon.h"
 
-int main() {
-    return slash_emu::run_daemon();
+#include <cstdio>
+
+int main(int argc, char* argv[]) {
+    slash_emu::CliResult cli = slash_emu::parse_cli(argc, argv);
+    if (!cli.ok) {
+        std::fprintf(stderr, "%s\n", cli.error.c_str());
+        return 2;
+    }
+    if (cli.exit_code != 0) {
+        return cli.exit_code;
+    }
+    // --help / --version return ok with an empty config (CLI11 already printed);
+    // there is nothing to run, so exit cleanly.
+    if (cli.config.accelerators.empty()) {
+        return 0;
+    }
+    return slash_emu::run_daemon(cli.config);
 }

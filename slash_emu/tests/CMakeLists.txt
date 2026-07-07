@@ -312,3 +312,24 @@ add_dependencies(model_process_test step6_fixtures)
 add_slash_emu_test(reconfigure_test reconfigure_test.cpp)
 target_include_directories(reconfigure_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 add_dependencies(reconfigure_test step6_fixtures)
+
+# -------- Step 11: accelerator lifecycle + hotplug --------
+add_slash_emu_test(accelerator_test accelerator_test.cpp)
+target_link_libraries(accelerator_test
+  PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+target_include_directories(accelerator_test
+  PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${JSONCPP_INCLUDE_DIRS})
+add_dependencies(accelerator_test step6_fixtures)
+
+add_slash_emu_test(hotplug_subsystem_test hotplug_subsystem_test.cpp)
+target_link_libraries(hotplug_subsystem_test
+  PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+target_include_directories(hotplug_subsystem_test
+  PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${JSONCPP_INCLUDE_DIRS})
+add_dependencies(hotplug_subsystem_test step6_fixtures)
+
+# daemon_test's config-overload integration test launches a fake model and needs
+# the fixture VBINs + fixtures_paths.h (wired here, after step6_fixtures exists).
+target_link_libraries(daemon_test PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
+target_include_directories(daemon_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${JSONCPP_INCLUDE_DIRS})
+add_dependencies(daemon_test step6_fixtures)

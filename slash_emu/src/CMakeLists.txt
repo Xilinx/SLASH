@@ -50,6 +50,12 @@ if(NOT EXISTS "${SLASH_UAPI_INCLUDE_DIR}/slash/uapi/slash_interface.h")
     "<slash/uapi/slash_interface.h>; not found under "
     "SLASH_UAPI_INCLUDE_DIR='${SLASH_UAPI_INCLUDE_DIR}'")
 endif()
+if(NOT EXISTS "${SLASH_UAPI_INCLUDE_DIR}/slash/uapi/slash_hotplug.h")
+  message(FATAL_ERROR
+    "slash_emu requires the libslash hotplug UAPI header "
+    "<slash/uapi/slash_hotplug.h>; not found under "
+    "SLASH_UAPI_INCLUDE_DIR='${SLASH_UAPI_INCLUDE_DIR}'")
+endif()
 
 add_library(slash_emu_core STATIC
   daemon.cpp
@@ -65,6 +71,8 @@ add_library(slash_emu_core STATIC
   model_control_workers.cpp
   ctl_subsystem.cpp
   qdma_subsystem.cpp
+  accelerator.cpp
+  hotplug_subsystem.cpp
 )
 
 target_include_directories(slash_emu_core

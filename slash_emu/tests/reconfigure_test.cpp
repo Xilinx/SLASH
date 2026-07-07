@@ -116,7 +116,7 @@ void write_file(const fs::path& p, const std::string& content) {
 TEST(Reconfigure, BootstrapFromDefaultLaunchesMain) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
 
     auto r = inst.reconfigure();
     EXPECT_EQ(r.status, ReconfigureStatus::NewProcess) << r.message;
@@ -132,7 +132,7 @@ TEST(Reconfigure, BootstrapFromDefaultLaunchesMain) {
 
 TEST(Reconfigure, NoWorkerControllerIsAllowed) {
     ScratchDir scratch;
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, nullptr, fast());
     auto r = inst.reconfigure();
     EXPECT_EQ(r.status, ReconfigureStatus::NewProcess) << r.message;
     EXPECT_TRUE(inst.has_process());
@@ -151,7 +151,7 @@ TEST(Reconfigure, BootstrapsFromResolvedPerAcceleratorSource) {
 
     auto resolved = cfg.resolve_default_vbin(accel);
     ASSERT_TRUE(resolved.has_value());
-    ModelInstance inst(scratch.path(), accel.board_bdf(), *resolved, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), accel.board_bdf(), *resolved, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     // The per-accelerator source (250 MHz) was used, not the daemon default.
     EXPECT_EQ(inst.process()->system_map().clock_frequency_hz, 250000000u);
@@ -165,7 +165,7 @@ TEST(Reconfigure, BootstrapsFromResolvedDaemonDefaultSource) {
 
     auto resolved = cfg.resolve_default_vbin(accel);
     ASSERT_TRUE(resolved.has_value());
-    ModelInstance inst(scratch.path(), accel.board_bdf(), *resolved, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), accel.board_bdf(), *resolved, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     EXPECT_EQ(inst.process()->system_map().clock_frequency_hz, 100000000u);
 }
@@ -177,7 +177,7 @@ TEST(Reconfigure, BootstrapsFromResolvedDaemonDefaultSource) {
 TEST(Reconfigure, StagingLaunchReplacesMainAndAdoptsNewProcess) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
 
     // First bring up the default (main) process.
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
@@ -204,7 +204,7 @@ TEST(Reconfigure, StagingLaunchReplacesMainAndAdoptsNewProcess) {
 
 TEST(Reconfigure, StagingPromotionPersistsAsNewMain) {
     ScratchDir scratch;
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
 
     stage_vbin(inst.store(), tf::kStagingGoodVbin);
@@ -213,7 +213,7 @@ TEST(Reconfigure, StagingPromotionPersistsAsNewMain) {
 
     // A fresh instance for the same BDF must launch the promoted (250 MHz) main,
     // NOT the original 100 MHz default.
-    ModelInstance inst2(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, fast());
+    ModelInstance inst2(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst2.reconfigure().status, ReconfigureStatus::NewProcess);
     EXPECT_EQ(inst2.process()->system_map().clock_frequency_hz, 250000000u);
 }
@@ -225,7 +225,7 @@ TEST(Reconfigure, StagingPromotionPersistsAsNewMain) {
 TEST(Reconfigure, CorruptStagingClearedOldProcessSurvives) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     ModelProcess* running_before = inst.process();
     int starts_before = workers->starts.load();
@@ -245,7 +245,7 @@ TEST(Reconfigure, CorruptStagingClearedOldProcessSurvives) {
 
 TEST(Reconfigure, UnlaunchableStagingClearedOldProcessSurvives) {
     ScratchDir scratch;
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     ModelProcess* running_before = inst.process();
 
@@ -265,7 +265,7 @@ TEST(Reconfigure, MainLaunchFailureIsReconfigureFailed) {
     ScratchDir scratch;
     // Bootstrap the store manually with an UNLAUNCHABLE main, then reconfigure:
     // no process running + no staging → main launch attempted → fails.
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kUnlaunchableVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kUnlaunchableVbin, nullptr, {}, nullptr, fast());
     auto r = inst.reconfigure();
     EXPECT_EQ(r.status, ReconfigureStatus::Failed) << r.message;
     EXPECT_FALSE(inst.has_process());
@@ -274,7 +274,7 @@ TEST(Reconfigure, MainLaunchFailureIsReconfigureFailed) {
 
 TEST(Reconfigure, CorruptMainIsReconfigureFailed) {
     ScratchDir scratch;
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kCorruptVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kCorruptVbin, nullptr, {}, nullptr, fast());
     auto r = inst.reconfigure();
     EXPECT_EQ(r.status, ReconfigureStatus::Failed) << r.message;
     EXPECT_FALSE(inst.has_process());
@@ -287,7 +287,7 @@ TEST(Reconfigure, CorruptMainIsReconfigureFailed) {
 TEST(Reconfigure, RunningWithEmptyStagingIsNoOp) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     ModelProcess* p1 = inst.process();
     int starts_before = workers->starts.load();
@@ -307,7 +307,7 @@ TEST(Reconfigure, WorkerStartFailureTearsDownNewProcess) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
     workers->fail_next_start = true; // fail the first (main) worker start
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
 
     auto r = inst.reconfigure();
     // Main launch succeeded but worker start failed → adopt rolled back → no
@@ -358,7 +358,7 @@ TEST(Reconfigure, PromotionFailureClearsStagingAtStoreLevel) {
 TEST(Reconfigure, PromotionFailureRetainsAdoptedProcess) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
 
     stage_vbin(inst.store(), tf::kStagingGoodVbin);
@@ -387,7 +387,7 @@ TEST(Reconfigure, PromotionFailureRetainsAdoptedProcess) {
 TEST(Reconfigure, StagingFailsWithNoProcessFallsBackToMain) {
     ScratchDir scratch;
     auto workers = std::make_shared<CountingWorkers>();
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, workers, {}, nullptr, fast());
 
     // Bootstrap the store so main (default, 100 MHz) exists, then stage a corrupt
     // VBIN, WITHOUT ever launching a process.
@@ -416,7 +416,7 @@ TEST(Reconfigure, ModelDeathThenReconfigureIsCoherent) {
     ScratchDir scratch;
     std::atomic<int> deaths{0};
     ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr,
-                       [&] { ++deaths; }, fast());
+                       [&](uint64_t) { ++deaths; }, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     ModelProcess* p = inst.process();
     ASSERT_NE(p, nullptr);
@@ -441,7 +441,7 @@ TEST(Reconfigure, ModelDeathThenReconfigureIsCoherent) {
 
 TEST(Reconfigure, TeardownPreservesVbinFiles) {
     ScratchDir scratch;
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     fs::path main_path = inst.store().main_path();
     ASSERT_TRUE(fs::exists(main_path));
@@ -454,7 +454,7 @@ TEST(Reconfigure, TeardownPreservesVbinFiles) {
 
 TEST(Reconfigure, ColdRebootCleanupRemovesVbinFiles) {
     ScratchDir scratch;
-    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, fast());
+    ModelInstance inst(scratch.path(), "0000:61:00", tf::kDefaultModelVbin, nullptr, {}, nullptr, fast());
     ASSERT_EQ(inst.reconfigure().status, ReconfigureStatus::NewProcess);
     inst.teardown();
     ASSERT_TRUE(fs::exists(inst.store().main_path()));

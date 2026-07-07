@@ -25,7 +25,10 @@
 #include "vbin_store.h"
 #include "worker_controller.h"
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -74,14 +77,24 @@ public:
      * @param bdf           Validated board BDF string.
      * @param default_vbin  Default VBIN used to bootstrap a fresh accelerator.
      * @param workers       Worker lifecycle hook (may be null → no workers).
-     * @param on_death      Model-process death callback (may be null).
+     * @param on_death_gen  Model-process death callback (may be null).  Its
+     *                      argument is the GENERATION of the process that died —
+     *                      a globally-unique id (per @p gen_counter) assigned at
+     *                      that process's launch.  The caller uses it to ignore a
+     *                      STALE death (a process already replaced by a newer one).
+     * @param gen_counter   Shared, never-reset generation counter.  Each launch
+     *                      draws a fresh generation from it; a successful adopt
+     *                      records it as current_generation().  Shared (not owned)
+     *                      so it SURVIVES this ModelInstance being reset()/recreated
+     *                      by the owning Accelerator across model restarts.
      * @param timeouts      Launch/teardown timeouts.
      */
     ModelInstance(std::filesystem::path        base_dir,
                   std::string                  bdf,
                   std::filesystem::path        default_vbin,
-                  std::shared_ptr<WorkerController> workers = nullptr,
-                  DeathCallback                on_death = {},
+                  std::shared_ptr<WorkerController>            workers = nullptr,
+                  std::function<void(uint64_t)>               on_death_gen = {},
+                  std::shared_ptr<std::atomic<uint64_t>>      gen_counter = nullptr,
                   const ModelProcessTimeouts&  timeouts = {});
 
     ModelInstance(const ModelInstance&)            = delete;
@@ -127,19 +140,30 @@ public:
     [[nodiscard]] VbinStore&       store() noexcept { return store_; }
     [[nodiscard]] const VbinStore& store() const noexcept { return store_; }
 
+    /**
+     * @brief The generation of the currently-adopted process (0 if none).
+     *
+     * A globally-unique id assigned at the running process's launch.  Used by the
+     * death path to distinguish a stale death (old generation) from the current
+     * process.  Set only on a successful adopt, under the caller's lifecycle lock.
+     */
+    [[nodiscard]] uint64_t current_generation() const noexcept { return current_gen_; }
+
 private:
     // Adopt @p proc as the new running process: stop old workers, swap process,
     // start new workers.  On worker-start failure, the new process is torn down
     // and false is returned.
     bool adopt(std::unique_ptr<ModelProcess> proc, std::string& err);
 
-    VbinStore                         store_;
-    std::filesystem::path             default_vbin_;
-    std::shared_ptr<WorkerController> workers_;
-    DeathCallback                     on_death_;
-    ModelProcessTimeouts              timeouts_;
+    VbinStore                              store_;
+    std::filesystem::path                  default_vbin_;
+    std::shared_ptr<WorkerController>      workers_;
+    std::function<void(uint64_t)>          on_death_gen_;
+    std::shared_ptr<std::atomic<uint64_t>> gen_counter_;
+    ModelProcessTimeouts                   timeouts_;
 
-    std::unique_ptr<ModelProcess>     process_;
+    std::unique_ptr<ModelProcess>          process_;
+    uint64_t                               current_gen_{0};
 };
 
 } // namespace slash_emu

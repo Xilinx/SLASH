@@ -1274,11 +1274,77 @@ ctest suite passing.
       the daemon-side half of Step 6 reconfiguration; Step 11 owns promoting the
       staged VBIN and restarting the model.
 
-* **Steps 11–14 — NOT STARTED.** Next up: **Step 11 — accelerator lifecycle /
-  hotplug (RESCAN/REMOVE orchestration across PF1+PF2 + model reconfiguration)**.
-  Then 12 (libslash integration), 13 (kernel driver + VRTD changes, incl. moving
-  `kReconfigApertureAddr` + memory ranges into the ABI header and driver-side QDMA
-  bdf), 14 (end-to-end integration).
+* **Step 11 — Accelerator lifecycle and hotplug — DONE**
+    * `src/accelerator.{h,cpp}`: `Accelerator` is the per-BDF state machine
+      (`AccelState` = Absent/Inactive/Active/Partial) that owns the `ModelInstance`
+      + PF1 (`QdmaSubsystem`) + PF2 (`CtlSubsystem`) for one board and enforces
+      instantiation/teardown ordering. `instantiate()`: ensure model → `setup_qdma`
+      (PF1) → `setup_ctl` (PF2). `teardown()`: reverse. `restore_pf(Pf2)` (the
+      reconfiguration path, driven from the QDMA staged-VBIN promotion) **quiesces
+      PF1 first** (`qdma_->remove()` + reset while the old `ModelClient` is still
+      alive) BEFORE `ensure_model()` destroys it, then rebuilds PF2 and reconstructs
+      PF1 against the new model — this is what keeps `qdma_subsystem.*` PRISTINE at
+      its Step-10 borrow-by-reference contract (no `rebind_model`, no snapshot-
+      pointer UAF; device HBM/DDR is defined not to persist across reconfig, so
+      dropping stale qpair state is intended, per the memory-range notes above).
+    * **Model-death generation guard.** Each model launch mints a process-globally-
+      unique generation from a `shared_ptr<atomic<uint64_t>>` counter owned by the
+      `Accelerator` (survives `model_.reset()`); the per-launch `DeathCallback`
+      captures its own generation and posts `on_model_died(gen)` to the lifecycle
+      thread. `Accelerator::on_model_died(gen)` no-ops unless `gen == generation()`,
+      so a stale death task for a process already replaced by HOTPLUG/RESCAN cannot
+      tear down the healthy re-adopted model (the adversary's segfault, fixed).
+      Honours the `DeathCallback` contract: the monitor thread only posts; teardown
+      runs on the lifecycle thread.
+    * `src/hotplug_subsystem.{h,cpp}` + `src/hotplug_ioctls.h`: the daemon-level
+      `slash_hotplug` `AF_UNIX`/`SOCK_SEQPACKET` socket, serving RESCAN (`_IO('w',
+      0x30)`, no-arg), REMOVE/TOGGLE_SBR/HOTPLUG (`_IOW('w', 0x31/0x32/0x33,
+      slash_hotplug_device_request{u32 size; char bdf[32]})`) over the shared
+      datagram transport. `hotplug_ioctls.h` is the thin wrapper over the OFFICIAL
+      `<slash/uapi/slash_hotplug.h>` (real kernel driver `driver/slash_hotplug.c`;
+      same `SLASH_UAPI_INCLUDE_DIR` rule). BDF targeting: `.0/.1/.2` suffix → one PF;
+      bare board BDF → all PFs; empty BDF → the single tracked device (`-EOPNOTSUPP`
+      if multiple, `-ENODEV` if none). A **single `lifecycle_mu_`** serialises
+      RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR and the posted death-teardown; a dedicated
+      lifecycle thread/queue runs death callbacks off the monitor thread. TOGGLE_SBR
+      emulates the 1 s link-training delay.
+    * `src/daemon.{h,cpp}` + `main.cpp`: `run_daemon()` does
+      `cold_reboot_cleanup_all` → `hotplug.setup()` → automatic startup RESCAN →
+      `wait_for_shutdown()` → `hotplug.remove()` → `cold_reboot_cleanup_all`.
+      Async-signal-safe self-pipe shutdown (handler = atomic CAS + `write` 1 byte;
+      main thread `read`/`poll` with EINTR retry). **Bug #2 fix:** the shutdown flag
+      is cleared at run-END (`close_shutdown_state`), not at reset, so a request that
+      arrives before the loop starts is not lost (was a hang). Re-invocable across
+      runs with no self-pipe fd leak.
+    * `src/reconfigure.{h,cpp}`: `ModelInstance` ctor extended to take the per-launch
+      `on_death_gen` callback + the shared generation counter; each launch mints its
+      generation, wraps it into the `DeathCallback`, and records `current_gen_`
+      (exposed via `current_generation()`). `adopt()` destroys the old
+      `ModelProcess` synchronously.
+    * Tests: `tests/accelerator_test.cpp` (22), `tests/hotplug_subsystem_test.cpp`
+      (45), `tests/daemon_test.cpp` (10, incl. the bug-#2 regression
+      `ShutdownRequestedBeforeStartIsNotLost`, both-signal storm, re-invocation fd-
+      leak audit), plus the migrated `tests/reconfigure_test.cpp`. Covers the full
+      state machine, PF1+PF2 ordering, RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR routing +
+      BDF targeting + ABI edge cases, the quiesce-first PF2 restore, and the two
+      adversary bugs with regressions: the **stale-death generation guard**
+      (`OnModelDiedStaleGenerationIsNoop`, `StaleDeathTaskDoesNotTearDownReadopted
+      Model` ×12 iters, `ModelKilledDuringPf2RestoreIsClean`,
+      `InflightTransferRacingReconfigureIsClean`,
+      `QdmaReconstructsAgainstNewModelAfterReconfigure`) and the shutdown-flag fix.
+      Clean 4-dir builds green (**565/565**): normal `-j16`, asan/ubsan/aubsan `-j8`
+      (WSL2 full-suite -j16 is memory-pressure flaky), `-fsanitize` PROVEN live in
+      each `flags.make`; `qdma_subsystem.*` confirmed empty-diff vs Step 10.
+    * Step 11→12 handoff: the daemon now stands up a full emulated board from an
+      empty `/run/slash_emu` and drives it through the hotplug socket; Step 12 points
+      libslash at these sockets (control-file-vs-socket flag) and forwards the PF1
+      BDF from the extended QDMA `INFO` field.
+
+* **Steps 12–14 — NOT STARTED.** Next up: **Step 12 — libslash integration**
+  (control-file-vs-socket flag, IOCTL↔datagram translation, SCM_RIGHTS fd-by-index
+  both directions, QDMA BDF forwarding). Then 13 (kernel driver + VRTD changes,
+  incl. moving `kReconfigApertureAddr` + memory ranges into the ABI header and
+  driver-side QDMA bdf), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -1328,6 +1394,20 @@ ctest suite passing.
   store. Serialisation leans on `ModelClient`'s per-socket lock with file I/O
   outside it. Idempotent `setup()`/`remove()`. Step 11 drives its lifecycle and
   owns staged-VBIN promotion + model restart.
+* `Accelerator` (`accelerator.{h,cpp}`) — the per-BDF state machine that owns one
+  board's `ModelInstance` + PF1 + PF2 and enforces instantiate/teardown ordering,
+  the quiesce-first PF2-restore reconfiguration path, and the model-death
+  generation guard (`on_model_died(gen)` no-ops on stale generations). Step 12+
+  constructs one per discovered board.
+* `HotplugSubsystem` + `hotplug_ioctls.h` (thin UAPI wrapper over the official
+  `slash_hotplug.h`) — the daemon-level `slash_hotplug` socket serialising
+  RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR (+ BDF targeting) and the posted death-teardown
+  under one `lifecycle_mu_`, with a lifecycle thread for off-monitor death
+  callbacks. Drives every `Accelerator`'s lifecycle.
+* `run_daemon()` + the self-pipe shutdown (`daemon.{h,cpp}`) — the real event-loop
+  entry point: cold-reboot cleanup → hotplug setup → startup RESCAN → async-signal-
+  safe self-pipe wait → REMOVE → cleanup; re-invocable, no fd leak. The Step-1
+  `cv.notify_all()`-from-handler note is now resolved.
 
 ### Deferred / outstanding items
 
@@ -1335,10 +1415,10 @@ ctest suite passing.
   virtual network setups, non-polling BAR, FPGA-emulation-model support,
   hardened model-process isolation, and persisting HBM/DDR across
   reconfigurations.
-* **Signal-handler async-signal-safety (from Step 1):** `run_daemon()` currently
-  calls `cv.notify_all()` from the signal handler, which is not formally
-  async-signal-safe (documented inline; safe on Linux/glibc in practice). To be
-  replaced with a self-pipe/eventfd when the real event loop lands in **Step 11**.
+* **Signal-handler async-signal-safety (from Step 1): RESOLVED in Step 11.**
+  `run_daemon()` now uses an async-signal-safe self-pipe (handler = atomic CAS +
+  `write` of 1 byte; main thread `read`/`poll`), replacing the earlier
+  `cv.notify_all()`-from-handler.
 * `main.cpp` (2 lines) is not unit-tested (daemon entry point); acceptable.
 * Residual cosmetic `geninfo mismatch` warnings on test files under GCC 13 +
   lcov 2.0; downgraded via `--ignore-errors`, not a production concern.

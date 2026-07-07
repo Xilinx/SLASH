@@ -24,16 +24,18 @@
 
 namespace slash_emu {
 
-ModelInstance::ModelInstance(std::filesystem::path             base_dir,
-                             std::string                       bdf,
-                             std::filesystem::path             default_vbin,
-                             std::shared_ptr<WorkerController> workers,
-                             DeathCallback                     on_death,
-                             const ModelProcessTimeouts&       timeouts)
+ModelInstance::ModelInstance(std::filesystem::path                  base_dir,
+                             std::string                            bdf,
+                             std::filesystem::path                  default_vbin,
+                             std::shared_ptr<WorkerController>      workers,
+                             std::function<void(uint64_t)>          on_death_gen,
+                             std::shared_ptr<std::atomic<uint64_t>> gen_counter,
+                             const ModelProcessTimeouts&            timeouts)
     : store_(std::move(base_dir), std::move(bdf)),
       default_vbin_(std::move(default_vbin)),
       workers_(std::move(workers)),
-      on_death_(std::move(on_death)),
+      on_death_gen_(std::move(on_death_gen)),
+      gen_counter_(std::move(gen_counter)),
       timeouts_(timeouts) {}
 
 ModelInstance::~ModelInstance() { teardown(); }
@@ -75,8 +77,15 @@ ReconfigureResult ModelInstance::reconfigure() {
     //    promote staging → main and return.  On ANY failure we clear staging and
     //    fall through (per spec: staging is cleared in either case).
     if (store_.staging_nonempty()) {
+        // Mint a globally-unique generation for THIS launch and bind it into a
+        // per-launch void() death wrapper, so the death callback carries the exact
+        // identity of the process it monitors (see the death-path generation guard).
+        const uint64_t g = gen_counter_ ? (gen_counter_->fetch_add(1) + 1) : 0;
+        DeathCallback per_launch = [cb = on_death_gen_, g] {
+            if (cb) cb(g);
+        };
         VbinResult<std::unique_ptr<ModelProcess>> launched =
-            ModelProcess::launch(store_.staging_path().string(), on_death_, timeouts_);
+            ModelProcess::launch(store_.staging_path().string(), per_launch, timeouts_);
 
         if (launched) {
             // Adopt the staged process BEFORE the rename; the process holds its
@@ -84,6 +93,7 @@ ReconfigureResult ModelInstance::reconfigure() {
             // be renamed into main.
             std::string err;
             if (adopt(std::move(launched.value()), err)) {
+                current_gen_ = g; // record the adopted process's generation
                 // Success: promote staging → main, recreate empty staging.  The
                 // promotion (rename + recreate empty staging) also satisfies the
                 // "clear staging on success" requirement.
@@ -123,8 +133,12 @@ ReconfigureResult ModelInstance::reconfigure() {
     if (!store_.has_main()) {
         return {ReconfigureStatus::Failed, "no main VBIN to launch"};
     }
+    const uint64_t gm = gen_counter_ ? (gen_counter_->fetch_add(1) + 1) : 0;
+    DeathCallback main_per_launch = [cb = on_death_gen_, gm] {
+        if (cb) cb(gm);
+    };
     VbinResult<std::unique_ptr<ModelProcess>> main_launched =
-        ModelProcess::launch(store_.main_path().string(), on_death_, timeouts_);
+        ModelProcess::launch(store_.main_path().string(), main_per_launch, timeouts_);
     if (!main_launched) {
         return {ReconfigureStatus::Failed,
                 "main VBIN launch failed: " + main_launched.error().message};
@@ -133,6 +147,7 @@ ReconfigureResult ModelInstance::reconfigure() {
     if (!adopt(std::move(main_launched.value()), err)) {
         return {ReconfigureStatus::Failed, "main VBIN " + err};
     }
+    current_gen_ = gm; // record the adopted process's generation
     return {ReconfigureStatus::NewProcess, "launched main VBIN"};
 }
 
