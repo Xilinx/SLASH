@@ -45,6 +45,19 @@ add_slash_sysemu_test(daemon_test     daemon_test.cpp)
 add_slash_sysemu_test(transport_test transport_test.cpp)
 add_slash_sysemu_test(config_test    config_test.cpp)
 
+# Guards the CMake-built default VBIN.  Needs the artifact built first and its
+# build-tree path injected as a compile definition.
+add_slash_sysemu_test(default_vbin_test default_vbin_test.cpp)
+add_dependencies(default_vbin_test default_vbin)
+target_compile_definitions(default_vbin_test PRIVATE
+  SLASH_SYSEMU_DEFAULT_VBIN_BUILD="${SLASH_SYSEMU_DEFAULT_VBIN_BUILD}")
+
+# Integration guard: launches the real vpp_sim binary and drives it via ModelClient.
+add_slash_sysemu_test(model_server_test model_server_test.cpp)
+add_dependencies(model_server_test slash_sysemu_model)
+target_compile_definitions(model_server_test PRIVATE
+  SLASH_SYSEMU_MODEL_BIN="$<TARGET_FILE:slash_sysemu_model>")
+
 # -------- reusable mock vpp_sim model server (test helper) --------
 # pkg_check_modules populates directory-scoped variables, so re-query here for
 # the tests subdirectory (the imported target PkgConfig::PC_ZMQ is global).

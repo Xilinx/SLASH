@@ -29,9 +29,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
+# Standard GNU install layout (CMAKE_INSTALL_BINDIR, _LIBDIR, …) plus the full
+# install paths the daemon bakes in as compile-time defaults.
+include(GNUInstallDirs)
+
 # -------- Build options --------
 
 option(SLASH_SYSEMU_BUILD_TESTS "Build unit tests" ON)
+option(SLASH_SYSEMU_INSTALL     "Install the daemon, default VBIN, and assets" ON)
 
 option(ENABLE_ASAN  "Build with AddressSanitizer"          OFF)
 option(ENABLE_UBSAN "Build with Undefined Behaviour Sanitizer" OFF)

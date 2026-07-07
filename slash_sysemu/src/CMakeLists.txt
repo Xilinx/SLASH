@@ -107,6 +107,22 @@ target_link_libraries(slash_sysemu_core
     Threads::Threads
 )
 
+# -------- default model server + default VBIN --------
+# Builds the `vpp_sim` model from source and tars it (with a committed system
+# map) into the default VBIN.  Exports SLASH_SYSEMU_DEFAULT_VBIN_BUILD (the
+# build-tree artifact path) to this scope for the compile-time default + tests.
+add_subdirectory(model)
+
+# Bubble the built default-VBIN path up to the top-level scope so the tests
+# subdirectory (a sibling of src/) can reference the artifact.
+set(SLASH_SYSEMU_DEFAULT_VBIN_BUILD "${SLASH_SYSEMU_DEFAULT_VBIN_BUILD}" PARENT_SCOPE)
+
+# The daemon's compile-time default for --default-vbin: the installed location of
+# the default VBIN (see src/model/CMakeLists.txt).  Overridable at runtime by the
+# SLASH_SYSEMU_DEFAULT_VBIN env var and the --default-vbin flag.
+target_compile_definitions(slash_sysemu_core PRIVATE
+  SLASH_SYSEMU_DEFAULT_VBIN_PATH="${CMAKE_INSTALL_PREFIX}/lib/slash-sysemu/default.vbin")
+
 # -------- slash_sysemud executable --------
 
 add_executable(slash_sysemud
@@ -116,3 +132,8 @@ add_executable(slash_sysemud
 target_link_libraries(slash_sysemud PRIVATE slash_sysemu_core)
 
 target_compile_options(slash_sysemud PRIVATE -Wall -Wextra -Werror)
+
+# -------- installation --------
+if(SLASH_SYSEMU_INSTALL)
+  install(TARGETS slash_sysemud RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()

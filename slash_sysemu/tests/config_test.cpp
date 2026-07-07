@@ -622,12 +622,40 @@ TEST(DefaultVbinTest, CliDefaultVbinParsed) {
     EXPECT_EQ("/opt/models/default.vbin", *res.config.default_vbin_path);
 }
 
-TEST(DefaultVbinTest, CliDefaultVbinAbsentIsNullopt) {
+TEST(DefaultVbinTest, CliDefaultVbinAbsentUsesCompiledDefault) {
+    // With neither --default-vbin nor $SLASH_SYSEMU_DEFAULT_VBIN, the daemon
+    // falls back to the compiled-in installed default VBIN path.
+    ::unsetenv("SLASH_SYSEMU_DEFAULT_VBIN");
     TempFile f("[device.0000:61:00]\n");
     FakeArgv args{{"slash_sysemud", "-c", f.path()}};
     auto res = parse_cli(args.argc(), args.argv());
     ASSERT_TRUE(res.ok) << res.error;
-    EXPECT_FALSE(res.config.default_vbin_path.has_value());
+    ASSERT_TRUE(res.config.default_vbin_path.has_value());
+    EXPECT_TRUE(res.config.default_vbin_path->ends_with("slash-sysemu/default.vbin"))
+        << *res.config.default_vbin_path;
+}
+
+TEST(DefaultVbinTest, EnvDefaultVbinOverridesCompiledDefault) {
+    ::setenv("SLASH_SYSEMU_DEFAULT_VBIN", "/opt/env/default.vbin", 1);
+    TempFile f("[device.0000:61:00]\n");
+    FakeArgv args{{"slash_sysemud", "-c", f.path()}};
+    auto res = parse_cli(args.argc(), args.argv());
+    ::unsetenv("SLASH_SYSEMU_DEFAULT_VBIN");
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_TRUE(res.config.default_vbin_path.has_value());
+    EXPECT_EQ("/opt/env/default.vbin", *res.config.default_vbin_path);
+}
+
+TEST(DefaultVbinTest, CliDefaultVbinOverridesEnv) {
+    ::setenv("SLASH_SYSEMU_DEFAULT_VBIN", "/opt/env/default.vbin", 1);
+    TempFile f("[device.0000:61:00]\n");
+    FakeArgv args{{"slash_sysemud", "-c", f.path(),
+                   "--default-vbin", "/opt/cli/default.vbin"}};
+    auto res = parse_cli(args.argc(), args.argv());
+    ::unsetenv("SLASH_SYSEMU_DEFAULT_VBIN");
+    ASSERT_TRUE(res.ok) << res.error;
+    ASSERT_TRUE(res.config.default_vbin_path.has_value());
+    EXPECT_EQ("/opt/cli/default.vbin", *res.config.default_vbin_path);
 }
 
 TEST(DefaultVbinTest, ResolvePrefersPerAcceleratorOverDaemonDefault) {

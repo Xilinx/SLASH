@@ -254,11 +254,21 @@ CliResult parse_cli(int argc, char* argv[]) {
                    "(default: $RUNTIME_DIRECTORY, else /run/slash_sysemu)");
 
     // Daemon-wide default VBIN used to bootstrap a fresh accelerator (Step 6).
-    // Optional: left unset when not provided.
+    // Precedence (low → high): compiled-in installed default, $SLASH_SYSEMU_DEFAULT_VBIN,
+    // then the --default-vbin flag.  Left unset only if none of these apply.
     std::string default_vbin;
     bool        default_vbin_set = false;
+#ifdef SLASH_SYSEMU_DEFAULT_VBIN_PATH
+    default_vbin     = SLASH_SYSEMU_DEFAULT_VBIN_PATH;
+    default_vbin_set = true;
+#endif
+    if (const char* dv = std::getenv("SLASH_SYSEMU_DEFAULT_VBIN"); dv != nullptr && dv[0] != '\0') {
+        default_vbin     = dv;
+        default_vbin_set = true;
+    }
     app.add_option("--default-vbin", default_vbin,
-                   "Daemon-wide default VBIN used to bootstrap a fresh accelerator")
+                   "Daemon-wide default VBIN used to bootstrap a fresh accelerator "
+                   "(default: the installed VBIN, or $SLASH_SYSEMU_DEFAULT_VBIN)")
        ->each([&default_vbin_set](const std::string&) { default_vbin_set = true; });
 
     // ---- Parse ----
