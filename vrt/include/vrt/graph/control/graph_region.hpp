@@ -45,17 +45,47 @@ namespace vrt::graph {
 
 class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
    public:
+    /**
+     * @brief Create the root region for a Graph.
+     *
+     * The root region has scope id 0 and uses itself as its parent scope. It
+     * is the only region allowed to have no parent boundary.
+     */
     static std::shared_ptr<GraphRegion> createRoot() {
         return std::shared_ptr<GraphRegion>(new GraphRegion(0, 0));
     }
 
+    /**
+     * @brief Create a nested child region whose parent is this region.
+     *
+     * Child regions are used for loop bodies and conditional branches. Tokens
+     * from the parent must be passed through explicit boundaries or through
+     * struct-literal loop/conditional port mappings.
+     */
     std::shared_ptr<GraphRegion> createChild() const {
         return std::shared_ptr<GraphRegion>(new GraphRegion(nextScopeId(), scopeId_));
     }
 
+    /**
+     * @brief Return the unique scope id used in scoped token keys.
+     */
     uint64_t scopeId() const { return scopeId_; }
+
+    /**
+     * @brief Return the parent scope id, or the root scope id for the root region.
+     */
     uint64_t parentScopeId() const { return parentScopeId_; }
 
+    /**
+     * @brief Declare a producer-less input buffer token in this region.
+     *
+     * @param type  Element type stored in the buffer.
+     * @param name  Region-local logical name; must be unique among buffer tokens
+     *              in this region.
+     * @param size  Optional scalar token containing the element count.
+     * @return      A buffer token that graph callers must populate before run.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphBuffer inputBuffer(BufferType type, std::string name,
                             std::optional<GraphScalar> size = std::nullopt) {
         if (tokenNames_.count(name)) {
@@ -66,6 +96,16 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
     }
 
+    /**
+     * @brief Declare a producer-less input buffer token sized by @p size.
+     *
+     * @param type  Element type stored in the buffer.
+     * @param name  Region-local logical name; must be unique among buffer tokens
+     *              in this region.
+     * @param size  Scalar token containing the element count.
+     * @return      A buffer token that graph callers must populate before run.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphBuffer inputBuffer(BufferType type, std::string name, GraphScalar size) {
         return inputBuffer(type, std::move(name),
                            std::optional<GraphScalar>(std::move(size)));
@@ -92,6 +132,17 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
     }
 
+    /**
+     * @brief Declare a graph-visible output buffer token in this region.
+     *
+     * @param type  Element type stored in the buffer.
+     * @param name  Region-local logical name; must be unique among buffer tokens
+     *              in this region.
+     * @param size  Optional scalar token containing the element count.
+     * @return      A buffer token that must be produced before graph outputs
+     *              are read.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphBuffer outputBuffer(BufferType type, std::string name,
                              std::optional<GraphScalar> size = std::nullopt) {
         if (tokenNames_.count(name)) {
@@ -103,11 +154,32 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
     }
 
+    /**
+     * @brief Declare a graph-visible output buffer token sized by @p size.
+     *
+     * @param type  Element type stored in the buffer.
+     * @param name  Region-local logical name; must be unique among buffer tokens
+     *              in this region.
+     * @param size  Scalar token containing the element count.
+     * @return      A buffer token that must be produced before graph outputs
+     *              are read.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphBuffer outputBuffer(BufferType type, std::string name, GraphScalar size) {
         return outputBuffer(type, std::move(name),
                             std::optional<GraphScalar>(std::move(size)));
     }
 
+    /**
+     * @brief Declare a mutable scalar token in this region.
+     *
+     * @param type  Scalar element type.
+     * @param name  Region-local logical name; must be unique among scalars in
+     *              this region.
+     * @return      A scalar token that can be bound as a kernel scalar input or
+     *              output according to the graph structure.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphScalar scalar(ScalarType type, std::string name) {
         if (scalarTypes_.count(name)) {
             throw std::invalid_argument("GraphRegion::scalar: name '" + name + "' already used");
@@ -116,6 +188,15 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphScalar::ref(type, std::move(name), scopeId_);
     }
 
+    /**
+     * @brief Declare a graph input scalar in this region.
+     *
+     * @param type  Scalar element type.
+     * @param name  Region-local logical name; must be unique among scalars in
+     *              this region.
+     * @return      A scalar token that callers must set before run.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphScalar inputScalar(ScalarType type, std::string name) {
         if (scalarTypes_.count(name)) {
             throw std::invalid_argument(
@@ -126,6 +207,16 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphScalar::ref(type, std::move(name), scopeId_);
     }
 
+    /**
+     * @brief Declare a graph output scalar in this region.
+     *
+     * @param type  Scalar element type.
+     * @param name  Region-local logical name; must be unique among scalars in
+     *              this region.
+     * @return      A scalar token that must be produced before graph outputs
+     *              are read.
+     * @throws std::invalid_argument If @p name is already used in this region.
+     */
     GraphScalar outputScalar(ScalarType type, std::string name) {
         if (scalarTypes_.count(name)) {
             throw std::invalid_argument(
@@ -136,6 +227,17 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return GraphScalar::ref(type, std::move(name), scopeId_);
     }
 
+    /**
+     * @brief Add a kernel dispatch operation to this region.
+     *
+     * @param kernel     Kernel identity and typed port signature.
+     * @param ioMap      Concrete token bindings for this dispatch.
+     * @param device     Target device id, matching a registered IDevice.
+     * @param afterOps   Optional side-effect ordering dependencies by op id.
+     * @return           Stable authored operation id for the new dispatch.
+     * @throws std::invalid_argument If @p device is empty or the generated op
+     *                               id collides with an existing id.
+     */
     std::string addKernel(KernelDescriptor kernel, IOMap ioMap, std::string device,
                           std::vector<std::string> afterOps = {}) {
         if (device.empty()) {
@@ -149,6 +251,15 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return nodeId;
     }
 
+    /**
+     * @brief Add an FPGA image reprogram operation to this region.
+     *
+     * @param spec  Image id, PDI path, target device, timeout, and ordering
+     *              dependencies.
+     * @return      Stable authored operation id for the new reprogram op.
+     * @throws std::invalid_argument If the image id, PDI path, or device id is
+     *                               empty, or the generated op id collides.
+     */
     std::string addReprogram(ReprogramSpec spec) {
         if (spec.imageId.empty()) {
             throw std::invalid_argument("GraphRegion::addReprogram: image id must not be empty");
@@ -188,6 +299,14 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
                                  std::move(afterOps));
     }
 
+    /**
+     * @brief Import parent-scope scalar tokens into this child region.
+     *
+     * @param scalarMappings  Scalar copies to perform at region entry.
+     * @param afterOps        Optional side-effect ordering dependencies by op id.
+     * @return                Stable boundary operation id.
+     * @throws std::invalid_argument If called on the root region.
+     */
     std::string importFromParent(std::vector<ScalarBoundaryMapping> scalarMappings,
                                  std::vector<std::string> afterOps = {}) {
         requireNonRoot("importFromParent");
@@ -197,6 +316,14 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
                                  std::move(afterOps));
     }
 
+    /**
+     * @brief Import parent-scope buffer tokens into this child region.
+     *
+     * @param bufferMappings  Buffer copies to perform at region entry.
+     * @param afterOps        Optional side-effect ordering dependencies by op id.
+     * @return                Stable boundary operation id.
+     * @throws std::invalid_argument If called on the root region.
+     */
     std::string importFromParent(std::vector<BufferBoundaryMapping> bufferMappings,
                                  std::vector<std::string> afterOps = {}) {
         requireNonRoot("importFromParent");
@@ -226,6 +353,14 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
                                  std::move(afterOps));
     }
 
+    /**
+     * @brief Export child-scope scalar tokens back to the parent region.
+     *
+     * @param scalarMappings  Scalar copies to perform at region exit.
+     * @param afterOps        Optional side-effect ordering dependencies by op id.
+     * @return                Stable boundary operation id.
+     * @throws std::invalid_argument If called on the root region.
+     */
     std::string exportToParent(std::vector<ScalarBoundaryMapping> scalarMappings,
                                std::vector<std::string> afterOps = {}) {
         requireNonRoot("exportToParent");
@@ -235,6 +370,14 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
                                  std::move(afterOps));
     }
 
+    /**
+     * @brief Export child-scope buffer tokens back to the parent region.
+     *
+     * @param bufferMappings  Buffer copies to perform at region exit.
+     * @param afterOps        Optional side-effect ordering dependencies by op id.
+     * @return                Stable boundary operation id.
+     * @throws std::invalid_argument If called on the root region.
+     */
     std::string exportToParent(std::vector<BufferBoundaryMapping> bufferMappings,
                                std::vector<std::string> afterOps = {}) {
         requireNonRoot("exportToParent");
@@ -244,6 +387,16 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
                                  std::move(afterOps));
     }
 
+    /**
+     * @brief Add a structured loop operation to this region.
+     *
+     * @param spec  Loop signature, bindings, body region, trip count or
+     *              condition, output placement hints, and ordering deps.
+     * @return      Stable authored operation id for the loop.
+     * @throws std::invalid_argument If the body is null, a fixed-count loop
+     *                               has no trip count, a while loop has no
+     *                               condition, or the generated op id collides.
+     */
     std::string addLoop(LoopSpec spec) {
         if (!spec.body) {
             throw std::invalid_argument("GraphRegion::addLoop: body region must not be null");
@@ -269,6 +422,15 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return id;
     }
 
+    /**
+     * @brief Add a structured two-branch conditional operation to this region.
+     *
+     * @param spec  Conditional signature, bindings, predicate, branch regions,
+     *              output placement hints, and ordering deps.
+     * @return      Stable authored operation id for the conditional.
+     * @throws std::invalid_argument If the condition or either branch region is
+     *                               missing, or the generated op id collides.
+     */
     std::string addConditional(ConditionalSpec spec) {
         if (!spec.condition) {
             throw std::invalid_argument(
@@ -292,6 +454,9 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         return id;
     }
 
+    /**
+     * @brief Return authored operations in insertion order.
+     */
     const std::vector<RegionOp>& ops() const { return ops_; }
 
     /**
@@ -299,6 +464,9 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
      */
     const std::set<std::string>& declaredInputBufferNames() const { return bufferNames_; }
 
+    /**
+     * @brief Returns the set of names registered via outputBuffer() on this region.
+     */
     const std::set<std::string>& declaredOutputBufferNames() const {
         return outputBufferNames_;
     }
@@ -309,10 +477,16 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
      */
     const std::map<std::string, ScalarType>& declaredScalars() const { return scalarTypes_; }
 
+    /**
+     * @brief Returns graph input scalars registered via inputScalar().
+     */
     const std::map<std::string, ScalarType>& declaredInputScalars() const {
         return inputScalarTypes_;
     }
 
+    /**
+     * @brief Returns graph output scalars registered via outputScalar().
+     */
     const std::map<std::string, ScalarType>& declaredOutputScalars() const {
         return outputScalarTypes_;
     }

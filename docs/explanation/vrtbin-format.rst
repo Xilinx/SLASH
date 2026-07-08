@@ -155,6 +155,8 @@ When you construct ``vrt::Device(bdf, vrtbinPath)``:
    bitstream(s) via the vrtd daemon. On emulation/simulation, it launches
    the model executable in a background thread.
 
+.. _graph-api-and-rp1:
+
 Graph API and RP1
 =================
 
@@ -180,6 +182,9 @@ Graph authors explicitly request image swaps with a reprogram node.  In the
 RP1 backend this lowers to ``RP1_OP_PDI_LOAD`` using the selected vbin's PDI
 bytes staged into RP1-visible DDR.  No partial-region coexistence metadata is
 modeled yet; at most one vbin image is active per FPGA device.
+
+See :doc:`/explanation/graph-api-architecture` for how this image metadata fits
+into Graph compilation, device plans, and FPGA control-flow lowering.
 
 Inspecting a Vrtbin
 ===================

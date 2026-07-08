@@ -44,122 +44,240 @@ namespace vrt::graph {
 
 class GraphRegion;
 
+/**
+ * @brief Which side of a child-region boundary an import/export node models.
+ */
 enum class BoundarySide {
+    /** Copy parent-scope tokens into child-scope tokens before the child runs. */
     Start,
+    /** Copy child-scope tokens back to parent-scope tokens after the child runs. */
     End,
 };
 
+/**
+ * @brief Mapping from one scalar token to another across a region boundary.
+ */
 struct ScalarBoundaryMapping {
+    /** Token read by the boundary op. */
     GraphScalar source;
+    /** Token written by the boundary op. */
     GraphScalar target;
 };
 
+/**
+ * @brief Mapping from one buffer token to another across a region boundary.
+ */
 struct BufferBoundaryMapping {
+    /** Token read by the boundary op. */
     GraphBuffer source;
+    /** Token written by the boundary op. */
     GraphBuffer target;
 };
 
+/**
+ * @brief Scalar and buffer mappings carried by a subgraph boundary op.
+ */
 struct BoundaryMappings {
+    /** Scalar token copies performed by the boundary. */
     std::vector<ScalarBoundaryMapping> scalars;
+    /** Buffer token copies performed by the boundary. */
     std::vector<BufferBoundaryMapping> buffers;
 };
 
+/**
+ * @brief Authored kernel dispatch stored in a GraphRegion.
+ */
 struct KernelOp {
+    /** Stable authored operation id. */
     std::string id;
+    /** Kernel identity and typed port signature. */
     KernelDescriptor kernel;
+    /** Target device id, matching IDevice::id(). */
     std::string device;
+    /** Concrete graph-token bindings for this dispatch. */
     IOMap ioMap;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief User-authored request to load an FPGA image before later dispatches.
+ */
 struct ReprogramSpec {
+    /** User-facing image id registered on the FPGA device. */
     std::string imageId;
+    /** PDI file path to stage and load. */
     std::string pdiPath;
+    /** Target FPGA device id. */
     std::string device;
+    /** Optional backend-specific timeout in RP1 cycles; 0 selects backend default. */
     uint32_t timeoutCycles = 0;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief Authored reprogram op stored in a GraphRegion.
+ */
 struct ReprogramOp {
+    /** Stable authored operation id. */
     std::string id;
+    /** User-facing image id registered on the FPGA device. */
     std::string imageId;
+    /** PDI file path to stage and load. */
     std::string pdiPath;
+    /** Target FPGA device id. */
     std::string device;
+    /** Optional backend-specific timeout in RP1 cycles; 0 selects backend default. */
     uint32_t timeoutCycles = 0;
+    /** Reserved signature slot; reprogram ops currently have no user ports. */
     IOTypeMap ioType;
+    /** Reserved binding slot; reprogram ops currently have no user ports. */
     IOMap ioMap;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief Compiler-visible copy op at the start or end of a child region.
+ */
 struct SubgraphBoundaryOp {
+    /** Stable authored operation id. */
     std::string id;
+    /** Whether this boundary imports into or exports from the child region. */
     BoundarySide side = BoundarySide::Start;
+    /** Parent scope id for boundary validation and scoped-token keys. */
     uint64_t parentScopeId = 0;
+    /** Child/local scope id for boundary validation and scoped-token keys. */
     uint64_t localScopeId = 0;
+    /** Reserved signature slot; concrete mappings carry the boundary I/O. */
     IOTypeMap ioType;
+    /** Reserved binding slot; concrete mappings carry the boundary I/O. */
     IOMap ioMap;
+    /** Scalar token copies performed by this boundary. */
     std::vector<ScalarBoundaryMapping> scalarMappings;
+    /** Buffer token copies performed by this boundary. */
     std::vector<BufferBoundaryMapping> bufferMappings;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief Loop execution mode.
+ */
 enum class LoopKind {
+    /** Run a fixed number of iterations from a LoopTripCount. */
     FixedCount,
+    /** Re-evaluate a Condition before each iteration. */
     WhileCondition,
 };
 
+/**
+ * @brief Optional backend placement hints for values produced by control ops.
+ */
 struct ControlOutputPlacementHints {
+    /** Preferred device id for each output buffer port. */
     std::map<std::string, std::string> buffers;
+    /** Preferred device id for each output scalar port. */
     std::map<std::string, std::string> scalars;
 };
 
+/**
+ * @brief User-authored loop region specification.
+ */
 struct LoopSpec {
+    /** Typed boundary ports exposed by the loop. */
     IOTypeMap ioType;
+    /** Parent-scope inputs, outputs, and inouts bound to loop ports. */
     IOMap ioMap;
+    /** Fixed-count or while-condition loop form. */
     LoopKind kind = LoopKind::FixedCount;
+    /** Required when @ref kind is LoopKind::FixedCount. */
     std::optional<LoopTripCount> tripCount;
+    /** Required when @ref kind is LoopKind::WhileCondition. */
     std::optional<Condition> condition;
+    /** Child region containing the loop body. */
     std::shared_ptr<GraphRegion> body;
+    /** Optional backend placement hints for loop outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief Authored loop op stored in a GraphRegion.
+ */
 struct LoopOp {
+    /** Stable authored operation id. */
     std::string id;
+    /** Typed boundary ports exposed by the loop. */
     IOTypeMap ioType;
+    /** Parent-scope inputs, outputs, and inouts bound to loop ports. */
     IOMap ioMap;
+    /** Fixed-count or while-condition loop form. */
     LoopKind kind = LoopKind::FixedCount;
+    /** Fixed iteration count, if this is a fixed-count loop. */
     std::optional<LoopTripCount> tripCount;
+    /** Loop predicate, if this is a while-condition loop. */
     std::optional<Condition> condition;
+    /** Child region containing the loop body. */
     std::shared_ptr<GraphRegion> body;
+    /** Optional backend placement hints for loop outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief User-authored two-branch conditional region specification.
+ */
 struct ConditionalSpec {
+    /** Typed boundary ports exposed by the conditional. */
     IOTypeMap ioType;
+    /** Parent-scope inputs, outputs, and inouts bound to conditional ports. */
     IOMap ioMap;
     /// Required for ConditionalSpec; GraphRegion::addConditional throws if absent.
     std::optional<Condition> condition;
+    /** Branch region executed when @ref condition evaluates true. */
     std::shared_ptr<GraphRegion> thenRegion;
+    /** Branch region executed when @ref condition evaluates false. */
     std::shared_ptr<GraphRegion> elseRegion;
+    /** Optional backend placement hints for conditional outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief Authored conditional op stored in a GraphRegion.
+ */
 struct ConditionalOp {
+    /** Stable authored operation id. */
     std::string id;
+    /** Typed boundary ports exposed by the conditional. */
     IOTypeMap ioType;
+    /** Parent-scope inputs, outputs, and inouts bound to conditional ports. */
     IOMap ioMap;
+    /** Predicate evaluated to choose between @ref thenRegion and @ref elseRegion. */
     Condition condition = Condition::alwaysFalse();
+    /** Branch region executed when @ref condition evaluates true. */
     std::shared_ptr<GraphRegion> thenRegion;
+    /** Branch region executed when @ref condition evaluates false. */
     std::shared_ptr<GraphRegion> elseRegion;
+    /** Optional backend placement hints for conditional outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
 
+/**
+ * @brief Any operation that can appear in an authored graph region.
+ */
 using RegionOp = std::variant<KernelOp, ReprogramOp, SubgraphBoundaryOp, LoopOp, ConditionalOp>;
 
+/**
+ * @brief Return the stable authored id of any RegionOp variant.
+ */
 inline const std::string& regionOpId(const RegionOp& op) {
     return std::visit(
         [](const auto& concrete) -> const std::string& {

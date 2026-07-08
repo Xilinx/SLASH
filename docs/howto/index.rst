@@ -19,6 +19,7 @@ Task-oriented recipes for common operations.
    build-from-source
    use-cmake-modules
    inspect-vrtbin-metadata
+   debug-graph-with-dot
    use-mock-mode
    migrate-from-xrt
    use-rtl-kernels
