@@ -29,7 +29,7 @@
  * FpgaDevice, compile, and run().  Assertions cover:
  *
  *  - The sentinel slot gets the expected magic written once the graph
- *    finishes (matches the existing `rp1_bringup diamond` contract).
+ *    finishes (the trailing-SIGNAL completion contract).
  *  - The CQ contains one entry per kernel + the sentinel signal node.
  *  - Barrier masks and arg packing are correct for the diamond DAG.
  *  - Non-kernel CompiledNode variants (e.g. CompiledBridgeOpNode that
@@ -78,7 +78,7 @@ namespace {
 constexpr std::size_t   kBarSize   = 128ULL << 20;
 constexpr std::uint64_t kWindowOff = 64ULL << 20;
 
-// Diamond test addresses match examples/rp1_bringup/rp1_bringup.c.
+// Arbitrary distinct R5 kernel addresses for the fake-RP1 diamond DAG.
 constexpr std::uint32_t kKernelA_R5 = 0x88010000u;
 constexpr std::uint32_t kKernelB_R5 = 0x88020000u;
 constexpr std::uint32_t kKernelC_R5 = 0x88030000u;

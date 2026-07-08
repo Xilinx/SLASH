@@ -976,8 +976,8 @@ Authoring stays in `vrt::graph::Graph` — there is no separate
 `addNode(KernelDescriptor{name, DeviceType::FPGA, ...}, IOMap{...},
 "fpga:0", afterNodes)`. Kernel names are resolved to R5 AXI-Lite base
 addresses through a user-supplied `FpgaKernelLocationLookup`. The
-canonical demonstration is `examples/rp1_bringup_vrt`, which is the
-direct VRT-graph port of the bringup C tool's `diamond` stage.
+canonical demonstration is `examples/graph/00_multi_image_pipeline`, an
+end-to-end `vrt::graph` FPGA-backend example.
 
 Limitations of phase 1 (each will be addressed by a follow-up phase):
 
@@ -1015,7 +1015,7 @@ as future phases.
 - System map must include R5-visible kernel addresses alongside PCIe-visible ones
 
 For phase 1 the R5 addresses are hardcoded in the example (see
-`examples/rp1_bringup_vrt/rp1_bringup_vrt.cpp`); a future phase will
+`examples/graph/00_multi_image_pipeline/multi_image_pipeline.cpp`); a future phase will
 auto-generate the `FpgaKernelLocationLookup` from `system_map.xml`
 using the documented formula
 `r5_addr = xml_addr - 0x0202'0000'0000 + 0x8800'0000`.

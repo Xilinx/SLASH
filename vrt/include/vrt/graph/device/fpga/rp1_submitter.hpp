@@ -93,7 +93,8 @@ struct Rp1GraphImage {
 };
 
 /**
- * @brief Default CQ size for first submission (matches `examples/rp1_bringup`).
+ * @brief Default CQ size for first submission (matches the `v80-smi debug
+ *        rp1-ping` probe).
  */
 constexpr std::uint32_t kDefaultCqSize = 64u;
 

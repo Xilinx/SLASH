@@ -24,7 +24,7 @@
  *        backend: typed tokens, kernel handles, addKernelCall, addLoop (with a
  *        carried buffer), addConditional, in-place (inout) kernels, scalar
  *        outputs, and Graph::write/read. The FPGA reprogram / image-safety
- *        paths are validated on hardware via examples/rp1_graph_vbin_full.
+ *        paths are validated on hardware via examples/graph/00_multi_image_pipeline.
  */
 
 #include <gtest/gtest.h>

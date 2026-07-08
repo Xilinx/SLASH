@@ -25,8 +25,8 @@
  * The RP1 firmware exposes its host-shared state through a 64 MiB DDR
  * aperture that lives at R5 physical address @c RP1_CTRL_PHYS_ADDR
  * (`0x3000_0000`). On V80 the host reaches that aperture through BAR4 at
- * a fixed 64 MiB byte offset (matching the convention validated by
- * `examples/07_rp1_memcheck` and `examples/rp1_bringup`).
+ * a fixed 64 MiB byte offset (matching the convention validated by the
+ * `v80-smi debug rp1-dump` / `rp1-ping` probes).
  *
  * @c Rp1BarWindow owns the BAR mapping and provides bracketed, typed
  * access to the protocol structs defined in
@@ -76,8 +76,8 @@ class Rp1BarWindow {
     /**
      * @brief Host-side BAR offset of the RP1 64 MiB DDR aperture on V80.
      *
-     * Mirrors @c BAR_CTRL_OFFSET in @c examples/rp1_bringup/rp1_bringup.c
-     * and the convention validated by `examples/07_rp1_memcheck`.
+     * Mirrors the control-block offset used by the `v80-smi debug rp1-dump`
+     * / `rp1-ping` probes (their default @c --ctrl-offset).
      */
     static constexpr std::uint64_t kDefaultWindowOffset = 64ULL << 20;
 

@@ -28,7 +28,7 @@ talks to vrtd via libvrtdpp's `vrtd::BarFile`, mmaps BAR4 + 64 MiB,
 and submits RP1 command-processor graphs through the shared protocol
 header at `driver/libslash/include/slash/uapi/rp1_protocol.h`. See
 `linker/resources/aved/rp1/ARCHITECTURE.md` §H for the layering and
-`examples/rp1_bringup_vrt` for an end-to-end demo.
+`examples/graph/00_multi_image_pipeline` for an end-to-end demo.
 
 Key responsibilities:
 

@@ -105,8 +105,7 @@ using FpgaKernelLocationLookup =
 
 /**
  * @brief Sentinel slot/value used by the trailing SIGNAL node in every
- *        compiled FPGA plan.  Matches the convention used by
- *        `examples/rp1_bringup/cmd_diamond`.
+ *        compiled FPGA plan.
  */
 constexpr std::uint32_t kDefaultSentinelSlot  = RP1_MAX_SIGNALS - 1u;
 constexpr std::uint32_t kDefaultSentinelValue = 0xD1A1D0DDu;
