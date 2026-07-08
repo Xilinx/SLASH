@@ -19,13 +19,13 @@
 # ##################################################################################################
 
 cmake_minimum_required(VERSION 3.20)
-project(multi_image_pipeline LANGUAGES CXX)
+project(edge_detection LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VRT_USE_REPO  "Build VRT (and its deps) from the repo tree instead of installed packages" OFF)
-option(BUILD_KERNELS "Build the HLS kernels and link the two vbins (requires Vivado)" ON)
+option(BUILD_KERNELS "Build the HLS kernels and link the vbin (requires Vivado)" ON)
 
 if(VRT_USE_REPO)
   get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." REALPATH)
@@ -48,34 +48,38 @@ endif()
 if(BUILD_KERNELS)
   set(DEVICE "xcv80-lsva4737-2MHP-e-S" CACHE STRING "Target device")
 
+  # All three kernels are compiled from the same hls/ directory and packed
+  # into a single vbin image -- fewer images means fewer reprogram steps at
+  # runtime, and the linker can share unused PL resources across kernels.
   build_hls_dir(
-    TARGET      hls_a
-    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls_a"
+    TARGET      hls_edges
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
     DEVICE      "${DEVICE}"
-    KERNELS     graph_kernel
-    OUT_KERNELS _KERNELS_A
+    KERNELS     edges_kernel
+    OUT_KERNELS _KERNELS_EDGES
   )
-  add_vbin(
-    TARGET    multi_image_pipeline_a_hw
-    PLATFORM  hw
-    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config_a.cfg"
-    KERNELS   ${_KERNELS_A}
+  build_hls_dir(
+    TARGET      hls_level
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
+    DEVICE      "${DEVICE}"
+    KERNELS     level_kernel
+    OUT_KERNELS _KERNELS_LEVEL
+  )
+  build_hls_dir(
+    TARGET      hls_normalize
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
+    DEVICE      "${DEVICE}"
+    KERNELS     normalize_kernel
+    OUT_KERNELS _KERNELS_NORMALIZE
   )
 
-  build_hls_dir(
-    TARGET      hls_b
-    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls_b"
-    DEVICE      "${DEVICE}"
-    KERNELS     graph_kernel
-    OUT_KERNELS _KERNELS_B
-  )
   add_vbin(
-    TARGET    multi_image_pipeline_b_hw
+    TARGET    edge_detection_hw
     PLATFORM  hw
-    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config_b.cfg"
-    KERNELS   ${_KERNELS_B}
+    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config.cfg"
+    KERNELS   ${_KERNELS_EDGES} ${_KERNELS_LEVEL} ${_KERNELS_NORMALIZE}
   )
 endif()
 
-add_executable(${PROJECT_NAME} multi_image_pipeline.cpp)
+add_executable(${PROJECT_NAME} 01_edge_detection.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${_VRT_TARGET})

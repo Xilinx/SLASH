@@ -19,7 +19,7 @@
  */
 
 // ===========================================================================
-// rp1_graph_vbin_full — full CPU+FPGA work-graph demo on the vrt::graph API.
+// multi_image_pipeline — full CPU+FPGA work-graph demo on the vrt::graph API.
 // ===========================================================================
 //
 // One application source drives a heterogeneous graph across two FPGA images
@@ -120,8 +120,8 @@ void usage(const char* argv0) {
 Cli parseArgs(int argc, char** argv) {
     Cli cli;
     const auto binDir = executableDir(argv[0]);
-    cli.vbinA = (binDir / "rp1_graph_vbin_full_a_hw.vbin").string();
-    cli.vbinB = (binDir / "rp1_graph_vbin_full_b_hw.vbin").string();
+    cli.vbinA = (binDir / "multi_image_pipeline_a_hw.vbin").string();
+    cli.vbinB = (binDir / "multi_image_pipeline_b_hw.vbin").string();
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -451,7 +451,7 @@ int main(int argc, char** argv) try {
         input[i] = static_cast<int32_t>(i);
     }
 
-    std::cout << "[rp1_graph_vbin_full] compiling graph with "
+    std::cout << "[multi_image_pipeline] compiling graph with "
               << cli.iterations << " loop iteration(s), "
               << cli.elementCount << " element(s)" << std::endl;
     auto exec = graph.compile();
@@ -460,15 +460,15 @@ int main(int argc, char** argv) try {
     exec.writeScalar(loopIterations, cli.iterations);
     exec.write(raw, input);
 
-    std::cout << "[rp1_graph_vbin_full] running graph..." << std::endl;
+    std::cout << "[multi_image_pipeline] running graph..." << std::endl;
     exec.run();
-    std::cout << "[rp1_graph_vbin_full] graph run complete; checking output..." << std::endl;
+    std::cout << "[multi_image_pipeline] graph run complete; checking output..." << std::endl;
 
     std::vector<int32_t> output(cli.elementCount, 0);
     exec.read(out, output);
     const auto expected = expectedOutput(cli.elementCount, cli.iterations);
 
-    std::cout << "[rp1_graph_vbin_full] output:";
+    std::cout << "[multi_image_pipeline] output:";
     for (size_t i = 0; i < std::min<size_t>(output.size(), 8); ++i) {
         std::cout << ' ' << output[i];
     }
@@ -489,6 +489,6 @@ int main(int argc, char** argv) try {
               << std::endl;
     return 0;
 } catch (const std::exception& e) {
-    std::cerr << "rp1_graph_vbin_full: " << e.what() << std::endl;
+    std::cerr << "multi_image_pipeline: " << e.what() << std::endl;
     return 1;
 }

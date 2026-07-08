@@ -1,4 +1,4 @@
-# rp1_graph_vbin_full
+# 00_multi_image_pipeline
 
 End-to-end example for the VRT graph FPGA backend, authored with the
 struct-literal `vrt::graph` API:
@@ -63,7 +63,7 @@ gated behind a reprogram of its image:
 | `hls_a/graph_kernel.cpp` | Image A FPGA kernel, increments every element. |
 | `hls_b/graph_kernel.cpp` | Image B FPGA kernel, doubles every element. |
 | `config_a.cfg`, `config_b.cfg` | One `graph_kernel_0` instance with two HBM-connected `m_axi` ports. |
-| `rp1_graph_vbin_full.cpp` | Host graph authoring and execution. |
+| `multi_image_pipeline.cpp` | Host graph authoring and execution. |
 | `CMakeLists.txt` | Builds HLS/vbins when Vivado is available and always builds the host app. |
 
 ## Build
@@ -71,7 +71,7 @@ gated behind a reprogram of its image:
 Against the repo tree:
 
 ```bash
-cd examples/rp1_graph_vbin_full
+cd examples/graph/00_multi_image_pipeline
 cmake -B build -S . -DVRT_USE_REPO=ON
 cmake --build build
 ```
@@ -79,7 +79,7 @@ cmake --build build
 Host-only build without Vivado:
 
 ```bash
-cd examples/rp1_graph_vbin_full
+cd examples/graph/00_multi_image_pipeline
 cmake -B build -S . -DVRT_USE_REPO=ON -DBUILD_KERNELS=OFF
 cmake --build build
 ```
@@ -99,16 +99,16 @@ Prerequisites:
 Run from the build directory:
 
 ```bash
-./rp1_graph_vbin_full --bdf 0000:65:00.0 --iterations 2 --elements 16
+./multi_image_pipeline --bdf 0000:65:00.0 --iterations 2 --elements 16
 ```
 
 Or provide explicit vbin paths:
 
 ```bash
-./rp1_graph_vbin_full \
+./multi_image_pipeline \
   --bdf 0000:65:00.0 \
-  --vbin-a /path/to/rp1_graph_vbin_full_a_hw.vbin \
-  --vbin-b /path/to/rp1_graph_vbin_full_b_hw.vbin \
+  --vbin-a /path/to/multi_image_pipeline_a_hw.vbin \
+  --vbin-b /path/to/multi_image_pipeline_b_hw.vbin \
   --iterations 2 \
   --elements 16
 ```

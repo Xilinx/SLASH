@@ -19,13 +19,13 @@
 # ##################################################################################################
 
 cmake_minimum_required(VERSION 3.20)
-project(multi_image_pipeline LANGUAGES CXX)
+project(sharpen_loop LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VRT_USE_REPO  "Build VRT (and its deps) from the repo tree instead of installed packages" OFF)
-option(BUILD_KERNELS "Build the HLS kernels and link the two vbins (requires Vivado)" ON)
+option(BUILD_KERNELS "Build the HLS kernel and link the vbin (requires Vivado)" ON)
 
 if(VRT_USE_REPO)
   get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." REALPATH)
@@ -49,33 +49,20 @@ if(BUILD_KERNELS)
   set(DEVICE "xcv80-lsva4737-2MHP-e-S" CACHE STRING "Target device")
 
   build_hls_dir(
-    TARGET      hls_a
-    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls_a"
+    TARGET      hls_sharpen
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
     DEVICE      "${DEVICE}"
-    KERNELS     graph_kernel
-    OUT_KERNELS _KERNELS_A
-  )
-  add_vbin(
-    TARGET    multi_image_pipeline_a_hw
-    PLATFORM  hw
-    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config_a.cfg"
-    KERNELS   ${_KERNELS_A}
+    KERNELS     sharpen_kernel
+    OUT_KERNELS _KERNELS_SHARPEN
   )
 
-  build_hls_dir(
-    TARGET      hls_b
-    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls_b"
-    DEVICE      "${DEVICE}"
-    KERNELS     graph_kernel
-    OUT_KERNELS _KERNELS_B
-  )
   add_vbin(
-    TARGET    multi_image_pipeline_b_hw
+    TARGET    sharpen_loop_hw
     PLATFORM  hw
-    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config_b.cfg"
-    KERNELS   ${_KERNELS_B}
+    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config.cfg"
+    KERNELS   ${_KERNELS_SHARPEN}
   )
 endif()
 
-add_executable(${PROJECT_NAME} multi_image_pipeline.cpp)
+add_executable(${PROJECT_NAME} 02_sharpen_loop.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${_VRT_TARGET})
