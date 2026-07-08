@@ -25,6 +25,7 @@ add_library(slash
   ${CMAKE_CURRENT_SOURCE_DIR}/hotplug.c
   ${CMAKE_CURRENT_SOURCE_DIR}/qdma.c
   ${CMAKE_CURRENT_SOURCE_DIR}/qdma_mock.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/sock_transport.c
 )
 
 # Provide an alias target with namespace (nice for internal use too)

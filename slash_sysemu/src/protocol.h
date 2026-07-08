@@ -20,27 +20,15 @@
 
 #pragma once
 
-#include <cstdint>
+// The canonical struct definition and protocol constants live in the shared
+// UAPI header so both the daemon and libslash use the same source of truth.
+#include <slash/uapi/slash_sysemu.h>
 
 namespace slash_sysemu {
 
-/**
- * @brief Wire header for every datagram exchanged over the emulation sockets.
- *
- * Both request (user->daemon) and response (daemon->user) datagrams begin with
- * this fixed-size header, followed immediately by the IOCTL argument struct bytes.
- *
- * Field layout matches the architecture specification exactly; types use the
- * fixed-width stdint aliases so the struct is the same size in every build.
- */
-struct slash_sysemu_socket_header {
-    uint32_t ioctl_op;      /**< The IOCTL operation to emulate */
-    uint32_t sequence_id;   /**< A monotonically increasing sequence number */
-    uint32_t return_value;  /**< The return value of the IOCTL, can be set arbitrarily for requests */
-    uint32_t pad;           /**< Padding */
-};
-
-static_assert(sizeof(slash_sysemu_socket_header) == 16,
-              "slash_sysemu_socket_header must be exactly 16 bytes");
+// Import the UAPI struct into the daemon namespace so existing code that
+// references slash_sysemu::slash_sysemu_socket_header continues to compile
+// unchanged.
+using ::slash_sysemu_socket_header;
 
 } // namespace slash_sysemu

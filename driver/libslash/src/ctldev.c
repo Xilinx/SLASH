@@ -31,6 +31,7 @@
 #include <slash/ctldev.h>
 
 #include "ctldev_mock.h"
+#include "sock_transport.h"
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -47,6 +48,7 @@
 struct slash_ctldev *slash_ctldev_open(const char *path)
 {
     struct slash_ctldev *ctldev;
+    int is_sock;
 
     if (path == NULL) {
         errno = EINVAL;
@@ -62,12 +64,28 @@ struct slash_ctldev *slash_ctldev_open(const char *path)
         return NULL;
     }
 
-    ctldev->fd = open(path, O_RDWR);
-    if (ctldev->fd < 0) {
+    is_sock = slash_path_is_socket(path);
+    if (is_sock < 0) {
         goto err_free_ctldev;
     }
 
-    ctldev->mock = false;
+    if (is_sock) {
+        ctldev->fd = slash_sock_connect(path);
+        if (ctldev->fd < 0) {
+            goto err_free_ctldev;
+        }
+        ctldev->mock      = false;
+        ctldev->transport = SLASH_TRANSPORT_SOCKET;
+        ctldev->seq       = 0;
+    } else {
+        ctldev->fd = open(path, O_RDWR);
+        if (ctldev->fd < 0) {
+            goto err_free_ctldev;
+        }
+        ctldev->mock      = false;
+        ctldev->transport = SLASH_TRANSPORT_IOCTL;
+        ctldev->seq       = 0;
+    }
 
     return ctldev;
 
@@ -104,6 +122,7 @@ int slash_ctldev_close(struct slash_ctldev *ctldev)
 struct slash_ioctl_device_info *slash_device_info_read(struct slash_ctldev *ctldev)
 {
     int ret;
+    int32_t rv;
     struct slash_ioctl_device_info *info;
 
     if (ctldev == NULL) {
@@ -120,9 +139,27 @@ struct slash_ioctl_device_info *slash_device_info_read(struct slash_ctldev *ctld
         return NULL;
     }
 
-    /* Set size so the kernel can version-check the struct. */
     info->size = sizeof(*info);
 
+    if (ctldev->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(ctldev->fd,
+                                (uint32_t)SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO,
+                                info, sizeof(*info),
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &ctldev->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            /* errno already ENODEV */
+            goto err_free_info;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            goto err_free_info;
+        }
+        return info;
+    }
+
+    /* IOCTL path */
     ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, info);
     if (ret < 0) {
         goto err_free_info;
@@ -144,6 +181,7 @@ void slash_device_info_free(struct slash_ioctl_device_info *info)
 struct slash_ioctl_bar_info *slash_bar_info_read(struct slash_ctldev *ctldev, int bar_number)
 {
     int ret;
+    int32_t rv;
     struct slash_ioctl_bar_info *bar_info;
 
     if (ctldev == NULL) {
@@ -160,9 +198,27 @@ struct slash_ioctl_bar_info *slash_bar_info_read(struct slash_ctldev *ctldev, in
         return NULL;
     }
 
-    bar_info->size = sizeof(*bar_info);
-    bar_info->bar_number = bar_number;
+    bar_info->size       = sizeof(*bar_info);
+    bar_info->bar_number = (uint8_t)bar_number;
 
+    if (ctldev->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(ctldev->fd,
+                                (uint32_t)SLASH_CTLDEV_IOCTL_GET_BAR_INFO,
+                                bar_info, sizeof(*bar_info),
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &ctldev->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            goto err_free_bar_info;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            goto err_free_bar_info;
+        }
+        return bar_info;
+    }
+
+    /* IOCTL path */
     ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_INFO, bar_info);
     if (ret < 0) {
         goto err_free_bar_info;
@@ -178,14 +234,16 @@ err_free_bar_info:
 
 struct slash_bar_file *slash_bar_file_open(struct slash_ctldev *ctldev, int bar_number, int flags)
 {
-    struct slash_ioctl_bar_fd_request req = {
-        .size = sizeof(req),
-
-        .bar_number = bar_number,
-        .flags = flags,
-    };
-
+    struct slash_ioctl_bar_fd_request req;
     struct slash_bar_file *bar_file;
+    int recv_fd;
+    size_t n_recv;
+    int32_t rv;
+
+    memset(&req, 0, sizeof(req));
+    req.size       = sizeof(req);
+    req.bar_number = (uint8_t)bar_number;
+    req.flags      = (uint32_t)flags;
 
     if (ctldev == NULL) {
         errno = EINVAL;
@@ -201,14 +259,51 @@ struct slash_bar_file *slash_bar_file_open(struct slash_ctldev *ctldev, int bar_
         return NULL;
     }
 
-    /* The ioctl returns the dma-buf fd directly as its return value. */
+    if (ctldev->transport == SLASH_TRANSPORT_SOCKET) {
+        recv_fd  = -1;
+        n_recv   = 0;
+        rv = slash_sock_request(ctldev->fd,
+                                (uint32_t)SLASH_CTLDEV_IOCTL_GET_BAR_FD,
+                                &req, sizeof(req),
+                                NULL, 0,
+                                &recv_fd, 1, &n_recv,
+                                &ctldev->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            goto err_free_bar_file;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            if (recv_fd >= 0) { close(recv_fd); recv_fd = -1; }
+            goto err_free_bar_file;
+        }
+        if (n_recv < 1 || recv_fd < 0) {
+            /* Daemon didn't send us an fd — treat as transport error */
+            errno = ENODEV;
+            goto err_free_bar_file;
+        }
+        /* req.length was filled in by the daemon. */
+        bar_file->fd        = recv_fd;
+        bar_file->len       = (size_t)req.length;
+        bar_file->mock      = false;
+        bar_file->transport = SLASH_TRANSPORT_SOCKET;
+
+        bar_file->map = mmap(NULL, bar_file->len, PROT_READ | PROT_WRITE,
+                             MAP_SHARED, bar_file->fd, 0);
+        if (bar_file->map == MAP_FAILED) {
+            close(bar_file->fd);
+            goto err_free_bar_file;
+        }
+        return bar_file;
+    }
+
+    /* IOCTL path: the ioctl returns the dma-buf fd directly as its return value. */
     bar_file->fd = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_FD, &req);
     if (bar_file->fd < 0) {
         goto err_free_bar_file;
     }
 
     /* The kernel filled in req.length with the BAR size. */
-    bar_file->len = (size_t) req.length;
+    bar_file->len = (size_t)req.length;
 
     /*
      * Map the entire BAR into our address space.  The dma-buf fd
@@ -218,17 +313,19 @@ struct slash_bar_file *slash_bar_file_open(struct slash_ctldev *ctldev, int bar_
      * accesses with the DMA_BUF_IOCTL_SYNC start/end helpers
      * (see the inline functions in ctldev.h).
      */
-    bar_file->map = mmap(NULL, bar_file->len, PROT_READ | PROT_WRITE, MAP_SHARED, bar_file->fd, 0);
+    bar_file->map = mmap(NULL, bar_file->len, PROT_READ | PROT_WRITE,
+                         MAP_SHARED, bar_file->fd, 0);
     if (bar_file->map == MAP_FAILED) {
         goto err_close_fd;
     }
 
-    bar_file->mock = false;
+    bar_file->mock      = false;
+    bar_file->transport = SLASH_TRANSPORT_IOCTL;
 
     return bar_file;
 
 err_close_fd:
-    (void) close(bar_file->fd);
+    (void)close(bar_file->fd);
 
 err_free_bar_file:
     free(bar_file);

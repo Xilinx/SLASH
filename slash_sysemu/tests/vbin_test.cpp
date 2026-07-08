@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "fixtures_paths.h"
@@ -644,6 +645,87 @@ TEST(VbinTest, TempDirReleaseSuppressesRemoval) {
     }
     EXPECT_TRUE(fs::exists(dir)) << "release() should suppress auto-removal";
     fs::remove_all(dir);
+}
+
+// ── ADVERSARY PROBE: umask=0117 (systemd UMask=0117 live regression) ─────────
+//
+// Verifies that both the implicit-directory path (write_member creates parent
+// dirs via create_directories) and the explicit-directory-entry path (extract_tar
+// handles typeflag '5' dir entries) both add owner-execute AFTER creation so the
+// extraction succeeds regardless of the process umask.
+//
+// MUST FAIL before the fix (create_directories yields 0660; the subsequent
+// ofstream fails EACCES) and PASS after.
+
+// Helper: recursively check that every directory under @p root has owner-execute.
+void expect_dirs_traversable(const fs::path& root) {
+    for (auto it = fs::recursive_directory_iterator(root); it != fs::recursive_directory_iterator(); ++it) {
+        if (it->is_directory()) {
+            auto perms = it->status().permissions();
+            EXPECT_NE(perms & fs::perms::owner_exec, fs::perms::none)
+                << "directory missing owner-execute: " << it->path()
+                << " mode=" << std::oct << static_cast<int>(perms);
+        }
+    }
+}
+
+// Covers write_member's create_directories(parent) path: the tar has a member
+// nested under a path whose parent dirs must be implicitly created.
+TEST(VbinTest, NestedMemberExtractionSucceedsUnderRestrictiveUmask) {
+    std::vector<uint8_t> tar;
+    append_member(tar, "system_map.xml", kEmuMapXml);
+    append_member(tar, "vpp_emu", "#!/bin/true\n");
+    // A member nested under a directory that must be created implicitly.
+    append_member(tar, "data/default/payload.bin", "nested-content");
+    append_end(tar);
+    RawTempFile f(tar);
+
+    const mode_t old_umask = ::umask(0117);
+    struct UmaskGuard {
+        mode_t saved;
+        ~UmaskGuard() { ::umask(saved); }
+    } umask_guard{old_umask};
+
+    auto res = unpack_vbin(f.path());
+
+    ::umask(old_umask); // restore before ASSERT so teardown is clean
+
+    ASSERT_TRUE(res) << (res ? "" : res.error().message);
+
+    // Every extracted directory must be traversable (owner-exec present).
+    expect_dirs_traversable(res.value().temp_dir.path());
+
+    // The nested file was actually extracted.
+    EXPECT_TRUE(fs::exists(res.value().temp_dir.path() / "data/default/payload.bin"));
+}
+
+// Covers extract_tar's explicit dir-entry path (typeflag '5'): the tar contains
+// an explicit directory entry before the file nested inside it.
+TEST(VbinTest, ExplicitDirEntryExtractionSucceedsUnderRestrictiveUmask) {
+    std::vector<uint8_t> tar;
+    append_member(tar, "system_map.xml", kEmuMapXml);
+    append_member(tar, "vpp_emu", "#!/bin/true\n");
+    // Explicit directory entry (typeflag '5'), then a file inside it.
+    append_member(tar, "data/default/", "", '5');
+    append_member(tar, "data/default/payload.bin", "content-in-explicit-dir");
+    append_end(tar);
+    RawTempFile f(tar);
+
+    const mode_t old_umask = ::umask(0117);
+    struct UmaskGuard {
+        mode_t saved;
+        ~UmaskGuard() { ::umask(saved); }
+    } umask_guard{old_umask};
+
+    auto res = unpack_vbin(f.path());
+
+    ::umask(old_umask);
+
+    ASSERT_TRUE(res) << (res ? "" : res.error().message);
+
+    expect_dirs_traversable(res.value().temp_dir.path());
+
+    EXPECT_TRUE(fs::exists(res.value().temp_dir.path() / "data/default/payload.bin"));
 }
 
 } // namespace

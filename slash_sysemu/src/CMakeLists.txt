@@ -60,6 +60,12 @@ if(NOT EXISTS "${SLASH_UAPI_INCLUDE_DIR}/slash/uapi/slash_hotplug.h")
     "<slash/uapi/slash_hotplug.h>; not found under "
     "SLASH_UAPI_INCLUDE_DIR='${SLASH_UAPI_INCLUDE_DIR}'")
 endif()
+if(NOT EXISTS "${SLASH_UAPI_INCLUDE_DIR}/slash/uapi/slash_sysemu.h")
+  message(FATAL_ERROR
+    "slash_sysemu requires the shared sysemu UAPI header "
+    "<slash/uapi/slash_sysemu.h>; not found under "
+    "SLASH_UAPI_INCLUDE_DIR='${SLASH_UAPI_INCLUDE_DIR}'")
+endif()
 
 add_library(slash_sysemu_core STATIC
   daemon.cpp

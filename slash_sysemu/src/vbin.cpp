@@ -228,15 +228,65 @@ std::optional<std::vector<uint8_t>> gunzip(const std::vector<uint8_t>& in, VbinE
     return out;
 }
 
-// Write @p data (len bytes) to @p out_path, creating parent directories.
-std::optional<VbinError> write_member(const std::filesystem::path& out_path, const uint8_t* data,
-                                      std::size_t len) {
+// Create @p dir (and any intermediate components relative to @p root that do not
+// yet exist), ensuring that every newly-created directory under @p root has
+// owner-execute — bypassing the process umask.
+//
+// Background: the systemd unit sets UMask=0117, so std::filesystem::create_directories()
+// would yield mode 0660 = drw-rw---- on every new directory.  A directory that
+// lacks the owner-execute bit is non-traversable by its owner: any subsequent
+// attempt to create a child inside it returns EACCES.  We walk from @p root toward
+// @p dir component by component, creating each missing level with create_directory()
+// and immediately adding owner_all (rwx), so each level is traversable before we
+// descend into it.
+//
+// Only directories that are proper descendants of @p root are touched; @p root
+// itself is assumed to be already traversable (mkdtemp(3) always yields 0700).
+std::optional<VbinError> create_dirs_under_root(const std::filesystem::path& root,
+                                                 const std::filesystem::path& dir) {
     std::error_code ec;
+    // Build a relative path from root → dir; if dir is not under root this is a
+    // no-op (lexically_relative returns an empty path for paths that don't share
+    // a common prefix, but the caller guarantees dir is inside root).
+    const std::filesystem::path rel = dir.lexically_relative(root);
+    // rel is "." when dir == root, or starts with ".." when dir is above root.
+    // In both cases there is nothing to create or fix under root.
+    if (rel.empty() || rel == std::filesystem::path(".") ||
+        rel.native().rfind("..", 0) == 0) {
+        return std::nullopt;
+    }
+
+    std::filesystem::path cur = root;
+    for (const auto& part : rel) {
+        cur /= part;
+        if (!std::filesystem::exists(cur, ec)) {
+            std::filesystem::create_directory(cur, ec);
+            if (ec && ec != std::errc::file_exists) {
+                return io_err("failed to create directory '" + cur.string() + "': " + ec.message());
+            }
+        }
+        // Add owner-execute regardless of whether it was freshly created.
+        // perm_options::add is idempotent (a no-op if the bit is already set).
+        std::filesystem::permissions(cur,
+                                     std::filesystem::perms::owner_all,
+                                     std::filesystem::perm_options::add, ec);
+        if (ec) {
+            return io_err("failed to set permissions on '" + cur.string() + "': " + ec.message());
+        }
+    }
+    return std::nullopt;
+}
+
+// Write @p data (len bytes) to @p out_path, creating parent directories under
+// @p root and ensuring each new directory is owner-executable (see
+// create_dirs_under_root).
+std::optional<VbinError> write_member(const std::filesystem::path& root,
+                                      const std::filesystem::path& out_path, const uint8_t* data,
+                                      std::size_t len) {
     const auto parent = out_path.parent_path();
     if (!parent.empty()) {
-        std::filesystem::create_directories(parent, ec);
-        if (ec) {
-            return io_err("failed to create directory '" + parent.string() + "': " + ec.message());
+        if (auto e = create_dirs_under_root(root, parent)) {
+            return e;
         }
     }
     std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
@@ -315,14 +365,11 @@ std::optional<VbinError> extract_tar(const std::vector<uint8_t>& tar,
         if (!rel->empty()) {
             const std::filesystem::path out_path = dest_dir / *rel;
             if (is_dir_type(typeflag)) {
-                std::error_code ec;
-                std::filesystem::create_directories(out_path, ec);
-                if (ec) {
-                    return io_err("failed to create directory '" + out_path.string() +
-                                  "': " + ec.message());
+                if (auto e = create_dirs_under_root(dest_dir, out_path)) {
+                    return e;
                 }
             } else if (is_regular_type(typeflag)) {
-                if (auto e = write_member(out_path, payload, static_cast<std::size_t>(size))) {
+                if (auto e = write_member(dest_dir, out_path, payload, static_cast<std::size_t>(size))) {
                     return e;
                 }
             }
@@ -345,7 +392,21 @@ std::optional<std::filesystem::path> make_temp_dir(const std::filesystem::path& 
                      temp_root.string() + "'");
         return std::nullopt;
     }
-    return std::filesystem::path(buf.data());
+    // mkdtemp(3) on Linux applies the process umask, so under the systemd
+    // UMask=0117 the tempdir may come out as 0600 (drw-------) — no execute bit,
+    // meaning even the owner cannot list or traverse it.  Explicitly add owner_all
+    // (rwx) to make the directory traversable regardless of umask.
+    const std::filesystem::path dir(buf.data());
+    std::error_code ec;
+    std::filesystem::permissions(dir, std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::add, ec);
+    if (ec) {
+        err = io_err("failed to set permissions on '" + dir.string() + "': " + ec.message());
+        // Best-effort cleanup.
+        std::filesystem::remove_all(dir, ec);
+        return std::nullopt;
+    }
+    return dir;
 }
 
 // Locate a file by name at the extraction root (VBIN members are flat).

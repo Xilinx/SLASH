@@ -589,9 +589,15 @@ TEST_F(AcceleratorTest, MultiSessionH2cC2hHammerRacingRepeatedReconfigure) {
             if (!xfer) return;
             UniqueFd buf(::memfd_create("h", MFD_CLOEXEC));
             if (!buf) return;
-            (void)::ftruncate(buf.get(), static_cast<off_t>(page));
+            if (::ftruncate(buf.get(), static_cast<off_t>(page)) < 0) {
+                bad.fetch_add(1);
+                return;
+            }
             std::vector<uint8_t> src(page, static_cast<uint8_t>(0x10 + s));
-            (void)::pwrite(buf.get(), src.data(), page, 0);
+            if (::pwrite(buf.get(), src.data(), page, 0) < 0) {
+                bad.fetch_add(1);
+                return;
+            }
 
             uint32_t xseq = 1000;
             bool alive = true;

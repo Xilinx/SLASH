@@ -137,8 +137,9 @@ struct slash_ctldev *slash_ctldev_mock_open(void)
         return NULL;
     }
 
-    ctldev->fd = -1;
-    ctldev->mock = true;
+    ctldev->fd        = -1;
+    ctldev->mock      = true;
+    ctldev->transport = SLASH_TRANSPORT_MOCK;
 
     return ctldev;
 }
@@ -260,11 +261,12 @@ struct slash_bar_file *slash_bar_file_mock_open(struct slash_ctldev *ctldev, int
         return NULL;
     }
 
-    bar_file->fd = fd;
-    bar_file->len = (size_t) SLASH_MOCK_BAR_SIZE;
-    bar_file->map = map;
-    bar_file->mock = true;
+    bar_file->fd        = fd;
+    bar_file->len       = (size_t)SLASH_MOCK_BAR_SIZE;
+    bar_file->map       = map;
+    bar_file->mock      = true;
     bar_file->mock_path = path;
+    bar_file->transport = SLASH_TRANSPORT_MOCK;
 
     return bar_file;
 }

@@ -34,10 +34,13 @@ static constexpr const char *REAL_CTLDEV_PATH = "/dev/slash_ctl0";
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
 
 TEST(CtldevOpenTest, NullPath) {
+    /* slash_ctldev_open(NULL) explicitly sets errno=EINVAL and returns NULL
+     * (src/ctldev.c — the first guard at the top of the function).
+     * The previous expectation of EFAULT was wrong. */
     errno = 0;
     struct slash_ctldev *dev = slash_ctldev_open(nullptr);
     EXPECT_EQ(dev, nullptr);
-    EXPECT_EQ(errno, EFAULT);
+    EXPECT_EQ(errno, EINVAL);
 }
 
 TEST(CtldevCloseTest, NullHandle) {

@@ -21,6 +21,7 @@
 #include "hotplug_subsystem.h"
 
 #include "hotplug_ioctls.h"
+#include "log.h"
 
 #include <cerrno>
 #include <cstring>
@@ -481,7 +482,10 @@ int HotplugSubsystem::rescan_locked() {
                                                        gen_counter_);
         }
 
-        (void)it->second->instantiate(); // Failed → left Inactive; continue RESCAN
+        if (auto r = it->second->instantiate(); !r) {
+            log_err("RESCAN: instantiate(%s) failed: %s",
+                    board.c_str(), r.error().message.c_str());
+        } // Failed → left Inactive; continue RESCAN
     }
 
     return 0;

@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
@@ -234,6 +235,48 @@ TEST(VbinStore, ColdRebootCleanupRemovesEverything) {
     ASSERT_TRUE(store.cold_reboot_cleanup().has_value());
     EXPECT_FALSE(fs::exists(store.dir()));
     EXPECT_FALSE(store.has_main());
+}
+
+// ── ADVERSARY PROBE: umask=0117 (systemd UMask=0117 live regression) ─────────
+//
+// The systemd unit sets UMask=0117, so create_directories would normally yield
+// mode 0660 = drw-rw----.  A directory without owner-execute is non-traversable
+// even by its owner; copy_file into it then returns EACCES.  bootstrap() must
+// explicitly add owner-execute AFTER creation so the copy succeeds regardless of
+// the process umask.  This test MUST FAIL before the fix and PASS after.
+TEST(VbinStore, BootstrapSucceedsUnderRestrictiveUmask) {
+    ScratchDir scratch;
+    fs::path def = scratch.path() / "default.vbin";
+    write_file(def, "DEFAULT-VBIN-CONTENT");
+
+    // Apply the same restrictive umask the systemd unit would impose.
+    const mode_t old_umask = ::umask(0117);
+    struct UmaskGuard {
+        mode_t saved;
+        ~UmaskGuard() { ::umask(saved); }
+    } umask_guard{old_umask};
+
+    VbinStore store(scratch.path(), "0000:61:00");
+    auto r = store.bootstrap(def);
+
+    // Fix the umask before any EXPECT that might allocate so teardown is clean.
+    ::umask(old_umask);
+
+    ASSERT_TRUE(r.has_value()) << (r.has_value() ? "" : r.error().message);
+
+    // The store directory must have owner-execute so the daemon can traverse it.
+    std::error_code ec;
+    auto perms = fs::status(store.dir(), ec).permissions();
+    ASSERT_FALSE(ec) << "stat on store dir failed: " << ec.message();
+    EXPECT_NE(perms & fs::perms::owner_exec, fs::perms::none)
+        << "store dir is missing owner-execute: mode="
+        << std::oct << static_cast<int>(perms);
+
+    // The copy of the default VBIN must have succeeded (main.vbin seeded).
+    EXPECT_TRUE(store.has_main());
+    EXPECT_EQ(read_file(store.main_path()), "DEFAULT-VBIN-CONTENT");
+    EXPECT_TRUE(fs::exists(store.staging_path()));
+    EXPECT_FALSE(store.staging_nonempty());
 }
 
 // The key lifecycle guarantee: an accelerator teardown does NOT touch the VBIN

@@ -4,7 +4,7 @@ Idea: A user-space daemon emulates the behavior of the SLASH driver and the unde
 
 Instead of exposing control files, the emulation daemon exposes UNIX domain sockets (`AF_UNIX`/`SOCK_SEQPACKET`) with identical names, and instead of IOCTLs, all operations are messages sent over these sockets. Where an IOCTL is supposed to return a file descriptor, the daemon's response is instead a return value of zero (i.e. success), and the file descriptor is instead transferred as ancillary data as `SCM_RIGHTS`. Where an IOCTL argument struct is supposed to contain file descriptors, the sender instead transfers the corresponding file descriptors as ancillary data and references these file descriptors by index.
 
-The difference between the driver's ABI and its emulation (IOCTLs vs socket datagrams) will be resolved in libslash: When opening a top-level device file/socket, users will also have to set a flag whether the opened file is a control file or a UNIX domain socket. This information will then handled by libslash accordingly and also forwarded to newly created constructs.
+The difference between the driver's ABI and its emulation (IOCTLs vs socket datagrams) will be resolved in libslash: Whenever a user wants to execute an operation, libslash has to query the type of the underlying file and either execute an IOCTL or a datagram exchange depending on the type.
 
 The following document describes the requirements for the system emulation daemon, as well as some necessary changes to the kernel driver, libslash, and the entire stack that depends on it.
 
@@ -345,7 +345,7 @@ Just like the real driver, the daemon exposes multiple files/sockets for differe
         * Use `flock` with a shared lock for reads and exclusive locks for write
     * Has to be handled correctly by libslash:
         * `struct slash_bar_file` needs a flag whether it is emulated or real
-        * `slash_bar_file_sync` needs to use fsync for emulated bar files
+        * `slash_bar_file_sync` needs to use flock for emulated bar files
     * Requires that the file description held by the daemon and sent to the user are distinct
         * Otherwise, locks from separate processes will not collide
 * Issue: The daemon is not notified when the user writes to the memfd
@@ -824,7 +824,7 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 
 #### Step 12: libslash integration
 
-* Add the control-file-vs-socket flag at device open and propagate it
+* Query the file type before opening and open/connect to the file correctly
 * Translate IOCTLs into datagrams and back for socket-backed devices
 * Pass FDs by index via `SCM_RIGHTS` in both directions
 * Return `-ENODEV` on any send or receive failure
@@ -1395,11 +1395,77 @@ ctest suite passing.
       proven live, normal/asan/aubsan **553/553** (ubsan 552/553 — the one failure
       is the deferred generation-guard flake below).
 
-* **Steps 12–14 — NOT STARTED.** Next up: **Step 12 — libslash integration**
-  (control-file-vs-socket flag, IOCTL↔datagram translation, SCM_RIGHTS fd-by-index
-  both directions, QDMA BDF forwarding). Then 13 (kernel driver + VRTD changes,
-  incl. moving `kReconfigApertureAddr` + memory ranges into the ABI header and
-  driver-side QDMA bdf), 14 (end-to-end integration).
+* **Step 12 — libslash integration — DONE**
+    * **Shared UAPI protocol header** (`driver/libslash/include/slash/uapi/slash_sysemu.h`):
+      `struct slash_sysemu_socket_header` (16 bytes, static-assert-verified) + the
+      `SLASH_SYSEMU_RECONFIG_APERTURE_ADDR` constant (0x102100000, from `qdma_ioctls.h` —
+      the aperture constant itself is intentionally deferred to Step 13 where the kernel
+      driver + VRTD will need it in the ABI header). The daemon's `src/protocol.h`
+      refactored to `#include` this header instead of defining the struct locally —
+      single source of truth, consistent with the UAPI-header rule for Steps 9–11.
+    * **`src/sock_transport.{h,c}`** (private to libslash): C90 client-side transport
+      mirroring the daemon's `transport.cpp`. Provides `slash_sock_connect` (SEQPACKET +
+      SO_RCVTIMEO/SO_SNDTIMEO ~10 s), `slash_path_is_socket`/`slash_fd_is_socket` (stat/fstat
+      + S_ISSOCK), `slash_sock_request` (build header+payload, one `sendmsg` with SCM_RIGHTS
+      MSG_NOSIGNAL, one `recvmsg` with MSG_CMSG_CLOEXEC, validate MSG_TRUNC/MSG_CTRUNC/
+      size/seq/op, copy response arg, return `header.return_value`; transport failure →
+      `errno=ENODEV`, `SLASH_SOCK_TRANSPORT_ERR` sentinel), and
+      `slash_sock_rewrite_fd_index` (client side of `collect_fds_and_rewrite` for
+      TRANSFER `buf_fd` by index). Per-handle `uint32_t seq` counter; raw-fd entry
+      points use `__thread uint32_t` for thread-safe per-socket sequencing.
+    * **ctldev socket path** (`src/ctldev.c`, `include/slash/ctldev.h`): `slash_transport`
+      enum (`IOCTL`/`MOCK`/`SOCKET`) in `struct slash_ctldev` and `struct slash_bar_file`.
+      `slash_ctldev_open` detects `S_ISSOCK` → `slash_sock_connect` + `SOCKET`;
+      `device_info_read`/`bar_info_read` → `slash_sock_request`; `bar_file_open` →
+      `GET_BAR_FD` request, `recv_fds[0]` via SCM_RIGHTS, `mmap`. The inline
+      `slash_bar_file_sync` gains a SOCKET branch: `DMA_BUF_SYNC_*` → `flock(2)`
+      (`START|WRITE`→`LOCK_EX`, `START|READ`→`LOCK_SH`, `END|*`→`LOCK_UN`, EINTR retry).
+      The daemon's `reopen()` ensures each client gets a distinct open file description on
+      the same memfd inode, so flock collisions are correct.
+    * **QDMA socket path** (`src/qdma.c`, `include/slash/qdma.h`): transport enum in
+      `struct slash_qdma`. `slash_qdma_open` socket-detects; `info_read` (forwards BDF),
+      `qpair_add`, `qpair_op`, `qpair_get_fd`/`_multi` (QPAIR_GET_FD returns an anonymous
+      XFER socket fd via SCM_RIGHTS; TRANSFER is issued on the XFER fd), `buffer_create`,
+      `qpair_buffer_create` (raw fd → `slash_fd_is_socket` for transport), `transfer_batch`/
+      `transfer` each gain socket branches. TRANSFER uses `slash_sock_rewrite_fd_index` for
+      `buf_fd` by index (SCM_RIGHTS on the XFER socket). The ENOTTY→memfd mock fallback on
+      raw-fd non-socket paths is preserved unchanged.
+    * **Hotplug socket path** (`src/hotplug.c`, `include/slash/hotplug.h`): transport enum +
+      `uint32_t seq` in `struct slash_hotplug`. `slash_hotplug_open` socket-detects.
+      RESCAN (no-arg `_IO`) → header-only `slash_sock_request` (`arg=NULL, arg_len=0`);
+      REMOVE/TOGGLE_SBR/HOTPLUG → `slash_hotplug_device_request` payload, same BDF-copy +
+      length-guard logic as the ioctl path.
+    * **In-process test server** (`tests/sysemu_test_server.{h,cpp}`): reusable C++
+      SEQPACKET server that binds a temp socket, speaks the full protocol, serves all
+      ctldev/QDMA/hotplug ops (BAR memfds via `reopen()`; XFER socketpairs via
+      `SCM_RIGHTS`; aperture H2C appends to `staging_`, C2H from aperture returns
+      `−EINVAL`; `transfer_hint = SLASH_QDMA_TRANSFER_HINT_SINGLE_QPAIR`), and injects
+      faults (PeerClose, TruncatedReply, WrongSeq, WrongOp, DaemonError). Hotplug state
+      (`last_hotplug_bdf`, `hotplug_error_code`, `hotplug_no_device` knobs). sv[1]
+      double-close fixed (set to −1 after SCM_RIGHTS transfer); sv[0] lifecycle owned by
+      `ConnectionLoop` (Stop uses `shutdown` not `close`); recv_fd-on-error leaks fixed
+      in `ctldev.c` and `qdma.c`.
+    * **Tests**: `tests/ctldev_sysemu_test.cpp` (32 tests), `tests/qdma_sysemu_test.cpp`
+      (25 tests), `tests/hotplug_sysemu_test.cpp` (22 tests), plus
+      `tests/libslash_e2e_test.cpp` (7 tests, all `GTEST_SKIP()` unless
+      `SLASH_E2E_CTL`/`SLASH_E2E_QDMA`/`SLASH_E2E_HOTPLUG` are set — the suite never
+      spawns the daemon). `tests/sock_transport_test.cpp` (framing, fd passing, ENODEV
+      mapping). `CtldevOpenTest.NullPath` corrected to `EINVAL` (was `EFAULT` — a
+      pre-existing test bug). Total: **187 tests**; fully green across all 4 dirs.
+      Adversary + reviewer sign-off complete.
+    * **Aperture constant deferral**: `kReconfigApertureAddr`/`SLASH_SYSEMU_RECONFIG_APERTURE_ADDR`
+      stays in `qdma_ioctls.h`/`slash_sysemu.h` for now; it will move into the kernel UAPI
+      header in Step 13 when the driver-side QDMA BDF and memory-range ABI are locked.
+    * Clean **187/187** across 4 build dirs (normal `-j16`, asan/ubsan/aubsan `-j8`);
+      `-fsanitize` proven live via `nm` on all 3 sanitizer binaries.
+    * Step 12→13 handoff: libslash speaks both char-device and socket transports over
+      the same API; consumer code is transport-agnostic. Step 13 adds the kernel driver
+      changes (driver-side QDMA BDF, memory-range ABI, and `kReconfigApertureAddr`
+      migration into the UAPI header).
+
+* **Steps 13–14 — NOT STARTED.** Next up: **Step 13 — kernel driver + VRTD changes**
+  (driver-side QDMA bdf, moving `kReconfigApertureAddr` + memory ranges into the UAPI
+  header), 14 (end-to-end integration).
 
 ### Reusable building blocks now available
 
@@ -1471,6 +1537,24 @@ ctest suite passing.
   kernels. The daemon defaults `--default-vbin` to the installed artifact. The
   production server and the test `MockModelServer` are independently pinned to
   `ModelClient`; keep them green together.
+* **`sock_transport.{h,c}` + libslash socket transport** (Step 12) — the C90
+  client-side `AF_UNIX`/`SOCK_SEQPACKET` transport (`slash_sock_connect`,
+  `slash_path_is_socket`/`slash_fd_is_socket`, `slash_sock_request`,
+  `slash_sock_rewrite_fd_index`) mirroring the daemon's `transport.cpp`. All three
+  libslash subsystems (ctldev, qdma, hotplug) are transport-agnostic at the public
+  API; `S_ISSOCK` detection at `open` selects the path. BAR sync over sockets uses
+  `flock(2)` (LOCK_EX/LOCK_SH/LOCK_UN) instead of `DMA_BUF_IOCTL_SYNC`. Any
+  transport failure → `errno=ENODEV`. Consumer code works unchanged over both
+  `/dev/slash_*` char devices and `/run/slash_sysemu/slash_*` sockets.
+* **`SysemuTestServer`** (`tests/sysemu_test_server.{h,cpp}`, Step 12) — reusable
+  in-process C++ SEQPACKET server that binds a temp socket, serves all three
+  subsystems (ctldev/QDMA/hotplug), passes memfds + socketpairs via SCM_RIGHTS,
+  models the reconfig-aperture staging buffer (`staging_`), and injects faults
+  (PeerClose, TruncatedReply, WrongSeq, WrongOp, DaemonError). Shared fixture for
+  `ctldev_sysemu_test`, `qdma_sysemu_test`, and `hotplug_sysemu_test`; extended by
+  each adversary pass. The opt-in `libslash_e2e_test` drives the same consumer flow
+  against a real running daemon via `SLASH_E2E_CTL`/`SLASH_E2E_QDMA`/`SLASH_E2E_HOTPLUG`
+  env vars.
 
 ### Deferred / outstanding items
 

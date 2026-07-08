@@ -77,6 +77,17 @@ VbinResult<void> VbinStore::bootstrap(const std::filesystem::path& default_vbin)
         return VbinResult<void>::err(
             io_error("cannot create directory '" + dir_.string() + "': " + ec.message()));
     }
+    // The systemd unit sets UMask=0117, so create_directories yields 0660 —
+    // drw-rw----.  A directory without owner-execute is non-traversable even by
+    // its owner.  Explicitly add owner_all (rwx) WITHOUT relying on umask, so the
+    // daemon can create files inside this directory regardless of the unit umask.
+    std::filesystem::permissions(dir_,
+                                 std::filesystem::perms::owner_all,
+                                 std::filesystem::perm_options::add, ec);
+    if (ec) {
+        return VbinResult<void>::err(
+            io_error("cannot set permissions on '" + dir_.string() + "': " + ec.message()));
+    }
 
     if (!has_main()) {
         // Fresh accelerator: seed main.vbin from the default VBIN.

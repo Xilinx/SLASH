@@ -51,7 +51,9 @@ public:
         EXPECT_GE(fd, 0) << "mkstemp: " << std::strerror(errno);
         path_ = tmpl;
         if (fd >= 0) {
-            ::write(fd, content.data(), content.size());
+            EXPECT_EQ(::write(fd, content.data(), content.size()),
+                      static_cast<ssize_t>(content.size()))
+                << "write to temp file failed: " << std::strerror(errno);
             ::close(fd);
         }
     }

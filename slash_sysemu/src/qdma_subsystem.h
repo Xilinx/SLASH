@@ -104,8 +104,7 @@ namespace slash_sysemu {
 // The reconfiguration-aperture device address.  H2C writes here are appended to
 // the staging VBIN instead of being forwarded to the model process (architecture
 // "Writing the staging VBIN": chunks of up to 64 KiB, always at device address
-// 0x102100000).  Step 13 moves this constant into the kernel ABI header along
-// with the HBM/DDR/reconfiguration memory ranges; until then it lives here.
+// 0x102100000).  Step 13 moves this constant into the kernel ABI header.
 inline constexpr uint64_t kReconfigApertureAddr = 0x102100000ull;
 
 class QdmaSubsystem {

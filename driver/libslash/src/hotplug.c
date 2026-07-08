@@ -31,8 +31,11 @@
 
 #include <slash/hotplug.h>
 
+#include "sock_transport.h"
+
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -43,6 +46,8 @@
  * slash_hotplug_ioctl_without_request() — Issue an ioctl that takes no
  * argument struct (used by RESCAN).
  *
+ * On the socket transport, sends a header-only request (arg=NULL, arg_len=0).
+ *
  * @hotplug: Open hotplug handle.  Must not be NULL.
  * @op:      ioctl request number.
  *
@@ -50,11 +55,29 @@
  */
 static int slash_hotplug_ioctl_without_request(struct slash_hotplug *hotplug, unsigned long op)
 {
+    int32_t rv;
     int ret;
 
     if (hotplug == NULL) {
         errno = EINVAL;
         return -1;
+    }
+
+    if (hotplug->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(hotplug->fd,
+                                (uint32_t)op,
+                                NULL, 0,
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &hotplug->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1; /* errno already ENODEV */
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            return -1;
+        }
+        return 0;
     }
 
     ret = ioctl(hotplug->fd, op);
@@ -68,6 +91,8 @@ static int slash_hotplug_ioctl_without_request(struct slash_hotplug *hotplug, un
 /**
  * slash_hotplug_ioctl_with_request() — Issue an ioctl that carries a
  * slash_hotplug_device_request identifying a device by BDF.
+ *
+ * On the socket transport, the same request struct is sent as the payload.
  *
  * @hotplug: Open hotplug handle.  Must not be NULL.
  * @op:      ioctl request number.
@@ -86,6 +111,7 @@ static int slash_hotplug_ioctl_with_request(
 {
     struct slash_hotplug_device_request req;
     size_t len;
+    int32_t rv;
     int ret;
 
     if (hotplug == NULL) {
@@ -106,6 +132,23 @@ static int slash_hotplug_ioctl_with_request(
         memcpy(req.bdf, bdf, len + 1);
     }
 
+    if (hotplug->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(hotplug->fd,
+                                (uint32_t)op,
+                                &req, sizeof(req),
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &hotplug->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1; /* errno already ENODEV */
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            return -1;
+        }
+        return 0;
+    }
+
     ret = ioctl(hotplug->fd, op, &req);
     if (ret < 0) {
         return -1;
@@ -118,6 +161,7 @@ struct slash_hotplug *slash_hotplug_open(const char *path)
 {
     const char *open_path;
     struct slash_hotplug *hotplug;
+    int is_sock;
 
     open_path = path;
     if (open_path == NULL) {
@@ -128,11 +172,28 @@ struct slash_hotplug *slash_hotplug_open(const char *path)
     if (hotplug == NULL) {
         return NULL;
     }
+    hotplug->seq = 0;
 
-    hotplug->fd = open(open_path, O_RDWR | O_CLOEXEC);
-    if (hotplug->fd < 0) {
+    is_sock = slash_path_is_socket(open_path);
+    if (is_sock < 0) {
         free(hotplug);
         return NULL;
+    }
+
+    if (is_sock) {
+        hotplug->fd = slash_sock_connect(open_path);
+        if (hotplug->fd < 0) {
+            free(hotplug);
+            return NULL;
+        }
+        hotplug->transport = SLASH_TRANSPORT_SOCKET;
+    } else {
+        hotplug->fd = open(open_path, O_RDWR | O_CLOEXEC);
+        if (hotplug->fd < 0) {
+            free(hotplug);
+            return NULL;
+        }
+        hotplug->transport = SLASH_TRANSPORT_IOCTL;
     }
 
     return hotplug;

@@ -30,6 +30,7 @@
 #include <slash/qdma.h>
 
 #include "qdma_mock.h"
+#include "sock_transport.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -42,6 +43,13 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+
+/*
+ * Per-thread sequence counter for the raw-fd entry points
+ * (slash_qdma_qpair_buffer_create, slash_qdma_qpair_transfer_batch) that
+ * have no struct slash_qdma handle to borrow a seq from.
+ */
+static __thread uint32_t qdma_raw_fd_seq = 0;
 
 /* Bounce-copy chunk used by the @mock transfer fallback. */
 #define QDMA_XFER_BOUNCE_CHUNK (1u << 20)
@@ -93,6 +101,63 @@ static int qdma_buffer_create_memfd(uint64_t length,
     if (qdma_buffer_mmap(buf_out) != 0) {
         saved_errno = errno;
         (void)close(fd);
+        buf_out->fd = -1;
+        errno = saved_errno;
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Create a buffer via BUF_CREATE over a socket fd (CTL or XFER socket).
+ * The daemon returns a memfd via SCM_RIGHTS and fills in granule/transfer_hint.
+ */
+static int qdma_buffer_create_on_sock(int sock_fd, uint64_t length,
+                                      uint32_t *seq,
+                                      struct slash_qdma_buffer *buf_out)
+{
+    struct slash_qdma_buf_create req;
+    int recv_fd;
+    size_t n_recv;
+    int32_t rv;
+    int saved_errno;
+
+    memset(&req, 0, sizeof(req));
+    req.size   = sizeof(req);
+    req.flags  = O_CLOEXEC;
+    req.length = length;
+
+    recv_fd = -1;
+    n_recv  = 0;
+    rv = slash_sock_request(sock_fd,
+                            (uint32_t)SLASH_QDMA_IOCTL_BUF_CREATE,
+                            &req, sizeof(req),
+                            NULL, 0,
+                            &recv_fd, 1, &n_recv,
+                            seq);
+    if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+        return -1; /* errno already ENODEV */
+    }
+    if (rv < 0) {
+        errno = (int)-rv;
+        if (recv_fd >= 0) { close(recv_fd); recv_fd = -1; }
+        return -1;
+    }
+    if (n_recv < 1 || recv_fd < 0) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    buf_out->fd            = recv_fd;
+    buf_out->length        = length;
+    buf_out->granule       = req.granule ? req.granule : (uint32_t)4096;
+    buf_out->transfer_hint = (enum slash_qdma_transfer_hint)req.transfer_hint;
+    buf_out->addr          = NULL;
+
+    if (qdma_buffer_mmap(buf_out) != 0) {
+        saved_errno = errno;
+        (void)close(recv_fd);
         buf_out->fd = -1;
         errno = saved_errno;
         return -1;
@@ -217,6 +282,7 @@ static ssize_t qdma_fallback_subxfer(int qpair_fd,
 struct slash_qdma *slash_qdma_open(const char *path)
 {
     struct slash_qdma *qdma;
+    int is_sock;
 
     if (path == NULL) {
         errno = EINVAL;
@@ -232,10 +298,28 @@ struct slash_qdma *slash_qdma_open(const char *path)
         return NULL;
     }
 
-    qdma->fd = open(path, O_RDWR);
-    if (qdma->fd < 0) {
+    is_sock = slash_path_is_socket(path);
+    if (is_sock < 0) {
         free(qdma);
         return NULL;
+    }
+
+    if (is_sock) {
+        qdma->fd        = slash_sock_connect(path);
+        if (qdma->fd < 0) {
+            free(qdma);
+            return NULL;
+        }
+        qdma->transport = SLASH_TRANSPORT_SOCKET;
+        qdma->seq       = 0;
+    } else {
+        qdma->fd        = open(path, O_RDWR);
+        if (qdma->fd < 0) {
+            free(qdma);
+            return NULL;
+        }
+        qdma->transport = SLASH_TRANSPORT_IOCTL;
+        qdma->seq       = 0;
     }
 
     return qdma;
@@ -268,6 +352,7 @@ int slash_qdma_close(struct slash_qdma *qdma)
 int slash_qdma_info_read(struct slash_qdma *qdma, struct slash_qdma_info *info)
 {
     struct slash_qdma_info tmp;
+    int32_t rv;
     int ret;
 
     if (qdma == NULL || info == NULL) {
@@ -281,6 +366,24 @@ int slash_qdma_info_read(struct slash_qdma *qdma, struct slash_qdma_info *info)
 
     memset(&tmp, 0, sizeof(tmp));
     tmp.size = sizeof(tmp);
+
+    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(qdma->fd,
+                                (uint32_t)SLASH_QDMA_IOCTL_INFO,
+                                &tmp, sizeof(tmp),
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &qdma->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            return -1;
+        }
+        *info = tmp;
+        return 0;
+    }
 
     ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_INFO, &tmp);
     if (ret < 0) {
@@ -304,6 +407,7 @@ int slash_qdma_qpair_add(struct slash_qdma *qdma,
                          struct slash_qdma_qpair_add *req)
 {
     struct slash_qdma_qpair_add tmp;
+    int32_t rv;
     int ret;
 
     if (qdma == NULL || req == NULL) {
@@ -316,13 +420,31 @@ int slash_qdma_qpair_add(struct slash_qdma *qdma,
     }
 
     memset(&tmp, 0, sizeof(tmp));
-    tmp.size        = sizeof(tmp);
-    tmp.mode        = req->mode;
-    tmp.dir_mask    = req->dir_mask;
-    tmp.mm_channel  = req->mm_channel;
-    tmp.h2c_ring_sz = req->h2c_ring_sz;
-    tmp.c2h_ring_sz = req->c2h_ring_sz;
+    tmp.size         = sizeof(tmp);
+    tmp.mode         = req->mode;
+    tmp.dir_mask     = req->dir_mask;
+    tmp.mm_channel   = req->mm_channel;
+    tmp.h2c_ring_sz  = req->h2c_ring_sz;
+    tmp.c2h_ring_sz  = req->c2h_ring_sz;
     tmp.cmpt_ring_sz = req->cmpt_ring_sz;
+
+    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(qdma->fd,
+                                (uint32_t)SLASH_QDMA_IOCTL_QPAIR_ADD,
+                                &tmp, sizeof(tmp),
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &qdma->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            return -1;
+        }
+        *req = tmp;
+        return 0;
+    }
 
     ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &tmp);
     if (ret < 0) {
@@ -346,6 +468,7 @@ static int slash_qdma_qpair_op(struct slash_qdma *qdma,
                                uint32_t op)
 {
     struct slash_qdma_qpair_op req;
+    int32_t rv;
     int ret;
 
     if (qdma == NULL) {
@@ -371,6 +494,23 @@ static int slash_qdma_qpair_op(struct slash_qdma *qdma,
     req.size = sizeof(req);
     req.qid  = qid;
     req.op   = op;
+
+    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
+        rv = slash_sock_request(qdma->fd,
+                                (uint32_t)SLASH_QDMA_IOCTL_Q_OP,
+                                &req, sizeof(req),
+                                NULL, 0,
+                                NULL, 0, NULL,
+                                &qdma->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            return -1;
+        }
+        return 0;
+    }
 
     ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_Q_OP, &req);
     if (ret < 0) {
@@ -398,6 +538,9 @@ int slash_qdma_qpair_del(struct slash_qdma *qdma, uint32_t qid)
 int slash_qdma_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flags)
 {
     struct slash_qdma_qpair_fd_request req;
+    int recv_fd;
+    size_t n_recv;
+    int32_t rv;
     int fd;
 
     if (qdma == NULL) {
@@ -412,7 +555,32 @@ int slash_qdma_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flags)
     memset(&req, 0, sizeof(req));
     req.size  = sizeof(req);
     req.qid   = qid;
-    req.flags = flags;
+    req.flags = (uint32_t)flags;
+
+    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
+        recv_fd = -1;
+        n_recv  = 0;
+        rv = slash_sock_request(qdma->fd,
+                                (uint32_t)SLASH_QDMA_IOCTL_QPAIR_GET_FD,
+                                &req, sizeof(req),
+                                NULL, 0,
+                                &recv_fd, 1, &n_recv,
+                                &qdma->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            if (recv_fd >= 0) { close(recv_fd); recv_fd = -1; }
+            return -1;
+        }
+        if (n_recv < 1 || recv_fd < 0) {
+            errno = ENODEV;
+            return -1;
+        }
+        /* recv_fd is the anonymous XFER socket fd. */
+        return recv_fd;
+    }
 
     fd = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req);
     if (fd < 0) {
@@ -426,6 +594,9 @@ int slash_qdma_qpair_get_fd_multi(struct slash_qdma *qdma, const uint32_t *qids,
                                   uint32_t qpair_count, int flags)
 {
     struct slash_qdma_qpair_fd_request req;
+    int recv_fd;
+    size_t n_recv;
+    int32_t rv;
     uint32_t i;
     int fd;
 
@@ -442,11 +613,35 @@ int slash_qdma_qpair_get_fd_multi(struct slash_qdma *qdma, const uint32_t *qids,
 
     memset(&req, 0, sizeof(req));
     req.size        = sizeof(req);
-    req.flags       = flags;
+    req.flags       = (uint32_t)flags;
     req.qid         = qids[0];
     req.qpair_count = qpair_count;
     for (i = 0; i < qpair_count; ++i) {
         req.qpair_ids[i] = qids[i];
+    }
+
+    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
+        recv_fd = -1;
+        n_recv  = 0;
+        rv = slash_sock_request(qdma->fd,
+                                (uint32_t)SLASH_QDMA_IOCTL_QPAIR_GET_FD,
+                                &req, sizeof(req),
+                                NULL, 0,
+                                &recv_fd, 1, &n_recv,
+                                &qdma->seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            if (recv_fd >= 0) { close(recv_fd); recv_fd = -1; }
+            return -1;
+        }
+        if (n_recv < 1 || recv_fd < 0) {
+            errno = ENODEV;
+            return -1;
+        }
+        return recv_fd;
     }
 
     fd = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req);
@@ -470,17 +665,41 @@ int slash_qdma_buffer_create(struct slash_qdma *qdma, uint64_t length,
         return qdma_buffer_create_memfd(length, buf_out);
     }
 
+    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
+        return qdma_buffer_create_on_sock(qdma->fd, length, &qdma->seq, buf_out);
+    }
+
     return qdma_buffer_create_on_fd(qdma->fd, length, buf_out);
 }
 
 int slash_qdma_qpair_buffer_create(int qpair_fd, uint64_t length,
                                    struct slash_qdma_buffer *buf_out)
 {
+    int is_sock;
+
     if (qpair_fd < 0 || buf_out == NULL || length == 0) {
         errno = EINVAL;
         return -1;
     }
 
+    is_sock = slash_fd_is_socket(qpair_fd);
+    if (is_sock < 0) {
+        return -1;
+    }
+
+    if (is_sock) {
+        /*
+         * qpair_fd is an XFER socket (received from the daemon via
+         * QPAIR_GET_FD).  BUF_CREATE on the XFER socket returns a memfd.
+         */
+        return qdma_buffer_create_on_sock(qpair_fd, length,
+                                          &qdma_raw_fd_seq, buf_out);
+    }
+
+    /*
+     * Non-socket path: ioctl on char device or @mock memfd.
+     * The ENOTTY fallback inside qdma_buffer_create_on_fd handles @mock.
+     */
     return qdma_buffer_create_on_fd(qpair_fd, length, buf_out);
 }
 
@@ -515,12 +734,21 @@ ssize_t slash_qdma_qpair_transfer_batch(int qpair_fd,
                                         uint32_t count)
 {
     struct slash_qdma_transfer req;
+    int fd_list[SLASH_SOCK_MAX_FDS_PER_MSG];
+    size_t n_fds;
+    int32_t rv;
     uint32_t i;
     int ret;
+    int is_sock;
 
     if (qpair_fd < 0 || xfers == NULL ||
         count == 0 || count > SLASH_QDMA_FD_MAX_QPAIRS) {
         errno = EINVAL;
+        return -1;
+    }
+
+    is_sock = slash_fd_is_socket(qpair_fd);
+    if (is_sock < 0) {
         return -1;
     }
 
@@ -536,6 +764,45 @@ ssize_t slash_qdma_qpair_transfer_batch(int qpair_fd,
         req.xfers[i] = xfers[i];
     }
 
+    if (is_sock) {
+        /*
+         * Socket (XFER) path: buf_fd fields must be replaced by their
+         * index in the SCM_RIGHTS fd list.  Use slash_sock_rewrite_fd_index
+         * to atomically collect and index each buf_fd.
+         *
+         * Use a plain int tmp to avoid pointer-type mismatch between int* and
+         * __s32* even though they alias on Linux.
+         */
+        n_fds = 0;
+        for (i = 0; i < count; ++i) {
+            int idx = (int)req.xfers[i].buf_fd;
+            if (slash_sock_rewrite_fd_index(fd_list, &n_fds,
+                                            &idx,
+                                            (int)xfers[i].buf_fd) != 0) {
+                errno = EMSGSIZE;
+                return -1;
+            }
+            req.xfers[i].buf_fd = (__s32)idx;
+        }
+
+        rv = slash_sock_request(qpair_fd,
+                                (uint32_t)SLASH_QDMA_QPAIR_IOCTL_TRANSFER,
+                                &req, sizeof(req),
+                                fd_list, n_fds,
+                                NULL, 0, NULL,
+                                &qdma_raw_fd_seq);
+        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
+            return -1;
+        }
+        if (rv < 0) {
+            errno = (int)-rv;
+            return -1;
+        }
+        /* return_value carries total bytes transferred as a non-negative int32. */
+        return (ssize_t)(int32_t)rv;
+    }
+
+    /* Non-socket ioctl path. */
     ret = ioctl(qpair_fd, SLASH_QDMA_QPAIR_IOCTL_TRANSFER, &req);
     if (ret < 0) {
         if (errno == ENOTTY) {
