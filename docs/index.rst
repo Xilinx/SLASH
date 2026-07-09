@@ -52,6 +52,7 @@ management, and memory operations.
    explanation/vrtbin-format
    explanation/pcie-topology
    explanation/platform-modes
+   explanation/system-emulation
 
 .. toctree::
    :maxdepth: 1
