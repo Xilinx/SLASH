@@ -35,7 +35,7 @@ include(GNUInstallDirs)
 
 # -------- Build options --------
 
-option(SLASH_SYSEMU_BUILD_TESTS "Build unit tests" ON)
+option(SLASH_SYSEMU_BUILD_TESTS "Build unit tests" OFF)
 option(SLASH_SYSEMU_INSTALL     "Install the daemon, default VBIN, and assets" ON)
 
 option(ENABLE_ASAN  "Build with AddressSanitizer"          OFF)

@@ -926,7 +926,8 @@ deadlocks, or spurious `-ENODEV`:
     * Move `kReconfigApertureAddr` (0x102100000) + the HBM/DDR/reconfig memory ranges from `qdma_ioctls.h`/`slash_sysemu.h` into the kernel UAPI header.
     * Document the reconfiguration writing protocol in the ABI reference.
     * Switch VRTD discovery to globbing `/dev/` + `/run/slash_sysemu/` (`slash_ctl*`/`slash_qdma_ctl*`), querying + pairing BDFs (path indices are not stable across remove/rescan/hotplug).
-* **Step 14 — end-to-end integration — NOT STARTED.** Real `vpp_sim` under the daemon; BAR/HBM/DDR round trips, kernel execution, clock wizard, reconfiguration via staging writes + RESCAN, hotplug under concurrent activity; run under ASan/UBSan.
+* **Step 14 — end-to-end integration — IN PROGRESS.** Real `vpp_sim` under the daemon; BAR/HBM/DDR round trips, kernel execution, clock wizard, reconfiguration via staging writes + RESCAN, hotplug under concurrent activity; run under ASan/UBSan.
+    * First harness: `00_axilite_raw` (see "Raw example E2E app" under building blocks) exercises the whole flow through libslash alone. As of 2026-07-09 it reaches server-side reconfiguration cleanly (discovery, VBIN staging transfer, and PF2 REMOVE all succeed). RESCAN then fails because the staged `vpp_sim` cannot load Vivado's XSI runtime (`libxv_simulator_kernel.so`); the daemon safely reverts to the default VBIN. Fixed by adding the Vivado runtime dir to the daemon env file (`LD_LIBRARY_PATH` → `.../Vivado/lib/lnx64.o`, `slash_sysemu/packaging/conf/slash_sysemu.env`). Verifying a full green sim run under the daemon (and extending raw apps to examples 01–07) is next-session work.
 
 ### Reusable building blocks now available
 
@@ -947,6 +948,7 @@ in the ledger + invariants above):
 * **Default model** — `slash_sysemu_model` (`src/model/`) + CMake-built `default.vbin` (round-trip mem/regs, no kernels); independently pinned to `ModelClient` alongside `MockModelServer` — keep both green.
 * **libslash socket transport** — `sock_transport.{h,c}` + ctldev/qdma/hotplug socket paths (`driver/libslash/`). `S_ISSOCK` at open selects the path; failure → `errno=ENODEV`; BAR sync = `flock(2)`. Transport-agnostic across `/dev/slash_*` and `/run/slash_sysemu/slash_*`.
 * **Test server** — `SysemuTestServer` (`driver/libslash/tests/sysemu_test_server.*`): in-process SEQPACKET server for all three subsystems + fault injection (PeerClose/TruncatedReply/WrongSeq/WrongOp/DaemonError). Opt-in `libslash_e2e_test` drives a real daemon via `SLASH_E2E_*`.
+* **Raw example E2E app** — `examples/00_axilite/00_axilite_raw.cpp` (target `00_axilite_raw`): a libslash-only counterpart to `00_axilite` that drives the daemon with **no VRT/VRTD** in between — the thinnest possible host-to-daemon integration test. Args: `<control-base-dir> <board-BDF> <vbin>`. Flow: enumerate `slash_ctl*`/`slash_qdma_ctl*` and match by BDF (indices are not stable) → QDMA H2C the whole VBIN to the reconfig aperture `0x102100000` → hotplug PF2 REMOVE + RESCAN → re-discover ctl/qdma → QDMA H2C input to HBM `0x4000000000` → launch kernels over BAR0 AXI-Lite (accumulate_0 @ BAR0 `0x0`, increment_0 @ `0x10000`; ap_ctrl_hs CTRL@`0x00` = ap_start bit0 / ap_done bit1, size@`0x10`, increment buffer ptr @`0x18`/`0x1c`, accumulate out_r@`0x18` + out_r_ctrl@`0x1c`) → poll ap_done → check result. Register/address constants are hard-coded against the design's `system_map.xml` (no VBIN untar / XML parse). **Build with `-DSLASH_USE_REPO=ON`** so it links the socket-capable repo libslash; a stale installed libslash without the Step-12 socket transport makes every `*_open()` on a socket fail with `ENXIO`.
 
 ### Deferred / outstanding items
 
@@ -1018,3 +1020,11 @@ in the ledger + invariants above):
 * Deps confirmed installed: libxml2 2.9.14 (`/usr/include/libxml2`), libzmq
   4.3.5, jsoncpp 1.9.5 (`/usr/include/jsoncpp`), libsystemd 255, inih/INIReader
   55, CLI11 (`/usr/include/CLI/CLI.hpp`), pthreads.
+* **Raw-example / live-daemon testing gotchas (found 2026-07-09):** (a) the
+  system-installed libslash on this host predates the Step-12 socket transport,
+  so examples must be built `-DSLASH_USE_REPO=ON` (or the repo libslash
+  reinstalled) or `*_open()` on a daemon socket returns `ENXIO`; (b) the daemon
+  runs as user `slash-sysemu` under systemd with an empty `Environment=`, so
+  launching a **sim** VBIN's `vpp_sim` needs Vivado's xsim runtime on
+  `LD_LIBRARY_PATH` — now wired via `slash_sysemu.env` (and the local install);
+  an **emu** VBIN would need the analogous Vitis-HLS runtime.
