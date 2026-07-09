@@ -877,684 +877,76 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 
 ## Sprint status and deferred items
 
-*Snapshot as of 2026-07-07. This section is a running log so a
+*Snapshot as of 2026-07-09. This section is a running log so a
 fresh session can resume the sprint without re-deriving context.*
 
 ### Progress
 
-Steps are executed strictly in order via the team workflow (implementer builds
-and unit-tests → adversary hunts bugs and folds every probe into the suite →
-they iterate to convergence → reviewer signs off → the lead commits). Each
-committed step keeps the normal/asan/ubsan/aubsan builds green and the full
-ctest suite passing.
+Steps 1–12 are DONE and committed; the system-emulation daemon and its libslash
+integration are complete. **Steps 13–14 remain** (kernel driver + VRTD, then
+end-to-end). The team workflow was: implementer builds and unit-tests → adversary
+hunts bugs and folds every probe into the GTest suite → they iterate to
+convergence → reviewer signs off → lead commits. Every committed step kept the
+normal/asan/ubsan/aubsan builds green and the full ctest suite passing. Commit
+hashes are in `git log`; component detail is in "Reusable building blocks" below.
 
-* **Step 1 — Project scaffolding and test harness — DONE** (commit `fcc3121b`)
-    * CMake C++20 project under `slash_sysemu/`; four build dirs
-      `build/{normal,asan,ubsan,aubsan}` plus a coverage build (coverage is
-      mutually exclusive with the sanitizers).
-    * GTest via FetchContent v1.17.0, `gtest_discover_tests`, run through ctest.
-    * gcov/lcov `coverage` custom target (extracts `src/*`; HTML under the
-      build dir).
-    * Minimal daemon entry point: `run_daemon()` with a `std::atomic<bool>`
-      shutdown flag and an injectable `SignalInstaller` seam so the
-      sigaction-failure path is unit-tested. `-Wall -Wextra -Werror` on all
-      targets.
-* **Step 2 — Socket transport and protocol framing — DONE** (commit `cb74d5d9`)
-    * `src/protocol.h`: `struct slash_sysemu_socket_header` (16 bytes,
-      static_assert-checked).
-    * `src/transport.{h,cpp}`: `Result<T>` / `Result<void>` with an `ErrorKind`
-      that distinguishes **Transport** (peer-closed / OS failures; later mapped
-      to `-ENODEV`) from **Protocol** (framing) errors; `UniqueFd` RAII owner;
-      `send_message`/`recv_message` over `SOCK_SEQPACKET` with SCM_RIGHTS FD
-      passing, `MSG_CMSG_CLOEXEC`, and `MSG_TRUNC`/`MSG_CTRUNC` detection;
-      FD-index collect/rewrite/resolve helpers (`kMaxFdsPerMessage` cap, atomic
-      rewrite); `send_request` with sequence-id + ioctl_op matching.
-    * 46 tests; 100% src line/function coverage.
-* **Step 3 — Configuration and CLI — DONE** (commit `5fe0b4a8`)
-    * `src/config.{h,cpp}`: `BoardBdf` value type (rejects function suffix and
-      trailing garbage); `AcceleratorConfig` (typed `BoardBdf` + optional
-      `vbin_path` reserved for Step 6); `DaemonConfig`; CLI11 `parse_cli`;
-      libinih `parse_config_file`; `socket_path_ctl/_qdma_ctl/_hotplug`
-      helpers. Defaults `/run/slash_sysemu`, `vrtd:vrt` (fallback to current
-      uid/gid with a warning when absent), mode `0600`.
-    * 115 tests; 98.9% src line / 100% function coverage (the 4 uncovered
-      lines are the vrtd/vrt fallback, reachable only where those accounts are
-      absent).
+#### Completed steps (ledger)
 
-* **Step 4 — VBIN and system map parsing — DONE**
-    * `src/vbin.{h,cpp}`: `unpack_vbin` reads the container (raw tar or
-      gzip-detected via magic), safely extracts into an RAII `TempDir`
-      (rejects absolute paths and `..` traversal, verifies tar checksums,
-      detects truncation, bounds member/archive size against decompression
-      bombs, handles GNU longnames, ustar prefix/name joining, and skips PAX
-      `x`/`g` headers), then locates `system_map.xml` and the
-      platform-appropriate `vpp_emu`/`vpp_sim`. Multi-member gzip streams are
-      fully consumed while trailing non-gzip bytes are tolerated. Hardware
-      VBINs are rejected with a clear error. Dedicated `VbinError` taxonomy
-      (Io/Archive/Contents/Parse), kept separate from transport's `ErrorKind`.
-    * `src/system_map.{h,cpp}`: libxml2 (RAII `XmlDocPtr`/`XmlCharPtr`) parse
-      of `<SystemMap>` → `Platform`, `ClockFrequency`, `Kernel`
-      (name/base_address/range + `Register` offset/access/bit_width, sorted
-      `FunctionalArg`s, port→memory `Connection`s), and `QdmaConnection`s.
-      `Kernel.base_address + Register.offset` gives the absolute address and
-      `register_at()` reverses it — the register→address mapping downstream
-      needs. Numbers parse as decimal unless an explicit `0x`/`0X` prefix
-      selects hex (no base-0 octal trap); attribute whitespace is trimmed;
-      leading `+`/`-` rejected; 32-bit width overflow is an error, not a silent
-      truncation. Duplicate kernel names and duplicate register offsets within a
-      kernel are rejected. Offset-0 control-register absence and zero bit_width
-      are deliberately accepted (documented Step 8 concerns).
-    * Tests: 33 `VbinTest` + 40 `SystemMapTest` (both real sample VBINs, raw
-      tar, gzip incl. multi-member/corrupt/truncated edges, traversal/absolute
-      rejection, GNU longname, Hardware rejection, every XML parse-error branch,
-      octal-trap/overflow/duplicate/XXE/billion-laughs probes). Coverage:
-      system_map.cpp 98.9% lines / 99.3% branches, vbin.cpp 89.0% lines /
-      82.6% branches (remainder are justified I/O fault-injection and DoS-guard
-      branches). Reviewer signed off; all four builds green.
+* **Step 1** — Scaffolding: CMake C++20, four build dirs `build/{normal,asan,ubsan,aubsan}` + a coverage build, GTest via ctest, lcov `coverage` target, daemon entry seam.
+* **Step 2** — SEQPACKET transport + protocol framing (`transport.*`, `protocol.h`): `Result<T>`/`ErrorKind`, `UniqueFd`, SCM_RIGHTS FD passing, FD-index collect/rewrite/resolve, `send_request` seq-id matching.
+* **Step 3** — Config + CLI (`config.*`): CLI11 + libinih, `BoardBdf`, `AcceleratorConfig`, socket-path helpers, defaults `/run/slash_sysemu`.
+* **Step 4** — VBIN + system map (`vbin.*`, `system_map.*`): `unpack_vbin` (tar/gzip, traversal-safe, DoS-bounded, RAII `TempDir`), libxml2 system-map parse → `Kernel`/`Register`/`FunctionalArg`/`Connection`; `VbinError` taxonomy; hardware VBINs rejected.
+* **Step 5** — ZeroMQ model client (`model_client.*`) + scriptable `MockModelServer` (`tests/mock_model_server.*`): vpp_sim address-keyed dialect, frame 0 byte-identical to the vrt reference client, one in-flight request under a per-socket mutex, ~10 s timeout.
+* **Step 6** — Model lifecycle + reconfiguration (`vbin_store.*`, `model_process.*`, `reconfigure.*`, abstract `worker_controller.h`): per-BDF main/staging store, `posix_spawn`ed vpp_sim, death detection, the staging→main reconfiguration algorithm with rollback. `fake_model` + fixture VBINs are the shared harness.
+* **Step 7** — BAR memfds (`bar_memfd.*`): `memfd_create` + mmap windows, flock brackets, `read_u32`/`write_u32`/`update_u32`, `reopen()` (distinct file description), internal per-BAR mutex; `BarSet`/`make_standard_bars()`.
+* **Step 8** — Model control workers (`model_control_workers.*`): per-kernel idle→busy→idle FSM (bits 0 `ap_start` / 1 `ap_done`) + clock-wizard lock-bit pin, over `ModelClient` against injected BAR memfds. Address identity: memfd offset == model address == `base_address + register.offset`.
+* **Step 9** — PF2 subsystem (`ctl_subsystem.*`, `ctl_ioctls.h`): `slash_ctl<N>` socket, `GET_BAR_INFO`/`GET_BAR_FD`/`GET_DEVICE_INFO`, SCM_RIGHTS BAR-fd passing, idempotent setup/remove over a borrowed `BarSet`. Established the UAPI-header rule (`SLASH_UAPI_INCLUDE_DIR`, no hand-mirrored structs) followed by Steps 10–12.
+* **Step 10** — PF1 QDMA subsystem (`qdma_subsystem.*`, `qdma_ioctls.h`): `slash_qdma_ctl<N>` socket, CTL + per-`GET_FD` XFER endpoints, qpair state machine, H2C/C2H `TRANSFER` to model (HBM/DDR) or reconfig-aperture append. **ABI change:** `slash_qdma_info` extended with `char bdf[SLASH_PCI_BDF_LEN]` (sizeof 20→52) so userspace discovers the PF1 BDF without sysfs.
+* **Step 11** — Accelerator lifecycle + hotplug (`accelerator.*`, `hotplug_subsystem.*`, `hotplug_ioctls.h`, `daemon.*`): per-BDF state machine (Absent/Inactive/Active/Partial), instantiate/teardown ordering, quiesce-first PF2 restore, model-death generation guard, `slash_hotplug` socket serialising RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR under one `lifecycle_mu_`.
+* **Post-Step-11 hardening/packaging** — sd-event/systemd refactor of `run_daemon()` (systemd owns runtime dir, socket identity/mode, journal logging; health-gated watchdog); rename `slash_emu`→`slash_sysemu` (exe `slash_sysemud`); from-source default VBIN (`src/model/` → `default.vbin`, installed to `/usr/lib/slash-sysemu/default.vbin`); deb/rpm packaging (`slash-sysemu.service`, disabled-by-default preset, sysusers, `slash-sim-emu` metapackage pulls in both `slash-sysemu` and `vrtd`). FPGA-emulation tokens (`vpp_emu`, `Emulation` platform) deliberately left untouched.
+* **Step 12** — libslash socket integration: shared UAPI protocol header `driver/libslash/include/slash/uapi/slash_sysemu.h`; C90 client transport `driver/libslash/src/sock_transport.{h,c}`; socket paths in `ctldev.c`/`qdma.c`/`hotplug.c` selected by `S_ISSOCK` at open; BAR sync over sockets via `flock(2)`; any transport failure → `errno=ENODEV`. Consumer code is transport-agnostic across char devices and sockets. In-process `SysemuTestServer` + opt-in real-daemon E2E (`SLASH_E2E_*`).
 
-* **Step 5 — ZeroMQ model client — DONE**
-    * `src/model_client.{h,cpp}`: `ModelClient` implements the `vpp_sim`
-      address-keyed ZeroMQ dialect (`start`/`populate`/`fetch buffer`/`fetch
-      scalar`/`reg`/`exit`) over `ZMQ_REQ`→`ZMQ_REP` on an `ipc://` (or
-      `tcp://`) endpoint, using the libzmq C API wrapped in RAII (LINGER=0, no
-      ctx_term hang) and jsoncpp for frames. Frame 0 is encoded with the default
-      `Json::StreamWriterBuilder` to be **byte-for-byte identical** to the vrt
-      reference client (`vrt/src/utils/zmq_server.cpp`), so a real `vpp_sim`
-      interoperates; `populate` sends a second raw frame with the invariant
-      `size == payload length` (the sim reads exactly `size` bytes). A single
-      `std::mutex` is held across the whole send→recv cycle: one request in
-      flight, callers serialized (ZMQ sockets are not thread-safe and REQ
-      forbids overlap). Configurable ~10s timeout (`ZMQ_RCVTIMEO`/`SNDTIMEO`,
-      injectable for tests). Reuses `transport.h`'s `Result`/`ErrorKind`:
-      timeout / dead-or-closed socket / moved-from-or-unconnected client →
-      `Transport` (→ -ENODEV, "model assumed dead"); malformed-but-delivered
-      reply (not "OK"/"ERR"/JSON, wrong type, byte >255, buffer length
-      mismatch) → `Protocol`. Never throws across the API.
-    * `tests/mock_model_server.{h,cpp}`: reusable scriptable `ZMQ_REP` mock
-      `vpp_sim` (in-memory addr→byte + scalar maps, request recording, injectable
-      faults: WrongReply/ErrReply/MalformedJson/OversizedByte/ShortBuffer/Delay/
-      Silence/ExtraFrame/JsonStringReply/Close). Built as a static helper lib —
-      **Steps 8 and 10 reuse it**. Serialization is proven by a functional
-      per-thread keyed-readback concurrency test (removing the client mutex makes
-      it fail with ~1500 crossed replies), NOT by the mock's `max_in_flight`
-      (its REP loop is single-threaded, so that is only a sanity check).
-    * 40 `ModelClient*` tests. Coverage: model_client.cpp 92.9% lines / 95.2%
-      branches (remainder are justified libzmq-API-failure defensive branches).
-      Reviewer signed off; normal/asan/ubsan/aubsan all green (253/253).
-    * Env note: TSan is unusable on this WSL2 host (runtime abort); the
-      mutex-removal experiment gives equivalent (functional) race assurance.
+#### Cross-cutting invariants (read before debugging)
 
-* **Step 6 — Model process lifecycle and reconfiguration — DONE**
-    * `src/vbin_store.{h,cpp}`: per-BDF on-disk store at `<base>/<bdf>/` with
-      `main.vbin` + `staging.vbin`. `bootstrap` (copy default→main + empty
-      staging if absent, without clobbering an existing main or a pending
-      staging), `append_staging`/`read_staging`/`clear_staging` (truncate, keep
-      file), `replace_main_with_staging` (atomic rename + recreate empty
-      staging), and `cold_reboot_cleanup` (removes the dir — Step 11 only; the
-      files PERSIST across per-accelerator teardown).
-    * `src/model_process.{h,cpp}`: RAII owner of one launched `vpp_sim`. Unpacks
-      the selected VBIN (its own `TempDir` copy), derives the `ipc://<dir>/
-      zmq.socket` endpoint (with an up-front `AF_UNIX sun_path` length guard →
-      clear Io error), launches via `posix_spawn` (`addchdir_np` to the
-      extraction dir, `SETSIGDEF`/`SETSIGMASK`), and treats launch success as
-      spawn + `ModelClient` connect + the one-time global `start` probe. A
-      single monitor thread is the sole reaper (`waitpid`); teardown escalates
-      `exit`→SIGTERM→SIGKILL with bounded waits. **Death detection** (process
-      exit / socket close / probe timeout) fires a death callback exactly once,
-      suppressed on intentional teardown. **Step 6→11 contract (documented on
-      `DeathCallback`):** `on_death` runs on the monitor thread; a caller must
-      NOT synchronously `teardown()` OR destroy the `ModelProcess` from within
-      it (destroy → UAF of the in-flight `std::function`) — Step 11 must post
-      teardown/destroy to another thread. A self-join guard (detach-not-join
-      when `teardown()` runs on the monitor thread) turns the would-be deadlock
-      into safe behavior as a backstop.
-    * `src/worker_controller.h`: abstract `WorkerController` (paired
-      `start(ModelClient&, const SystemMap&)` / `stop()`, nullable
-      `shared_ptr`); Step 8 implements the real one. `start` must NOT re-send
-      the global sim-clock `start` — the `ModelProcess` owns that one-time call.
-    * `src/reconfigure.{h,cpp}`: `ModelInstance::reconfigure()` implements the
-      "Launching the model process and reconfiguration" algorithm branch for
-      branch (no-main→bootstrap; staging-nonempty→launch→adopt→replace-main→
-      clear-staging; staging-fail→clear-staging→(fall back to main if idle |
-      keep old if running); main-fail→Failed; running+empty/corrupt-staging→
-      no-op). Adoption does worker stop→swap→start with rollback (full teardown
-      of the new process) on worker-start failure. On a rename failure after a
-      successful adoption it keeps the running process (NewProcess) and
-      best-effort clears staging (only the on-disk main is left stale).
-    * Additive config: `DaemonConfig::default_vbin_path` (+ `--default-vbin`),
-      per-device `vbin_path` parsed from the config file, and
-      `resolve_default_vbin(accel)` precedence (accelerator `vbin_path` >
-      daemon default). Step 3 semantics unchanged; `config_test` green. Also a
-      `VbinResult<void>` specialisation in `system_map.h`.
-    * Tests: `fake_model` executable (reuses `MockModelServer`; serve/exit/hang
-      variants + failure flags) and tar-packed fixture VBINs (default/staging/
-      unlaunchable/hang/corrupt). ~55 Step-6 tests across `vbin_store_test`,
-      `model_process_test`, `reconfigure_test`, and `DefaultVbinTest`. Coverage:
-      reconfigure.cpp 96.7% lines, config additions 97.8%, model_process.cpp
-      84.4%, vbin_store.cpp 83.8% (remainders are justified OS/IO
-      fault-injection + spawn-failure branches). Reviewer signed off;
-      normal/asan/ubsan/aubsan all green (308/308) with `-j16`; no zombies /
-      leftover ipc sockets / temp dirs.
+Non-obvious, load-bearing contracts. Breaking one tends to produce UAFs,
+deadlocks, or spurious `-ENODEV`:
 
-* **Step 7 — BAR memfds — DONE**
-    * `src/bar_memfd.{h,cpp}`: `BarMemfd` — an anonymous `memfd_create(MFD_CLOEXEC)`
-      window `ftruncate`d to size and persistently `mmap(MAP_SHARED)`ed
-      (RAII munmap), the daemon-side register store. Access via `flock` brackets
-      (LOCK_SH read / LOCK_EX write / LOCK_UN, replacing `DMA_BUF_IOCTL_SYNC`),
-      with `read_u32`/`write_u32` (explicit little-endian, no aliasing UB),
-      byte-range `read`/`write`, and an `update_u32` read-modify-write helper
-      (the atomic control-register handshake Step 8's idle loop needs) — all
-      overflow-safe bounds-checked (out-of-range → Protocol, OS failures →
-      Transport, never throws). `reopen()` = `open("/proc/self/fd/<n>",
-      O_RDWR|O_CLOEXEC)` returns a DISTINCT open file description (the fd Step 9
-      hands the user via SCM_RIGHTS) so daemon-vs-user flocks actually collide.
-      flock acquire AND LOCK_UN release retry on EINTR. A per-object internal
-      `std::mutex` (behind `unique_ptr` to stay movable) spans the ENTIRE flock
-      bracket, so multiple Step 8 kernel workers may safely share the one
-      user-region BAR (without it, one thread's LOCK_UN would drop the whole-file
-      flock another holds, breaking exclusion against the user).
-    * `BarSet` + `make_standard_bars()`: the standard trio — UserRegion 128 MiB
-      (idx 0), ServiceLayer 128 MiB (idx 2), ClockWizard 512 KiB (idx 4);
-      `by_kind`/`by_index` lookups (nullptr for absent 1/3/5) feed Step 9's
-      GET_BAR_INFO/GET_BAR_FD.
-    * ~38 `bar_memfd` tests: size/round-trip/bounds/overflow, u32 endianness,
-      cross-description flock collision (reopen) vs dup non-collision, shared-SH
-      compatibility, exclusive serialization, same-object concurrent RMW exact
-      count + no-tear, move/self-move safety under concurrency, EINTR retry, fd
-      hygiene. Coverage: bar_memfd.cpp 83.9% lines (remainder are justified
-      syscall-fault-injection + unreachable-default branches). Reviewer signed
-      off; normal/asan/ubsan/aubsan all green (346/346) with `-j16`, sanitizers
-      PROVEN active via `-fsanitize=` in flags.make (asan=address,
-      ubsan=undefined, aubsan=address+undefined).
-    * Step 7→8 handoff: `BarMemfd` is internally thread-safe for concurrent
-      daemon-side access; Step 8 workers may share the user-region `BarMemfd`.
+1. **Model death.** `ModelProcess`'s `DeathCallback` runs on the monitor (reaper) thread and may ONLY post — never synchronously `teardown()`/destroy the `ModelProcess` or its `Accelerator` from inside it (UAF of the in-flight `std::function`). `HotplugSubsystem` posts `on_model_died(gen)` to a dedicated lifecycle thread.
+2. **Generation guard.** The launch-generation counter is **owned by `HotplugSubsystem`** (daemon lifetime) and injected into every `Accelerator` — including RESCAN replacements, which replace the whole object. `on_model_died(gen)` no-ops unless `gen == generation()`, so a stale death task cannot tear down a re-adopted model. (A per-object counter caused a generation collision — see `project_death_generation_guard`.)
+3. **Model serialization.** `ModelClient` holds one `std::mutex` across the whole send→recv (one request in flight; ZMQ REQ). QDMA keeps `pread`/`pwrite` OUTSIDE that lock so file I/O overlaps while model requests serialise.
+4. **flock BAR sync.** flock only excludes across DISTINCT open file descriptions. The daemon `reopen()`s each BAR memfd (`/proc/self/fd/<n>`) before handing it to the client via SCM_RIGHTS; `BarMemfd`'s internal per-BAR mutex spans the whole flock bracket so kernel workers can share the user-region BAR. Same rule client-side in libslash.
+5. **Borrow contract.** PF1/PF2 borrow `BarSet`/`ModelClient`/`VbinStore` by reference; `remove()` never touches them, so model workers keep polling across REMOVE. A PF2 restore quiesces PF1 first (before the old `ModelClient` is destroyed) — this keeps `qdma_subsystem.*` pristine (no `rebind_model`).
+6. **`remove()` fd hygiene.** The `done`-flag check + `::shutdown(fd)` run **under** the connection-map mutex, and a worker sets `done=true` under that same lock before its `UniqueFd` closes — so `remove()` never `shutdown()`s a stale/reused fd number (all subsystems share one process fd table; this bit the Step-12 E2E).
+7. **Reconfig aperture.** H2C to `dev_addr == 0x102100000` appends to the staging VBIN (not sent to the model, `dev_addr` not advanced). The constant currently lives in `qdma_ioctls.h` / `slash_sysemu.h`; **Step 13 moves it into the kernel UAPI header.**
 
-* **Step 8 — Model control workers — DONE**
-    * `src/model_control_workers.{h,cpp}`: `ModelControlWorkers : public
-      WorkerController` — one worker thread per compute kernel + one clock-wizard
-      worker, spawned by `start(ModelClient&, const SystemMap&)` and joined by
-      `stop()`/dtor. Does NOT re-send the global `start` verb (the `ModelProcess`
-      owns that one-time sim-clock start). The BAR memfds (user region, clock
-      wizard) are INJECTED by reference (owned by Step 9/11, persist across model
-      restarts). `KernelState{Idle,Busy,Dead}` tracked per kernel for the process
-      lifetime; `kernel_state()`/`kernel_count()`/`running()` introspection.
-    * Kernel idle→busy→idle FSM: IDLE polls the control register at
-      `base_address + 0`; on `ap_start` (bit0) it captures-and-resets the control
-      word atomically via `update_u32`, forwards the WRITABLE parameter registers
-      (read-only outputs are skipped so their stale memfd value never clobbers the
-      model result), then the captured control value LAST → BUSY. BUSY polls
-      `fetch_scalar(control)`; on `ap_done` (bit1) fetches every READABLE register
-      back into the memfd and publishes the finished control word → IDLE. Only
-      bits 0/1 are interpreted. Address identity: memfd offset == model address ==
-      `base_address + register.offset` (matches `vrt/src/kernel.cpp`'s
-      `baseAddr + offset` for both the hardware BAR and the sim `reg`/`fetch`).
-      A kernel with no offset-0 register (`register_at(0)==nullptr`) spawns a
-      worker that idles forever (never starts, never crashes).
-    * Clock-wizard worker ORs bit0 into `0x0033C` (user) and `0x1033C` (service)
-      each poll cycle via `update_u32` (preserves the other bits); no model
-      interaction — just keeps the vrtd clock driver's lock poll from timing out.
-    * Error taxonomy: any `ModelClient` `Transport` error → `KernelState::Dead` +
-      clean worker exit (no spin on a dead socket); `Protocol` errors are
-      non-fatal (retried/skipped). Interruptible `wait_or_stop()` (cv) so teardown
-      never waits out a full poll interval. Nothing throws across the API.
-    * TOCTOU/atomicity: the architecture's "check control + fetch params + reset =
-      one CPU transaction" is met as an atomic capture-and-reset (`update_u32`)
-      with the params read in separate flock brackets AFTER — benign because VRT
-      writes all params BEFORE `ap_start` (documented at length in the .cpp);
-      resolved WITHOUT extending Step 7's `BarMemfd`. The busy→idle publish is also
-      `update_u32` and PRESERVES a re-armed `ap_start`, so a concurrent re-arm is
-      never silently dropped.
-    * Two adversary-found bugs fixed and folded into the suite as regression
-      tests: (1) a heap-use-after-free — lock-free `kernel_state()`/
-      `kernel_count()` reads racing `stop()`'s `kernels_.clear()`, fixed with a
-      `std::shared_mutex` (unique for mutate, shared for read) + join-before-clear;
-      (2) a dropped kernel re-arm — the `ap_done` publish blindly overwrote a
-      pipelined `ap_start`, fixed by the preserve-via-`update_u32` above.
-    * Tests: `tests/model_control_workers_test.cpp` (35 tests incl. 9 adversary
-      probes). Full idle→busy→idle with params-before-control ordering asserted via
-      `MockModelServer` records; multi-kernel + 6-kernel concurrent stress on the
-      shared user-region BAR (`max_in_flight==1` proves serialisation holds);
-      no-control-register kernel; zero-width/out-of-range register; autorestart
-      `0x81` whole-word forward; ap_done-already-set; RW double-handling; 32-kernel
-      clean teardown; clock-wizard both-windows pin / other-bits-preserved /
-      re-assert-after-clear; model death (Close) during idle-forward / param-
-      forward / mid-busy; Silence timeout; Protocol retry non-fatal; lifecycle
-      (double-start reject, stop-without-start, idempotent stop, dtor teardown,
-      restart); the two regression probes. Coverage: model_control_workers.cpp
-      92.41% lines / 97.47% branches (`gcov -b`; remainder are justified
-      OS-fault-injection + unreachable-default + nondeterministic output-fetch-
-      death branches). Reviewer signed off after independent clean builds;
-      normal/asan/ubsan/aubsan all green (381/381) with `-j16`, sanitizers PROVEN
-      active via `-fsanitize=` in flags.make.
-    * Step 8→9 handoff: the concrete `WorkerController` is now available for Step 6
-      reconfiguration to drive; Step 9/11 construct it with the accelerator's
-      `BarSet` user-region + clock-wizard memfds and manage its start/stop with the
-      model process.
+#### Remaining work
 
-* **Step 9 — BAR/device-info subsystem (PF2) — DONE**
-    * `src/ctl_subsystem.{h,cpp}`: `CtlSubsystem` serves the `slash_ctl<N>` named
-      `AF_UNIX`/`SOCK_SEQPACKET` socket (the emulated `/dev/slash_ctl<N>` control
-      device). One listener thread (`accept4` loop) + one worker thread per
-      connection; each worker recv→dispatch-on-`ioctl_op`→send, mirroring
-      `sequence_id`/`ioctl_op` and setting `return_value` = 0 / `-errno`.
-      One-thread-per-connection chosen over a pool: PF2 concurrency is small and
-      every request is short and non-blocking (no model I/O on this PF), which
-      keeps shutdown trivial.
-    * IOCTLs (per architecture): `GET_BAR_INFO` (0x30) — BARs 0/2/4 present
-      (`usable=1`, `in_use` ALWAYS 0, `start_address=0`, length 128 MiB/128 MiB/
-      512 KiB from the `BarSet` sizes); others absent. `GET_BAR_FD` (0x31) — a
-      `BarMemfd::reopen()`ed DISTINCT open file description sent via `SCM_RIGHTS`,
-      `return_value=0`, length filled, daemon's copy closed after send (no fd
-      leak); absent → `-EINVAL`, no fd. `GET_DEVICE_INFO` (0x32) — bdf =
-      `<board bdf>.2`, vendor=subsystem_vendor=`0x10EE`, device=`0x50B6`,
-      subsystem_device=`0x000e`. Under-length payload → `-EINVAL` (worker
-      survives); over-length tolerated (forward-compat); unknown op → `-ENOSYS`.
-    * `src/ctl_ioctls.h`: thin wrapper over the OFFICIAL libslash UAPI header
-      (`driver/libslash/include/slash/uapi/slash_interface.h`) — a deliberate
-      project decision (no hand-mirrored structs, so no ABI drift). CMake adds a
-      `SLASH_UAPI_INCLUDE_DIR` cache var (default `<repo>/driver/libslash/include`,
-      overridable to an installed libslash) to `slash_sysemu_core`'s PUBLIC includes,
-      with a configure-time `FATAL_ERROR` guard if the header is absent. The
-      wrapper adds only the slash_sysemu-specific PF2 identity constants, clearly
-      separated from the ABI include. **Steps 10–12 follow the same rule** (QDMA +
-      hotplug structs from the same header).
-    * Lifecycle: `setup()` binds → `chmod(mode)` → `chown(uid,gid)` (EPERM
-      tolerated for an unprivileged daemon) → `listen`, unlinking any stale file
-      first. `remove()` flips a stop flag, unlinks the socket, `shutdown(SHUT_RDWR)`
-      + closes the listen fd (accept returns → listener joins), then
-      `shutdown()`s every live connection fd (the architecture's forced user
-      disconnect) and joins the workers. Connection fds are OWNED by their worker
-      (`UniqueFd`); `remove()` only `shutdown()`s them, never closes out from under
-      a worker. The `BarSet` is BORROWED (`const&`) and untouched by `remove()` —
-      the model control workers keep polling the memfds. Idempotent setup/remove;
-      dtor removes if active; setup→remove→setup cycles safe. The RESCAN
-      reconfiguration-trigger is deliberately DEFERRED to Step 11 (this is the
-      socket-lifecycle half only).
-    * Race-freedom (the risk area): `remove()` joins the LISTENER before
-      snapshotting the connection map, so no worker can register after the move-out
-      window; the listener re-checks `stop_` under the connection mutex after
-      `accept4` (closes the fd + breaks if stopping, never orphaning it); a reaper
-      drops done-connection entries before a reused fd number can collide; map
-      entries are moved out under the lock and joined outside it (no join-under-
-      lock, no deadlock). Reviewer independently reasoned through and found no
-      race, no fd/thread leak, no close-from-under-a-worker, no deadlock.
-    * Tests: `tests/ctl_subsystem_test.cpp` (41 tests: 23 implementer + 18
-      adversary). In-process SEQPACKET test client; covers bar_info present/absent
-      across the full `__u8` range, bar_fd SCM_RIGHTS + fstat/mmap round-trip + the
-      critical distinct-description flock-conflict proof for ALL three BARs + a
-      400× daemon-fd-leak loop, device_info exactness, under-length `-EINVAL` +
-      unknown-op survival, ownership/mode (mode always asserted; uid only when
-      privileged), REMOVE forced-disconnect with memfds-still-work + RESTORE + 5×
-      cycles, 16 concurrent clients, connect-storm racing remove at the
-      accept-before-register window, fd-number-reuse, destructor-while-connected,
-      fd/thread-leak checks. Coverage: ctl_subsystem.cpp 90.3% lines / 85.4%
-      branches (`gcov -b`; remainder are justified OS-fault-injection paths).
-      Reviewer signed off after independent clean builds; normal/asan/ubsan/aubsan
-      all green (422/422) with `-j16`, sanitizers PROVEN active (libasan/libubsan
-      confirmed linked), lifecycle stable 5× until-fail under aubsan.
-    * Non-blocking nits: (a) `remove()` may `shutdown()` a done-worker's already-
-      closed/reused fd number — benign (EBADF/ENOTSOCK ignored); could be tightened
-      by skipping done entries. (b) a cosmetic gcov line-split artifact on the
-      unknown-op default case.
-    * Step 9→11 handoff: Step 11 constructs `CtlSubsystem` with the accelerator's
-      resolved `slash_ctl<N>` path + ownership + board BDF + its `BarSet`, and
-      drives `setup()`/`remove()` as part of the PF2 RESCAN/REMOVE lifecycle
-      (calling `reconfigure()` before `setup()` on a PF2 restore).
-
-* **Step 10 — QDMA subsystem (PF1) — DONE**
-    * `src/qdma_subsystem.{h,cpp}`: `QdmaSubsystem` serves the `slash_qdma_ctl<N>`
-      named `AF_UNIX`/`SOCK_SEQPACKET` socket (emulated `/dev/slash_qdma_ctl<N>`).
-      Two endpoint kinds, dispatched by `(endpoint, ioctl_op)`: **CTL** (the
-      top-level socket) accepts `INFO` (0x50), `QPAIR_ADD` (0x51), `Q_OP` (0x52),
-      `QPAIR_GET_FD` (0x53), `BUF_CREATE` (0x54); **XFER** (a per-`GET_FD`
-      anonymous `SEQPACKET` socketpair) accepts `BUF_CREATE` (0x54) and `TRANSFER`
-      (0x56). Op on the wrong endpoint → `-EINVAL`; unknown op → `-ENOSYS`; workers
-      survive both. Threading mirrors `CtlSubsystem`: one `accept4` listener + one
-      worker per CTL connection; each `GET_FD` spawns a dedicated transfer-session
-      worker on the daemon end of the socketpair.
-    * Qpair state machine: `Initial -[ADD]-> Stopped`; `Stopped|Started -[START]->
-      Started`; `Started -[GET_FD]-> Used`; `Used -[last close on FD]-> Started`;
-      `Started|Stopped -[STOP]-> Stopped`; `Started|Stopped|Used -[DEL]-> removed`.
-      A `STOP`/`DEL` may land underneath a live session (models the driver not
-      invalidating a session); the transfer path then observes `-ENODEV`. Invalid
-      transitions → `-EINVAL`. Multi-qpair `GET_FD` is all-or-nothing (validate all
-      Started, then transition; revert on socketpair/teardown failure). **Lead
-      decision:** a `GET_FD` list naming the same qid twice is rejected with
-      `-EINVAL` (mirrors the driver; double-binding one qpair into a single session
-      has no legitimate caller). Session workers are keyed by a monotonic id, NOT
-      the fd, to dodge fd-reuse map collisions.
-    * `TRANSFER` (per sub-transfer, 64 KiB chunks): H2C to HBM/DDR = `pread` the
-      referenced fd → `ModelClient::populate`; C2H from HBM/DDR = `ModelClient::
-      fetch_buffer` → `pwrite` the fd; H2C to the reconfiguration aperture
-      (`dev_addr == kReconfigApertureAddr`, 0x102100000) = `pread` →
-      `VbinStore::append_staging` (NOT sent to the model, `dev_addr` NOT advanced).
-      `buf_fd` is an INDEX into the `SCM_RIGHTS` fd list (`resolve_fd_index`);
-      `return_value` = total bytes. Model serialisation leans ENTIRELY on
-      `ModelClient`'s per-socket mutex (one request in flight); `pread`/`pwrite`
-      are kept OUTSIDE that lock so sessions' file I/O overlaps while model requests
-      serialise. `INFO` returns `bdf = <board bdf>.1` + zeroed caps. `BUF_CREATE`
-      returns a page-granule memfd (hint `SINGLE_QPAIR`, a deliberate V80-driver
-      difference) via `SCM_RIGHTS`, closing the daemon's copy after send (no leak,
-      no daemon-side reference).
-    * `src/qdma_ioctls.h`: thin wrapper over the OFFICIAL libslash UAPI header
-      (same `SLASH_UAPI_INCLUDE_DIR` rule as Step 9), adding only PF1 identity
-      constants. **ABI change:** `char bdf[SLASH_PCI_BDF_LEN]` appended to
-      `slash_qdma_info` (sizeof 20→52) so userspace discovers the PF1 BDF without
-      sysfs (lead+user decision to extend the official struct now, not a local
-      mirror). `kReconfigApertureAddr` lives here for now; **Step 13 moves it +
-      the HBM/DDR/reconfig memory ranges into the kernel ABI header**.
-    * Ownership: `ModelClient` + `VbinStore` are BORROWED and untouched by
-      `remove()` (which forgets the qpair list, force-disconnects all CTL
-      connections + transfer sessions, and joins); `setup()` re-inits the qpair
-      list (RESCAN half). Idempotent setup/remove; dtor removes if active.
-    * Tests: `tests/qdma_subsystem_test.cpp` (70 tests: 53 implementer + 16
-      adversary + 1 user-requested end-to-end roundtrip), backed by the shared
-      `MockModelServer` (address-keyed memory) + a real `VbinStore`. Covers the full
-      state machine, both transfer directions incl. multi-chunk, the reconfig
-      aperture path (dev_addr pinned, model untouched), all-or-nothing multi-qpair
-      GET_FD + revert, wrong-endpoint/unknown-op routing, short/oversized/garbage
-      payloads on every op, SCM_RIGHTS fd-leak audits on error paths, `Used`-
-      underneath STOP/DEL, teardown/destructor races (remove while sessions busy /
-      mid-transfer), 200× concurrent STOP/START-vs-transfer (no torn result), and a
-      **full host→device→host roundtrip** (`RoundtripHostToDeviceToHostAEqualsB`):
-      host buffers A/B allocated via `BUF_CREATE`, device buffer C in the model,
-      A→C (H2C) then C→B (C2H) at 128 KiB (crosses the chunk boundary both ways),
-      asserting `A == B` and that C holds A's bytes. Adversary found NO real bugs;
-      all four lead-flagged suspicions (int32 return overflow, precondition/exec
-      race, fd-number done-flagging, `connection_count` counting sessions) were
-      investigated and confirmed safe/intended. Coverage: `qdma_subsystem.cpp`
-      ~89% lines / ~85% branches (`gcov -b`; remainder are un-injectable OS-fault
-      paths). Clean 4-dir builds green (492/492): normal `-j16`, asan/ubsan/aubsan
-      `-j8` (WSL2 full-suite -j16 is memory-pressure flaky), `-fsanitize` PROVEN
-      live in each `flags.make`.
-    * Step 10→11 handoff: Step 11 constructs `QdmaSubsystem` with the accelerator's
-      resolved `slash_qdma_ctl<N>` path + ownership + board BDF + its `ModelClient`
-      and `VbinStore`, and drives `setup()`/`remove()` as part of the PF1
-      RESCAN/REMOVE lifecycle. The reconfig-aperture H2C→`append_staging` path is
-      the daemon-side half of Step 6 reconfiguration; Step 11 owns promoting the
-      staged VBIN and restarting the model.
-
-* **Step 11 — Accelerator lifecycle and hotplug — DONE**
-    * `src/accelerator.{h,cpp}`: `Accelerator` is the per-BDF state machine
-      (`AccelState` = Absent/Inactive/Active/Partial) that owns the `ModelInstance`
-      + PF1 (`QdmaSubsystem`) + PF2 (`CtlSubsystem`) for one board and enforces
-      instantiation/teardown ordering. `instantiate()`: ensure model → `setup_qdma`
-      (PF1) → `setup_ctl` (PF2). `teardown()`: reverse. `restore_pf(Pf2)` (the
-      reconfiguration path, driven from the QDMA staged-VBIN promotion) **quiesces
-      PF1 first** (`qdma_->remove()` + reset while the old `ModelClient` is still
-      alive) BEFORE `ensure_model()` destroys it, then rebuilds PF2 and reconstructs
-      PF1 against the new model — this is what keeps `qdma_subsystem.*` PRISTINE at
-      its Step-10 borrow-by-reference contract (no `rebind_model`, no snapshot-
-      pointer UAF; device HBM/DDR is defined not to persist across reconfig, so
-      dropping stale qpair state is intended, per the memory-range notes above).
-    * **Model-death generation guard.** Each model launch mints a process-globally-
-      unique generation from a `shared_ptr<atomic<uint64_t>>` counter owned by the
-      `Accelerator` (survives `model_.reset()`); the per-launch `DeathCallback`
-      captures its own generation and posts `on_model_died(gen)` to the lifecycle
-      thread. `Accelerator::on_model_died(gen)` no-ops unless `gen == generation()`,
-      so a stale death task for a process already replaced by HOTPLUG/RESCAN cannot
-      tear down the healthy re-adopted model (the adversary's segfault, fixed).
-      Honours the `DeathCallback` contract: the monitor thread only posts; teardown
-      runs on the lifecycle thread.
-    * `src/hotplug_subsystem.{h,cpp}` + `src/hotplug_ioctls.h`: the daemon-level
-      `slash_hotplug` `AF_UNIX`/`SOCK_SEQPACKET` socket, serving RESCAN (`_IO('w',
-      0x30)`, no-arg), REMOVE/TOGGLE_SBR/HOTPLUG (`_IOW('w', 0x31/0x32/0x33,
-      slash_hotplug_device_request{u32 size; char bdf[32]})`) over the shared
-      datagram transport. `hotplug_ioctls.h` is the thin wrapper over the OFFICIAL
-      `<slash/uapi/slash_hotplug.h>` (real kernel driver `driver/slash_hotplug.c`;
-      same `SLASH_UAPI_INCLUDE_DIR` rule). BDF targeting: `.0/.1/.2` suffix → one PF;
-      bare board BDF → all PFs; empty BDF → the single tracked device (`-EOPNOTSUPP`
-      if multiple, `-ENODEV` if none). A **single `lifecycle_mu_`** serialises
-      RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR and the posted death-teardown; a dedicated
-      lifecycle thread/queue runs death callbacks off the monitor thread. TOGGLE_SBR
-      emulates the 1 s link-training delay.
-    * `src/daemon.{h,cpp}` + `main.cpp`: `run_daemon()` does
-      `cold_reboot_cleanup_all` → `hotplug.setup()` → automatic startup RESCAN →
-      `wait_for_shutdown()` → `hotplug.remove()` → `cold_reboot_cleanup_all`.
-      Async-signal-safe self-pipe shutdown (handler = atomic CAS + `write` 1 byte;
-      main thread `read`/`poll` with EINTR retry). **Bug #2 fix:** the shutdown flag
-      is cleared at run-END (`close_shutdown_state`), not at reset, so a request that
-      arrives before the loop starts is not lost (was a hang). Re-invocable across
-      runs with no self-pipe fd leak.
-    * `src/reconfigure.{h,cpp}`: `ModelInstance` ctor extended to take the per-launch
-      `on_death_gen` callback + the shared generation counter; each launch mints its
-      generation, wraps it into the `DeathCallback`, and records `current_gen_`
-      (exposed via `current_generation()`). `adopt()` destroys the old
-      `ModelProcess` synchronously.
-    * Tests: `tests/accelerator_test.cpp` (22), `tests/hotplug_subsystem_test.cpp`
-      (45), `tests/daemon_test.cpp` (10, incl. the bug-#2 regression
-      `ShutdownRequestedBeforeStartIsNotLost`, both-signal storm, re-invocation fd-
-      leak audit), plus the migrated `tests/reconfigure_test.cpp`. Covers the full
-      state machine, PF1+PF2 ordering, RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR routing +
-      BDF targeting + ABI edge cases, the quiesce-first PF2 restore, and the two
-      adversary bugs with regressions: the **stale-death generation guard**
-      (`OnModelDiedStaleGenerationIsNoop`, `StaleDeathTaskDoesNotTearDownReadopted
-      Model` ×12 iters, `ModelKilledDuringPf2RestoreIsClean`,
-      `InflightTransferRacingReconfigureIsClean`,
-      `QdmaReconstructsAgainstNewModelAfterReconfigure`) and the shutdown-flag fix.
-      Clean 4-dir builds green (**565/565**): normal `-j16`, asan/ubsan/aubsan `-j8`
-      (WSL2 full-suite -j16 is memory-pressure flaky), `-fsanitize` PROVEN live in
-      each `flags.make`; `qdma_subsystem.*` confirmed empty-diff vs Step 10.
-    * Step 11→12 handoff: the daemon now stands up a full emulated board from an
-      empty `/run/slash_sysemu` and drives it through the hotplug socket; Step 12 points
-      libslash at these sockets (control-file-vs-socket flag) and forwards the PF1
-      BDF from the extended QDMA `INFO` field.
-
-* **Post-Step-11 hardening & packaging (between Steps 11 and 12) — DONE.**
-  Four interleaved deliverables that make the daemon shippable and operable
-  before libslash integration:
-    * **Daemon on systemd** (commit `3c750c97`). `run_daemon()` was rebuilt on
-      `libsystemd`: an `sd-event` loop with `sd_event_add_signal` (SIGTERM/SIGINT
-      via signalfd) and an `eventfd` source behind `request_shutdown()` — the
-      hand-rolled self-pipe/atomic-flag machinery is gone. `sd_notify` reports
-      `READY=1`/`STOPPING=1` and a **health-gated watchdog** (`WATCHDOG=1` only
-      while `HotplugSubsystem::healthy()` — a non-blocking `try_lock` on
-      `lifecycle_mu_` — so a lifecycle deadlock lets systemd restart us). Journal
-      logging via `sd_journal_print` (`src/log.h`). Everything systemd owns was
-      **removed** from the daemon: socket uid/gid → `User=`/`Group=`; socket mode
-      → `UMask=`; base-dir creation + cold-reboot cleanup → `RuntimeDirectory=` +
-      `RuntimeDirectoryPreserve=no`; the `-u`/`-g`/`-m` CLI flags and the
-      chmod/chown in every subsystem are deleted. Net −296 lines.
-    * **Rename `slash_emu` → `slash_sysemu`** (commit `b026414e`). "slash_emu"
-      read as *FPGA* emulation; this is *system* emulation (see Nomenclature).
-      Directory, C++ namespace, `struct slash_sysemu_socket_header`, CMake
-      project/targets, and the `SLASH_SYSEMU_*` options/env were renamed; the
-      executable is now **`slash_sysemud`**. The FPGA-emulation tokens (`vpp_emu`,
-      `*_emu.vbin`, `system_map_emu`, the `Emulation` platform) are a distinct
-      concept and were deliberately left untouched.
-    * **Default VBIN built from source** (commit `12577f31`). A fresh accelerator
-      needs a VBIN to bootstrap its model, but none was shipped. `src/model/`
-      holds a clean production model server (`slash_sysemu_model`, packed as
-      `vpp_sim`) that serves round-trip memory/register traffic with no compute
-      kernels — the "default VBIN" model this document describes. It is a
-      first-class implementation of the happy-path dialect, **not** the test
-      `MockModelServer` (whose fault-injection stays test-only); both are pinned to
-      `ModelClient` (mock via `model_client_test`, the real binary via
-      `tests/model_server_test.cpp` — the divergence guard). CMake tars
-      `{vpp_sim, data/default/system_map.xml}` into `default.vbin` (installed to
-      `/usr/lib/slash-sysemu/default.vbin`), and `config.cpp` defaults
-      `--default-vbin` to that compiled-in path (`SLASH_SYSEMU_DEFAULT_VBIN_PATH`),
-      overridable by `$SLASH_SYSEMU_DEFAULT_VBIN` then the flag — so the daemon
-      boots a fresh board with no config knob. Guarded by `default_vbin_test`
-      (unpacks the built artifact) + the precedence tests in `config_test`.
-    * **Packaging (deb + rpm)** (commit `45f6fae8`). Ships `slash_sysemud` as a
-      systemd service mirroring the vrtd convention. Assets under
-      `slash_sysemu/packaging/`: `slash-sysemu.service` (`Type=notify`, runs
-      unprivileged as `slash-sysemu:vrt`, `UMask=0117` → sockets 0660/group `vrt`,
-      `RuntimeDirectory=slash_sysemu`, health-gated `WatchdogSec`; hardened but
-      **no** `MemoryDenyWriteExecute` since the daemon fork/execs the model),
-      a `disable`-by-default preset (the shipped config declares no `[device.*]`,
-      so an auto-started daemon would exit and — under `Restart=on-failure` —
-      loop), `sysusers` (`slash-sysemu` user + shared `vrt` group), a documented
-      config template, and an `EnvironmentFile`. Wired into
-      `scripts/pconfigure|pbuild|pinstall.sh`; new `slash-sysemu` deb/rpm
-      subpackages; the `slash-sim-emu` metapackage now pulls in **both**
-      `slash-sysemu` and `vrtd` (applications drive the emulator through vrtd).
-      The deb installs the unit `--no-enable --no-start`; both back-ends ship it
-      disabled. Build discipline held throughout: clean 4-dir builds, sanitizers
-      proven live, normal/asan/aubsan **553/553** (ubsan 552/553 — the one failure
-      is the deferred generation-guard flake below).
-
-* **Step 12 — libslash integration — DONE**
-    * **Shared UAPI protocol header** (`driver/libslash/include/slash/uapi/slash_sysemu.h`):
-      `struct slash_sysemu_socket_header` (16 bytes, static-assert-verified) + the
-      `SLASH_SYSEMU_RECONFIG_APERTURE_ADDR` constant (0x102100000, from `qdma_ioctls.h` —
-      the aperture constant itself is intentionally deferred to Step 13 where the kernel
-      driver + VRTD will need it in the ABI header). The daemon's `src/protocol.h`
-      refactored to `#include` this header instead of defining the struct locally —
-      single source of truth, consistent with the UAPI-header rule for Steps 9–11.
-    * **`src/sock_transport.{h,c}`** (private to libslash): C90 client-side transport
-      mirroring the daemon's `transport.cpp`. Provides `slash_sock_connect` (SEQPACKET +
-      SO_RCVTIMEO/SO_SNDTIMEO ~10 s), `slash_path_is_socket`/`slash_fd_is_socket` (stat/fstat
-      + S_ISSOCK), `slash_sock_request` (build header+payload, one `sendmsg` with SCM_RIGHTS
-      MSG_NOSIGNAL, one `recvmsg` with MSG_CMSG_CLOEXEC, validate MSG_TRUNC/MSG_CTRUNC/
-      size/seq/op, copy response arg, return `header.return_value`; transport failure →
-      `errno=ENODEV`, `SLASH_SOCK_TRANSPORT_ERR` sentinel), and
-      `slash_sock_rewrite_fd_index` (client side of `collect_fds_and_rewrite` for
-      TRANSFER `buf_fd` by index). Per-handle `uint32_t seq` counter; raw-fd entry
-      points use `__thread uint32_t` for thread-safe per-socket sequencing.
-    * **ctldev socket path** (`src/ctldev.c`, `include/slash/ctldev.h`): `slash_transport`
-      enum (`IOCTL`/`MOCK`/`SOCKET`) in `struct slash_ctldev` and `struct slash_bar_file`.
-      `slash_ctldev_open` detects `S_ISSOCK` → `slash_sock_connect` + `SOCKET`;
-      `device_info_read`/`bar_info_read` → `slash_sock_request`; `bar_file_open` →
-      `GET_BAR_FD` request, `recv_fds[0]` via SCM_RIGHTS, `mmap`. The inline
-      `slash_bar_file_sync` gains a SOCKET branch: `DMA_BUF_SYNC_*` → `flock(2)`
-      (`START|WRITE`→`LOCK_EX`, `START|READ`→`LOCK_SH`, `END|*`→`LOCK_UN`, EINTR retry).
-      The daemon's `reopen()` ensures each client gets a distinct open file description on
-      the same memfd inode, so flock collisions are correct.
-    * **QDMA socket path** (`src/qdma.c`, `include/slash/qdma.h`): transport enum in
-      `struct slash_qdma`. `slash_qdma_open` socket-detects; `info_read` (forwards BDF),
-      `qpair_add`, `qpair_op`, `qpair_get_fd`/`_multi` (QPAIR_GET_FD returns an anonymous
-      XFER socket fd via SCM_RIGHTS; TRANSFER is issued on the XFER fd), `buffer_create`,
-      `qpair_buffer_create` (raw fd → `slash_fd_is_socket` for transport), `transfer_batch`/
-      `transfer` each gain socket branches. TRANSFER uses `slash_sock_rewrite_fd_index` for
-      `buf_fd` by index (SCM_RIGHTS on the XFER socket). The ENOTTY→memfd mock fallback on
-      raw-fd non-socket paths is preserved unchanged.
-    * **Hotplug socket path** (`src/hotplug.c`, `include/slash/hotplug.h`): transport enum +
-      `uint32_t seq` in `struct slash_hotplug`. `slash_hotplug_open` socket-detects.
-      RESCAN (no-arg `_IO`) → header-only `slash_sock_request` (`arg=NULL, arg_len=0`);
-      REMOVE/TOGGLE_SBR/HOTPLUG → `slash_hotplug_device_request` payload, same BDF-copy +
-      length-guard logic as the ioctl path.
-    * **In-process test server** (`tests/sysemu_test_server.{h,cpp}`): reusable C++
-      SEQPACKET server that binds a temp socket, speaks the full protocol, serves all
-      ctldev/QDMA/hotplug ops (BAR memfds via `reopen()`; XFER socketpairs via
-      `SCM_RIGHTS`; aperture H2C appends to `staging_`, C2H from aperture returns
-      `−EINVAL`; `transfer_hint = SLASH_QDMA_TRANSFER_HINT_SINGLE_QPAIR`), and injects
-      faults (PeerClose, TruncatedReply, WrongSeq, WrongOp, DaemonError). Hotplug state
-      (`last_hotplug_bdf`, `hotplug_error_code`, `hotplug_no_device` knobs). sv[1]
-      double-close fixed (set to −1 after SCM_RIGHTS transfer); sv[0] lifecycle owned by
-      `ConnectionLoop` (Stop uses `shutdown` not `close`); recv_fd-on-error leaks fixed
-      in `ctldev.c` and `qdma.c`.
-    * **Tests**: `tests/ctldev_sysemu_test.cpp` (32 tests), `tests/qdma_sysemu_test.cpp`
-      (25 tests), `tests/hotplug_sysemu_test.cpp` (22 tests), plus
-      `tests/libslash_e2e_test.cpp` (7 tests, all `GTEST_SKIP()` unless
-      `SLASH_E2E_CTL`/`SLASH_E2E_QDMA`/`SLASH_E2E_HOTPLUG` are set — the suite never
-      spawns the daemon). `tests/sock_transport_test.cpp` (framing, fd passing, ENODEV
-      mapping). `CtldevOpenTest.NullPath` corrected to `EINVAL` (was `EFAULT` — a
-      pre-existing test bug). Total: **187 tests**; fully green across all 4 dirs.
-      Adversary + reviewer sign-off complete.
-    * **Aperture constant deferral**: `kReconfigApertureAddr`/`SLASH_SYSEMU_RECONFIG_APERTURE_ADDR`
-      stays in `qdma_ioctls.h`/`slash_sysemu.h` for now; it will move into the kernel UAPI
-      header in Step 13 when the driver-side QDMA BDF and memory-range ABI are locked.
-    * Clean **187/187** across 4 build dirs (normal `-j16`, asan/ubsan/aubsan `-j8`);
-      `-fsanitize` proven live via `nm` on all 3 sanitizer binaries.
-    * Step 12→13 handoff: libslash speaks both char-device and socket transports over
-      the same API; consumer code is transport-agnostic. Step 13 adds the kernel driver
-      changes (driver-side QDMA BDF, memory-range ABI, and `kReconfigApertureAddr`
-      migration into the UAPI header).
-
-* **Steps 13–14 — NOT STARTED.** Next up: **Step 13 — kernel driver + VRTD changes**
-  (driver-side QDMA bdf, moving `kReconfigApertureAddr` + memory ranges into the UAPI
-  header), 14 (end-to-end integration).
+* **Step 13 — kernel driver + VRTD changes — NOT STARTED.**
+    * Driver fills the QDMA `INFO` BDF field libslash already forwards (Step 10 extended `slash_qdma_info` 20→52 bytes; the driver must populate `bdf`).
+    * Move `kReconfigApertureAddr` (0x102100000) + the HBM/DDR/reconfig memory ranges from `qdma_ioctls.h`/`slash_sysemu.h` into the kernel UAPI header.
+    * Document the reconfiguration writing protocol in the ABI reference.
+    * Switch VRTD discovery to globbing `/dev/` + `/run/slash_sysemu/` (`slash_ctl*`/`slash_qdma_ctl*`), querying + pairing BDFs (path indices are not stable across remove/rescan/hotplug).
+* **Step 14 — end-to-end integration — NOT STARTED.** Real `vpp_sim` under the daemon; BAR/HBM/DDR round trips, kernel execution, clock wizard, reconfiguration via staging writes + RESCAN, hotplug under concurrent activity; run under ASan/UBSan.
 
 ### Reusable building blocks now available
 
-* `Result<T>`/`Result<void>` + `ErrorKind` (Transport vs Protocol) — the error
-  vocabulary for all subsystems; Transport failures become `-ENODEV`.
-* `UniqueFd` RAII fd owner; `send_message`/`recv_message`/`send_request` and the
-  FD-index helpers — the datagram transport for PF2/QDMA/hotplug.
-* `DaemonConfig` + socket-path helpers — feed the subsystem setup in Steps 9–11.
-* `unpack_vbin` + `SystemMap`/`Kernel`/`Register`/`FunctionalArg`/`Connection`
-  model (with `VbinError` taxonomy and RAII `TempDir`) — feed the model process
-  launch/reconfiguration (Step 6), the model control workers and the
-  register→address mapping (Step 8), and QDMA target routing (Step 10).
-* `ModelClient` (vpp_sim ZeroMQ dialect, serialized + timed-out + Transport/
-  Protocol error taxonomy) and the scriptable `MockModelServer` test double —
-  drive the model process in the model control workers (Step 8) and QDMA
-  transfers (Step 10); the mock is the shared fixture for both.
-* `VbinStore`, `ModelProcess`, `WorkerController`, and `ModelInstance`
-  (reconfigure) — the per-accelerator model lifecycle. Step 8 implements the
-  real `WorkerController`; Step 10 appends reconfiguration chunks via
-  `append_staging`; Step 11 drives `reconfigure()`/teardown and owns
-  `cold_reboot_cleanup` — and MUST post model-death teardown to a thread other
-  than the death-callback (monitor) thread per the `DeathCallback` contract.
-  The `fake_model` executable + fixture VBINs are the shared end-to-end harness.
-* `BarMemfd` + `BarSet`/`make_standard_bars()` — memfd-backed BAR windows with
-  flock brackets, `update_u32` handshake helper, internal per-BAR mutex, and
-  `reopen()` (distinct open file description). Feed Step 8 (workers poll/handshake
-  the user-region BAR; internally thread-safe so per-kernel workers share it) and
-  Step 9 (GET_BAR_INFO via `by_index`/sizes; GET_BAR_FD sends a `reopen()`ed fd).
-* `ModelControlWorkers` (the concrete `WorkerController`) — per-kernel idle→busy→
-  idle FSM + clock-wizard lock-bit pinning, driven over `ModelClient` against the
-  injected user-region/clock-wizard `BarMemfd`s. Step 6 reconfiguration drives its
-  `start`/`stop`; Step 9/11 construct it with the accelerator's `BarSet` and bind
-  its lifetime to the model process.
-* `CtlSubsystem` + `ctl_ioctls.h` (thin UAPI wrapper) — the PF2 `slash_ctl<N>`
-  named-socket subsystem: listener + per-connection workers, GET_BAR_INFO/
-  GET_BAR_FD/GET_DEVICE_INFO, SCM_RIGHTS BAR-fd passing (`reopen()`), and
-  idempotent `setup()`/`remove()` over a borrowed `BarSet`. The established
-  pattern for the QDMA (Step 10) and hotplug (Step 11) sockets: reuse the transport
-  helpers, depend on the official UAPI header (`SLASH_UAPI_INCLUDE_DIR`), and keep
-  BAR/model state borrowed so REMOVE leaves it running. Step 11 drives its
-  lifecycle.
-* `QdmaSubsystem` + `qdma_ioctls.h` (thin UAPI wrapper) — the PF1
-  `slash_qdma_ctl<N>` named-socket subsystem: CTL + per-`GET_FD` XFER-session
-  endpoints, the qpair state machine, `SCM_RIGHTS` fd passing (host-buffer memfds
-  + session sockets), and H2C/C2H `TRANSFER` routing to `ModelClient` (HBM/DDR) or
-  `VbinStore::append_staging` (reconfig aperture) over a borrowed model + vbin
-  store. Serialisation leans on `ModelClient`'s per-socket lock with file I/O
-  outside it. Idempotent `setup()`/`remove()`. Step 11 drives its lifecycle and
-  owns staged-VBIN promotion + model restart.
-* `Accelerator` (`accelerator.{h,cpp}`) — the per-BDF state machine that owns one
-  board's `ModelInstance` + PF1 + PF2 and enforces instantiate/teardown ordering,
-  the quiesce-first PF2-restore reconfiguration path, and the model-death
-  generation guard (`on_model_died(gen)` no-ops on stale generations). Step 12+
-  constructs one per discovered board.
-* `HotplugSubsystem` + `hotplug_ioctls.h` (thin UAPI wrapper over the official
-  `slash_hotplug.h`) — the daemon-level `slash_hotplug` socket serialising
-  RESCAN/REMOVE/HOTPLUG/TOGGLE_SBR (+ BDF targeting) and the posted death-teardown
-  under one `lifecycle_mu_`, with a lifecycle thread for off-monitor death
-  callbacks. Drives every `Accelerator`'s lifecycle.
-* `run_daemon()` on `sd-event` (`daemon.{h,cpp}`) — the real event-loop entry
-  point: hotplug setup → startup RESCAN → `sd_notify(READY=1)` → `sd_event_loop`
-  (signalfd SIGTERM/SIGINT + `eventfd`-backed `request_shutdown()` + health-gated
-  watchdog) → `sd_notify(STOPPING=1)` → REMOVE. systemd owns the runtime dir,
-  socket identity/mode, and logging (journal). Re-invocable, no fd leak. (This
-  replaced the interim Step-11 self-pipe; the Step-1 handler-safety note is
-  resolved.)
-* `slash_sysemu_model` (`src/model/`) + the CMake-built `default.vbin` — the
-  shipped default model (packed as `vpp_sim`): round-trip memory/registers, no
-  kernels. The daemon defaults `--default-vbin` to the installed artifact. The
-  production server and the test `MockModelServer` are independently pinned to
-  `ModelClient`; keep them green together.
-* **`sock_transport.{h,c}` + libslash socket transport** (Step 12) — the C90
-  client-side `AF_UNIX`/`SOCK_SEQPACKET` transport (`slash_sock_connect`,
-  `slash_path_is_socket`/`slash_fd_is_socket`, `slash_sock_request`,
-  `slash_sock_rewrite_fd_index`) mirroring the daemon's `transport.cpp`. All three
-  libslash subsystems (ctldev, qdma, hotplug) are transport-agnostic at the public
-  API; `S_ISSOCK` detection at `open` selects the path. BAR sync over sockets uses
-  `flock(2)` (LOCK_EX/LOCK_SH/LOCK_UN) instead of `DMA_BUF_IOCTL_SYNC`. Any
-  transport failure → `errno=ENODEV`. Consumer code works unchanged over both
-  `/dev/slash_*` char devices and `/run/slash_sysemu/slash_*` sockets.
-* **`SysemuTestServer`** (`tests/sysemu_test_server.{h,cpp}`, Step 12) — reusable
-  in-process C++ SEQPACKET server that binds a temp socket, serves all three
-  subsystems (ctldev/QDMA/hotplug), passes memfds + socketpairs via SCM_RIGHTS,
-  models the reconfig-aperture staging buffer (`staging_`), and injects faults
-  (PeerClose, TruncatedReply, WrongSeq, WrongOp, DaemonError). Shared fixture for
-  `ctldev_sysemu_test`, `qdma_sysemu_test`, and `hotplug_sysemu_test`; extended by
-  each adversary pass. The opt-in `libslash_e2e_test` drives the same consumer flow
-  against a real running daemon via `SLASH_E2E_CTL`/`SLASH_E2E_QDMA`/`SLASH_E2E_HOTPLUG`
-  env vars.
+Component index (files under `slash_sysemu/src/` unless noted; behaviour detail
+in the ledger + invariants above):
+
+* **Transport** — `Result<T>`/`ErrorKind` (Transport vs Protocol; Transport → `-ENODEV`), `UniqueFd`, `send_message`/`recv_message`/`send_request`, FD-index helpers (`transport.*`, `protocol.h`).
+* **Config** — `DaemonConfig`, `BoardBdf`, socket-path helpers (`config.*`).
+* **VBIN/system map** — `unpack_vbin`, `SystemMap`/`Kernel`/`Register`/`FunctionalArg`/`Connection`, `VbinError`, RAII `TempDir` (`vbin.*`, `system_map.*`). `base_address + offset` = absolute address; `register_at()` reverses it.
+* **Model client** — `ModelClient` (vpp_sim ZeroMQ dialect, serialized, timed-out) + scriptable `MockModelServer` test double (`model_client.*`, `tests/mock_model_server.*`).
+* **Model lifecycle** — `VbinStore`, `ModelProcess`, `WorkerController` (abstract), `ModelInstance` (`vbin_store.*`, `model_process.*`, `worker_controller.h`, `reconfigure.*`). `fake_model` + fixture VBINs = shared harness. Death teardown MUST be posted off the monitor thread (invariant 1).
+* **BARs** — `BarMemfd`, `BarSet`/`make_standard_bars()` (`bar_memfd.*`): UserRegion 128 MiB (idx 0), ServiceLayer 128 MiB (idx 2), ClockWizard 512 KiB (idx 4); flock brackets, `update_u32`, internal per-BAR mutex, `reopen()`.
+* **Workers** — `ModelControlWorkers` (concrete `WorkerController`, `model_control_workers.*`): per-kernel FSM + clock-wizard lock-bit pin.
+* **PF2** — `CtlSubsystem` + `ctl_ioctls.h` (`ctl_subsystem.*`): `slash_ctl<N>`, listener + per-connection workers, idempotent setup/remove over a borrowed `BarSet`.
+* **PF1** — `QdmaSubsystem` + `qdma_ioctls.h` (`qdma_subsystem.*`): `slash_qdma_ctl<N>`, CTL + XFER endpoints, qpair FSM, `TRANSFER` routing over a borrowed model + vbin store.
+* **Accelerator** — `Accelerator` (`accelerator.*`): per-BDF state machine, instantiate/teardown ordering, quiesce-first PF2 restore, generation guard.
+* **Hotplug + daemon** — `HotplugSubsystem` + `hotplug_ioctls.h` (`hotplug_subsystem.*`): `slash_hotplug` socket, one `lifecycle_mu_`, owns the generation counter + off-monitor lifecycle thread. `run_daemon()` on `sd-event` (`daemon.*`): hotplug setup → startup RESCAN → READY → loop (signalfd + eventfd shutdown + health-gated watchdog) → REMOVE. systemd owns runtime dir/identity/mode/logging.
+* **Default model** — `slash_sysemu_model` (`src/model/`) + CMake-built `default.vbin` (round-trip mem/regs, no kernels); independently pinned to `ModelClient` alongside `MockModelServer` — keep both green.
+* **libslash socket transport** — `sock_transport.{h,c}` + ctldev/qdma/hotplug socket paths (`driver/libslash/`). `S_ISSOCK` at open selects the path; failure → `errno=ENODEV`; BAR sync = `flock(2)`. Transport-agnostic across `/dev/slash_*` and `/run/slash_sysemu/slash_*`.
+* **Test server** — `SysemuTestServer` (`driver/libslash/tests/sysemu_test_server.*`): in-process SEQPACKET server for all three subsystems + fault injection (PeerClose/TruncatedReply/WrongSeq/WrongOp/DaemonError). Opt-in `libslash_e2e_test` drives a real daemon via `SLASH_E2E_*`.
 
 ### Deferred / outstanding items
 
@@ -1578,54 +970,6 @@ ctest suite passing.
   release `workers_mtx_` before acquiring `qpairs_mtx_` and re-check the atomic stop
   flag after acquiring `qpairs_mtx_` (safe because the stop check is atomic), so both
   paths observe a single `qpairs_mtx_`-then-`workers_mtx_` (or non-nested) order.
-* **Step 12 fd-reuse `shutdown()` clobber — RESOLVED.**
-  `CtlSubsystem`/`QdmaSubsystem` `remove()` used to `::shutdown()` every fd number
-  in the connection/worker map — including *stale* keys whose fds had already been
-  closed by finished workers (the entry lingers until the opportunistic reap). Since
-  all subsystems share one process fd table, once the OS reused such a freed number
-  for an unrelated **live** socket, that `shutdown()` tore down the wrong connection.
-  Deterministically reproduced by the Step-12 real-daemon E2E
-  (`E2EHotplugTest.RemovePf2ThenRescanRestores`): a prior PF1 (QDMA) client
-  connection left a stale `workers_` entry whose fd number was later reused by the
-  hotplug client connection; a `REMOVE` PF2 + `RESCAN` then quiesced PF1
-  (`QdmaSubsystem::remove()`), whose stale-key `shutdown()` killed the live hotplug
-  connection → the client saw `-ENODEV`. The Step-9 status had called this
-  `shutdown()` "benign (EBADF/ENOTSOCK ignored)" — it is **not** benign after fd
-  reuse. **Fix:** the `done`-check + `::shutdown()` now run **under** the
-  connection-map mutex (`conns_mtx_` / `workers_mtx_`); a worker sets `done=true`
-  under that same lock *before* its `UniqueFd` closes the fd, so while `remove()`
-  holds the lock every `!done` entry's fd is guaranteed open (and every already-closed
-  fd is `done==true` and skipped). Applied symmetrically to CTL connections and the
-  per-`GET_FD` XFER session workers. Regressions:
-  `CtlSubsystemTest.RemoveDoesNotShutdownStaleOrReusedFdNumbers` (50-cycle
-  stale/reuse) and `ConcurrentWorkerFinishAndRemoveIsRaceFree` (200-cycle
-  concurrent-finish-vs-`remove`). Reviewer-signed-off; clean 4-dir suites (558/558).
-* **Step 11 generation-guard race — RESOLVED.**
-  `HotplugTest.StaleDeathTaskDoesNotTearDownReadoptedModel` used to SEGFAULT ~6/12
-  under a 12× stress. **Root cause (the recorded ASan diagnosis was wrong — it was
-  a value collision, not a locking window):** the model-death generation is minted
-  from a counter that lived *inside* the `Accelerator` (`gen_counter_`, one per
-  object, starting at 0). It survives `model_` restarts within one `Accelerator`,
-  but **RESCAN replaces the whole `Accelerator` object** when a board goes Inactive
-  (`hotplug_subsystem.cpp` replace path), and the replacement started a *fresh*
-  counter at 0. So a re-instantiated process (P2) reused the dead process's (P1's)
-  generation `1`; a still-pending stale death task for P1 — keyed only by board BDF,
-  resolving to the *new* object — then found `death_generation == generation()` and
-  wrongly tore down the healthy P2. (The guard's check + teardown were *already*
-  atomic under `lifecycle_mu_`; there was no locking window.) After the wrong
-  teardown `model_` is null, so the test's `model()->process()` deref turned the
-  `EXPECT_EQ` failure into a SEGV. **Fix:** the generation counter is now owned by
-  `HotplugSubsystem` (daemon lifetime) and injected into *every* `Accelerator` it
-  constructs (fresh and RESCAN-replacement), so launch generations are strictly
-  monotonic per board and a stale task can never match — plus the test's
-  `model()`/`process()` chain is null-guarded so any future defect fails cleanly
-  instead of crashing. Verified with **420 stress cycles** (240 normal + 180 asan)
-  and clean 4-dir suites (553/553). See the `project_death_generation_guard` memory.
-* **Signal-handler async-signal-safety (from Step 1): RESOLVED (systemd refactor).**
-  `run_daemon()` runs an `sd-event` loop; SIGTERM/SIGINT are handled via
-  `sd_event_add_signal` (signalfd), and the programmatic `request_shutdown()` uses
-  an eventfd source — no hand-rolled signal handler remains. (This superseded the
-  interim Step-11 self-pipe.)
 * `main.cpp` (2 lines) is not unit-tested (daemon entry point); acceptable.
 * Residual cosmetic `geninfo mismatch` warnings on test files under GCC 13 +
   lcov 2.0; downgraded via `--ignore-errors`, not a production concern.
