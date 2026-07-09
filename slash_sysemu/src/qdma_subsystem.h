@@ -230,11 +230,15 @@ private:
     uint32_t                                 next_qid_{0};
 
     // Live workers.  A single map holds both CTL connections and transfer
-    // sessions; the int key is the raw serviced fd (owned by its worker).  Keyed
-    // this way for shutdown() signalling, exactly like CtlSubsystem.
+    // sessions.  The worker thread owns and closes its fd; the raw fd is stored
+    // here only so remove() can call shutdown() to unblock a live worker's
+    // blocked recv()/send().  remove() checks done before calling shutdown():
+    // done==true means the worker has already closed its fd; that fd number may
+    // have been reused by the OS for a different live connection, so calling
+    // shutdown() on it would be unsafe.
     struct Worker {
         std::thread       thread;
-        int               fd{-1};   // fd to shutdown() on teardown
+        int               fd{-1};       // raw fd for shutdown() signalling only
         bool              session{false}; // true for XFER transfer sessions
         std::atomic<bool> done{false};
     };

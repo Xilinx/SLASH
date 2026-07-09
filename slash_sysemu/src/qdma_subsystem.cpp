@@ -169,22 +169,38 @@ void QdmaSubsystem::remove() {
     }
     listen_fd_.reset();
 
-    // 2. Force-disconnect every live worker (CTL connection + transfer session):
-    //    shutdown() its fd so a blocked recv()/send() fails, then join.  The
-    //    worker owns and closes its fd; we only signal via shutdown().  Move the
-    //    map out under the lock, then join outside it (workers take the lock in
-    //    their done-flagging path).
+    // 2. Force-disconnect every LIVE worker (CTL connection + transfer session),
+    //    then join all workers.
+    //
+    //    The done-check and ::shutdown() are performed UNDER workers_mtx_.
+    //    Invariant (established in connection_loop / session_loop): a worker
+    //    sets done=true under workers_mtx_ strictly BEFORE its UniqueFd
+    //    destructor closes the fd.  Therefore, while we hold workers_mtx_:
+    //      - If w->done == false  → the fd (w->fd) is guaranteed still OPEN;
+    //        shutdown() is safe and will unblock the worker's recv().
+    //      - If w->done == true   → the fd is already closed (or closing in a
+    //        thread blocked waiting for this lock); the fd number may have been
+    //        reused — skip shutdown().
+    //    This closes the race where done-check and shutdown ran outside the
+    //    lock: a worker could set done + close its fd between a !done read and
+    //    the subsequent shutdown() call, hitting a recycled fd.
+    //
+    //    The map is moved out under the same lock so that any worker that races
+    //    to set done after we release the lock finds an empty map (find() →
+    //    end()) and silently does nothing.  Joins happen outside the lock.
     std::unordered_map<uint64_t, std::unique_ptr<Worker>> workers;
     {
         std::lock_guard<std::mutex> lk(workers_mtx_);
+        for (auto& [key, w] : workers_) {
+            (void)key;
+            if (w->fd >= 0 && !w->done.load()) {
+                // fd guaranteed open (worker can't close without this lock).
+                ::shutdown(w->fd, SHUT_RDWR);
+            }
+            // done==true: fd already closed or closing; skip.
+        }
         workers = std::move(workers_);
         workers_.clear();
-    }
-    for (auto& [key, w] : workers) {
-        (void)key;
-        if (w->fd >= 0) {
-            ::shutdown(w->fd, SHUT_RDWR);
-        }
     }
     for (auto& [key, w] : workers) {
         (void)key;
@@ -246,6 +262,8 @@ void QdmaSubsystem::reap_finished() {
             }
         }
     }
+    // Join outside the lock.  The worker already flagged done and closed its
+    // fd (via UniqueFd in the worker lambda), so the join is near-instantaneous.
     for (auto& w : finished) {
         if (w->thread.joinable()) {
             w->thread.join();
@@ -272,7 +290,11 @@ void QdmaSubsystem::connection_loop(int conn_fd) {
         }
     }
 
-    // Flag done so the listener's reaper (or remove()) can join us.
+    // Mark done BEFORE the fd closes (UniqueFd dtor below), so remove() sees
+    // done=true and skips calling shutdown() on our (still-open) fd.  Once we
+    // return the fd is closed; any further shutdown() on that fd number would
+    // target a recycled fd — possibly a live connection — which must not be
+    // disturbed.
     {
         std::lock_guard<std::mutex> lk(workers_mtx_);
         for (auto& [key, w] : workers_) {
@@ -319,7 +341,10 @@ void QdmaSubsystem::session_loop(int sock_fd, uint64_t session_key,
         }
     }
 
-    // Flag done for the reaper / remove().
+    // Mark done BEFORE the fd closes (UniqueFd dtor below), so remove() sees
+    // done=true and skips calling shutdown() on our (still-open) fd.  Once we
+    // return the fd is closed; shutdown() on that fd number then would target a
+    // recycled fd — possibly a live connection — which must not be disturbed.
     {
         std::lock_guard<std::mutex> lk(workers_mtx_);
         auto it = workers_.find(session_key);
@@ -327,7 +352,7 @@ void QdmaSubsystem::session_loop(int sock_fd, uint64_t session_key,
             it->second->done.store(true);
         }
     }
-    // fd closes here.
+    // fd closes here (UniqueFd dtor).
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

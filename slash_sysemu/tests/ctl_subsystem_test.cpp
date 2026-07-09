@@ -1170,6 +1170,139 @@ TEST_F(CtlSubsystemTest, FdNumberReuseAcrossShortConnections) {
     EXPECT_EQ(0u, sub->connection_count());
 }
 
+// ── Regression: remove() must NOT shutdown() done entries (fd-reuse hazard) ─────
+//
+// Root cause: remove() iterated conns_ and called ::shutdown() on every map key
+// without checking the done flag.  A worker sets done=true under conns_mtx_ then
+// closes its fd (UniqueFd dtor).  In the original code the done-check and
+// shutdown() ran OUTSIDE the lock, so a worker could set done + close its fd in
+// the window between remove() reading done==false and calling shutdown() — the fd
+// number gets reused by a new live connection, and shutdown() tears it down.
+//
+// The fix: done-check + shutdown() are performed UNDER conns_mtx_.  Invariant:
+// while the lock is held a !done worker cannot have closed its fd (it must acquire
+// the same lock to set done before the UniqueFd dtor runs), so every !done entry's
+// fd is guaranteed open.  done==true entries are skipped — their fd may be reused.
+//
+// How this test constructs the scenario:
+//   1. Subsystem A: many short-lived connections leave stale done entries; their
+//      fd numbers are freed when the workers close, available for OS reuse.
+//   2. Subsystem B: a fresh subsystem whose accept() may reuse those fd numbers.
+//   3. A.remove(): OLD code → shutdown() on all conns_ keys including reused ones,
+//      tearing down B's live connection.  NEW code → skips done entries; B unaffected.
+//   4. Assert B's live client can still exchange a request/response.
+//
+// 50 cycles; probabilistic under OLD code, always safe under NEW code.
+TEST_F(CtlSubsystemTest, RemoveDoesNotShutdownStaleOrReusedFdNumbers) {
+    auto bars_b = make_standard_bars();
+    ASSERT_TRUE(bars_b.has_value());
+    BarSet bars_b_set = std::move(bars_b.value());
+
+    // Subsystem B runs on a distinct path alongside subsystem A.
+    std::string sock_b = (base_ / "slash_ctl_b").string();
+
+    constexpr int kCycles    = 50;
+    constexpr int kStormConns = 12; // short connections to A per cycle
+
+    for (int cycle = 0; cycle < kCycles; ++cycle) {
+        // ── Phase 1: start A and hammer it with short connections ──────────────
+        auto sub_a = make_subsystem();
+        ASSERT_TRUE(sub_a->setup().has_value()) << "A setup cycle " << cycle;
+
+        // Open many short connections on A so that done entries accumulate;
+        // these release their fd numbers when the workers exit (OLD code) making
+        // those numbers available to be reused.
+        for (int i = 0; i < kStormConns; ++i) {
+            UniqueFd c = connect_client(sock_path_);
+            if (c) { (void)do_device_info(c.get(), 1); }
+            // c closes here → server worker sees EOF and sets done=true.
+        }
+
+        // Give the workers time to exit so done entries accumulate in conns_
+        // (under OLD code their fds are now freed; under NEW code they are kept
+        // open by Connection::fd).  We do NOT call reap_finished_connections()
+        // (it's private); just wait a moment.
+        std::this_thread::sleep_for(15ms);
+
+        // ── Phase 2: start B and make one live connection ──────────────────────
+        CtlSubsystem sub_b(sock_b, "0000:62:00", bars_b_set);
+        ASSERT_TRUE(sub_b.setup().has_value()) << "B setup cycle " << cycle;
+
+        // B's accept() is now competing for fd numbers.  Under OLD code, the
+        // freed fd numbers from A's workers are the most likely candidates.
+        UniqueFd live = connect_client(sock_b);
+        ASSERT_TRUE(static_cast<bool>(live)) << "B connect cycle " << cycle;
+
+        // ── Phase 3: call A.remove() ───────────────────────────────────────────
+        // OLD code: iterates all conns_ keys (including stale done entries whose
+        //   fd numbers may now be B's live connections) and calls shutdown() on
+        //   each → B's live connection is torn down.
+        // NEW code: skips done==true entries; only shuts down live entries (which
+        //   hold their own fd in Connection::fd, guaranteed open and valid).
+        sub_a->remove();
+        ASSERT_FALSE(sub_a->is_active()) << "cycle " << cycle;
+
+        // ── Phase 4: assert B's live connection survived ───────────────────────
+        // Exchange one GET_DEVICE_INFO request/response.  If shutdown() was called
+        // on B's live fd, recv_message will return an error (EOF/EINVAL).
+        auto resp = do_device_info(live.get(), 42);
+        EXPECT_TRUE(resp.has_value())
+            << "cycle " << cycle
+            << ": B's live connection was disrupted by A.remove() — "
+               "stale done entry shutdown() hazard detected";
+        if (resp.has_value()) {
+            EXPECT_EQ(0, static_cast<int32_t>(resp.value().header.return_value))
+                << "cycle " << cycle << ": unexpected return_value";
+        }
+
+        sub_b.remove();
+    }
+}
+
+// ── Probe: worker finishes concurrently with remove() — no wrong-fd shutdown ─────
+//
+// Exercises the narrow window where a worker's peer closes at exactly the same
+// time remove() is running.  With the under-lock done-check the race has exactly
+// two safe outcomes:
+//   a) remove() sees done==false  → shutdown() fires; worker wakes, tries to set
+//      done (blocks on the lock until remove() releases it), finds the map cleared,
+//      returns — no-op.  Fd is closed by the worker's UniqueFd on return.
+//   b) remove() sees done==true   → shutdown() skipped; fd already closed/closing.
+// Both are correct; neither can hit a recycled fd.
+//
+// The test hammers many setup→connect→remove cycles where the single connection
+// peer closes simultaneously.  ASan/TSan must be clean; connection_count must
+// reach 0 after each remove().
+TEST_F(CtlSubsystemTest, ConcurrentWorkerFinishAndRemoveIsRaceFree) {
+    constexpr int kCycles = 200;
+    for (int cycle = 0; cycle < kCycles; ++cycle) {
+        auto sub = make_subsystem();
+        ASSERT_TRUE(sub->setup().has_value()) << "cycle " << cycle;
+
+        // Connect one client and immediately let it go out of scope on a
+        // background thread, so the peer-close races with sub->remove() below.
+        UniqueFd c = connect_client(sock_path_);
+        ASSERT_TRUE(static_cast<bool>(c)) << "cycle " << cycle;
+
+        // Confirm the connection is registered (worker spawned).
+        ASSERT_TRUE(do_device_info(c.get(), 1).has_value()) << "cycle " << cycle;
+
+        // Release the client on a thread that races with remove().
+        std::thread closer([cc = std::move(c)] {
+            // cc closes here; the worker on the daemon side sees EOF and races
+            // to set done + close its fd at the same time remove() is running.
+        });
+
+        // remove() runs concurrently with the closer thread — the under-lock
+        // done-check must handle both orderings (done seen before/after close).
+        sub->remove();
+        closer.join();
+
+        EXPECT_FALSE(sub->is_active()) << "cycle " << cycle;
+        EXPECT_EQ(0u, sub->connection_count()) << "cycle " << cycle;
+    }
+}
+
 TEST(CtlIoctlAbiTest, WireSizesMatchKernelNaturalLayout) {
     // These structs come from the official libslash UAPI header; their natural
     // (kernel) sizes are what libslash puts on the wire.

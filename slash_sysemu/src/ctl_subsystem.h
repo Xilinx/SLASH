@@ -157,13 +157,14 @@ private:
     UniqueFd          listen_fd_;
     std::thread       listener_;
 
-    // Live connections.  Guarded by conns_mtx_.  The int key is the raw conn fd;
-    // the fd is OWNED by its connection worker (closed when the worker exits), so
-    // this map stores the raw fd only for shutdown() signalling — remove() must
-    // not close it out from under the worker.
+    // Live connections.  Guarded by conns_mtx_.  The int key is the raw conn fd.
+    // The worker thread owns the fd (closes it via UniqueFd on return).  The
+    // done flag lets remove() distinguish live connections (shutdown() safe to
+    // call) from stale done entries (fd already closed; shutdown() MUST be
+    // skipped — the fd number may have been reused by a different live connection).
     struct Connection {
         std::thread       thread;
-        std::atomic<bool> done{false}; // set by the worker just before it returns
+        std::atomic<bool> done{false}; // set by the worker before it closes its fd
     };
     mutable std::mutex                                     conns_mtx_;
     std::unordered_map<int, std::unique_ptr<Connection>>  conns_;

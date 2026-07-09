@@ -1562,6 +1562,44 @@ ctest suite passing.
   virtual network setups, non-polling BAR, FPGA-emulation-model support,
   hardened model-process isolation, and persisting HBM/DDR across
   reconfigurations.
+* **QDMA ABBA lock-ordering hazard (pre-existing, Step 10) — DEFERRED.**
+  `QdmaSubsystem` has two mutexes, `workers_mtx_` and `qpairs_mtx_`, acquired in
+  *inconsistent order* on two paths: `handle_qpair_get_fd`'s stop-racing path takes
+  `workers_mtx_` → `qpairs_mtx_` (`qdma_subsystem.cpp` ~587-597), while
+  `session_loop`'s exit takes `qpairs_mtx_` → `workers_mtx_` (~335-354). That is a
+  classic ABBA deadlock potential if both fire simultaneously. The window is
+  extremely narrow (the `qpairs_mtx_` holds are very brief) and neither the full
+  aubsan suite nor TSan-sensitive paths trip it today, so it has never been observed.
+  It is **pre-existing** — present since Step 10 and *not* introduced or worsened by
+  the Step-12 fd-reuse fix (that fix only touched `remove()` and the done-setting
+  paths, none of which hold both locks). Surfaced by the reviewer during the
+  Step-12 fd-reuse-fix sign-off; the lead + user decided on 2026-07-08 to keep that
+  change scoped and defer this. **Suggested remedy:** in `handle_qpair_get_fd`,
+  release `workers_mtx_` before acquiring `qpairs_mtx_` and re-check the atomic stop
+  flag after acquiring `qpairs_mtx_` (safe because the stop check is atomic), so both
+  paths observe a single `qpairs_mtx_`-then-`workers_mtx_` (or non-nested) order.
+* **Step 12 fd-reuse `shutdown()` clobber — RESOLVED.**
+  `CtlSubsystem`/`QdmaSubsystem` `remove()` used to `::shutdown()` every fd number
+  in the connection/worker map — including *stale* keys whose fds had already been
+  closed by finished workers (the entry lingers until the opportunistic reap). Since
+  all subsystems share one process fd table, once the OS reused such a freed number
+  for an unrelated **live** socket, that `shutdown()` tore down the wrong connection.
+  Deterministically reproduced by the Step-12 real-daemon E2E
+  (`E2EHotplugTest.RemovePf2ThenRescanRestores`): a prior PF1 (QDMA) client
+  connection left a stale `workers_` entry whose fd number was later reused by the
+  hotplug client connection; a `REMOVE` PF2 + `RESCAN` then quiesced PF1
+  (`QdmaSubsystem::remove()`), whose stale-key `shutdown()` killed the live hotplug
+  connection → the client saw `-ENODEV`. The Step-9 status had called this
+  `shutdown()` "benign (EBADF/ENOTSOCK ignored)" — it is **not** benign after fd
+  reuse. **Fix:** the `done`-check + `::shutdown()` now run **under** the
+  connection-map mutex (`conns_mtx_` / `workers_mtx_`); a worker sets `done=true`
+  under that same lock *before* its `UniqueFd` closes the fd, so while `remove()`
+  holds the lock every `!done` entry's fd is guaranteed open (and every already-closed
+  fd is `done==true` and skipped). Applied symmetrically to CTL connections and the
+  per-`GET_FD` XFER session workers. Regressions:
+  `CtlSubsystemTest.RemoveDoesNotShutdownStaleOrReusedFdNumbers` (50-cycle
+  stale/reuse) and `ConcurrentWorkerFinishAndRemoveIsRaceFree` (200-cycle
+  concurrent-finish-vs-`remove`). Reviewer-signed-off; clean 4-dir suites (558/558).
 * **Step 11 generation-guard race — RESOLVED.**
   `HotplugTest.StaleDeathTaskDoesNotTearDownReadoptedModel` used to SEGFAULT ~6/12
   under a 12× stress. **Root cause (the recorded ASan diagnosis was wrong — it was

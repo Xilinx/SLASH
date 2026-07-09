@@ -145,19 +145,38 @@ void CtlSubsystem::remove() {
     }
     listen_fd_.reset();
 
-    // 2. Force-disconnect every live connection: shutdown() each connection fd so
-    //    its worker's blocked recv()/send() fails (the "forced user disconnect"),
-    //    then join the workers.  The worker owns and closes the fd itself; we only
-    //    signal via shutdown().  Move the map out under the lock, then join
-    //    outside it (a worker calls reap/erase paths that also take the lock).
+    // 2. Force-disconnect every LIVE connection, then join all workers.
+    //
+    //    The done-check and ::shutdown() are performed UNDER conns_mtx_.
+    //    Invariant (established in connection_loop): a worker sets done=true
+    //    under conns_mtx_ strictly BEFORE its UniqueFd destructor closes the
+    //    fd.  Therefore, while we hold conns_mtx_:
+    //      - If conn->done == false  → the fd is guaranteed still OPEN;
+    //        shutdown() is safe and will unblock the worker's recv().
+    //      - If conn->done == true   → the fd is already closed (or closing
+    //        right now in a thread that is blocked waiting for this lock to
+    //        drop); the fd number may have been reused — skip shutdown().
+    //    This closes the race present when done-check and shutdown ran outside
+    //    the lock: a worker could set done + close its fd between a !done read
+    //    and the subsequent shutdown() call, allowing a recycled fd to be hit.
+    //
+    //    The map is moved out under the same lock so that any worker racing to
+    //    set done after we release the lock finds an empty map (find() → end())
+    //    and silently skips the flag.  Joins happen outside the lock so a
+    //    worker woken by shutdown() can acquire conns_mtx_ to do its no-op
+    //    find(), then return and close its fd freely.
     std::unordered_map<int, std::unique_ptr<Connection>> conns;
     {
         std::lock_guard<std::mutex> lk(conns_mtx_);
+        for (auto& [conn_fd, conn] : conns_) {
+            if (!conn->done.load()) {
+                // fd guaranteed open (worker can't close without this lock).
+                ::shutdown(conn_fd, SHUT_RDWR);
+            }
+            // done==true: fd already closed or closing; skip.
+        }
         conns = std::move(conns_);
         conns_.clear();
-    }
-    for (auto& [conn_fd, conn] : conns) {
-        ::shutdown(conn_fd, SHUT_RDWR);
     }
     for (auto& [conn_fd, conn] : conns) {
         (void)conn_fd;
@@ -194,7 +213,7 @@ void CtlSubsystem::listener_loop() {
             std::lock_guard<std::mutex> lk(conns_mtx_);
             if (stop_.load()) {
                 // Racing with remove(): don't register a worker remove() won't
-                // see.  Close the accepted fd and stop accepting.
+                // see.  Close the fd directly (the worker never started).
                 ::close(conn);
                 break;
             }
@@ -217,8 +236,8 @@ void CtlSubsystem::reap_finished_connections() {
             }
         }
     }
-    // Join outside the lock (the worker has already flagged done and is about to
-    // return, so this join does not block meaningfully).
+    // Join outside the lock.  The worker has already flagged done and closed its
+    // own fd (via UniqueFd in connection_loop), so the join is near-instantaneous.
     for (auto& conn : finished) {
         if (conn->thread.joinable()) {
             conn->thread.join();
@@ -343,8 +362,11 @@ void CtlSubsystem::connection_loop(int conn_fd) {
         }
     }
 
-    // Flag done so the listener's opportunistic reaper can join+erase us.  If
-    // remove() moved us out first, this flag is harmless.
+    // Mark done BEFORE the fd closes (UniqueFd dtor below), so remove() sees
+    // done=true and skips calling shutdown() on our (still-open) fd.  Once this
+    // function returns the fd is closed; any further shutdown() on that fd
+    // number would be on a recycled fd — potentially a live connection — which
+    // must not be disturbed.
     {
         std::lock_guard<std::mutex> lk(conns_mtx_);
         if (auto it = conns_.find(fd.get()); it != conns_.end()) {
