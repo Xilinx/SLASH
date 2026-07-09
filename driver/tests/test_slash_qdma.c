@@ -373,6 +373,34 @@ TEST_F(qdma, qpair_add_cmpt_ring_size_out_of_range)
 	EXPECT_EQ(EINVAL, errno);
 }
 
+TEST_F(qdma, qpair_add_aperture_size_must_be_power_of_two)
+{
+	struct slash_qdma_qpair_add add;
+
+	memset(&add, 0, sizeof(add));
+	add.size = sizeof(add);
+	add.mode = 0;
+	add.dir_mask = 0x1;
+	add.aperture_size = 4097;
+	EXPECT_EQ(-1, ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &add));
+	EXPECT_EQ(EINVAL, errno);
+}
+
+TEST_F(qdma, qpair_add_keyhole_aperture)
+{
+	struct slash_qdma_qpair_add add;
+
+	memset(&add, 0, sizeof(add));
+	add.size = sizeof(add);
+	add.mode = 0;
+	add.dir_mask = 0x1;
+	add.aperture_size = 4096;
+
+	ASSERT_EQ(0, ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &add));
+	self->qid = add.qid;
+	self->qpair_added = 1;
+}
+
 TEST_F(qdma, q_op_invalid_op)
 {
 	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 0, 0x3, &self->qid));
@@ -816,24 +844,43 @@ TEST_F(qdma, qpair_get_fd_oversized_struct_zeros_tail)
 	free(buf);
 }
 
-TEST_F(qdma, reject_partial_4k_transfer)
+TEST_F(qdma, partial_4k_write_read_verify)
 {
-	int buf_fd;
+	const size_t partial_size = TRANSFER_SIZE / 2;
+	int write_fd, read_fd;
+	uint8_t *write_buf, *read_buf;
 	uint64_t dma_addr = get_dma_addr();
 	long ret;
 
 	bring_up_qpair(_metadata, self, 0x3);
 
-	buf_fd = qdma_buf_create(self->io_fd, TRANSFER_SIZE, NULL, NULL);
-	ASSERT_GE(buf_fd, 0);
+	write_fd = qdma_buf_create(self->io_fd, TRANSFER_SIZE, NULL, NULL);
+	ASSERT_GE(write_fd, 0);
+	read_fd = qdma_buf_create(self->io_fd, TRANSFER_SIZE, NULL, NULL);
+	ASSERT_GE(read_fd, 0);
 
-	/* A sub-page length is not a multiple of the buffer granule. */
-	ret = qdma_buf_transfer(self->io_fd, buf_fd, 0, dma_addr,
-				TRANSFER_SIZE / 2, SLASH_QDMA_XFER_H2C);
-	ASSERT_EQ(-1, ret);
-	ASSERT_EQ(EINVAL, errno);
+	write_buf = qdma_buf_map(write_fd, TRANSFER_SIZE);
+	ASSERT_NE(MAP_FAILED, write_buf);
+	read_buf = qdma_buf_map(read_fd, TRANSFER_SIZE);
+	ASSERT_NE(MAP_FAILED, read_buf);
 
-	close(buf_fd);
+	fill_pattern(write_buf, partial_size);
+	memset(read_buf, 0, TRANSFER_SIZE);
+
+	ret = qdma_buf_transfer(self->io_fd, write_fd, 0, dma_addr,
+				partial_size, SLASH_QDMA_XFER_H2C);
+	ASSERT_EQ((ssize_t)partial_size, ret);
+
+	ret = qdma_buf_transfer(self->io_fd, read_fd, 0, dma_addr,
+				partial_size, SLASH_QDMA_XFER_C2H);
+	ASSERT_EQ((ssize_t)partial_size, ret);
+
+	EXPECT_EQ(0, memcmp(write_buf, read_buf, partial_size));
+
+	munmap(write_buf, TRANSFER_SIZE);
+	munmap(read_buf, TRANSFER_SIZE);
+	close(write_fd);
+	close(read_fd);
 }
 
 TEST_F(qdma, multipage_4k_write_read_verify)

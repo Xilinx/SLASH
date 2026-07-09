@@ -61,7 +61,7 @@
  *      disappear from the bus).
  *   3. Open the AMI device on PF0, request access.
  *   4. Issue AMI_IOC_DEVICE_BOOT ioctl to tell the AMC firmware to boot
- *      from partition 1 on the next reset.
+ *      from partition 0 on the next reset.
  *   5. Write a trigger value to BAR0 offset 0x1040000 to initiate the
  *      firmware-level reconfiguration.
  *      TODO(vserbu): explain what BAR0 register 0x1040000 controls in AMI
@@ -178,7 +178,7 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
     }
 
     /*
-     * Step 4: Issue AMI_IOC_DEVICE_BOOT ioctl to select boot partition 1.
+     * Step 4: Issue AMI_IOC_DEVICE_BOOT ioctl to select boot partition 0.
      *
      * We issue AMI_IOC_DEVICE_BOOT directly rather than calling
      * ami_prog_device_boot(), even though the latter is the intended public

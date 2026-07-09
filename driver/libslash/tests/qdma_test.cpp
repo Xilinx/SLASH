@@ -269,6 +269,65 @@ TEST_P(ParametrizedQdmaTest, BufferCreateTransfer) {
     EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
 }
 
+TEST_P(ParametrizedQdmaTest, QpairAddAcceptsKeyholeAperture) {
+    struct slash_qdma_qpair_add req{};
+    req.mode          = 0;   /* QDMA_Q_MODE_MM */
+    req.dir_mask      = 0x1; /* H2C */
+    req.aperture_size = 4096;
+
+    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
+    uint32_t qid = req.qid;
+
+    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
+}
+
+TEST_P(ParametrizedQdmaTest, PartialLengthTransfer) {
+    static constexpr size_t BUFFER_SIZE = 4096;
+    static constexpr size_t XFER_SIZE = 4096 - 17;
+
+    struct slash_qdma_qpair_add req{};
+    req.mode     = 0;   /* QDMA_Q_MODE_MM */
+    req.dir_mask = 0x3; /* H2C | C2H */
+
+    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
+    uint32_t qid = req.qid;
+    ASSERT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
+
+    int queue_fd = slash_qdma_qpair_get_fd(qdma_, qid, 0);
+    ASSERT_GE(queue_fd, 0);
+
+    struct slash_qdma_buffer src_buf{};
+    struct slash_qdma_buffer dst_buf{};
+    ASSERT_EQ(slash_qdma_buffer_create(qdma_, BUFFER_SIZE, &src_buf), 0);
+    ASSERT_EQ(slash_qdma_buffer_create(qdma_, BUFFER_SIZE, &dst_buf), 0);
+    auto *src = static_cast<uint8_t *>(src_buf.addr);
+    auto *dst = static_cast<uint8_t *>(dst_buf.addr);
+    for (size_t i = 0; i < XFER_SIZE; ++i) {
+        src[i] = static_cast<uint8_t>((i * 3 + 5) & 0xFF);
+    }
+    std::memset(dst, 0, BUFFER_SIZE);
+
+    ssize_t written = slash_qdma_qpair_transfer(queue_fd, src_buf.fd, 0,
+                                                DDR_BASE_ADDRESS, XFER_SIZE,
+                                                SLASH_QDMA_XFER_H2C);
+    EXPECT_EQ(written, static_cast<ssize_t>(XFER_SIZE));
+
+    ssize_t read_bytes = slash_qdma_qpair_transfer(queue_fd, dst_buf.fd, 0,
+                                                   DDR_BASE_ADDRESS, XFER_SIZE,
+                                                   SLASH_QDMA_XFER_C2H);
+    EXPECT_EQ(read_bytes, static_cast<ssize_t>(XFER_SIZE));
+    EXPECT_EQ(std::memcmp(src, dst, XFER_SIZE), 0);
+
+    EXPECT_EQ(slash_qdma_buffer_destroy(&src_buf), 0);
+    EXPECT_EQ(slash_qdma_buffer_destroy(&dst_buf), 0);
+
+    EXPECT_EQ(close(queue_fd), 0);
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
+}
+
 TEST_P(ParametrizedQdmaTest, MultiQpairBatchTransfer) {
     // Two 4 KiB halves transferred concurrently across two queue pairs bound to
     // a single fd, exercising the get-fd-multi + batch transfer API.

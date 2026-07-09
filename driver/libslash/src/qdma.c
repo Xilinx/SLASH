@@ -323,6 +323,7 @@ int slash_qdma_qpair_add(struct slash_qdma *qdma,
     tmp.h2c_ring_sz = req->h2c_ring_sz;
     tmp.c2h_ring_sz = req->c2h_ring_sz;
     tmp.cmpt_ring_sz = req->cmpt_ring_sz;
+    tmp.aperture_size = req->aperture_size;
 
     ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &tmp);
     if (ret < 0) {
