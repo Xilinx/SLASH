@@ -832,23 +832,21 @@ If not stated otherwise, the behavior and contracts from the real kernel ABI app
 * Test libslash against the running daemon
 * Complete once a consumer works unchanged over both control files and sockets
 
-#### Step 13: Kernel driver and VRTD changes
+#### Step 13: Kernel driver, ABI, and libslash-consumer updates
 
 * Return the QDMA BDF from the driver's INFO IOCTL
 * Add the HBM/DDR/reconfiguration memory ranges to the kernel ABI header
 * Document the reconfiguration writing protocol in the ABI reference
-* Switch VRTD device discovery to `/dev/` and `/run/slash_sysemu/` scanning
-* Test discovery against both the real driver and the daemon
-* Complete once VRTD discovers and drives emulated accelerators
-
-#### Step 14: End-to-end integration
-
-* Run a real `vpp_sim` model under the daemon
-* Exercise BAR/HBM/DDR round trips, kernel execution, and the clock wizard
-* Exercise reconfiguration via staging VBIN writes and RESCAN
-* Exercise hotplug operations under concurrent user activity
-* Run the suite under ASan and UBSan
-* Complete once a representative application runs unmodified against the daemon
+* Rebuild VRTD and VRT against the widened libslash API (the enlarged
+  `slash_qdma_info` with its new `bdf` field), adjusting any code that consumes
+  the changed struct so it keeps compiling and behaving correctly
+* VRTD stays single-backend and hardware-only; VRT keeps using the hardware
+  path for hardware — no socket/daemon discovery or socket transport wiring in
+  this sprint (that moves to the deferred items)
+* Test the driver INFO BDF against the real driver, and confirm VRTD/VRT still
+  build and drive real hardware unchanged
+* Complete once the driver reports the QDMA BDF and VRTD/VRT build and run
+  against the updated libslash on real hardware
 
 ### Development guidelines for the system emulation daemon
 
@@ -883,9 +881,14 @@ fresh session can resume the sprint without re-deriving context.*
 ### Progress
 
 Steps 1–12 are DONE and committed; the system-emulation daemon and its libslash
-integration are complete. **Steps 13–14 remain** (kernel driver + VRTD, then
-end-to-end) — though Step 14 has now reached its first full green E2E run
-(`00_axilite_raw` completes against the real `vpp_sim` daemon; see below). The
+integration are complete. **Step 13 is the only remaining step:** the kernel
+driver populates the QDMA `INFO` BDF, the memory ranges and reconfiguration
+protocol land in the kernel ABI, and VRTD/VRT are rebuilt against the widened
+libslash API. VRTD stays single-backend and hardware-only, and VRT uses the
+hardware path for hardware; wiring the full VRTD/VRT stack onto the daemon is a
+deferred effort (see "Deferred / outstanding items"). The daemon path itself is
+already validated by the libslash-only `00_axilite_raw` harness, which reaches a
+full green E2E run against the real `vpp_sim` daemon (see below). The
 team workflow was: implementer builds and unit-tests → adversary
 hunts bugs and folds every probe into the GTest suite → they iterate to
 convergence → reviewer signs off → lead commits. Every committed step kept the
@@ -924,15 +927,12 @@ deadlocks, or spurious `-ENODEV`:
 
 #### Remaining work
 
-* **Step 13 — kernel driver + VRTD changes — NOT STARTED.**
+* **Step 13 — kernel driver, ABI, and libslash-consumer updates — NOT STARTED.**
     * Driver fills the QDMA `INFO` BDF field libslash already forwards (Step 10 extended `slash_qdma_info` 20→52 bytes; the driver must populate `bdf`).
     * Move `kReconfigApertureAddr` (0x102100000) + the HBM/DDR/reconfig memory ranges from `qdma_ioctls.h`/`slash_sysemu.h` into the kernel UAPI header.
     * Document the reconfiguration writing protocol in the ABI reference.
-    * Switch VRTD discovery to globbing `/dev/` + `/run/slash_sysemu/` (`slash_ctl*`/`slash_qdma_ctl*`), querying + pairing BDFs (path indices are not stable across remove/rescan/hotplug).
-* **Step 14 — end-to-end integration — IN PROGRESS (first full green run achieved).** Real `vpp_sim` under the daemon; BAR/HBM/DDR round trips, kernel execution, clock wizard, reconfiguration via staging writes + RESCAN, hotplug under concurrent activity; run under ASan/UBSan.
-    * First harness: `00_axilite_raw` (see "Raw example E2E app" under building blocks) exercises the whole flow through libslash alone. As of 2026-07-09 it now **completes end-to-end ("Test passed!") against the real `vpp_sim` daemon**: discovery, VBIN staging transfer, PF2 REMOVE/RESCAN reconfiguration, HBM input DMA, kernel launch over BAR0 AXI-Lite, and result readback all succeed.
-    * Two fixes got it there: (a) the staged `vpp_sim` could not load Vivado's XSI runtime (`libxv_simulator_kernel.so`) on RESCAN — resolved by prepending the Vivado runtime dir to the daemon env file (`LD_LIBRARY_PATH` → `.../Vivado/lib/lnx64.o`, `slash_sysemu/packaging/conf/slash_sysemu.env`); (b) **kernels never finished** because `KernelWorker` used a kernel's absolute AXI `base_address` directly as a user-region BAR memfd offset, which is out of range on the 128 MiB memfd, so the worker went `Dead` before ever seeing `ap_start` — fixed by splitting `bar_base` (memfd/BAR-window offset) from `model_base` (absolute model address); see invariant 8 and regression test `AbsoluteBaseAddressTranslatesMemfdVsModel` (commit `0fe66cf2`, full ctest 559 passed).
-    * Remaining Step-14 work: running the suite under ASan/UBSan against the live daemon, exercising hotplug under concurrent user activity, and extending raw apps to examples 01–07.
+    * Rebuild VRTD and VRT against the widened libslash API (enlarged `slash_qdma_info`), fixing any consumer of the changed struct. VRTD stays single-backend and hardware-only; VRT keeps the hardware path for hardware. No socket/daemon discovery or socket transport wiring here — that is deferred.
+    * Verify against the real driver that INFO reports the BDF, and that VRTD/VRT still build and drive real hardware unchanged.
 
 ### Reusable building blocks now available
 
@@ -956,6 +956,28 @@ in the ledger + invariants above):
 * **Raw example E2E app** — `examples/00_axilite/00_axilite_raw.cpp` (target `00_axilite_raw`): a libslash-only counterpart to `00_axilite` that drives the daemon with **no VRT/VRTD** in between — the thinnest possible host-to-daemon integration test. Args: `<control-base-dir> <board-BDF> <vbin>`. Flow: enumerate `slash_ctl*`/`slash_qdma_ctl*` and match by BDF (indices are not stable) → QDMA H2C the whole VBIN to the reconfig aperture `0x102100000` → hotplug PF2 REMOVE + RESCAN → re-discover ctl/qdma → QDMA H2C input to HBM `0x4000000000` → launch kernels over BAR0 AXI-Lite (accumulate_0 @ BAR0 `0x0`, increment_0 @ `0x10000`; ap_ctrl_hs CTRL@`0x00` = ap_start bit0 / ap_done bit1, size@`0x10`, increment buffer ptr @`0x18`/`0x1c`, accumulate out_r@`0x18` + out_r_ctrl@`0x1c`) → poll ap_done → check result. Register/address constants are hard-coded against the design's `system_map.xml` (no VBIN untar / XML parse). **Build with `-DSLASH_USE_REPO=ON`** so it links the socket-capable repo libslash; a stale installed libslash without the Step-12 socket transport makes every `*_open()` on a socket fail with `ENXIO`.
 
 ### Deferred / outstanding items
+
+* **VRTD/VRT socket backend and full stack end-to-end integration — DEFERRED.**
+  The daemon and libslash are the delivered goal; driving the VRTD/VRT stack
+  against the daemon is a separate later effort. Its scope:
+    * VRTD gains a socket/daemon backend alongside the hardware backend, with
+      device discovery by globbing `/dev/` + `/run/slash_sysemu/`
+      (`slash_ctl*`/`slash_qdma_ctl*`), querying + pairing BDFs (path indices are
+      not stable across remove/rescan/hotplug). The VRTD-rediscovery paragraph in
+      "Necessary functional changes to other components" describes this end-state.
+    * VRT selects the socket path for emulated accelerators and the hardware path
+      for hardware.
+    * The end-to-end pass: a real `vpp_sim` model under the daemon; BAR/HBM/DDR
+      round trips, kernel execution, and the clock wizard; reconfiguration via
+      staging VBIN writes + RESCAN; hotplug under concurrent user activity; the
+      suite run under ASan/UBSan; until a representative application runs
+      unmodified against the daemon through VRT.
+    * Groundwork already in place: the libslash-only `00_axilite_raw` harness (see
+      "Reusable building blocks") completes end-to-end ("Test passed!") against
+      the real `vpp_sim` daemon — discovery, VBIN staging transfer, PF2
+      REMOVE/RESCAN reconfiguration, HBM input DMA, kernel launch over BAR0
+      AXI-Lite, and result readback all succeed. Extending the raw apps to
+      examples 01–07 is further coverage to add when this resumes.
 
 * **MVP scope exclusions** (see the "Scope" section) remain deferred by design:
   virtual network setups, non-polling BAR, FPGA-emulation-model support,
