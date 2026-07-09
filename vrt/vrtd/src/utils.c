@@ -20,8 +20,49 @@
 
 #include "utils.h"
 
+#include <stdarg.h>
+#include <stdio.h>
 #include <pwd.h>
 #include <string.h>
+#include <syslog.h>
+
+static bool log_to_stderr = false;
+
+static const char *log_priority_name(int priority)
+{
+    switch (priority) {
+        case LOG_EMERG:   return "EMERG";
+        case LOG_ALERT:   return "ALERT";
+        case LOG_CRIT:    return "CRIT";
+        case LOG_ERR:     return "ERR";
+        case LOG_WARNING: return "WARNING";
+        case LOG_NOTICE:  return "NOTICE";
+        case LOG_INFO:    return "INFO";
+        case LOG_DEBUG:   return "DEBUG";
+        default:          return "LOG";
+    }
+}
+
+void vrtd_log_init(void)
+{
+    const char *log_stderr = getenv("VRTD_LOG_STDERR");
+    log_to_stderr = log_stderr != NULL && strcmp(log_stderr, "1") == 0;
+}
+
+void vrtd_log(int priority, const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    if (log_to_stderr) {
+        (void) fprintf(stderr, "vrtd[%s]: ", log_priority_name(priority));
+        (void) vfprintf(stderr, fmt, args);
+        (void) fputc('\n', stderr);
+    } else {
+        (void) sd_journal_printv(priority, fmt, args);
+    }
+    va_end(args);
+}
 
 const char *uid_to_username(uid_t uid, char *buf, size_t bufsz)
 {

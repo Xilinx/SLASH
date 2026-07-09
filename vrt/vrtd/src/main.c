@@ -58,7 +58,7 @@
  */
 #define VRTD_DEFERRED_WORK_INTERVAL_USEC (20ULL * 1000ULL)
 
-static void check_journal_and_abort_if_needed(void);
+static void log_startup(void);
 static int configure_watchdog(sd_event *ev);
 static int configure_signals(sd_event *ev, struct vrtd *state);
 static int configure_sockets(sd_event *ev, struct vrtd *state);
@@ -76,14 +76,7 @@ int main(void)
 {
     struct vrtd state = {0};
 
-    /*
-     * Verify the systemd journal is reachable before doing anything else.
-     * If logging is broken we want to fail *before* sd_notify(READY=1),
-     * so the service never appears started and the sysadmin gets a clear
-     * error from systemctl.  See the detailed rationale above
-     * check_journal_and_abort_if_needed().
-     */
-    check_journal_and_abort_if_needed();
+    log_startup();
 
     globals_init();
 
@@ -183,57 +176,18 @@ int main(void)
 
 
 /**
- * In vrtd we do all our logging through the systemd-journal.
- * This is very convenient as it allows inspecting with journalctl -u
- * in the usual way, saves us from having to manage our own files in
- * /var/log (with rotation, compression etc.) and is nice QoL all around.
- * 
- * The problem is that logging can fail, which raises the question about
- * how we are to handle that failure.
+ * Initialize the logging backend once and emit the startup banner.
  *
- * It is important to note that if the systemd-journal is not active,
- * the logging functions will succeed, and silently do nothing. This is
- * a systemd design choice. For now, we simply accept this behaviour.
- *
- * The logging functions can fail if:
- *
- * 1) We call them with invalid parameters (EINVAL).
- * 2) We send a message that's too big.
- * 3) We run out of memory (ENOMEM).
- * 4) Some other process limit is reached.
- * 5) An I/O error occurs.
- * 6) The internal sendmsg syscall is interrupted by a signal (EINTR).
- *
- * Aborting the program if logging fails is not a good idea. We are left
- * with two choices:
- *
- * a) generally ignore logging errors
- * b) generally check logging errors
- *
- * Our current approach is to generally ignore logging errors, checking
- * only once (in the function below) at the very beginning of the program,
- * mostly to catch errors of type (5), and failing if we cannot log anything
- * at all. Because this happens before we notify READY=1, the service will
- * never appear started and systemctl start will fail, making it obvious to
- * the sysadmin that something is wrong.
- *
- * If we decide to check (which would massively increase complexity and may
- * slightly affect performance), we should assert against (1); assert against (2)
- * when there is no user-provided parameters (and fall back to a message without them
- * if there are); ignore (3); fall back to some other (stderr?) logging if (4) or (5)
- * and quietly retry (6).
- *
- * The reason to ignore (3) is because logging code is not a structurally sane
- * place to recover from ENOMEM. If we're limited, we'll hit ENOMEM again later
- * and we can do a better job at recovering then.
+ * By default, vrtd logs to the system journal.  For direct test runs outside a
+ * systemd service, setting VRTD_LOG_STDERR=1 switches all LOG() output to
+ * stderr instead, which makes daemon logs visible in the invoking terminal or
+ * redirected test log.
  */
-static void check_journal_and_abort_if_needed()
+static void log_startup()
 {
-    int ret = sd_journal_print(LOG_INFO, "Starting vrtd...");
-    if (ret < 0) {
-        (void) fprintf(stderr, "Failed to access systemd journal\n");
-        exit(EXIT_FAILURE);
-    }
+    vrtd_log_init();
+
+    LOG(LOG_INFO, "Starting vrtd...");
 }
 
 static int configure_signals(sd_event *ev, struct vrtd *state)

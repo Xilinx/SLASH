@@ -53,8 +53,8 @@
  *
  * @section misc Miscellaneous
  *
- * - @c LOG -- shorthand for sd_journal_print (cast to void to suppress
- *   unused-result warnings).
+ * - @c LOG -- shorthand for vrtd_log (cast to void to suppress unused-result
+ *   warnings).
  * - @c NODISCARD -- portable warn_unused_result attribute.
  * - @c bit_ceil -- type-generic smallest power-of-two >= n.
  * - @c max / @c min -- type-safe comparisons using GCC statement expressions.
@@ -78,8 +78,19 @@
 #include <glob.h>
 #include <systemd/sd-journal.h>
 
-/** @brief Shorthand for sd_journal_print, cast to void to suppress unused-result warnings. */
-#define LOG (void) sd_journal_print
+/**
+ * @brief Initialize vrtd logging from environment once at daemon startup.
+ */
+void vrtd_log_init(void);
+
+/**
+ * @brief Log to the configured backend.
+ */
+void vrtd_log(int priority, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+/** @brief Shorthand for vrtd_log, cast to void to suppress unused-result warnings. */
+#define LOG (void) vrtd_log
 
 /*
  * Look up the username for @uid. Writes the name into @buf (size @bufsz).
@@ -227,7 +238,7 @@ static inline uint64_t bit_ceil_u64(uint64_t n) {
     ({                                                                    \
         __auto_type _ret = RET;                                                   \
         if (CMP) {                                                        \
-            sd_journal_print(LOGLEVEL, FMT, ##__VA_ARGS__);               \
+            LOG(LOGLEVEL, FMT, ##__VA_ARGS__);                            \
             JUMP;                                                         \
         }                                                                \
     })
