@@ -67,10 +67,15 @@ Result<void> ModelControlWorkers::start(ModelClient& client, const SystemMap& ma
         kernels_.clear();
         kernels_.reserve(map.kernels.size());
         for (const Kernel& k : map.kernels) {
-            auto kw            = std::make_unique<KernelWorker>();
-            kw->kernel         = k;
-            kw->control_offset = static_cast<std::size_t>(k.base_address);
-            kw->has_control    = (k.register_at(0) != nullptr);
+            auto kw        = std::make_unique<KernelWorker>();
+            kw->kernel     = k;
+            // The BAR memfd is addressed by the kernel's offset WITHIN the user
+            // region (base_address % kUserRegionSize), exactly as VRT resolves an
+            // absolute kernel address to a BAR offset.  The model, in contrast, is
+            // addressed by the absolute base_address.  See KernelWorker's fields.
+            kw->bar_base    = static_cast<std::size_t>(k.base_address % kUserRegionSize);
+            kw->model_base  = k.base_address;
+            kw->has_control = (k.register_at(0) != nullptr);
             kernels_.push_back(std::move(kw));
         }
 
@@ -205,10 +210,15 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
             continue;
         }
 
+        // Control register lives at offset 0 of the kernel; bar_base/model_base are
+        // the memfd offset and the absolute model address of that register.
+        const std::size_t control_bar_offset = kw.bar_base;
+        const uint64_t    control_model_addr = kw.model_base;
+
         // ── IDLE: poll the control register for ap_start ─────────────────────
         uint32_t captured_control = 0;
         bool     started          = false;
-        auto     upd = user_region_.update_u32(kw.control_offset, [&](uint32_t cur) -> uint32_t {
+        auto     upd = user_region_.update_u32(control_bar_offset, [&](uint32_t cur) -> uint32_t {
             if ((cur & kApStart) != 0) {
                 captured_control = cur;
                 started          = true;
@@ -244,16 +254,18 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
             if (reg.access.find('W') == std::string::npos) {
                 continue; // read-only output register: not a parameter to forward
             }
-            std::size_t off = static_cast<std::size_t>(kw.kernel.base_address) +
-                              static_cast<std::size_t>(reg.offset);
-            auto v = user_region_.read_u32(off);
+            // Read the staged value from the BAR memfd (BAR-window offset) and
+            // forward it to the model at the absolute AXI address.
+            std::size_t bar_off   = kw.bar_base + static_cast<std::size_t>(reg.offset);
+            uint64_t    model_addr = kw.model_base + static_cast<uint64_t>(reg.offset);
+            auto v = user_region_.read_u32(bar_off);
             if (!v) {
                 // Out-of-range/OS failure on a declared register: skip it rather
                 // than abort the whole cycle (a malformed map should not wedge the
                 // worker).  This is defensive; a well-formed map stays in range.
                 continue;
             }
-            auto w = client.reg_write(off, v.value());
+            auto w = client.reg_write(model_addr, v.value());
             if (!w) {
                 if (w.error().kind == ErrorKind::Transport) {
                     transport_dead = true;
@@ -264,7 +276,7 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
             }
         }
         if (!transport_dead) {
-            auto w = client.reg_write(kw.control_offset, captured_control);
+            auto w = client.reg_write(control_model_addr, captured_control);
             if (!w && w.error().kind == ErrorKind::Transport) {
                 transport_dead = true;
             }
@@ -281,7 +293,7 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
             if (!wait_or_stop()) {
                 return;
             }
-            auto ctrl = client.fetch_scalar(kw.control_offset);
+            auto ctrl = client.fetch_scalar(control_model_addr);
             if (!ctrl) {
                 if (ctrl.error().kind == ErrorKind::Transport) {
                     kw.state.store(KernelState::Dead);
@@ -304,9 +316,11 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
                 if (reg.access.find('R') == std::string::npos) {
                     continue; // not readable: nothing to fetch back
                 }
-                std::size_t off = static_cast<std::size_t>(kw.kernel.base_address) +
-                                  static_cast<std::size_t>(reg.offset);
-                auto val = client.fetch_scalar(off);
+                // Fetch the result from the model (absolute address) and write it
+                // back into the BAR memfd (BAR-window offset) so the user sees it.
+                std::size_t bar_off    = kw.bar_base + static_cast<std::size_t>(reg.offset);
+                uint64_t    model_addr = kw.model_base + static_cast<uint64_t>(reg.offset);
+                auto val = client.fetch_scalar(model_addr);
                 if (!val) {
                     if (val.error().kind == ErrorKind::Transport) {
                         dead = true;
@@ -314,7 +328,7 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
                     }
                     continue; // Protocol error: skip this register
                 }
-                auto wb = user_region_.write_u32(off, val.value());
+                auto wb = user_region_.write_u32(bar_off, val.value());
                 (void)wb; // a memfd write failure is non-fatal to the FSM state
             }
             if (dead) {
@@ -337,7 +351,7 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
             // picks the new launch up next; otherwise we publish ap_done.
             const uint32_t done_value = ctrl.value();
             auto           wb = user_region_.update_u32(
-                kw.control_offset, [done_value](uint32_t cur) -> uint32_t {
+                control_bar_offset, [done_value](uint32_t cur) -> uint32_t {
                     if ((cur & kApStart) != 0) {
                         return cur; // user re-armed while Busy: honour it, don't clobber
                     }

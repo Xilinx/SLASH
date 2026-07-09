@@ -155,7 +155,19 @@ private:
     // without locking; the worker thread is the sole writer.
     struct KernelWorker {
         Kernel                   kernel;               // a copy of the kernel model
-        std::size_t              control_offset = 0;   // base_address + 0
+        // The kernel's base_address is an ABSOLUTE AXI address (e.g. 0x20200010000).
+        // Two distinct address spaces derive from it, mirroring VRT (vrt/src/kernel.cpp):
+        //   * bar_base  — the offset of the kernel within the user-region BAR memfd,
+        //     i.e. base_address % kUserRegionSize.  The user/VRT accesses a kernel
+        //     through the BAR window at this offset (hardware path:
+        //     barOffset = absoluteAddr % barLen), so this is where ap_start/params/
+        //     outputs live in the memfd.
+        //   * model_base — the absolute address the simulation model expects over
+        //     ZeroMQ (simulation path: server->sendScalar(baseAddr + offset, ...)).
+        // Conflating the two (using base_address as a memfd offset) reads far past
+        // the 128 MiB memfd and every access fails — the kernel never starts.
+        std::size_t              bar_base    = 0;   // base_address % kUserRegionSize (memfd)
+        uint64_t                 model_base  = 0;   // base_address (absolute, for the model)
         bool                     has_control    = false;
         std::atomic<KernelState> state{KernelState::Idle};
         std::thread              thread;

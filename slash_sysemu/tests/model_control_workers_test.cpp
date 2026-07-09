@@ -1290,6 +1290,88 @@ TEST(ModelControlWorkers, ZeroRangeKernelIsHandled) {
     SUCCEED();
 }
 
+// PROBE J — ABSOLUTE KERNEL BASE ADDRESS: MEMFD OFFSET vs MODEL ADDRESS.
+//
+// Regression for the "kernels never finish" bug.  A real system_map declares a
+// kernel's <BaseAddress> as an ABSOLUTE AXI address (e.g. increment_0 @
+// 0x20200010000), well beyond the 128 MiB user-region BAR.  The user/VRT accesses
+// the kernel through the BAR window at offset (base % kUserRegionSize), while the
+// simulation model is addressed by the absolute base.  The worker must translate
+// between the two: if it used the absolute base as a memfd offset, every memfd
+// access is out of range and the worker immediately goes Dead — ap_start is never
+// observed and the kernel never completes (the exact 00_axilite_raw timeout).
+//
+// This drives a full IDLE→BUSY→IDLE cycle on a full-size (128 MiB) user BAR with an
+// absolute base, asserting:
+//   * ap_start written at the BAR-window offset triggers the cycle (worker alive),
+//   * the model is driven at the ABSOLUTE address (params + control forwards),
+//   * the output and ap_done are published back at the BAR-window offset.
+TEST(ModelControlWorkers, AbsoluteBaseAddressTranslatesMemfdVsModel) {
+    // increment_0-like absolute base; range 0x10000; size@0x10 (W), out@0x18 (R).
+    const uint64_t    abs_base   = 0x20200010000ULL;
+    const std::size_t bar_offset = static_cast<std::size_t>(abs_base % kUserRegionSize);
+    ASSERT_EQ(bar_offset, 0x10000u); // matches VRT's BAR-window resolution
+
+    auto map = one_kernel_map(
+        abs_base, {Register{"size", 0x10, "W", 32, ""}, Register{"out", 0x18, "R", 32, ""}});
+
+    auto ep = unique_endpoint();
+    MockModelServer server(ep);
+    auto client = make_client(ep);
+    // A full-size user region: the whole point is that abs_base is NOT a valid
+    // memfd offset, only (abs_base % kUserRegionSize) is.
+    auto user  = make_bar(kUserRegionSize);
+    auto clock = make_bar(kClockBarSize);
+
+    // The model reports its output at the ABSOLUTE output address; ap_done is
+    // raised by the FSM proxy at the ABSOLUTE control address.
+    server.set_scalar(abs_base + 0x18, 0xFEEDFACE);
+    FsmProxy fsm(server, {abs_base});
+
+    ModelControlWorkers workers(user, clock, 1ms);
+    ASSERT_TRUE(workers.start(client, map).has_value());
+
+    // The user writes params + ap_start at the BAR-WINDOW OFFSET (as VRT does).
+    ASSERT_TRUE(user.write_u32(bar_offset + 0x10, 0x1234).has_value());
+    ASSERT_TRUE(user.write_u32(bar_offset + 0x0, ModelControlWorkers::kApStart).has_value());
+
+    // ap_done must be published back at the BAR-window offset (this is what the raw
+    // example polls, and what timed out before the fix).
+    ASSERT_TRUE(wait_until([&] {
+        auto v = user.read_u32(bar_offset + 0x0);
+        return v.has_value() && (v.value() & ModelControlWorkers::kApStart) == 0 &&
+               (v.value() & ModelControlWorkers::kApDone) != 0;
+    })) << "ap_done never surfaced at the BAR-window offset (worker likely died on "
+           "an out-of-range memfd access using the absolute base as an offset)";
+
+    // The output must land back at the BAR-window offset.
+    ASSERT_TRUE(wait_until([&] {
+        auto v = user.read_u32(bar_offset + 0x18);
+        return v.has_value() && v.value() == 0xFEEDFACEu;
+    })) << "output register never written back at the BAR-window offset";
+
+    ASSERT_TRUE(wait_until([&] { return workers.kernel_state(0) == KernelState::Idle; }));
+    fsm.stop();
+    workers.stop();
+
+    // The model must have been driven at the ABSOLUTE addresses, never the offsets.
+    auto recs = server.requests();
+    bool param_at_abs   = false; // reg write of size at abs_base+0x10
+    bool control_at_abs = false; // reg write of control at abs_base
+    bool fetch_at_abs   = false; // fetch:scalar of out at abs_base+0x18
+    for (const auto& r : recs) {
+        if (r.command == "reg" && r.addr == abs_base + 0x10) param_at_abs = true;
+        if (r.command == "reg" && r.addr == abs_base) control_at_abs = true;
+        if (r.command == "fetch:scalar" && r.addr == abs_base + 0x18) fetch_at_abs = true;
+        // The model must NEVER be addressed by the BAR-window offset.
+        EXPECT_NE(r.addr, static_cast<uint64_t>(bar_offset))
+            << "model was addressed by the BAR-window offset instead of the absolute address";
+    }
+    EXPECT_TRUE(param_at_abs)   << "param was not forwarded to the model's absolute address";
+    EXPECT_TRUE(control_at_abs) << "control was not forwarded to the model's absolute address";
+    EXPECT_TRUE(fetch_at_abs)   << "output was not fetched from the model's absolute address";
+}
+
 TEST(ModelControlWorkers, BusyLoopPollsUntilDone) {
     // The model reports "not done" for several polls, then ap_done.  Exercises the
     // busy-loop "not done yet" retry branch.
