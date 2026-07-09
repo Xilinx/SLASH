@@ -7,6 +7,7 @@ devices, and transferring data between host and device memory.
 Key components:
 
 - **VRT** (V80 RunTime) — C++17 API for kernel execution, buffer management, and device control
+- **vrt::graph** — higher-level graph API inside VRT for authoring kernels, buffers, loops, and conditionals as a graph across CPU and FPGA devices, with autonomous FPGA-side execution via the RP1 command processor
 - **v80-smi** — command-line tool for board management, programming, and diagnostics
 - **slashkit** — Python-based linker that packages HLS kernels into deployable *vrtbin* archives
 - **slash** — Linux kernel module and driver stack
@@ -40,6 +41,19 @@ Two additional components sit alongside the stack:
 
 - **v80-smi** — CLI for listing, programming, resetting, and validating V80 boards.
 - **slashkit** — links HLS kernels into *vrtbin* archives for deployment.
+
+### Graph API
+
+`vrt::graph` is an optional higher-level layer inside VRT for applications
+that are easier to describe as a graph of kernels, buffers, scalars, loops,
+and conditionals than as a manual sequence of kernel launches. The compiler
+lowers the authored graph into per-device execution plans; on the FPGA
+device, kernel dispatch, reprogram, loop, and conditional nodes can run
+autonomously on an on-die ARM Cortex-R5 core (RP1) with no host round-trip
+per node. See [`examples/graph/`](examples/graph/) for worked examples, and
+the "Graph API" tutorial and architecture pages on
+[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/) for a full
+introduction.
 
 ## Repository Layout
 
@@ -255,6 +269,9 @@ This ensures the buffer allocation always matches the linker configuration.
 | 04 | Frequency targets | |
 | 05 | Memory performance test | Instantiates maximum number of kernels |
 
+[`examples/graph/`](examples/graph/) has a separate set of `vrt::graph` API
+examples (CPU+FPGA graphs, loops, conditionals, multi-image reprogramming).
+
 See the [examples README](examples/README.md) for build and run instructions.
 
 ## Component Documentation
@@ -265,18 +282,23 @@ Each component has its own README with detailed information:
 - **[libslash](driver/libslash/README.md)** — driver wrapper, device node API, mock mode
 - **[v80-smi](smi/README.md)** — all commands with usage examples
 - **[CMake Modules](cmake/README.md)** — BuildHLS, FindVivado, FindVitis, SlashTools reference
-- **[VRT API Docs](vrt/doc/README.md)** — Doxygen generation instructions
 - **[vrtd Daemon](vrt/vrtd/README.md)** — daemon coding guidelines and standards
 - **[Examples](examples/README.md)** — build recipes and run instructions for all examples
+
+API reference (VRT, `vrt::graph`, libslash, libvrtd, libvrtdpp, vrtd, v80-smi,
+CMake modules) is generated from Doxygen comments and published at
+[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/) — there is no
+standalone local Doxygen target; the Sphinx build in `docs/` invokes Doxygen
+against each component's `doc/Doxyfile` and renders the XML via Breathe.
 
 ## Full Documentation
 
 The complete documentation is published at **[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/)** and covers:
 
-- **Tutorials** — getting started, writing kernels, buffers and memory, emulation/simulation, platform setup, device management, vrtd configuration
+- **Tutorials** — getting started, writing kernels, the graph API, buffers and memory, emulation/simulation, platform setup, device management, vrtd configuration
 - **How-To Guides** — multiple boards, clock frequency, streaming chains, memory benchmarking, building from source, CMake modules, vrtbin inspection, mock mode
-- **API Reference** — VRT, libslash, libvrtd, libvrtdpp, vrtd, v80-smi, CMake modules
-- **Architecture** — stack overview, memory model, PCIe topology, platform modes, vrtbin format
+- **API Reference** — VRT, `vrt::graph` (devices, bridges, rendering), libslash, libvrtd, libvrtdpp, vrtd, v80-smi, CMake modules
+- **Architecture** — stack overview, graph API architecture, memory model, PCIe topology, platform modes, vrtbin format
 
 ## Known Limitations
 

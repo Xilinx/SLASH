@@ -14,7 +14,7 @@ hardware, write the static shell, and validate memory integrity and bandwidth.
 | `reset`    | Hardware-reset a V80 board                        |
 | `write-static-shell` | Write the static SLASH shell to a V80 board |
 | `validate` | Reset board and test memory integrity + bandwidth |
-| `debug`    | Low-level BAR, memory, clock, and hotplug debug utilities |
+| `debug`    | Low-level BAR, memory, clock, and RP1 debug utilities |
 
 ## Building
 
@@ -494,6 +494,68 @@ $ v80-smi debug hotplug-op -d 03:00 --op remove --function 2
 hotplug_op=remove bdf=0000:03:00 function=2
 ```
 
+### debug rp1-dump
+
+Read the RP1 control block (BAR-mapped, at its default DDR offset within
+the host-visible window) and sample `heartbeat` twice, 500ms apart, to
+report basic liveness.
+
+```
+v80-smi debug rp1-dump -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
+```
+
+
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `-b,--bar`        | BAR that maps the RP1 DDR window (default `4`)       |
+| `--ctrl-offset`   | Host BAR offset of the RP1 control block (default `0x4000000`; `0x...` for hex) |
+
+Prints `magic`, `version`, `node_count`, `cq_size`, the node/CQ/arg-buffer/
+signal-array base addresses, `graph_seq`/`graph_done_seq`, `cq_write_idx`,
+`rp1_state`, `rp1_error_code`, `rp1_current_node`, and `heartbeat`, then the
+liveness verdict (`running` if heartbeat advanced, `stuck or not loaded`
+otherwise). Fails with a diagnostic if `magic` isn't `RP1_CTRL_MAGIC`
+("SQR1") — RP1 firmware not loaded.
+
+Example:
+
+```console
+$ v80-smi debug rp1-dump -d 03:00
+RP1 control block @ R5 0x30000000 (BAR4 + 0x4000000):
+  magic            = 0x53515231 (SQR1)
+  ...
+Liveness: heartbeat advanced 128841 -> 129091 (running)
+```
+
+### debug rp1-ping
+
+Submit a one-node `SIGNAL` graph to RP1 and verify it completes end-to-end:
+programs the control block if needed, submits the graph, polls
+`graph_done_seq`, and checks the signal slot the node was expected to write.
+
+```
+v80-smi debug rp1-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
+```
+
+Takes the same `-d`, `-b`, and `--ctrl-offset` flags as `debug rp1-dump`.
+Exits non-zero and dumps the control block on timeout, firmware-not-ready,
+or a signal-slot mismatch.
+
+Example:
+
+```console
+$ v80-smi debug rp1-ping -d 03:00
+rp1-ping: submitted seq=1, polling...
+PASS: slot[0] = 0xdeadbeef, cq_write_idx=1, state=1
+```
+
+Both `rp1-*` commands require RP1 firmware to be loaded onto R5-1 and
+reporting `RP1_STATE_READY`; see
+[`linker/resources/aved/rp1/ARCHITECTURE.md`](../linker/resources/aved/rp1/ARCHITECTURE.md)
+for the on-wire protocol they probe.
+
 ## Device addressing
 
 All commands that accept a `-d,--device` option support four BDF
@@ -539,6 +601,7 @@ smi/
     debug/mem_poke.cpp/hpp  Raw device memory read/write command
     debug/clockwiz.cpp/hpp  Clock read/set debug command
     debug/hotplug.cpp/hpp   PCIe hotplug debug command
+    debug/rp1_probe.cpp/hpp RP1 firmware bring-up probes (rp1-dump, rp1-ping)
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
   resources/
