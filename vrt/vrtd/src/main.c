@@ -21,14 +21,16 @@
 #define _GNU_SOURCE
 
 #include <fcntl.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <string.h>
 #include <syslog.h>
 #include <sys/epoll.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -62,9 +64,13 @@ static int configure_signals(sd_event *ev, struct vrtd *state);
 static int configure_sockets(sd_event *ev, struct vrtd *state);
 static int configure_background_tasks(sd_event *ev, struct vrtd *state);
 static int block_signals(const int *signals, size_t n);
+static int create_listening_unix_socket(const char *path);
+static int register_listening_socket(sd_event *ev, struct vrtd *state, int fd, const char *name);
 
 void globals_init();
 void globals_destroy();
+
+static char *created_socket_path = NULL;
 
 int main(void)
 {
@@ -160,6 +166,11 @@ int main(void)
     }
 
     (void) sd_notify(0, "STOPPING=1");
+    if (created_socket_path != NULL) {
+        (void) unlink(created_socket_path);
+        free(created_socket_path);
+        created_socket_path = NULL;
+    }
 
     cleanup_flash_worker(state.flash_worker);
     state.flash_worker = NULL;
@@ -268,51 +279,133 @@ static int configure_sockets(sd_event *ev, struct vrtd *state)
 
     int ret = sd_listen_fds_with_names(1, &names);
     PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Could not list listen fds");
-    if (ret == 0) {
+    int n_fds = ret;
+
+    for (int i = 0; i < n_fds; i++) {
+        int fd = SD_LISTEN_FDS_START + i;
+        const char *name = (names != NULL && names[i] != NULL) ? names[i] : "systemd";
+
+        ret = sd_is_socket(fd, AF_UNIX, SOCK_SEQPACKET, 1);
+        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to get state of socket %s", name);
+        if (ret == 0) {
+            LOG(LOG_ERR, "Bad socket type %s", name);
+            return -1;
+        }
+
+        ret = register_listening_socket(ev, state, fd, name);
+        PROPAGATE_ERROR(ret);
+    }
+
+    const char *env_socket_path = getenv("VRTD_SOCKET");
+    if (env_socket_path != NULL && env_socket_path[0] != '\0') {
+        int fd = create_listening_unix_socket(env_socket_path);
+        PROPAGATE_ERROR(fd);
+
+        ret = register_listening_socket(ev, state, fd, env_socket_path);
+        if (ret == -1) {
+            (void) close(fd);
+            (void) unlink(env_socket_path);
+            return -1;
+        }
+    } else if (n_fds == 0) {
         LOG(LOG_ERR, "No socket provided");
         return -1;
     }
 
-    for (int i = 0; i < ret; i++) {
-        int fd = SD_LISTEN_FDS_START + i;
+    return 0;
+}
 
-        ret = sd_is_socket(fd, AF_UNIX, SOCK_SEQPACKET, 1);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to get state of socket %s", names[i]);
-        if (ret == 0) {
-            LOG(LOG_ERR, "Bad socket type %s", names[i]);
-            return -1;
-        }
-
-        int flags = fcntl(fd, F_GETFL, 0);
-        PROPAGATE_ERROR_STDC_LOG(flags, LOG_ERR, "Failed to get fcntl for fd=%d (%s)", fd, names[i]);
-        ret = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-        PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Failed to set fcntl for fd=%d (%s)", fd, names[i]);
-        
-        _cleanup_(sd_event_source_unrefp)
-        sd_event_source *source = NULL;
-        ret = sd_event_add_io(ev, &source, fd, EPOLLIN, on_event_new_connection, state);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up listening for socket %s", names[i]);
-
-        _cleanup_(cleanup_free)
-        char *description = NULL;
-
-        ret = asprintf(&description, "Unix socket %s", names[i]);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Could not allocate description for socket %s", names[i]);
-
-        ret = sd_event_source_set_description(source, description);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Could not set description for socket %s", names[i]);
-
-        ret = sd_event_source_set_io_fd_own(source, 1);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up fd ownership for socket %s", names[i]);
-
-        ret = sd_event_source_set_floating(source, 1);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up floating source for socket %s", names[i]);
-
-        ret = sd_event_source_set_exit_on_failure(source, 1);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up exit on failure for socket %s", names[i]);
-
-        LOG(LOG_INFO, "Listening on unix socket %s", names[i]);
+static int create_listening_unix_socket(const char *path)
+{
+    if (path == NULL || path[0] == '\0') {
+        errno = EINVAL;
+        LOG(LOG_ERR, "VRTD_SOCKET must not be empty");
+        return -1;
     }
+
+    struct sockaddr_un addr = {0};
+    size_t path_len = strlen(path);
+    if (path_len >= sizeof(addr.sun_path)) {
+        errno = ENAMETOOLONG;
+        LOG(LOG_ERR, "VRTD_SOCKET path is too long: %s", path);
+        return -1;
+    }
+
+    int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    PROPAGATE_ERROR_STDC_LOG(fd, LOG_ERR, "Failed to create VRTD_SOCKET listener %s", path);
+
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, path, path_len + 1);
+
+    (void) unlink(path);
+
+    int ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    if (ret == -1) {
+        LOG(LOG_ERR, "Failed to bind VRTD_SOCKET listener %s: %m", path);
+        (void) close(fd);
+        return -1;
+    }
+
+    ret = chmod(path, 0666);
+    if (ret == -1) {
+        LOG(LOG_ERR, "Failed to chmod VRTD_SOCKET listener %s: %m", path);
+        (void) close(fd);
+        (void) unlink(path);
+        return -1;
+    }
+
+    ret = listen(fd, SOMAXCONN);
+    if (ret == -1) {
+        LOG(LOG_ERR, "Failed to listen on VRTD_SOCKET listener %s: %m", path);
+        (void) close(fd);
+        (void) unlink(path);
+        return -1;
+    }
+
+    free(created_socket_path);
+    created_socket_path = strdup(path);
+    if (created_socket_path == NULL) {
+        LOG(LOG_ERR, "Failed to remember VRTD_SOCKET path %s: %m", path);
+        (void) close(fd);
+        (void) unlink(path);
+        return -1;
+    }
+
+    return fd;
+}
+
+static int register_listening_socket(sd_event *ev, struct vrtd *state, int fd, const char *name)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    PROPAGATE_ERROR_STDC_LOG(flags, LOG_ERR, "Failed to get fcntl for fd=%d (%s)", fd, name);
+
+    int ret = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Failed to set fcntl for fd=%d (%s)", fd, name);
+
+    _cleanup_(sd_event_source_unrefp)
+    sd_event_source *source = NULL;
+    ret = sd_event_add_io(ev, &source, fd, EPOLLIN, on_event_new_connection, state);
+    PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up listening for socket %s", name);
+
+    _cleanup_(cleanup_free)
+    char *description = NULL;
+
+    ret = asprintf(&description, "Unix socket %s", name);
+    PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Could not allocate description for socket %s", name);
+
+    ret = sd_event_source_set_description(source, description);
+    PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Could not set description for socket %s", name);
+
+    ret = sd_event_source_set_io_fd_own(source, 1);
+    PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up fd ownership for socket %s", name);
+
+    ret = sd_event_source_set_floating(source, 1);
+    PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up floating source for socket %s", name);
+
+    ret = sd_event_source_set_exit_on_failure(source, 1);
+    PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to set up exit on failure for socket %s", name);
+
+    LOG(LOG_INFO, "Listening on unix socket %s", name);
 
     return 0;
 }
