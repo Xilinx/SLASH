@@ -18,9 +18,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 // ################################################################################################
 
+#include <gtest/gtest.h>
+
 #include "model_control_workers.h"
 
 #include "bar_memfd.h"
+#include "fixtures_paths.h"
 #include "model_client.h"
 #include "mock_model_server.h"
 #include "system_map.h"
@@ -33,8 +36,6 @@
 #include <vector>
 
 #include <unistd.h>
-
-#include <gtest/gtest.h>
 
 using namespace slash_sysemu;
 using slash_sysemu::test::FaultMode;
@@ -690,8 +691,7 @@ TEST(ModelControlWorkers, ModelSilenceDuringBusyPollStopsWorker) {
 TEST(ModelControlWorkers, DrivesFixtureSystemMapKernel) {
     // Parse the good_sim fixture map and run one cycle against its "demo" kernel
     // (base 0x30000, CTRL@0, size@0x10 W).
-    auto parsed = parse_system_map_file(
-        "/home/jopdenho/SLASH/slash_sysemu/tests/fixtures/good_sim/system_map.xml");
+    auto parsed = parse_system_map_file(test_fixtures::kGoodSimMapXml);
     ASSERT_TRUE(parsed.has_value()) << (parsed.has_value() ? "" : parsed.error().message);
     SystemMap map = std::move(parsed.value());
     ASSERT_EQ(map.kernels.size(), 1u);

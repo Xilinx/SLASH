@@ -216,8 +216,6 @@ add_custom_target(slash_sysemu_fixtures ALL
 )
 
 # Generate a header exposing all fixture paths as string constants.
-set(REAL_SIM_VBIN /home/jopdenho/SLASH/examples/00_axilite/build/axilite_sim.vbin)
-set(REAL_EMU_VBIN /home/jopdenho/SLASH/examples/00_axilite/build/axilite_emu.vbin)
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/fixtures_paths.h.in
   ${CMAKE_CURRENT_BINARY_DIR}/fixtures_paths.h
@@ -250,7 +248,8 @@ target_include_directories(qdma_subsystem_test PRIVATE ${JSONCPP_INCLUDE_DIRS})
 add_slash_sysemu_test(model_control_workers_test model_control_workers_test.cpp)
 target_link_libraries(model_control_workers_test
   PRIVATE mock_model_server PkgConfig::PC_ZMQ ${JSONCPP_LIBRARIES})
-target_include_directories(model_control_workers_test PRIVATE ${JSONCPP_INCLUDE_DIRS})
+target_include_directories(model_control_workers_test
+  PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${JSONCPP_INCLUDE_DIRS})
 
 # ────────────────────────────────────────────────────────────────────────────
 # Step 6: fake vpp_sim model executables + launchable fixture VBINs

@@ -42,6 +42,9 @@ inline constexpr const char* kLongNameVbin     = "@FIXTURE_OUT_DIR@/longname.vbi
 // Standalone system_map.xml fixtures for the parser tests.
 inline constexpr const char* kMapDir = "@FIXTURE_SRC_DIR@/maps";
 
+// Real fixture system map (good_sim) driven directly by the worker tests.
+inline constexpr const char* kGoodSimMapXml = "@FIXTURE_SRC_DIR@/good_sim/system_map.xml";
+
 // Step 6: launchable model VBIN fixtures (pack a fake vpp_sim executable).
 inline constexpr const char* kDefaultModelVbin = "@FIXTURE_OUT_DIR@/default_model.vbin";
 inline constexpr const char* kStagingGoodVbin  = "@FIXTURE_OUT_DIR@/staging_good.vbin";
