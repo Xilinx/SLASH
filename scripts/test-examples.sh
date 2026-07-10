@@ -27,14 +27,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXAMPLES_DIR="$REPO_ROOT/examples"
 
 SANITIZE=false
+USE_REPO=false
 
 usage() {
-    echo "Usage: $0 [--sanitize] <hw|sim|emu> [BDF]"
+    echo "Usage: $0 [--sanitize] [--use-repo] <hw|sim|emu> [BDF]"
     echo ""
     echo "  Build and run examples 0, 1, 2, and 4 for the specified platform."
     echo ""
     echo "  Options:"
     echo "    --sanitize   Build with AddressSanitizer and UBSan"
+    echo "    --use-repo   Build examples against this repository instead of installed packages"
     echo ""
     echo "  Arguments:"
     echo "    hw|sim|emu   Target platform (hardware, simulation, or emulation)"
@@ -47,6 +49,7 @@ usage() {
 while [[ $# -gt 0 && "$1" == --* ]]; do
     case "$1" in
         --sanitize) SANITIZE=true; shift ;;
+        --use-repo) USE_REPO=true; shift ;;
         *) echo "ERROR: Unknown option '$1'"; usage ;;
     esac
 done
@@ -64,6 +67,12 @@ fi
 
 # Sanitizer cmake flags
 CMAKE_EXTRA_ARGS=()
+if [[ "$USE_REPO" == true ]]; then
+    echo "=== Building examples against repository sources ==="
+    CMAKE_EXTRA_ARGS+=(
+        -DSLASH_USE_REPO=ON
+    )
+fi
 if [[ "$SANITIZE" == true ]]; then
     echo "=== AddressSanitizer + UBSan ENABLED ==="
     CMAKE_EXTRA_ARGS+=(
