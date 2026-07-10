@@ -1798,23 +1798,25 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
 /**
  * slash_qdma_ioctl_info() - Populate QDMA capability information.
  * @misc:      Miscdevice handle (unused).
- * @qdma_dev:  QDMA device (unused for now).
+ * @qdma_dev:  QDMA device (PF1) whose PCI identity is reported.
  * @qdma_info: [out] Structure to fill with capability data.
  *
- * Currently returns zeroes for all fields.  This is a placeholder for
- * future capability reporting (e.g., querying qdma_device_capabilities).
+ * The capability fields are placeholders (zeroed) pending future reporting
+ * (e.g., querying qdma_device_capabilities).  @bdf is filled with the QDMA
+ * PF's PCI BDF string so userspace can discover the device's PCI identity
+ * without reading sysfs.
  */
 static void slash_qdma_ioctl_info(struct miscdevice *misc,
                                   struct slash_qdma_dev *qdma_dev,
                                   struct slash_qdma_info *qdma_info)
 {
     (void) misc;
-    (void) qdma_dev;
 
     qdma_info->qsets_max = 0;
     qdma_info->msix_qvecs = 0;
     qdma_info->vf_max = 0;
     qdma_info->caps = 0;
+    strscpy(qdma_info->bdf, pci_name(qdma_dev->pdev), sizeof(qdma_info->bdf));
 }
 
 /* ─────────────────────────────────────────────────────────────────────
