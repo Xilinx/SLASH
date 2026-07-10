@@ -234,6 +234,7 @@ bool qdma_h2c(const std::string &qdma_path, uint64_t dev_addr,
     add.h2c_ring_sz = 4;
     add.c2h_ring_sz = 4;
     add.cmpt_ring_sz = 4;
+    add.aperture_size = (dev_addr == kReconfigApertureAddr) ? 4096 : 0;
     if (slash_qdma_qpair_add(q.get(), &add) != 0) {
         std::cerr << "  qpair_add: " << std::strerror(errno) << "\n";
         return false;

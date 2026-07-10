@@ -176,7 +176,8 @@ private:
     enum class QState { Stopped, Started, Used };
     struct Qpair {
         uint32_t id;
-        uint32_t dir_mask; // enabled directions (bit0 H2C, bit1 C2H)
+        uint32_t dir_mask;      // enabled directions (bit0 H2C, bit1 C2H)
+        uint32_t aperture_size; // 0 = linear MM addressing, non-zero = keyhole aperture
         QState   state;
     };
 

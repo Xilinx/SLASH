@@ -241,6 +241,29 @@ uint32_t add_started_qpair(int fd, uint32_t& seq) {
     return qid;
 }
 
+// Add + START a MM qpair with the given direction mask and keyhole aperture,
+// returning its qid.
+uint32_t add_started_qpair_aperture(int fd, uint32_t dir_mask, uint32_t aperture_size,
+                                    uint32_t& seq) {
+    slash_qdma_qpair_add add{};
+    add.size          = sizeof(add);
+    add.mode          = kQdmaQModeMm;
+    add.dir_mask      = dir_mask;
+    add.aperture_size = aperture_size;
+    slash_sysemu_socket_header h{kSlashQdmaIoctlQpairAdd, seq++, 0, 0};
+    std::span<const uint8_t> p(reinterpret_cast<const uint8_t*>(&add), sizeof(add));
+    auto r = send_request(fd, h, p, {});
+    EXPECT_TRUE(r.has_value());
+    EXPECT_EQ(0, ret_of(r.value()));
+    slash_qdma_qpair_add a{};
+    std::memcpy(&a, r.value().payload.data(), sizeof(a));
+    uint32_t qid = a.qid;
+    auto st = do_q_op(fd, qid, SLASH_QDMA_QUEUE_OP_START, seq++);
+    EXPECT_TRUE(st.has_value());
+    EXPECT_EQ(0, ret_of(st.value()));
+    return qid;
+}
+
 // Obtain a working XFER fd for a single started qpair; returns the fd.
 UniqueFd open_xfer(int ctl_fd, uint32_t qid, uint32_t& seq) {
     auto r = do_get_fd(ctl_fd, qid, seq++);
@@ -855,6 +878,136 @@ TEST_F(QdmaSubsystemTest, TransferWithDeletedQpairEnodev) {
     auto r = do_transfer(xfer.get(), {sx}, {buf.get()}, 700);
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(-ENODEV, ret_of(r.value()));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// QPAIR_ADD: keyhole aperture validation
+// ═════════════════════════════════════════════════════════════════════════════
+
+TEST_F(QdmaSubsystemTest, QpairAddRejectsNonPowerOfTwoAperture) {
+    auto sub = make_subsystem();
+    ASSERT_TRUE(sub->setup().has_value());
+    UniqueFd c = connect_client(sock_path_);
+    ASSERT_TRUE(static_cast<bool>(c));
+
+    slash_qdma_qpair_add add{};
+    add.size          = sizeof(add);
+    add.mode          = kQdmaQModeMm;
+    add.dir_mask      = 0x1;
+    add.aperture_size = 4097; // not a power of two
+    slash_sysemu_socket_header h{kSlashQdmaIoctlQpairAdd, 1, 0, 0};
+    std::span<const uint8_t> p(reinterpret_cast<const uint8_t*>(&add), sizeof(add));
+    auto r = send_request(c.get(), h, p, {});
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(-EINVAL, ret_of(r.value()));
+    EXPECT_EQ(0u, sub->qpair_count());
+}
+
+TEST_F(QdmaSubsystemTest, QpairAddAcceptsPowerOfTwoAperture) {
+    auto sub = make_subsystem();
+    ASSERT_TRUE(sub->setup().has_value());
+    UniqueFd c = connect_client(sock_path_);
+    ASSERT_TRUE(static_cast<bool>(c));
+
+    slash_qdma_qpair_add add{};
+    add.size          = sizeof(add);
+    add.mode          = kQdmaQModeMm;
+    add.dir_mask      = 0x1;
+    add.aperture_size = 4096; // power of two
+    slash_sysemu_socket_header h{kSlashQdmaIoctlQpairAdd, 1, 0, 0};
+    std::span<const uint8_t> p(reinterpret_cast<const uint8_t*>(&add), sizeof(add));
+    auto r = send_request(c.get(), h, p, {});
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(0, ret_of(r.value()));
+    EXPECT_EQ(1u, sub->qpair_count());
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TRANSFER: keyhole aperture wrapping
+// ═════════════════════════════════════════════════════════════════════════════
+
+// H2C on a keyhole queue funnels the whole transfer through a fixed aperture
+// window: the endpoint address wraps at the aperture boundary, so the model only
+// retains the LAST window's worth of data and nothing lands beyond the window.
+TEST_F(QdmaSubsystemTest, TransferH2cKeyholeWrapsWithinAperture) {
+    auto sub = make_subsystem();
+    ASSERT_TRUE(sub->setup().has_value());
+    UniqueFd c = connect_client(sock_path_);
+    ASSERT_TRUE(static_cast<bool>(c));
+    uint32_t seq = 1;
+
+    constexpr uint32_t kAperture = 1024;
+    uint32_t qid = add_started_qpair_aperture(c.get(), 0x1 /*H2C*/, kAperture, seq);
+    UniqueFd xfer = open_xfer(c.get(), qid, seq);
+
+    // 4 aperture windows of distinct bytes.
+    const std::size_t len = 4 * kAperture;
+    std::vector<uint8_t> src(len);
+    for (std::size_t i = 0; i < len; ++i) src[i] = static_cast<uint8_t>(i & 0xFF);
+    UniqueFd buf = make_filled_buf(src);
+
+    slash_qdma_subxfer sx{};
+    sx.qpair_index = 0;
+    sx.direction   = SLASH_QDMA_XFER_H2C;
+    sx.buf_fd      = 0;
+    sx.buf_offset  = 0;
+    sx.dev_addr    = kDevAddr; // aperture-aligned
+    sx.length      = len;
+    auto r = do_transfer(xfer.get(), {sx}, {buf.get()}, 800);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(static_cast<int32_t>(len), ret_of(r.value()));
+
+    // The window holds the final segment (src[3*kAperture ..]).
+    for (std::size_t j = 0; j < kAperture; ++j) {
+        EXPECT_EQ(src[3 * kAperture + j], server_->peek(kDevAddr + j)) << "byte " << j;
+    }
+    // Nothing was written past the aperture window.
+    EXPECT_EQ(0, server_->peek(kDevAddr + kAperture));
+    EXPECT_EQ(0, server_->peek(kDevAddr + 2 * kAperture));
+}
+
+// C2H on a keyhole queue reads the same aperture window repeatedly, so a transfer
+// longer than the aperture fills the host buffer with the window pattern tiled.
+TEST_F(QdmaSubsystemTest, TransferC2hKeyholeWrapsWithinAperture) {
+    auto sub = make_subsystem();
+    ASSERT_TRUE(sub->setup().has_value());
+    UniqueFd c = connect_client(sock_path_);
+    ASSERT_TRUE(static_cast<bool>(c));
+    uint32_t seq = 1;
+
+    constexpr uint32_t kAperture = 1024;
+    uint32_t qid = add_started_qpair_aperture(c.get(), 0x2 /*C2H*/, kAperture, seq);
+    UniqueFd xfer = open_xfer(c.get(), qid, seq);
+
+    // Seed only the aperture window in the model.
+    std::vector<uint8_t> window(kAperture);
+    for (std::size_t i = 0; i < kAperture; ++i) window[i] = static_cast<uint8_t>(0xA0 ^ (i & 0xFF));
+    server_->poke_buffer(kDevAddr, window);
+
+    const std::size_t len = 3 * kAperture;
+    UniqueFd buf(::memfd_create("dst", MFD_CLOEXEC));
+    ASSERT_TRUE(static_cast<bool>(buf));
+    ASSERT_EQ(0, ::ftruncate(buf.get(), static_cast<off_t>(len)));
+
+    slash_qdma_subxfer sx{};
+    sx.qpair_index = 0;
+    sx.direction   = SLASH_QDMA_XFER_C2H;
+    sx.buf_fd      = 0;
+    sx.buf_offset  = 0;
+    sx.dev_addr    = kDevAddr;
+    sx.length      = len;
+    auto r = do_transfer(xfer.get(), {sx}, {buf.get()}, 900);
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(static_cast<int32_t>(len), ret_of(r.value()));
+
+    std::vector<uint8_t> got(len);
+    ASSERT_EQ(static_cast<ssize_t>(len), ::pread(buf.get(), got.data(), len, 0));
+    for (std::size_t seg = 0; seg < 3; ++seg) {
+        for (std::size_t j = 0; j < kAperture; ++j) {
+            EXPECT_EQ(window[j], got[seg * kAperture + j])
+                << "seg " << seg << " byte " << j;
+        }
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

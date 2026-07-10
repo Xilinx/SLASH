@@ -443,12 +443,19 @@ Result<void> QdmaSubsystem::handle_qpair_add(int fd, ReceivedMessage& msg) {
         std::span<const uint8_t> payload(reinterpret_cast<const uint8_t*>(&add), sizeof(add));
         return send_plain_response(fd, msg.header, -EINVAL, payload);
     }
+    // Keyhole aperture: 0 (linear) or a power-of-two byte window (mirrors the
+    // real driver's slash_qdma_ioctl_qpair_add_w validation).
+    if (add.aperture_size != 0 &&
+        (add.aperture_size & (add.aperture_size - 1)) != 0) {
+        std::span<const uint8_t> payload(reinterpret_cast<const uint8_t*>(&add), sizeof(add));
+        return send_plain_response(fd, msg.header, -EINVAL, payload);
+    }
 
     uint32_t qid;
     {
         std::lock_guard<std::mutex> lk(qpairs_mtx_);
         qid = next_qid_++;
-        qpairs_.emplace(qid, Qpair{qid, add.dir_mask, QState::Stopped});
+        qpairs_.emplace(qid, Qpair{qid, add.dir_mask, add.aperture_size, QState::Stopped});
     }
     add.qid = qid;
     std::span<const uint8_t> payload(reinterpret_cast<const uint8_t*>(&add), sizeof(add));
@@ -676,6 +683,10 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
         return send_plain_response(fd, msg.header, -EINVAL, {});
     }
 
+    // Per-sub-transfer keyhole aperture, captured from the bound qpair under the
+    // qpairs lock below and consumed (unlocked) by the transfer loop.
+    std::array<uint32_t, SLASH_QDMA_FD_MAX_QPAIRS> apertures{};
+
     // Precondition: every referenced qpair must currently be Started or Used
     // (i.e. present and not stopped).  A stopped/removed qpair fails the WHOLE
     // transfer with -ENODEV (models the driver not invalidating a live session).
@@ -691,6 +702,7 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
             if (it == qpairs_.end() || it->second.state == QState::Stopped) {
                 return send_plain_response(fd, msg.header, -ENODEV, {});
             }
+            apertures[i] = it->second.aperture_size;
             // Direction must be enabled on the qpair.
             uint32_t dir = xfer.xfers[i].direction;
             if (dir == SLASH_QDMA_XFER_H2C && (it->second.dir_mask & kDirH2cBit) == 0) {
@@ -723,6 +735,8 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
         uint64_t dev_addr  = sx.dev_addr;
         const bool to_reconfig =
             (sx.direction == SLASH_QDMA_XFER_H2C && dev_addr == kReconfigApertureAddr);
+
+        // TODO: Implement keyhole transfers if something actually needs it.
 
         while (remaining > 0) {
             std::size_t chunk = static_cast<std::size_t>(
