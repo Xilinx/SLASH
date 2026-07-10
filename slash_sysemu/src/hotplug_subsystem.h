@@ -45,7 +45,7 @@ namespace slash_sysemu {
 //
 // Serves the single daemon-level `slash_hotplug` AF_UNIX/SOCK_SEQPACKET socket
 // (emulated `/dev/slash_hotplug`) and orchestrates the lifecycle of every
-// emulated accelerator (architecture: "Life cycle operations (Hotplugging)").
+// emulated accelerator (the daemon-level life-cycle / hotplug operations).
 //
 // Operations (all under ONE daemon-wide lifecycle lock — only one in flight):
 //   * RESCAN      (0x30, no arg): reload the config, (re)instantiate configs that

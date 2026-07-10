@@ -39,19 +39,20 @@ namespace slash_sysemu {
 //                 implements the reconfiguration procedure.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// This is the Step 6 realisation of the architecture's "Model process and
-// reconfiguration" section.  A ModelInstance holds:
+// ModelInstance implements the model-process-and-reconfiguration procedure.  It
+// holds:
 //   * a VbinStore (per-BDF main + staging VBIN files),
 //   * the currently-running ModelProcess (if any),
-//   * a pluggable WorkerController (Step 8 fills in the real one; may be null),
+//   * a pluggable WorkerController (ModelControlWorkers is the concrete
+//     implementation; may be null),
 //   * the default-VBIN source and the launch timeouts / death callback.
 //
-// reconfigure() runs the exact algorithm from "Launching the model process and
-// reconfiguration".  Step 11 (accelerator lifecycle/hotplug) will own instances
-// of this class and call reconfigure()/teardown() under its lifecycle lock; the
-// model process death callback is wired by Step 11 to tear the accelerator down.
+// reconfigure() runs the staging→main launch algorithm below.  Accelerator
+// (accelerator.h) owns instances of this class and calls reconfigure()/teardown()
+// under the daemon lifecycle lock; the model process death callback is wired by
+// the Accelerator to tear the accelerator down.
 
-/** Outcome of a reconfigure() call, for the caller (Step 11) to act on. */
+/** Outcome of a reconfigure() call, for the caller (Accelerator) to act on. */
 enum class ReconfigureStatus {
     NewProcess,   /**< A new model process was launched and adopted. */
     Unchanged,    /**< A process was already running and staging was empty/failed:
@@ -105,7 +106,7 @@ public:
     /**
      * @brief Run the reconfiguration procedure.
      *
-     * Algorithm (verbatim from the architecture):
+     * Algorithm:
      *   1. If no main VBIN exists yet: bootstrap from the default (copy
      *      default→main, create empty staging).
      *   2. If staging is non-empty: try to unpack+launch the staging VBIN.

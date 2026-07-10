@@ -136,7 +136,7 @@ Result<void> Accelerator::ensure_persistent_state() {
 // up.  instantiate() satisfies this trivially (PF1 doesn't exist yet);
 // restore_pf(Pf2) quiesces PF1 explicitly.  Stale qpair state is intentionally
 // dropped — device memory does not persist across reconfiguration anyway
-// (architecture "Accepted inaccuracies").
+// (an accepted emulation inaccuracy for now).
 
 Result<void> Accelerator::ensure_model() {
     if (auto r = ensure_persistent_state(); !r) {

@@ -527,7 +527,7 @@ TEST_F(HotplugTest, ShortConnectionChurnReaped) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES (Step 11)
+// ADVERSARY PROBES
 //
 // Probes hunting for lifecycle-lock races, death-callback-vs-lifecycle-op races,
 // forced-disconnect hangs, stale-generation teardown, and socket/thread hygiene
@@ -653,7 +653,7 @@ TEST_F(HotplugTest, RescanWithBrokenConfigKeepsActiveRunning) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES (Step 11) — second wave: stale-death-task / generation guard,
+// ADVERSARY PROBES — second wave: stale-death-task / generation guard,
 // TOGGLE_SBR-lock-blocks-others, shutdown interrupts SBR, multi-accel death.
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -670,7 +670,7 @@ TEST_F(HotplugTest, RescanWithBrokenConfigKeepsActiveRunning) {
 //      posted for, it wrongly tears P2 down → the accelerator drops to Inactive
 //      and a healthy child is killed.
 //
-// The architecture + accelerator.h promise a generation guard exactly for this.
+// accelerator.h promises a generation guard exactly for this.
 // The probe repeats the race many times and asserts the accelerator always
 // settles Active on a LIVE (reaped-free) process.  A single wrong teardown fails.
 TEST_F(HotplugTest, StaleDeathTaskDoesNotTearDownReadoptedModel) {
@@ -802,7 +802,7 @@ TEST_F(HotplugTest, MultipleModelsDyingAtOnce) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES (Step 11) — third wave: hotplug ABI / targeting hardening.
+// ADVERSARY PROBES — third wave: hotplug ABI / targeting hardening.
 // Cross-checked against driver/libslash/include/slash/uapi/slash_hotplug.h.
 // ═════════════════════════════════════════════════════════════════════════════
 

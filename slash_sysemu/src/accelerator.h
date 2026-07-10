@@ -44,8 +44,7 @@ namespace slash_sysemu {
 // Accelerator — one emulated card (per board BDF): the six-component state machine
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Owns the six tracked components from the architecture's "Accelerator state and
-// life cycle" section, for a single board BDF:
+// Owns the six tracked components for a single board BDF:
 //   (1) the main+staging VBIN files      — via ModelInstance's VbinStore
 //   (2) the model process                — via ModelInstance's ModelProcess
 //   (3) the model control worker threads — via a ModelControlWorkers
@@ -53,13 +52,18 @@ namespace slash_sysemu {
 //   (5) the QDMA subsystem (PF1)         — a QdmaSubsystem
 //   (6) the BAR/device-info subsystem (PF2) — a CtlSubsystem
 //
+// The PF0 stub models board management: in the real system PF0 is owned by the
+// AMI driver, but its REMOVE/RESCAN still goes through the slash driver, and an
+// accelerator is only fully torn down once PF0 has also been removed.  The daemon
+// therefore needs nothing more than a single presence flag to track it.
+//
 // State (derived from the component flags):
 //   * Absent   — never instantiated during this run and no main.vbin on disk.
 //   * Inactive — no model process running (VBIN files may exist on disk).
 //   * Active   — model running AND all of PF0/PF1/PF2 present.
 //   * Partial  — model running AND at least one PF absent (REMOVE of some, not all).
 //
-// Instantiation order (architecture): launch the model process + workers FIRST,
+// Instantiation order: launch the model process + workers FIRST,
 // then set up the QDMA (PF1) and BAR (PF2) subsystems, then mark PF0 present.
 // Teardown order: tear down each PF on REMOVE; the model process + workers follow
 // once the LAST PF (incl. PF0) is gone.  A full teardown PRESERVES the VBIN files
@@ -76,7 +80,7 @@ namespace slash_sysemu {
 //     reconfigure runs (it may destroy the old process), THEN a FRESH QdmaSubsystem
 //     is reconstructed against the new client.  Stale qpair state is intentionally
 //     dropped — device memory does not persist across reconfiguration anyway
-//     (architecture "Accepted inaccuracies").
+//     (an accepted emulation inaccuracy for now).
 //   * The QdmaSubsystem is always torn down BEFORE the ModelInstance whose client
 //     it borrows, so the borrowed reference never dangles under a live transfer.
 //   * The model-death callback (fired on the ModelProcess monitor thread) is

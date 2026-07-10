@@ -870,8 +870,8 @@ TEST(ModelControlWorkers, ProtocolErrorOnParamForwardIsNotFatal) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADVERSARY PROBES (Step 8) — added by the adversary; each targets a specific
-// suspected bug, race, or architecture-conformance gap.  A probe that reveals a
+// ADVERSARY PROBES — added by the adversary; each targets a specific
+// suspected bug, race, or conformance gap.  A probe that reveals a
 // bug becomes a regression test after the fix; a probe that passes is a hardening
 // test.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -996,7 +996,7 @@ TEST(ModelControlWorkers, ReArmDuringBusyStillWritesBackFirstCycleOutput) {
 // and stop()'s kernels_.clear().  Before the fix these reads were lock-free; the
 // fix guards the vector lifetime with a shared_mutex (readers shared, start/stop
 // unique) and joins worker threads before clearing.  A consumer polling kernel
-// state (e.g. a status thread, or Step 9 introspection) concurrently with a
+// state (e.g. a status thread, or CTL-subsystem introspection) concurrently with a
 // reconfiguration-driven stop() must never read freed std::vector storage — this
 // was a use-after-free (ASan-caught at kernel_state()); it now stays clean.  This
 // probe hammers kernel_state()/kernel_count() from a reader thread while the main
@@ -1045,12 +1045,12 @@ TEST(ModelControlWorkers, KernelStateReadRacesStopUnderAsan) {
 // PROBE D — CONTROL REGISTER NOT AT OFFSET 0.
 //
 // The worker hardcodes control_offset = base_address (offset 0) and gates on
-// register_at(0).  The architecture only says the control register is "expected
+// register_at(0).  By convention the control register is only "expected
 // at offset 0"; the parser explicitly does NOT enforce it.  A kernel whose
 // control/handshake register is declared at a non-zero offset will therefore
 // NEVER start (has_control == false), even though a real ap_ctrl_hs block could
 // place it elsewhere.  This probe documents the current behavior: such a kernel
-// stays Idle forever and drives no model traffic.  If Step 8 is meant to resolve
+// stays Idle forever and drives no model traffic.  If the workers are meant to resolve
 // the control register by role rather than by fixed offset 0, this is a bug; if
 // offset-0 is a hard contract, this is the hardening test that pins it.
 TEST(ModelControlWorkers, ControlRegisterAtNonZeroOffsetNeverStarts) {

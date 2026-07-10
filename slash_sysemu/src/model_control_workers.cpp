@@ -156,10 +156,10 @@ bool ModelControlWorkers::wait_or_stop() {
 //
 // TOCTOU / atomicity resolution
 // -----------------------------
-// The architecture wants "check the control register + fetch the parameters +
-// reset the control register" to be a single CPU transaction.  BarMemfd's public
+// Ideally "check the control register + fetch the parameters + reset the control
+// register" would be a single CPU transaction.  BarMemfd's public
 // API only brackets ONE flock'd op at a time (read_u32 / write_u32 / update_u32);
-// there is no scoped multi-op lock, and Step 7 deliberately kept that API narrow.
+// there is no scoped multi-op lock, and BarMemfd deliberately keeps that API narrow.
 //
 // We resolve this WITHOUT extending BarMemfd, in two steps:
 //
@@ -174,15 +174,14 @@ bool ModelControlWorkers::wait_or_stop() {
 //   2. The parameter registers are then read with separate read_u32 brackets,
 //      AFTER ap_start was captured-and-cleared.  This leaves a residual window
 //      (params read a few instructions after the control reset), but it is benign
-//      per the architecture's "Accepted inaccuracies": VRT's hardware path writes
+//      (an accepted emulation inaccuracy): VRT's hardware path writes
 //      ALL parameter registers FIRST and only THEN writes ap_start (see
 //      vrt/src/kernel.cpp — write() of each arg register precedes the ap_start
 //      write to the control register).  Therefore, by the time this worker
 //      observes ap_start=1, every parameter is already committed in the memfd.
 //      A user that violates that ordering (sets ap_start before writing params)
-//      is out of contract; the architecture explicitly does not model
-//      write-ordering-dependent behaviour and only promises "suffices for most
-//      compute kernels".
+//      is out of contract; write-ordering-dependent behaviour is explicitly not
+//      modelled — this only needs to suffice for most compute kernels.
 //
 // Bundling the parameter reads into the update_u32 callback was rejected: the
 // callback runs under the exclusive flock, so issuing more mmap reads there is
@@ -369,12 +368,34 @@ void ModelControlWorkers::kernel_loop(KernelWorker& kw, ModelClient& client) {
 // Clock-wizard worker
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The vrtd clock driver polls REG4 bit0 (offset 0x33C within each wizard window)
-// for the lock signal after a reconfig.  In the memory-backed BAR that cell
-// aliases a divider data register, so it frequently reads back 0.  We pin bit0 of
-// both windows (user 0x0033C, service 0x1033C) to 1 on every poll cycle so the
-// driver's 200 ms / 100 µs lock poll always sees a 1 (architecture: "Clock
-// wizard").  No model interaction.
+// BAR 4 exposes two independent Xilinx Clocking-Wizard register windows: the
+// user-logic clock at BAR4+0x0 and the service/infrastructure clock at
+// BAR4+0x10000.  The only client is the vrtd clock driver, which mmaps BAR 4 and
+// does direct MMIO.  The FPGA model is clock-agnostic — no real frequency
+// synthesis is emulated; only the register interface must be modelled well enough
+// that the driver does not error out.  (For reference, the driver derives
+// f_out = (prim_in_hz * M) / (D * O) with prim_in_hz a fixed 100 MHz constant it
+// never reads back, only ever drives output clk_out1 (index 0), and its highest
+// used register is REG26 at offset 0x3FC within a window.)
+//
+// After a SET the driver programs the M/D/O + tail registers, writes the reconfig
+// trigger at offset 0x14, then polls REG4 (offset 0x33C) bit0 for the lock signal
+// for up to 200 ms at 100 µs intervals; on timeout it returns -ETIMEDOUT.  The
+// only functional requirement is therefore that the lock bit becomes observable
+// as 1 after a reconfig — the client never validates the achieved frequency.
+//
+// Complication: REG4 (0x33C) is the lock-status register on READ but the low half
+// of the clk_out1 divider leaf pair (0x338/0x33C) on WRITE.  On real hardware
+// these are distinct read/write registers sharing one address; in a memory-backed
+// memfd they are the same cell, so after a SET the lock bit reads back as
+// (O / 4) & 1, frequently 0.  We therefore pin bit0 of both windows (user
+// 0x0033C, service 0x1033C) to 1 on every poll cycle so the driver's lock poll
+// always sees a 1; forcing this bit only perturbs the ignored low bit of the
+// decoded frequency.  The reconfig trigger (0x14) and the M/D/O divider semantics
+// are not interpreted at all.  No model interaction.
+// (Long-term, once BAR access becomes read/write syscalls, the lock/status
+// address can instead return value|1 on read while writes land in a data shadow,
+// removing the aliasing race and keeping the frequency readback exact.)
 
 void ModelControlWorkers::clock_loop() {
     auto pin = [](uint32_t cur) -> uint32_t { return cur | kClockLockBit; };

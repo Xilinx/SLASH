@@ -39,8 +39,7 @@ namespace slash_sysemu {
 //
 // Exposes a named AF_UNIX/SOCK_SEQPACKET socket (the emulated equivalent of the
 // `/dev/slash_ctl<N>` control device) and services the three PF2 control ioctls
-// as request/response datagrams (architecture: "BAR access and device
-// information subsystem (`slash_ctl<N>`)"):
+// as request/response datagrams:
 //
 //   * SLASH_CTLDEV_IOCTL_GET_BAR_INFO   (0x30) — BAR enumeration
 //   * SLASH_CTLDEV_IOCTL_GET_BAR_FD     (0x31) — hand a mappable BAR memfd back
@@ -66,14 +65,14 @@ namespace slash_sysemu {
 //     shutdown(SHUT_RDWR)s + closes the listening socket so the listener's
 //     accept() returns and the listener thread exits.
 //   * It then shutdown(SHUT_RDWR)s every live connection fd (forcing each
-//     connection worker's blocked recv()/send() to fail — the "forced user
-//     disconnect" the architecture requires) and joins every worker thread.
+//     connection worker's blocked recv()/send() to fail — the forced user
+//     disconnect) and joins every worker thread.
 //   * No self-pipe/eventfd is needed: shutdown() on the listening and connection
 //     sockets is sufficient to promptly unblock accept()/recv() on Linux.
 //
 // BAR ownership:
-//   * The BarSet is BORROWED (const reference), owned by the accelerator
-//     (Step 11).  REMOVE never touches the memfds — the model control workers
+//   * The BarSet is BORROWED (const reference), owned by the Accelerator.
+//     REMOVE never touches the memfds — the model control workers
 //     keep polling them.  GET_BAR_FD returns a reopen()ed DISTINCT open file
 //     description so daemon-vs-user flocks genuinely collide.
 //

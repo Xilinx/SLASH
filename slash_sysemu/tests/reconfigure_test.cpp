@@ -316,7 +316,7 @@ TEST(Reconfigure, WorkerStartFailureTearsDownNewProcess) {
     EXPECT_FALSE(inst.has_process());
 }
 
-// ── ADVERSARY PROBES (Step 6) ────────────────────────────────────────────────
+// ── ADVERSARY PROBES ─────────────────────────────────────────────────────────
 
 // PROBE R1 — rename-failure-after-adoption safety + staging clearing (spec:
 // "clear staging in EITHER case").  ModelInstance offers no seam to inject a

@@ -167,7 +167,7 @@ TEST(ProtocolTest, HeaderSize) {
 
 TEST(ProtocolTest, HeaderFieldOffsets) {
     slash_sysemu_socket_header h{};
-    // Offsets must match the architecture spec.
+    // Offsets must match the wire protocol spec.
     EXPECT_EQ(offsetof(slash_sysemu_socket_header, ioctl_op),     0u);
     EXPECT_EQ(offsetof(slash_sysemu_socket_header, sequence_id),  4u);
     EXPECT_EQ(offsetof(slash_sysemu_socket_header, return_value), 8u);
@@ -733,7 +733,7 @@ TEST_F(TransportTest, SendRequestFailsWhenRecvFails) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Adversary probes — added to expose defects found in the Step 2 adversary
+// Adversary probes — added to expose defects found in the transport adversary
 // review.  Each test name is referenced in the review findings.
 // ─────────────────────────────────────────────────────────────────────────────
 

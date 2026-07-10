@@ -50,7 +50,7 @@ struct ModelProcessReap;
 //   * the unpacked Vbin (its TempDir keeps the extracted tree — including the
 //     executable and the ipc socket — alive for the process lifetime);
 //   * the child pid (guaranteed reaped on destruction);
-//   * a live ModelClient (used by the model control workers in Step 8);
+//   * a live ModelClient (used by the model control workers);
 //   * a monitor thread that detects unexpected process death.
 //
 // Launch convention (ground truth from vrt/src/device.cpp):
@@ -79,16 +79,17 @@ struct ModelProcessReap;
  *   * A caller MUST NOT synchronously tear down THIS ModelProcess from within
  *     on_death.  teardown() joins the monitor thread; a synchronous teardown
  *     from the callback would be the monitor thread trying to join itself.
- *     Step 11's on_death (which reacts to model death by tearing the accelerator
- *     down) MUST dispatch that teardown to a DIFFERENT thread (e.g. post it to a
- *     lifecycle work queue), never call it inline.
+ *     The Accelerator's on_death (which reacts to model death by tearing the
+ *     accelerator down) MUST dispatch that teardown to a DIFFERENT thread (e.g.
+ *     post it to a lifecycle work queue), never call it inline.
  *   * A caller MUST ALSO NOT synchronously DESTROY THIS ModelProcess from within
  *     on_death.  ~ModelProcess destroys the on_death_ std::function while its
  *     operator() is still executing on the monitor stack — a heap-use-after-free
  *     of the callable's own captures.  The detach guard below makes
  *     teardown-from-callback safe, but it CANNOT make delete-this-from-callback
  *     safe: the object (and the running callable) would be freed underneath the
- *     monitor thread.  So Step 11 must also post the DESTROY to another thread.
+ *     monitor thread.  So the Accelerator must also post the DESTROY to another
+ *     thread.
  *   * Required pattern (both cases): to react to model death, hand off to another
  *     thread — post a teardown/destroy task — and return from on_death promptly.
  *     Never tear down OR destroy this ModelProcess synchronously inside on_death.

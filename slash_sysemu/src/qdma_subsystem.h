@@ -41,9 +41,9 @@ namespace slash_sysemu {
 //
 // Exposes a named AF_UNIX/SOCK_SEQPACKET socket (the emulated equivalent of the
 // `/dev/slash_qdma_ctl<N>` control device) and services the PF1 QDMA ioctls as
-// request/response datagrams (architecture: "QDMA subsystem (`slash_qdma_ctl<N>`)").
+// request/response datagrams.
 //
-// Two kinds of endpoint (see the CTL/XFER table in the architecture):
+// Two kinds of endpoint (CTL and XFER):
 //   * CTL  — the top-level slash_qdma_ctl<N> socket.  Accepts:
 //       INFO(0x50), QPAIR_ADD(0x51), Q_OP(0x52), QPAIR_GET_FD(0x53), BUF_CREATE(0x54).
 //   * XFER — a per-transfer-session anonymous socketpair returned by QPAIR_GET_FD.
@@ -60,7 +60,7 @@ namespace slash_sysemu {
 //     and services BUF_CREATE + TRANSFER until the user closes their end (recv
 //     returns EOF), at which point the owned qpairs transition back to Started.
 //
-// Qpair state machine (architecture "Mechanisms"):
+// Qpair state machine:
 //   Initial   -[QPAIR_ADD]->        Stopped
 //   Stopped|Started -[START]->      Started
 //   Started   -[GET_FD]->          Used
@@ -82,16 +82,16 @@ namespace slash_sysemu {
 //
 // Model serialisation:
 //   ModelClient's internal per-socket mutex guarantees only one model request is
-//   ever in flight, satisfying the architecture's "only one transfer session ever
-//   has an open request with the model process".  File I/O (pread/pwrite on the
+//   ever in flight, so only one transfer session ever has an open request with
+//   the model process.  File I/O (pread/pwrite on the
 //   user buffer) is deliberately done OUTSIDE that lock — each chunk is
 //   pread-then-populate / fetch-then-pwrite — so two sessions' file I/O can
 //   overlap while their model requests serialise.  No extra transfer mutex is
 //   needed; leaning on ModelClient's lock keeps the critical section minimal.
 //
 // Ownership / borrowing:
-//   The ModelClient and VbinStore are BORROWED (owned by the accelerator / Steps
-//   6/11).  REMOVE forgets the qpair list and drops all CTL connections and
+//   The ModelClient and VbinStore are BORROWED (owned by the Accelerator via its
+//   ModelInstance).  REMOVE forgets the qpair list and drops all CTL connections and
 //   transfer sessions but does NOT touch the model or any buffers.  Host buffers
 //   are memfds handed to the user and CLOSED by the daemon immediately after
 //   responding (so they release on the user's last ref); the daemon keeps no
@@ -102,9 +102,8 @@ namespace slash_sysemu {
 // destructor calls remove() if still active.  Nothing throws across the API.
 
 // The reconfiguration-aperture device address.  H2C writes here are appended to
-// the staging VBIN instead of being forwarded to the model process (architecture
-// "Writing the staging VBIN": chunks of up to 64 KiB, always at device address
-// 0x102100000).  Step 13 moves this constant into the kernel ABI header.
+// the staging VBIN instead of being forwarded to the model process (chunks of up
+// to 64 KiB, always at device address 0x102100000).
 inline constexpr uint64_t kReconfigApertureAddr = 0x102100000ull;
 
 class QdmaSubsystem {

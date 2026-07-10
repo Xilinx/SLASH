@@ -41,11 +41,11 @@ namespace slash_sysemu {
 class ModelClient;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ModelControlWorkers — the concrete WorkerController (Step 8)
+// ModelControlWorkers — the concrete WorkerController
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Orchestrates the execution of the compute kernels described in the system map,
-// plus the clock wizard (architecture: "Model control worker subsystem").  One
+// plus the clock wizard.  One
 // worker thread per kernel drives the idle→busy→idle handshake between the
 // user-region BAR memfd (where VRT writes parameters and ap_start via direct
 // MMIO) and the model process (driven over the ZeroMQ ModelClient).  A single
@@ -53,26 +53,36 @@ class ModelClient;
 // vrtd clock driver never times out.
 //
 // Lifetime and ownership:
-//   * The BAR memfds (user region, clock wizard) are owned elsewhere (Step 9/11)
-//     and PERSIST across model-process restarts, so they are injected by
-//     reference, not owned here.  The architecture requires the workers to run
-//     "for the entire lifetime of the model process, independently of the BAR
-//     subsystem" — the BAR subsystem may be REMOVE'd and restored while the
-//     kernels keep running, hence the memfds outlive any single worker set.
+//   * The BAR memfds (user region, clock wizard) are owned by the Accelerator
+//     and PERSIST across model-process restarts, so they are injected
+//     by reference, not owned here.  The workers run for the entire lifetime of the
+//     model process, independently of the BAR subsystem — the BAR subsystem may
+//     be REMOVE'd and restored while the kernels keep running, hence the memfds
+//     outlive any single worker set.
 //   * The ModelClient and SystemMap passed to start() are owned by the
 //     ModelProcess and remain valid until the matching stop() (WorkerController
 //     contract).
 //
-// This object is a WorkerController: Step 6's reconfiguration calls start() on a
+// This object is a WorkerController: The reconfiguration (reconfigure.h) calls start() on a
 // freshly launched model and stop() before tearing an old one down.  start()
 // MUST NOT send the global `start` verb — the ModelProcess already issued that
 // one-time sim-clock start as its launch probe (see worker_controller.h).
+//
+// Accepted inaccuracies (the daemon observes no register-access events, only
+// polled memfd state, so anything that depends on access timing/order is not
+// modelled): a clear-on-handshake control register does not instantly trigger an
+// operation (it is noticed on the next poll); clear-on-read registers are never
+// cleared by the daemon; write-only registers are not enforced (the user can
+// change them); output/return/ap_vld registers are set once the kernel completes
+// but are not latched/write-protected.  Only bits 0 (ap_start) and 1 (ap_done) of
+// the control register are implemented.  Crude, but sufficient for most compute
+// kernels — the MVP target.
 
 /**
  * @brief The lifetime state of a single compute kernel's worker.
  *
- * Tracked for the whole lifetime of the model process (architecture: "the daemon
- * never loses track of a kernel's state").  Exposed for tests via
+ * Tracked for the whole lifetime of the model process (the daemon never loses
+ * track of a kernel's state).  Exposed for tests via
  * kernel_state().
  */
 enum class KernelState {
@@ -86,7 +96,7 @@ const char* kernel_state_name(KernelState s) noexcept;
 
 class ModelControlWorkers : public WorkerController {
 public:
-    /** Control-register bit masks (architecture control-register-bits table). */
+    /** Control-register bit masks. */
     static constexpr uint32_t kApStart = 0x1u; /**< bit0 */
     static constexpr uint32_t kApDone  = 0x2u; /**< bit1 */
 

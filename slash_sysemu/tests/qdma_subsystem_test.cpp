@@ -1113,7 +1113,7 @@ TEST_F(QdmaSubsystemTest, UnknownIoctlEnosysWorkerSurvives) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 TEST(QdmaIoctlAbiTest, InfoStructCarriesBdfAndCmdEncodesSize) {
-    // The bdf field was appended (Step 10 ABI change); sizeof grows to 52.
+    // The bdf field was appended (the QDMA INFO ABI change); sizeof grows to 52.
     EXPECT_EQ(52u, sizeof(slash_qdma_info));
     // _IOWR('v', 0x50, struct slash_qdma_info): low byte = nr, next byte = 'v'.
     EXPECT_EQ(0x50u, kSlashQdmaIoctlInfo & 0xFFu);
@@ -1126,7 +1126,7 @@ TEST(QdmaIoctlAbiTest, InfoStructCarriesBdfAndCmdEncodesSize) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES (Step 10)
+// ADVERSARY PROBES
 //
 // Probes devised to hunt for fd/thread/memfd leaks, lifecycle/teardown races,
 // protocol-abuse crashes, qpair state-machine holes, transfer-correctness gaps,
@@ -1614,7 +1614,7 @@ TEST_F(QdmaSubsystemTest, ConcurrentQpairAddDelConsistent) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES — round 2 (Step 10 review)
+// ADVERSARY PROBES — round 2
 //
 // Targeted at the lead's four suspicions plus a broad sweep for fd/thread leaks,
 // state-machine holes, transfer-boundary quirks, endpoint routing, and teardown
@@ -1682,7 +1682,7 @@ TEST_F(QdmaSubsystemTest, TransferZeroLengthSubxferReturnsZeroNoModel) {
 }
 
 // ── Suspicion 2: precondition-vs-execution race — STOP between check & populate ─
-// The architecture says the driver does NOT invalidate a live session: once the
+// The driver does NOT invalidate a live session: once the
 // precondition passes (qpair Started/Used), a concurrent STOP must NOT abort a
 // transfer already past its check.  We can't hit the exact microsecond window
 // deterministically, but we can hammer it: repeatedly transfer on a session while

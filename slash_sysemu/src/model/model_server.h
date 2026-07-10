@@ -35,9 +35,12 @@ namespace slash_sysemu::model {
 // A minimal system-emulation model: it binds a ZMQ_REP socket on the endpoint
 // the daemon passes as argv[1] and services the model dialect against an
 // in-memory address→byte store.  It supports round-trip BAR/HBM/DDR reads and
-// writes plus register scalars, but runs no compute kernels — this is exactly
-// the "default VBIN" model described in architecture.md ("supports round-trip
-// BAR/HBM/DDR read/writes, but no executable kernels").
+// writes plus register scalars, but runs no compute kernels. It thus acts as
+// a "default" model to use before an accelerator has been reconfigured by a user.
+// It is built from source as part of the daemon and packaged into `default.vbin`
+// (installed to <prefix>/lib/slash-sysemu/default.vbin); the daemon copies it
+// into a fresh accelerator's main.vbin at bootstrap.  The path is overridable via
+// configuration (see DaemonConfig::default_vbin_path).
 //
 // The dialect (frame 0 is a JSON command; `populate` carries a second raw byte
 // frame) is the same one the daemon's ModelClient speaks and the test

@@ -69,7 +69,7 @@ TEST(SystemMapTest, ParsesInlineEmulationBuffer) {
     EXPECT_EQ(k.base_address, 0x10000u);
     EXPECT_EQ(k.range, 0x1000u);
 
-    // Control register at offset 0 must be discoverable (Step 8 ap_start/ap_done).
+    // Control register at offset 0 must be discoverable (model control worker ap_start/ap_done).
     const Register* ctrl = k.register_at(0);
     ASSERT_NE(ctrl, nullptr);
     EXPECT_EQ(ctrl->name, "CTRL");
@@ -403,7 +403,7 @@ TEST(SystemMapTest, DuplicateRegisterOffsetsRejected) {
 }
 
 // PROBE (SPEC GAP): a kernel whose registers have NO control register at
-// offset 0. Step 8 resolves ap_start/ap_done at offset 0; the parser accepts a
+// offset 0. The model control workers resolve ap_start/ap_done at offset 0; the parser accepts a
 // kernel with only a nonzero-offset register. Documents that the model does not
 // enforce the presence of offset-0.
 TEST(SystemMapTest, KernelWithoutOffsetZeroRegisterAccepted) {
@@ -612,8 +612,8 @@ TEST(SystemMapTest, SameOffsetsAcrossDifferentKernelsAllowed) {
 }
 
 // PROBE (reverse-mapping capability): confirm the model captures enough to
-// reverse register -> absolute address (base_address + offset), per
-// architecture.md "reverse the register -> address mapping".
+// reverse register -> absolute address (base_address + offset), i.e. the
+// register -> address mapping.
 TEST(SystemMapTest, ReverseRegisterToAbsoluteAddress) {
     const std::string xml = R"(<?xml version="1.0"?>
 <SystemMap><Platform>Emulation</Platform>

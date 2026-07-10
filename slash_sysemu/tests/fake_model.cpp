@@ -18,9 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 // ################################################################################################
 
-// A fake vpp_sim model executable used as a test artifact for Step 6.  It takes
+// A fake vpp_sim model executable used as a test artifact for the model-process
+// tests.  It takes
 // the ZeroMQ endpoint as argv[1], binds a ZMQ_REP socket, and services the sim
-// verbs by reusing the same MockModelServer logic the Step 5 client tests use —
+// verbs by reusing the same MockModelServer logic the model_client tests use —
 // so a launched fake model behaves exactly like the mock.
 //
 // A leading option (argv[1]) selects a failure mode; when present the endpoint

@@ -254,7 +254,11 @@ Result<ReceivedMessage> recv_message(int sockfd);
  *
  * Per the protocol, argument structs that carry file descriptors store them as
  * indices into the list of SCM_RIGHTS FDs that arrived with the datagram.  This
- * helper resolves one such index.
+ * helper resolves one such index.  (Emulated IOCTLs may pass file descriptors in
+ * both directions, but NEVER pointers into the user's virtual address space —
+ * those cannot be meaningfully transferred across a UNIX-domain socket to another
+ * process, which is why FDs travel as ancillary data and are referenced by index
+ * rather than by an address embedded in a shared struct.)
  *
  * The FD at @p index is moved out of @p msg.fds (leaving -1 in its place), so
  * each index may only be resolved once per message.

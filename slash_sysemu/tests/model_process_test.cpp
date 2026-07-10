@@ -195,7 +195,7 @@ TEST(ModelProcess, HardKillMidRunFiresDeathCallback) {
 
 // Re-entrancy safety net: calling teardown() synchronously from inside on_death
 // (which runs on the monitor thread) must NOT self-join → deadlock/hang.  The
-// contract forbids this (Step 11 must dispatch off-thread), but teardown() must
+// contract forbids this (the Accelerator must dispatch off-thread), but teardown() must
 // degrade to safe behavior (detach) rather than hang.  A watchdog thread bounds
 // the test so a regression shows as a failure, not an indefinite hang.
 TEST(ModelProcess, TeardownFromInsideDeathCallbackDoesNotHang) {
@@ -313,7 +313,7 @@ TEST(ModelProcess, MissingVbinFileIsError) {
     ASSERT_FALSE(r.has_value());
 }
 
-// ── ADVERSARY PROBES (Step 6) ────────────────────────────────────────────────
+// ── ADVERSARY PROBES ─────────────────────────────────────────────────────────
 
 // PROBE P1 — AF_UNIX sun_path length limit.
 // sun_path is ~108 bytes.  The endpoint is
@@ -368,7 +368,7 @@ TEST(ModelProcess, LongTmpdirEndpointFailsCleanlyNotHang) {
 }
 
 // PROBE P2 — no zombie / fd leak over many launch+teardown cycles.  Reaping and
-// fd hygiene must hold across churn (Step 11 will reconfigure repeatedly).
+// fd hygiene must hold across churn (the Accelerator reconfigures repeatedly).
 TEST(ModelProcess, ManyLaunchTeardownCyclesNoLeak) {
     auto count_fds = [] {
         int n = 0;

@@ -448,7 +448,7 @@ TEST(CliTest, VersionFlagReturnsOkWithExitCode) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Adversary probes — Step 3 review
+// Adversary probes
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Finding A1 (Critical): config_test.cpp used .board_bdf as a data member but
@@ -565,7 +565,7 @@ TEST(AdversaryBdfTest, VbinPathIsNulloptWhenAbsentFromIni) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Step 6: default VBIN configuration (default_vbin_path + per-device vbin_path)
+// Default VBIN configuration (default_vbin_path + per-device vbin_path)
 // ─────────────────────────────────────────────────────────────────────────────
 
 TEST(DefaultVbinTest, PerDeviceVbinPathParsedFromConfig) {

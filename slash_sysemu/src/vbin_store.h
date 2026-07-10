@@ -34,19 +34,27 @@ namespace slash_sysemu {
 // VbinStore — per-BDF on-disk main + staging VBIN files
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Each emulated accelerator owns two VBIN files on disk, per the architecture's
-// "Model process and reconfiguration" section:
+// Each emulated accelerator owns two VBIN files on disk:
 //
 //   * <base>/<bdf>/main.vbin    — the last successfully launched model program.
-//   * <base>/<bdf>/staging.vbin — user-written reconfiguration buffer (QDMA in
-//                                 Step 10 appends chunks here at device address
+//   * <base>/<bdf>/staging.vbin — user-written reconfiguration buffer (the QDMA
+//                                 subsystem appends chunks here at device address
 //                                 0x102100000).
+//
+// Why the FULL VBIN is staged (not just the DCP/PDI bitstream real hardware
+// receives over QDMA): the daemon needs the VBIN's system map to tell whether the
+// target platform is emulation or simulation and to reverse the register→address
+// mapping, and the simulation model itself ships as a separate shared object that
+// the `vpp_sim` executable only wraps.  So a reconfiguration must carry the whole
+// container, not just the programmable-logic image.  VRT writes it in ≤64 KiB
+// chunks (always at device address 0x102100000), then REMOVEs PF2 and RESCANs to
+// launch the staged model.
 //
 // Lifecycle rules from the spec:
 //   * The files PERSIST across accelerator teardown — tearing an accelerator down
 //     must NOT remove them (they are needed for a later RESCAN).  They are only
 //     removed on daemon startup/shutdown ("cold reboot"), modelled here as the
-//     explicit cold_reboot_cleanup() call (invoked by Step 11, never by
+//     explicit cold_reboot_cleanup() call (invoked by the daemon, never by
 //     per-accelerator teardown).
 //   * bootstrap(): if no main.vbin exists yet, copy the configured default VBIN
 //     into main.vbin and create an empty staging.vbin.  If main already exists,
@@ -57,7 +65,7 @@ namespace slash_sysemu {
 //   * clear_staging(): truncate staging.vbin back to zero length (do NOT delete).
 //
 // All operations that touch the filesystem return VbinResult<...> with a
-// VbinErrorKind::Io on failure, matching the Step 4 VBIN taxonomy.
+// VbinErrorKind::Io on failure, matching the VBIN error taxonomy (vbin.h).
 
 class VbinStore {
 public:
@@ -100,8 +108,16 @@ public:
     /**
      * @brief Append @p bytes to staging.vbin (creating it if absent).
      *
-     * Models the QDMA reconfiguration-aperture write path (Step 10): each written
+     * Models the QDMA reconfiguration-aperture write path: each written
      * chunk is appended to the staging VBIN file.
+     *
+     * ACCEPTED INACCURACY (non-atomic reconfiguration): staging writes and the
+     * PF2 REMOVE/RESCAN that consumes them are separate, unsynchronised user
+     * operations.  A user that writes only SOME chunks and then triggers a RESCAN
+     * makes PF2 restoration evaluate an incomplete VBIN.  The daemon cannot
+     * safeguard against this beyond rejecting a staging VBIN that fails to
+     * unpack/parse; avoiding a partial-but-plausible image is the user's
+     * responsibility.
      */
     VbinResult<void> append_staging(std::span<const uint8_t> bytes);
 

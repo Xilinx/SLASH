@@ -203,7 +203,7 @@ ConfigFileResult parse_config_file(const std::string& path) {
             return result;
         }
 
-        // Per-device optional `vbin_path` override (used by Step 6 as this
+        // Per-device optional `vbin_path` override (used as this
         // accelerator's default VBIN source, taking precedence over the daemon
         // wide default_vbin_path).  Absent or empty → nullopt.
         std::optional<std::string> vbin_path;
@@ -253,7 +253,7 @@ CliResult parse_cli(int argc, char* argv[]) {
                    "Base directory for emulation sockets "
                    "(default: $RUNTIME_DIRECTORY, else /run/slash_sysemu)");
 
-    // Daemon-wide default VBIN used to bootstrap a fresh accelerator (Step 6).
+    // Daemon-wide default VBIN used to bootstrap a fresh accelerator.
     // Precedence (low → high): compiled-in installed default, $SLASH_SYSEMU_DEFAULT_VBIN,
     // then the --default-vbin flag.  Left unset only if none of these apply.
     std::string default_vbin;

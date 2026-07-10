@@ -37,7 +37,7 @@ namespace slash_sysemu {
  *
  * Move-only.  A default-constructed / moved-from instance owns nothing and
  * removes nothing.  The path stays valid for the lifetime of the object, which
- * is what lets Step 6 launch the extracted executable before cleanup.
+ * is what lets the model process launch the extracted executable before cleanup.
  */
 class TempDir {
 public:
@@ -89,7 +89,7 @@ private:
  * The container (a POSIX tar, optionally gzip-compressed) is extracted into a
  * unique temporary directory owned by @ref temp_dir; when the Vbin is destroyed
  * the directory and its contents are removed.  Extraction-to-disk (rather than
- * in-memory parsing) is deliberate: Step 6 must exec the emulation/simulation
+ * in-memory parsing) is deliberate: the model process must exec the emulation/simulation
  * binary and reference the xsim.dir tree, which only exist on disk.
  */
 struct Vbin {

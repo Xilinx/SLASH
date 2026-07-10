@@ -634,7 +634,7 @@ TEST(ModelClientConcurrency, ConcurrentFetchScalarsNeverCrossReplies) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADVERSARY PROBES (Step 5 review)
+// ADVERSARY PROBES
 // ─────────────────────────────────────────────────────────────────────────────
 
 // PROBE 1 — post-timeout REQ desync.  A ZMQ_REQ socket that has sent a request

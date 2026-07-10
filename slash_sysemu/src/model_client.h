@@ -40,13 +40,17 @@ namespace slash_sysemu {
 // one model process, and speaks the address-keyed `vpp_sim` dialect of the model
 // protocol documented in docs/reference/model-protocol/index.rst.
 //
+// SCOPE: only the address-keyed `vpp_sim` (FPGA-simulation) dialect is supported.
+// FPGA *emulation* models (`vpp_emu`) are out of scope for this sprint — they
+// provide no way to asynchronously check kernel state, which the polling worker
+// design relies on — so only simulation VBINs are launched.
+//
 // The `vpp_sim` model binds a ZMQ_REP endpoint (an ipc:// AF_UNIX path, or a
 // tcp:// endpoint); this client connects to it.  The REQ/REP pair is strict
 // lock-step: exactly one request may be in flight at a time.  ZeroMQ sockets are
 // additionally not thread-safe.  We therefore guard the whole send→recv cycle
 // with a std::mutex, which both serialises concurrent callers (each gets its own
-// correct reply) and provides the "queue of waiting threads" the architecture
-// requires.
+// correct reply) and provides a queue of waiting threads.
 //
 // Error taxonomy (reusing transport.h's Result / ErrorKind):
 //   * ErrorKind::Transport — the request could not be delivered or no reply was
@@ -125,7 +129,7 @@ public:
      * `fetch buffer`: device-to-host read of @p size bytes from @p addr.
      * The reply is a JSON array of byte-sized integers (0..255).
      *
-     * ERROR TAXONOMY (matters for downstream / Step 10 QDMA C2H): a well-delivered
+     * ERROR TAXONOMY (matters for the QDMA C2H path): a well-delivered
      * but malformed reply is an ErrorKind::Protocol error, NOT Transport — this
      * includes a byte value outside 0..255, a non-integer element, a non-array
      * reply, and an array whose length != @p size (a short OR long read).  Only a

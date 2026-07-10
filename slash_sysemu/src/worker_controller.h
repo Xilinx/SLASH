@@ -31,17 +31,16 @@ class ModelClient;
 // WorkerController — pluggable model control worker lifecycle hook
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The model control workers (Step 8) are set up and torn down together with the
-// model process (architecture: "Run for the entire lifetime of the model
-// process ... Set up and torn down together with their model process").  Step 6
-// (reconfiguration) owns the model process lifecycle but not the worker internals,
+// The model control workers are set up and torn down together with the model
+// process: they run for the entire lifetime of the model process.  ModelInstance
+// (reconfigure.h) owns the model process lifecycle but not the worker internals,
 // so it drives the workers through this abstract interface: on a successful NEW
 // model process, the reconfiguration stops the OLD workers and starts NEW ones
 // bound to the new ModelClient and SystemMap.
 //
 // The interface is intentionally minimal and paired: start() and stop() bracket
-// the lifetime of one set of workers.  Step 8 provides the concrete
-// implementation; Step 6 tests use a counting stub.  It is passed to the
+// the lifetime of one set of workers.  ModelControlWorkers provides the concrete
+// implementation; the reconfiguration tests use a counting stub.  It is passed to the
 // reconfiguration as a nullable shared_ptr — a null controller means "no workers
 // to manage" (valid for tests and for early bring-up).
 //

@@ -99,8 +99,8 @@ struct AcceleratorConfig {
     /**
      * @brief Optional path to a pre-installed VBIN for this accelerator.
      *
-     * When present, this overrides the default VBIN discovery path used by
-     * Step 6 (model process lifecycle).  Left empty for most configurations.
+     * When present, this overrides the daemon-wide default VBIN used when
+     * bootstrapping this accelerator.  Left empty for most configurations.
      */
     std::optional<std::string> vbin_path;
 
@@ -137,11 +137,10 @@ struct DaemonConfig {
     /**
      * @brief Daemon-wide default VBIN used to bootstrap a fresh accelerator.
      *
-     * Step 6 (model process lifecycle) copies this into a new accelerator's
-     * main.vbin when it has none yet.  A per-accelerator
+     * Copied into a new accelerator's main.vbin when it has none yet (the model
+     * process bootstrap path).  A per-accelerator
      * AcceleratorConfig::vbin_path, when set, takes precedence over this
-     * daemon-wide default.  Empty when not configured (the shipped default-VBIN
-     * artifact is out of scope for the current sprint).
+     * daemon-wide default.  Empty when not configured.
      */
     std::optional<std::string> default_vbin_path;
 

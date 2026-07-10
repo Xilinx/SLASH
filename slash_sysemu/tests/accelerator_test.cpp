@@ -559,7 +559,7 @@ TEST_F(AcceleratorTest, OnModelDiedStaleGenerationIsNoop) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES (Step 11) — second wave: harder QDMA-quiesce-vs-reconfigure,
+// ADVERSARY PROBES — second wave: harder QDMA-quiesce-vs-reconfigure,
 // death-during-reconfigure, and death-during-teardown/instantiate ordering.
 // ═════════════════════════════════════════════════════════════════════════════
 

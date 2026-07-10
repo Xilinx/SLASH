@@ -601,7 +601,7 @@ TEST_F(CtlSubsystemTest, ConnectionCountTracksLiveConnections) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ADVERSARY PROBES (Step 9)
+// ADVERSARY PROBES
 //
 // Every probe below was devised by the adversary agent to hunt for fd/thread
 // leaks, lifecycle races, protocol-abuse crashes, and spec-conformance gaps in

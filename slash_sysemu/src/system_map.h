@@ -195,7 +195,7 @@ struct Kernel {
 
     /**
      * @brief Find a register by exact name; nullptr if absent.
-     * @note Downstream (Step 8) resolves output/return registers by name.
+     * @note The model control workers resolve output/return registers by name.
      */
     [[nodiscard]] const Register* find_register(const std::string& reg_name) const;
 
@@ -204,7 +204,7 @@ struct Kernel {
      * @note The control register (ap_start/ap_done) is expected at offset 0.
      *       The parser does NOT enforce its presence: a kernel may legitimately
      *       have no offset-0 register (e.g. streaming/free-running kernels), so
-     *       downstream (Step 8) must handle register_at(0) == nullptr rather than
+     *       the model control workers must handle register_at(0) == nullptr rather than
      *       assuming a control register always exists.
      */
     [[nodiscard]] const Register* register_at(uint64_t offset) const;

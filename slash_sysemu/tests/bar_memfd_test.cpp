@@ -340,8 +340,8 @@ TEST(BarMemfd, ConcurrentSharedReadersSeeConsistentValues) {
 // Same-object concurrency: the internal mutex serialises daemon-side access
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The 128 MiB user-region BAR holds every kernel's register window and Step 8
-// runs one worker thread PER KERNEL, so multiple daemon threads share ONE
+// The 128 MiB user-region BAR holds every kernel's register window and one model
+// control worker thread runs PER KERNEL, so multiple daemon threads share ONE
 // BarMemfd (NOT reopened).  BarMemfd's internal mutex must make that safe: with a
 // single fd, an unsynchronised LOCK_UN from one thread would drop the whole-file
 // flock another thread holds.  These tests use the daemon-side write_u32/read_u32
@@ -410,7 +410,7 @@ TEST(BarMemfd, SharedObjectConcurrentUpdateU32IsExactCount) {
     // update_u32 holds ONE mutex + ONE exclusive flock bracket across the whole
     // read-modify-write, so N threads * kIters increments on the SAME offset of
     // the SAME (non-reopened) object must produce EXACTLY N*kIters — the atomic
-    // RMW helper is the path Step 8 workers use for control-register handshakes.
+    // RMW helper is the path the model control workers use for control-register handshakes.
     auto bar = make_small();
     ASSERT_TRUE(bar.write_u32(0, 0).has_value());
 
@@ -498,7 +498,7 @@ TEST(BarMemfd, MoveTransfersOwnership) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ADVERSARY PROBES (Step 7)
+// ADVERSARY PROBES
 // ─────────────────────────────────────────────────────────────────────────────
 
 // PROBE 1 — self-move-assignment must not double-munmap / self-destruct the
@@ -673,7 +673,7 @@ TEST(BarMemfdAdversary, ReopenFdIsReadWriteMappable) {
     ASSERT_NE(fl, -1);
     EXPECT_EQ(fl & O_ACCMODE, O_RDWR);
     // A read-write MAP_SHARED mmap on the reopened fd must succeed and be visible
-    // to the daemon (models the user's mmap in Step 9).
+    // to the daemon (models the user's mmap of a BAR fd).
     void* p = ::mmap(nullptr, kSmall, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     ASSERT_NE(p, MAP_FAILED);
     static_cast<unsigned char*>(p)[12] = 0xEE;

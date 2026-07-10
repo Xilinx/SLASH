@@ -60,7 +60,7 @@ inline constexpr uint32_t kSlashCtldevIoctlGetBarFd =
 inline constexpr uint32_t kSlashCtldevIoctlGetDeviceInfo =
     static_cast<uint32_t>(SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO);
 
-// PF2 PCI identity constants (architecture: GET_DEVICE_INFO).
+// PF2 PCI identity constants (returned by GET_DEVICE_INFO).
 inline constexpr uint16_t kPf2VendorId          = 0x10EE; // AMD/Xilinx
 inline constexpr uint16_t kPf2DeviceId          = 0x50B6;
 inline constexpr uint16_t kPf2SubsystemVendorId = 0x10EE;

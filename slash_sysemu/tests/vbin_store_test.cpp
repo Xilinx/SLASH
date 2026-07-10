@@ -190,7 +190,7 @@ TEST(VbinStore, ReplaceMainWithStagingIsAtomicAndRecreatesEmptyStaging) {
     EXPECT_FALSE(store.staging_nonempty());
 }
 
-// ── ADVERSARY PROBES (Step 6) ────────────────────────────────────────────────
+// ── ADVERSARY PROBES ─────────────────────────────────────────────────────────
 
 // PROBE A1 — replace_main_with_staging() rename FAILURE must not silently leave
 // staging populated in a way that misrepresents on-disk state.  Force the rename

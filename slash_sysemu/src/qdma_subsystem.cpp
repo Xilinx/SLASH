@@ -329,7 +329,7 @@ void QdmaSubsystem::session_loop(int sock_fd, uint64_t session_key,
     }
 
     // Last close on the transfer fd: return the owned qpairs from Used to Started
-    // (architecture: Used -[last close on FD]-> Started).  A qpair that was
+    // (Used -[last close on FD]-> Started).  A qpair that was
     // STOPed/DELeted underneath is skipped (no longer Used / no longer present).
     {
         std::lock_guard<std::mutex> lk(qpairs_mtx_);
@@ -485,8 +485,7 @@ Result<void> QdmaSubsystem::handle_q_op(int fd, ReceivedMessage& msg) {
                 }
                 break;
             case SLASH_QDMA_QUEUE_OP_STOP:
-                // Started|Stopped -[STOP]-> Stopped.  Used cannot be stopped via
-                // Q_OP directly?  The architecture allows STOP only from
+                // Started|Stopped -[STOP]-> Stopped.  STOP is only valid from
                 // Started/Stopped; a Used qpair's stop models the driver marking
                 // it stopped underneath a live session, so we also allow it and
                 // let the transfer path observe -ENODEV.
@@ -583,6 +582,12 @@ Result<void> QdmaSubsystem::handle_qpair_get_fd(int fd, ReceivedMessage& msg) {
 
     // Register + start the session worker.  Do this BEFORE sending the fd so a
     // racing remove() can find and tear it down.
+    //
+    // LOCK ORDERING: when both mutexes are needed at once they are taken
+    // workers_mtx_ THEN qpairs_mtx_ (as below).  session_loop() only ever holds
+    // one at a time (it releases qpairs_mtx_ before taking workers_mtx_), so no
+    // cycle forms today.  Preserve this ordering — a nested acquire in the other
+    // order would reintroduce an ABBA hazard (tracked in the PR's deferred items).
     {
         std::lock_guard<std::mutex> lk(workers_mtx_);
         if (stop_.load()) {
@@ -642,7 +647,7 @@ Result<void> QdmaSubsystem::handle_buf_create(int fd, ReceivedMessage& msg) {
     }
 
     req.granule       = static_cast<uint32_t>(page);
-    // Deliberate difference from the V80 driver (architecture): single-qpair hint.
+    // Deliberate difference from the V80 driver: single-qpair hint.
     req.transfer_hint = SLASH_QDMA_TRANSFER_HINT_SINGLE_QPAIR;
 
     slash_sysemu_socket_header h = make_response_header(msg.header, 0);
@@ -766,6 +771,9 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
 
             remaining -= chunk;
             buf_off   += chunk;
+            // Reconfig-aperture writes are a fixed "mailbox" append at a constant
+            // device address, so dev_addr is deliberately NOT advanced for them;
+            // HBM/DDR transfers walk forward through device memory as normal.
             if (!to_reconfig) {
                 dev_addr += chunk;
             }

@@ -40,25 +40,33 @@ namespace slash_sysemu {
 //
 // The real driver exposes each BAR as a dmabuf that the user mmaps and accesses
 // via direct MMIO, bracketing transactions with DMA_BUF_IOCTL_SYNC.  The
-// emulation daemon instead backs each BAR with an anonymous memfd (architecture:
-// "Model control worker subsystem"):
+// emulation daemon instead backs each BAR with an anonymous memfd:
 //
 //   * The daemon holds an fd to the memfd and mmaps it for its own (frequent,
 //     polling) register access.
 //   * Instead of DMA_BUF_IOCTL_SYNC, reads take a SHARED flock (LOCK_SH) and
 //     writes take an EXCLUSIVE flock (LOCK_EX), released after each access.
-//   * The fd handed to the user (Step 9's GET_BAR_FD) MUST be a DISTINCT open
+//   * The fd handed to the user (the CTL subsystem's GET_BAR_FD) MUST be a DISTINCT open
 //     file description from the daemon's, otherwise their flocks would not
 //     collide (flock is per-open-file-description, not per-fd/per-inode-per-
 //     process).  reopen() provides that distinct description by opening
 //     /proc/self/fd/<n> rather than dup()-ing.
 //
 // Daemon-side data path: this class keeps a persistent RAII mmap of the whole
-// window.  Step 8's worker polls control registers in a tight loop, so a
+// window.  The model control worker polls control registers in a tight loop, so a
 // per-access pread/pwrite syscall would be wasteful; a persistent mmap lets the
 // daemon read/write registers as plain memory.  The flock brackets remain the
 // advisory synchronisation protocol between the daemon and the user (mmap access
 // itself does not interact with flock — flock is advisory).
+//
+// Why polling (and its cost): the daemon is NOT notified when the user writes to
+// the memfd (a plain shared mapping has no write hook), so the model control
+// workers must POLL the control registers to notice an ap_start.  This is the
+// accepted cost of the dmabuf-shaped MVP interface.  The long-term fix is a
+// rebuilt BAR interface where every register access is a read()/write() syscall
+// the daemon can service directly (no polling, exact clear-on-read / action-on-
+// write semantics) — but that needs a kernel-driver refactor and is deferred
+// past the MVP.
 //
 // Thread-safety / flock nuance: flock is per-OPEN-FILE-DESCRIPTION.  A single fd's
 // whole-file LOCK_SH/LOCK_EX excludes other DISTINCT descriptions (a user's
@@ -67,13 +75,13 @@ namespace slash_sysemu {
 // converted, not contended: one thread's LOCK_UN would drop a lock another thread
 // believes it holds (breaking exclusion against the user and risking torn
 // same-offset access).  Because the 128 MiB user-region BAR holds every kernel's
-// register window and Step 8 runs one worker thread PER KERNEL, multiple daemon
+// register window and one model control worker thread runs PER KERNEL, multiple daemon
 // threads WILL share one BarMemfd.  So this class holds an INTERNAL std::mutex for
 // the entire flock-bracketed op: BarMemfd is internally thread-safe for concurrent
 // daemon-side access (at most one daemon thread holds the flock at a time, so
 // LOCK_UN is correct and the flock still excludes the user for that window), and
 // the flock continues to handle the cross-process (daemon-vs-user) boundary.
-// Multiple Step 8 workers may therefore safely share one BarMemfd.
+// Multiple model control workers may therefore safely share one BarMemfd.
 //
 // All accesses are bounds-checked against the BAR size; out-of-range access is a
 // Protocol error.  OS failures (memfd_create/ftruncate/mmap/flock/open) are
@@ -124,7 +132,7 @@ public:
      * Reads the current value, calls @p fn on it, and writes the result back —
      * all under a SINGLE held internal-mutex + EXCLUSIVE-flock bracket, so
      * concurrent daemon-side RMWs on this object do not lose updates and the user
-     * cannot observe or interleave a half-completed modification.  Step 8's kernel
+     * cannot observe or interleave a half-completed modification.  The model control
      * workers use this for control-register handshakes (e.g. clear ap_start after
      * reading it) where a plain read_u32-then-write_u32 pair would race.
      *
@@ -139,7 +147,7 @@ public:
      * description that shares the underlying memfd inode but NOT the file
      * description — so an flock held on this BarMemfd's fd and an flock held on
      * the returned fd genuinely conflict (as the daemon-vs-user model requires).
-     * This is the fd Step 9 sends to the user; the daemon closes its copy after
+     * This is the fd the CTL subsystem sends to the user; the daemon closes its copy after
      * handing it over (the returned UniqueFd owns it until then).
      *
      * NOTE: dup() would NOT work here — a dup shares the same open file
@@ -160,7 +168,7 @@ private:
     std::size_t size_ = 0;
     // Serialises the ENTIRE flock-bracketed access (lock → flock → mmap access →
     // LOCK_UN → unlock) so that concurrent daemon-side callers sharing one
-    // BarMemfd (e.g. multiple Step 8 workers on the shared 128 MiB user-region
+    // BarMemfd (e.g. multiple model control workers on the shared 128 MiB user-region
     // BAR) do not race on the single fd's whole-file flock — one thread's LOCK_UN
     // would otherwise drop the lock another thread believes it holds, breaking
     // exclusion against the user and risking torn same-offset access.  Behind a
@@ -174,8 +182,10 @@ private:
 // Standard BAR set
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The three BARs present on PF2 (architecture: BARs 0, 2, 4 are present/usable),
-// with the sizes from the "Model control worker subsystem" section.
+// The three BARs present on PF2 (BARs 0, 2, 4 are present/usable), with the fixed
+// sizes defined below.  The user region (BAR 0) and clock wizard (BAR 4) are
+// driven by model control workers; the service layer (BAR 2) has NO worker — no
+// software consumer reads it today, so a passive exported memfd suffices.
 
 enum class BarKind {
     UserRegion,  /**< BAR 0: compute-kernel control window, 128 MiB. */
@@ -200,7 +210,7 @@ inline constexpr std::size_t kClockWizardSize  = 512u * 1024u;         // 512 Ki
 /**
  * @brief The standard trio of BAR memfds for one accelerator.
  *
- * Indexed by BarKind; also queryable by the PF2 BAR index (0/2/4) that Step 9
+ * Indexed by BarKind; also queryable by the PF2 BAR index (0/2/4) that the CTL subsystem
  * hands to the user in GET_BAR_INFO/GET_BAR_FD.
  */
 struct BarSet {
