@@ -1832,6 +1832,8 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc,
  *     (completion queues are not yet supported).
  *   - @mode must be MM; streaming mode (ST) is not yet supported.
  *   - Ring size indices must be in [0, 15] (CSR table range).
+ *   - @aperture_size must be zero (linear addressing) or a power-of-two
+ *     libqdma keyhole aperture.
  *
  * On success, the kernel-assigned @qid is written back to userspace.
  *
@@ -1893,6 +1895,10 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     if (req.mm_channel != SLASH_QDMA_MM_CHANNEL_AUTO &&
         req.mm_channel != SLASH_QDMA_MM_CHANNEL_0 &&
         req.mm_channel != SLASH_QDMA_MM_CHANNEL_1)
+        return -EINVAL;
+
+    if (req.aperture_size != 0 &&
+        (req.aperture_size & (req.aperture_size - 1)) != 0)
         return -EINVAL;
 
     mutex_lock(&qdma_dev->lock);
@@ -2033,9 +2039,9 @@ rollback:
  *     (required for poll-mode operation per the reference driver).
  *   - qconf.cmpl_stat_en = 1: enable completion status generation
  *     (required for poll-mode operation per the reference driver).
- *   - qconf.aperture_size = 0: disables libqdma keyhole mode so MM
- *     transfers advance linearly through endpoint memory.  Non-zero
- *     values are keyhole apertures and wrap addresses within that window.
+ *   - qconf.aperture_size: zero disables libqdma keyhole mode so MM
+ *     transfers advance linearly through endpoint memory.  Non-zero values
+ *     enable keyhole mode and wrap addresses within that byte aperture.
  *   - qconf.desc_rng_sz_idx: CSR table index (0-15) selecting the
  *     descriptor ring depth.  Not a raw descriptor count — the actual
  *     count is looked up from the global CSR ring-size table.
@@ -2079,7 +2085,7 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
     qconf.cmpl_status_pend_chk = 1;                 /* Check pending completions (poll-mode req) */
     qconf.cmpl_stat_en = 1;                         /* Enable completion status generation */
 
-    qconf.aperture_size = 0;                        /* Linear MM addressing; non-zero enables keyhole mode */
+    qconf.aperture_size = req->aperture_size;       /* 0 = linear MM; non-zero = keyhole aperture */
     /*
      * CPM5 exposes two MM channels.  The per-queue mm_channel selection
      * (validated in slash_qdma_ioctl_qpair_add_w) chooses the channel: AUTO
@@ -2124,9 +2130,9 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
     }
 
     SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev,
-                          "queue add qid=%u type=%u mode=%u mm_channel=%u (req=%u)\n",
+                          "queue add qid=%u type=%u mode=%u mm_channel=%u (req=%u) aperture_size=%u\n",
                           req->qid, qtype, req->mode, qconf.mm_channel,
-                          req->mm_channel);
+                          req->mm_channel, qconf.aperture_size);
     err = qdma_queue_add(qdma_dev->qdma_handle, &qconf, &qhndl,
                             errbuf, sizeof(errbuf));
     if (err) {
@@ -2603,49 +2609,52 @@ err_free:
 }
 
 /**
- * slash_qdma_buf_sync_for_device() - Hand a transfer slice to the device.
- * @buf:         Buffer being transferred.
- * @start_entry: First page index of the slice.
- * @n_entries:   Number of pages in the slice.
- * @dir:         DMA direction (DMA_TO_DEVICE for H2C, DMA_FROM_DEVICE for C2H).
+ * slash_qdma_buf_sync_sgl_for_device() - Hand a transfer slice to the device.
+ * @buf:       Buffer being transferred.
+ * @sgl:       Per-transfer SGL slice.
+ * @n_entries: Number of SGL entries in @sgl.
+ * @dir:       DMA direction (DMA_TO_DEVICE for H2C, DMA_FROM_DEVICE for C2H).
  *
  * Synchronises CPU-written data out to the device (and/or invalidates CPU
- * caches) for exactly the pages a sub-transfer touches.  On cache-coherent
- * hosts these are no-ops; on others they bound coherency to the transfer.
+ * caches) for exactly the SGL spans a sub-transfer touches.  On
+ * cache-coherent hosts these are no-ops; on others they bound coherency to
+ * the transfer.
  */
-static void slash_qdma_buf_sync_for_device(struct slash_qdma_buf *buf,
-                                           u64 start_entry, u64 n_entries,
-                                           enum dma_data_direction dir)
+static void slash_qdma_buf_sync_sgl_for_device(struct slash_qdma_buf *buf,
+                                               const struct qdma_sw_sg *sgl,
+                                               u64 n_entries,
+                                               enum dma_data_direction dir)
 {
     struct device *dev = &buf->qdma_dev->pdev->dev;
     u64 i;
 
     for (i = 0; i < n_entries; i++) {
-        struct qdma_sw_sg *sg = &buf->sgl[start_entry + i];
+        const struct qdma_sw_sg *sg = &sgl[i];
 
         dma_sync_single_for_device(dev, sg->dma_addr, sg->len, dir);
     }
 }
 
 /**
- * slash_qdma_buf_sync_for_cpu() - Reclaim a transfer slice for the CPU.
- * @buf:         Buffer being transferred.
- * @start_entry: First page index of the slice.
- * @n_entries:   Number of pages in the slice.
- * @dir:         DMA direction (DMA_FROM_DEVICE for a completed C2H read).
+ * slash_qdma_buf_sync_sgl_for_cpu() - Reclaim a transfer slice for the CPU.
+ * @buf:       Buffer being transferred.
+ * @sgl:       Per-transfer SGL slice.
+ * @n_entries: Number of SGL entries in @sgl.
+ * @dir:       DMA direction (DMA_FROM_DEVICE for a completed C2H read).
  *
  * Makes device-written data visible to the CPU for exactly the pages a C2H
  * sub-transfer touched.  Called after the transfer completes.
  */
-static void slash_qdma_buf_sync_for_cpu(struct slash_qdma_buf *buf,
-                                        u64 start_entry, u64 n_entries,
-                                        enum dma_data_direction dir)
+static void slash_qdma_buf_sync_sgl_for_cpu(struct slash_qdma_buf *buf,
+                                            const struct qdma_sw_sg *sgl,
+                                            u64 n_entries,
+                                            enum dma_data_direction dir)
 {
     struct device *dev = &buf->qdma_dev->pdev->dev;
     u64 i;
 
     for (i = 0; i < n_entries; i++) {
-        struct qdma_sw_sg *sg = &buf->sgl[start_entry + i];
+        const struct qdma_sw_sg *sg = &sgl[i];
 
         dma_sync_single_for_cpu(dev, sg->dma_addr, sg->len, dir);
     }
@@ -2928,6 +2937,7 @@ static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
  * @qhndl:          Resolved libqdma queue handle for the direction/qpair.
  * @start_entry:    First page index of the buffer slice being transferred.
  * @n_entries:      Number of pages in the slice (for the DMA sync).
+ * @xfer_sgl:       Optional per-transfer SGL copy with a clipped final entry.
  * @dma_dir:        DMA direction for the streaming sync calls.
  * @is_c2h:         True for a C2H (device-to-host) sub-transfer, so the slice
  *                  is synced back for the CPU after completion.
@@ -2946,6 +2956,7 @@ struct slash_qdma_xfer_req {
     unsigned long qhndl;
     u64 start_entry;
     u64 n_entries;
+    struct qdma_sw_sg *xfer_sgl;
     enum dma_data_direction dma_dir;
     bool is_c2h;
     unsigned int bytes_done;
@@ -2988,8 +2999,9 @@ static int slash_qdma_xfer_done(struct qdma_request *qreq,
  * optional io_uring uring_cmd path.  Resolves the buffer fd named by the
  * descriptor and refs the buffer, validates the slice against the buffer's
  * page granule and length, resolves the queue handle for the requested
- * direction, syncs the pages touched by the slice for the device, and fills the cached,
- * pre-DMA-mapped SGL slice into @xr->qreq (dma_mapped = 1, fp_done = NULL).
+ * direction, builds the per-transfer SGL slice, syncs the bytes touched by
+ * that slice for the device, and fills @xr->qreq (dma_mapped = 1,
+ * fp_done = NULL).
  * No pages are allocated or DMA-mapped here; that was amortised at creation.
  *
  * On success the caller owns the buffer ref in @xr->buf and must release it
@@ -3003,6 +3015,7 @@ static int slash_qdma_xfer_prep(struct slash_qdma_dev *qdma_dev,
                                 struct slash_qdma_xfer_req *xr)
 {
     struct slash_qdma_buf *buf;
+    struct qdma_sw_sg *sgl;
     struct file *file;
     unsigned long qhndl;
     bool write;
@@ -3088,20 +3101,41 @@ static int slash_qdma_xfer_prep(struct slash_qdma_dev *qdma_dev,
     mutex_unlock(&qdma_dev->lock);
 
     /*
-     * Hand the touched pages to the device.  The mapping is persistent
-     * (dma_mapped = 1); only this slice is synced, so coherency cost scales
-     * with the transfer, not the whole buffer.
+     * Full-page transfers can point directly into the cached buffer SGL.
+     * Exact-length transfers with a partial final page need a per-transfer
+     * copy so libqdma sees the shortened tail descriptor without mutating the
+     * reusable buffer SGL.
      */
-    slash_qdma_buf_sync_for_device(buf, start_entry, n_entries, dma_dir);
+    if ((desc->length % buf->granule) == 0) {
+        sgl = &buf->sgl[start_entry];
+    } else {
+        u64 i;
+        u64 tail = desc->length % buf->granule;
+
+        xr->xfer_sgl = kvmalloc_array(n_entries, sizeof(*xr->xfer_sgl),
+                                      GFP_KERNEL);
+        if (!xr->xfer_sgl) {
+            slash_qdma_buf_put(buf);
+            return -ENOMEM;
+        }
+
+        for (i = 0; i < n_entries; i++) {
+            xr->xfer_sgl[i] = buf->sgl[start_entry + i];
+            xr->xfer_sgl[i].next =
+                (i + 1 < n_entries) ? &xr->xfer_sgl[i + 1] : NULL;
+        }
+        xr->xfer_sgl[n_entries - 1].len = tail;
+        sgl = xr->xfer_sgl;
+    }
 
     /*
-     * Build the request from the cached SGL slice.  dma_mapped = 1 tells
-     * libqdma the SGL is already DMA-mapped (dma_addr filled at creation),
-     * so it skips the per-request map/unmap entirely.
+     * Build the request from a cached or clipped SGL slice.  dma_mapped = 1
+     * tells libqdma the SGL is already DMA-mapped (dma_addr filled at buffer
+     * creation), so it skips the per-request map/unmap entirely.
      */
     memset(&xr->qreq, 0, sizeof(xr->qreq));
     xr->qreq.sgcnt = (unsigned int)n_entries;
-    xr->qreq.sgl = &buf->sgl[start_entry];
+    xr->qreq.sgl = sgl;
     xr->qreq.write = write ? 1 : 0;
     xr->qreq.dma_mapped = 1;
     xr->qreq.udd_len = 0;
@@ -3120,7 +3154,30 @@ static int slash_qdma_xfer_prep(struct slash_qdma_dev *qdma_dev,
     xr->bytes_done = 0;
     xr->err = 0;
     xr->async_inflight = false;
+
+    /*
+     * Hand the touched bytes to the device.  The mapping is persistent
+     * (dma_mapped = 1); only this transfer's SGL spans are synced, so
+     * coherency cost scales with the transfer, not the whole buffer.
+     */
+    slash_qdma_buf_sync_sgl_for_device(buf, xr->qreq.sgl, n_entries, dma_dir);
     return 0;
+}
+
+/**
+ * slash_qdma_xfer_cleanup() - Drop resources held by a prepared sub-transfer.
+ * @xr: Prepared transfer request.
+ *
+ * Releases the optional clipped SGL and the buffer reference taken in prep.
+ * It is safe for prepared-but-unsubmitted error paths.
+ */
+static void slash_qdma_xfer_cleanup(struct slash_qdma_xfer_req *xr)
+{
+    kvfree(xr->xfer_sgl);
+    xr->xfer_sgl = NULL;
+    if (xr->buf)
+        slash_qdma_buf_put(xr->buf);
+    xr->buf = NULL;
 }
 
 /**
@@ -3133,9 +3190,9 @@ static int slash_qdma_xfer_prep(struct slash_qdma_dev *qdma_dev,
 static void slash_qdma_xfer_finish(struct slash_qdma_xfer_req *xr)
 {
     if (xr->is_c2h && xr->bytes_done)
-        slash_qdma_buf_sync_for_cpu(xr->buf, xr->start_entry, xr->n_entries,
-                                    xr->dma_dir);
-    slash_qdma_buf_put(xr->buf);
+        slash_qdma_buf_sync_sgl_for_cpu(xr->buf, xr->qreq.sgl,
+                                        xr->qreq.sgcnt, xr->dma_dir);
+    slash_qdma_xfer_cleanup(xr);
 }
 
 /**
@@ -3203,7 +3260,7 @@ static long slash_qdma_qpair_transfer(struct file *file, void __user *uarg)
                                       &xrs[i]);
         if (rv) {
             while (i-- > 0)
-                slash_qdma_buf_put(xrs[i].buf);
+                slash_qdma_xfer_cleanup(&xrs[i]);
             kfree(xrs);
             return rv;
         }
@@ -3426,7 +3483,7 @@ static int slash_qdma_qpair_uring_cmd(struct io_uring_cmd *cmd,
                                       &uc->xrs[i]);
         if (rv) {
             while (i-- > 0)
-                slash_qdma_buf_put(uc->xrs[i].buf);
+                slash_qdma_xfer_cleanup(&uc->xrs[i]);
             kfree(uc);
             return rv;
         }

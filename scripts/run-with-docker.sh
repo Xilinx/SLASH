@@ -201,6 +201,7 @@ IMAGE_TAG="slash-$CONTAINER-$DISTRO:$VERSION"
 docker build \
     --build-arg USER_ID=$(id -u) \
     --build-arg BASE_IMAGE="$BASE_IMAGE" \
+    --build-arg TZ=$(timedatectl show -p Timezone --value) \
     -t "$IMAGE_TAG" \
     -f "scripts/Dockerfile.$CONTAINER-$DISTRO" .
 docker run $DOCKER_RUN_ARGS \

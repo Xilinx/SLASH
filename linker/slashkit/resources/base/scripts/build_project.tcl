@@ -33,7 +33,7 @@ proc build_project {{proj_name "user"} {jobs 14}} {
 
   # Parent impl run remains 'impl_1'
   set_property PR_CONFIGURATION config_1 [get_runs impl_1]
-  set_property strategy Congestion_SSI_SpreadLogic_high [get_runs impl_1]
+  set_property strategy Performance_NetDelay_high [get_runs impl_1]
   set_property STEPS.OPT_DESIGN.TCL.POST         [get_files *opt.post.tcl]                [get_runs impl_1]
   set_property STEPS.PLACE_DESIGN.TCL.PRE        [get_files *place.pre.tcl]               [get_runs impl_1]
   set_property STEPS.WRITE_DEVICE_IMAGE.TCL.PRE  [get_files *write_device_image.pre.tcl]  [get_runs impl_1]
@@ -42,6 +42,10 @@ proc build_project {{proj_name "user"} {jobs 14}} {
   launch_runs impl_1 -to_step write_bitstream -jobs $jobs
   wait_on_run impl_1
   open_run impl_1
+
+  set timing_report_file [file join [file normalize [pwd]] "report_timing_${proj_name}.txt"]
+  report_timing_summary -delay_type min_max -check_timing_verbose -max_paths 1 -input_pins -routable_nets -file $timing_report_file
+  puts "TIMING REPORT: $timing_report_file"
   
   set impl_output_dir [get_property DIRECTORY [current_run]]
   write_abstract_shell -cell top_i/slash -force [file join $impl_output_dir "static_shell_slash.dcp"]

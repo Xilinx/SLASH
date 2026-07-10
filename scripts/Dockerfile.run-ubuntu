@@ -36,9 +36,11 @@ RUN apt install -y /tmp/slash-dev_*.deb \
   /tmp/libvrt_*.deb
 
 # Setting timezone and locale for Vivado
-ENV TZ="Europe/Dublin"
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+ARG TZ
+ENV TZ=${TZ:-Europe/Dublin}
 ENV LC_ALL=en_US.utf-8
+
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Adding the slash user
 RUN if id -u $USER_ID >/dev/null 2>&1; then \
@@ -47,7 +49,3 @@ RUN if id -u $USER_ID >/dev/null 2>&1; then \
     useradd -m -U -u $USER_ID slash
 
 USER slash
-
-# Again, setting timezone and locale for Vivado
-ENV TZ="Europe/Dublin"
-ENV LC_ALL=en_US.utf-8

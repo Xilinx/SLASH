@@ -731,7 +731,7 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
     CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
     CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
     CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {300.000,100.000,100.000,100.000,100.000,100.000,100.000} \
+    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {250.000,100.000,100.000,100.000,100.000,100.000,100.000} \
     CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
     CONFIG.CLKOUT_USED {true,false,false,false,false,false,false} \
     CONFIG.USE_DYN_RECONFIG {true} \
@@ -2163,448 +2163,448 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X2Y0} \
-   CONFIG.CONNECTIONS {HBM0_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM0_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM00_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X3Y0} \
-   CONFIG.CONNECTIONS {HBM0_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM0_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM01_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X1Y0} \
-   CONFIG.CONNECTIONS {HBM0_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM0_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM02_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X0Y0} \
-   CONFIG.CONNECTIONS {HBM0_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM0_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM03_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X4Y0} \
-   CONFIG.CONNECTIONS {HBM1_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM1_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM04_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X5Y0} \
-   CONFIG.CONNECTIONS {HBM1_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM1_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM05_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X6Y0} \
-   CONFIG.CONNECTIONS {HBM1_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM1_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM06_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X7Y0} \
-   CONFIG.CONNECTIONS {HBM1_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM1_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM07_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X10Y0} \
-   CONFIG.CONNECTIONS {HBM2_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM2_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM08_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X11Y0} \
-   CONFIG.CONNECTIONS {HBM2_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM2_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM09_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X8Y0} \
-   CONFIG.CONNECTIONS {HBM2_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM2_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM10_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X9Y0} \
-   CONFIG.CONNECTIONS {HBM2_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM2_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM11_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X12Y0} \
-   CONFIG.CONNECTIONS {HBM3_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM3_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM12_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X13Y0} \
-   CONFIG.CONNECTIONS {HBM3_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM3_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM13_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X15Y0} \
-   CONFIG.CONNECTIONS {HBM3_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM3_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM14_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X14Y0} \
-   CONFIG.CONNECTIONS {HBM3_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM3_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM15_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X19Y0} \
-   CONFIG.CONNECTIONS {HBM4_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM4_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM16_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X18Y0} \
-   CONFIG.CONNECTIONS {HBM4_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM4_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM17_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X17Y0} \
-   CONFIG.CONNECTIONS {HBM4_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM4_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM18_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X16Y0} \
-   CONFIG.CONNECTIONS {HBM4_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM4_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM19_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X20Y0} \
-   CONFIG.CONNECTIONS {HBM5_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM5_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM20_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X21Y0} \
-   CONFIG.CONNECTIONS {HBM5_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM5_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM21_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X22Y0} \
-   CONFIG.CONNECTIONS {HBM5_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM5_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM22_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X23Y0} \
-   CONFIG.CONNECTIONS {HBM5_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM5_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM23_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X27Y0} \
-   CONFIG.CONNECTIONS {HBM6_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM6_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM24_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X26Y0} \
-   CONFIG.CONNECTIONS {HBM6_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM6_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM25_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X24Y0} \
-   CONFIG.CONNECTIONS {HBM6_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM6_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM26_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X25Y0} \
-   CONFIG.CONNECTIONS {HBM6_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM6_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM27_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X29Y0} \
-   CONFIG.CONNECTIONS {HBM7_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM7_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM28_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X28Y0} \
-   CONFIG.CONNECTIONS {HBM7_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM7_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM29_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X31Y0} \
-   CONFIG.CONNECTIONS {HBM7_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM7_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM30_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X30Y0} \
-   CONFIG.CONNECTIONS {HBM7_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM7_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM31_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X35Y0} \
-   CONFIG.CONNECTIONS {HBM8_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM8_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM32_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X34Y0} \
-   CONFIG.CONNECTIONS {HBM8_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM8_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM33_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X33Y0} \
-   CONFIG.CONNECTIONS {HBM8_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM8_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM34_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X32Y0} \
-   CONFIG.CONNECTIONS {HBM8_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM8_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM35_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X37Y0} \
-   CONFIG.CONNECTIONS {HBM9_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM9_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM36_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X36Y0} \
-   CONFIG.CONNECTIONS {HBM9_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM9_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM37_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X39Y0} \
-   CONFIG.CONNECTIONS {HBM9_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM9_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM38_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X38Y0} \
-   CONFIG.CONNECTIONS {HBM9_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM9_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM39_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X43Y0} \
-   CONFIG.CONNECTIONS {HBM10_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM10_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM40_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X42Y0} \
-   CONFIG.CONNECTIONS {HBM10_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM10_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM41_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X41Y0} \
-   CONFIG.CONNECTIONS {HBM10_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM10_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM42_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X40Y0} \
-   CONFIG.CONNECTIONS {HBM10_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM10_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM43_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X44Y0} \
-   CONFIG.CONNECTIONS {HBM11_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM11_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM44_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X45Y0} \
-   CONFIG.CONNECTIONS {HBM11_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM11_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM45_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X47Y0} \
-   CONFIG.CONNECTIONS {HBM11_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM11_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM46_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X46Y0} \
-   CONFIG.CONNECTIONS {HBM11_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM11_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM47_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X51Y0} \
-   CONFIG.CONNECTIONS {HBM12_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM12_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM48_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X50Y0} \
-   CONFIG.CONNECTIONS {HBM12_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM12_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM49_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X48Y0} \
-   CONFIG.CONNECTIONS {HBM12_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM12_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM50_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X49Y0} \
-   CONFIG.CONNECTIONS {HBM12_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM12_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM51_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X52Y0} \
-   CONFIG.CONNECTIONS {HBM13_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM13_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM52_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X53Y0} \
-   CONFIG.CONNECTIONS {HBM13_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM13_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM53_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X55Y0} \
-   CONFIG.CONNECTIONS {HBM13_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM13_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM54_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X54Y0} \
-   CONFIG.CONNECTIONS {HBM13_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM13_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM55_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X58Y0} \
-   CONFIG.CONNECTIONS {HBM14_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM14_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM56_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X59Y0} \
-   CONFIG.CONNECTIONS {HBM14_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM14_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM57_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X57Y0} \
-   CONFIG.CONNECTIONS {HBM14_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM14_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM58_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X56Y0} \
-   CONFIG.CONNECTIONS {HBM14_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM14_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM59_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X61Y0} \
-   CONFIG.CONNECTIONS {HBM15_PORT0 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM15_PORT0 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM60_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X60Y0} \
-   CONFIG.CONNECTIONS {HBM15_PORT1 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM15_PORT1 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM61_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X63Y0} \
-   CONFIG.CONNECTIONS {HBM15_PORT2 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM15_PORT2 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM62_AXI]
 
   set_property -dict [ list \
    CONFIG.PHYSICAL_LOC {NOC_NMU_HBM2E_X62Y0} \
-   CONFIG.CONNECTIONS {HBM15_PORT3 {read_bw {2000} write_bw {2000} read_avg_burst {4} write_avg_burst {4}}} \
+   CONFIG.CONNECTIONS {HBM15_PORT3 {read_bw {12800} write_bw {12800} read_avg_burst {256} write_avg_burst {256}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl_hbm} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/HBM63_AXI]
@@ -2631,21 +2631,21 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/M05_INI]
 
   set_property -dict [ list \
-   CONFIG.CONNECTIONS {HBM10_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M02_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64}} HBM15_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM10_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M01_AXI {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM5_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM15_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM5_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM1_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM1_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM6_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM12_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM0_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM6_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM14_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M06_INI {read_bw {500} write_bw {500}} HBM12_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM0_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM8_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM8_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM14_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM3_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM3_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM4_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM4_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM9_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M04_INI {read_bw {500} write_bw {500}} HBM2_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M05_INI {read_bw {500} write_bw {500}} HBM11_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M00_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64}} HBM9_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM11_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM7_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM13_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM7_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM13_PORT0 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM2_PORT2 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M00_AXI {read_bw {5} write_bw {5} read_avg_burst {64} write_avg_burst {64}}} \
-   CONFIG.DEST_IDS {M01_AXI:0x1:M00_AXI:0xd00} \
-   CONFIG.REMAPS {M00_INI {{0x20108000000 0x00038000000 0x08000000}}} \
+  CONFIG.CONNECTIONS {HBM10_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M02_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64} initial_boot {false}} HBM15_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM10_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M01_AXI {read_bw {250} write_bw {250} read_avg_burst {4} write_avg_burst {4} initial_boot {false}} HBM5_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM15_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM5_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM1_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM1_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM6_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM12_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM0_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM6_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM14_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M06_INI {read_bw {5} write_bw {5} initial_boot {false}} HBM12_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM0_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM8_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM8_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM14_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM3_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM3_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM4_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM4_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM9_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M04_INI {read_bw {5} write_bw {5} initial_boot {false}} HBM2_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM11_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M00_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64} initial_boot {false}} HBM9_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM11_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM7_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM13_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM7_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM13_PORT0 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM2_PORT2 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M00_AXI {read_bw {5} write_bw {5} read_avg_burst {64} write_avg_burst {64}}} \
+   CONFIG.DEST_IDS {M01_AXI:0x1:M00_AXI:0x2c1} \
+   CONFIG.REMAPS {M00_INI {{0x20108000000 0x00038000000 0x08000000} {0x20404000000 0x00030000000 0x04000000}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {ps_pcie} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/S00_AXI]
 
   set_property -dict [ list \
    CONFIG.INI_STRATEGY {auto} \
-   CONFIG.CONNECTIONS {M02_INI {read_bw {800} write_bw {800}} M00_INI {read_bw {800} write_bw {800}}} \
+   CONFIG.CONNECTIONS {M02_INI {read_bw {800} write_bw {800} initial_boot {false}} M00_INI {read_bw {800} write_bw {800} initial_boot {false}}} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/S00_INI]
 
   set_property -dict [ list \
-   CONFIG.CONNECTIONS {HBM10_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M01_AXI {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM10_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM5_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM15_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM0_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM15_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM1_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM5_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM1_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M01_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64}} HBM0_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM6_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM8_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM14_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM12_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M06_INI {read_bw {500} write_bw {500}} HBM6_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM12_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM8_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM14_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM3_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM3_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM4_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM9_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM4_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M04_INI {read_bw {500} write_bw {500}} M05_INI {read_bw {500} write_bw {500}} HBM9_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM11_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM11_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM7_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM13_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM7_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} HBM2_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M03_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64}} HBM2_PORT1 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}} M00_AXI {read_bw {5} write_bw {5} read_avg_burst {64} write_avg_burst {64}} HBM13_PORT3 {read_bw {50} write_bw {50} read_avg_burst {4} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {M01_AXI:0x1:M00_AXI:0xd00} \
+  CONFIG.CONNECTIONS {HBM10_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M01_AXI {read_bw {250} write_bw {250} read_avg_burst {4} write_avg_burst {4} initial_boot {false}} HBM10_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM5_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM15_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM0_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM15_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM1_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM5_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM1_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M01_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64} initial_boot {false}} HBM0_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM6_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM8_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM14_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM12_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M06_INI {read_bw {5} write_bw {5} initial_boot {false}} HBM6_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM12_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM8_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM14_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM3_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM3_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM4_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM9_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM4_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M04_INI {read_bw {5} write_bw {5} initial_boot {false}} HBM9_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM11_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM11_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM7_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM13_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM7_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} HBM2_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M03_INI {read_bw {800} write_bw {800} read_avg_burst {64} write_avg_burst {64} initial_boot {false}} HBM2_PORT1 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}} M00_AXI {read_bw {5} write_bw {5} read_avg_burst {64} write_avg_burst {64}} HBM13_PORT3 {read_bw {360} write_bw {360} read_avg_burst {32} write_avg_burst {32} initial_boot {false}}} \
+   CONFIG.DEST_IDS {M01_AXI:0x1:M00_AXI:0x2c1} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {ps_pcie} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/S01_AXI]
@@ -3304,6 +3304,7 @@ proc create_hier_cell_static_region { parentCell nameHier } {
   create_hier_cell_aved $hier_obj aved
 
   # Create instance: clk_wizard_0, and set properties
+  # clock reduction for achieving timing closure
   set clk_wizard_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wizard:1.0 clk_wizard_0 ]
   set_property -dict [list \
     CONFIG.CLKOUT_DRIVES {No_buffer,BUFG,BUFG,BUFG,BUFG,BUFG,BUFG} \
@@ -3312,7 +3313,7 @@ proc create_hier_cell_static_region { parentCell nameHier } {
     CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
     CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
     CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {400,100.000,100.000,100.000,100.000,100.000,100.000} \
+    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {333,100.000,100.000,100.000,100.000,100.000,100.000} \
     CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
     CONFIG.CLKOUT_USED {true,false,false,false,false,false,false} \
     CONFIG.RESET_TYPE {ACTIVE_LOW} \

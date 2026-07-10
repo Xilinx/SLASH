@@ -426,12 +426,14 @@ All transfers are synchronous and block until the transfer completes or times ou
 **10 seconds**; after expiry the call returns ``-ETIME``. Partial transfers are possible; the
 return value is the number of bytes transferred, and the file position is advanced accordingly.
 
-The userspace buffer address and ``count`` must be page-aligned: the address
-must be 4 KiB-aligned and ``count`` must be a non-zero multiple of 4 KiB. The
-transfer is backed by 4 KiB base pages, one descriptor per page. Transparent
-hugepages are not accepted, so callers using anonymous mappings should apply
-``MADV_NOHUGEPAGE`` before faulting pages when they need deterministic
-base-page transfers.
+The buffer offset must be aligned to the buffer's page granule.  The transfer
+length is an exact byte count: it must be non-zero and may end within the final
+page. The transfer is backed by 4 KiB base pages, with the driver clipping the
+final descriptor when the requested length is not page-multiple.
+Non-page-multiple transfers are supported for exact byte-stream use cases such
+as PDI programming, but they are not the speed-optimised path. Performance
+critical application buffers should pad transfer lengths to full 4 KiB page
+multiples whenever possible.
 
 Multiple fds can be obtained for the same qpair via multiple ``QPAIR_GET_FD`` calls, including
 from different processes. Concurrent ``read()``/``write()`` calls on the same qpair (from any
@@ -451,7 +453,7 @@ The following errno values can be returned by ``read()`` and ``write()`` on the 
    * - ``-ENODEV``
      - Device shutting down, or the required direction is not enabled for this qpair
    * - ``-EINVAL``
-     - Zero-length, unaligned, or non-page-multiple transfer
+     - Zero-length, unaligned, or out-of-range transfer
    * - ``-ENOMEM``
      - SGL allocation failure
    * - ``-EFAULT``
@@ -565,10 +567,12 @@ is returned in the struct and is used for all subsequent operations on this queu
         __u32 size;          /* [in/out] ABI version */
         __u32 mode;          /* [in]  Queue mode: 0=MM (Memory Mapped), 1=ST (Streaming, not yet supported) */
         __u32 dir_mask;      /* [in]  Direction bitmask (see below) */
+        __u32 mm_channel;    /* [in]  AXI-MM/NoC channel selection: 0=auto, 1=channel 0, 2=channel 1 */
         __u32 h2c_ring_sz;   /* [in]  H2C descriptor ring CSR table index: 0–15 */
         __u32 c2h_ring_sz;   /* [in]  C2H descriptor ring CSR table index: 0–15 */
         __u32 cmpt_ring_sz;  /* [in]  Completion ring CSR table index: 0–15 */
         __u32 qid;           /* [out] Kernel-assigned queue pair ID */
+        __u32 aperture_size; /* [in]  0=linear MM addressing, non-zero=keyhole aperture size */
     };
 
 Direction bitmask bits:
@@ -593,8 +597,14 @@ Ring size fields are QDMA Control and Status Register (CSR) table indices (0–1
 descriptor counts. Index 0 maps to approximately 2049 descriptors; index 15 to approximately
 16385. The caller does not control the actual descriptor count directly.
 
-**Direction:** ``_IOWR`` — userspace writes ``mode``, ``dir_mask``, and ring size indices; the
-kernel writes back ``qid``.
+``aperture_size`` controls libqdma keyhole mode for memory-mapped queues.  A value of ``0``
+keeps endpoint addressing linear and is the normal setting for DDR/HBM application buffers.
+A non-zero power-of-two value enables keyhole mode: endpoint addresses wrap within that byte
+aperture as the transfer advances.  Keyhole queues are intended for special endpoints such as
+the PDI design-writer ingress path; ordinary application queues should leave this field ``0``.
+
+**Direction:** ``_IOWR`` — userspace writes ``mode``, ``dir_mask``, ``mm_channel``, ring size
+indices, and optionally ``aperture_size``; the kernel writes back ``qid``.
 
 **Preconditions:**
 
@@ -602,7 +612,9 @@ kernel writes back ``qid``.
 - ``dir_mask`` must be non-zero and contain only bits ``[0, 1]``; bit 2 (CMPT) is not yet
   supported
 - ``mode`` must be 0 (MM); streaming mode (1) is not yet supported
+- ``mm_channel`` must be 0 (auto), 1 (channel 0), or 2 (channel 1)
 - All ring size indices must be in ``[0, 15]``
+- ``aperture_size`` must be 0 (linear addressing) or a power-of-two keyhole aperture size
 - At most 256 concurrent queue pairs per device. The actual ceiling is lower in practice and
   depends on how many queues libqdma's resource manager makes available to the calling process
   (the 256-slot pool is shared across all PCI functions of the device).
@@ -728,8 +740,8 @@ the new fd as the ``ioctl()`` return value (not as a struct field).
 - ``qpair_count`` must not exceed ``SLASH_QDMA_FD_MAX_QPAIRS``
 - ``flags & ~O_CLOEXEC == 0`` (any other bits cause ``-EINVAL``)
 - The queue pairs should be in the started state for I/O to work
-- Each bound qpair keeps the per-qpair configuration (``mm_channel``, ring sizes, directions) it was
-  given at ``QPAIR_ADD`` time, so the two channels can be configured independently
+- Each bound qpair keeps the per-qpair configuration (``mm_channel``, ``aperture_size``, ring sizes,
+  directions) it was given at ``QPAIR_ADD`` time, so the two channels can be configured independently
 
 **Postconditions:**
 
@@ -868,8 +880,9 @@ across all sub-transfers is returned as the ``ioctl()`` return value (not as a s
 - each sub-transfer's ``qpair_index`` must be ``< `` the number of qpairs the fd owns
 - each ``direction`` must be 1 (H2C) or 2 (C2H) and must be enabled on the selected queue pair
 - each ``buf_fd`` must be a buffer fd (from ``BUF_CREATE``) bound to the same device as this qpair fd
-- each ``buf_offset`` and ``length`` must be aligned to the buffer's page granule, ``length`` non-zero
-  and ``<= UINT_MAX``, and ``buf_offset + length`` must not exceed the buffer length
+- each ``buf_offset`` must be aligned to the buffer's page granule; ``length`` is an exact byte count,
+  must be non-zero and ``<= UINT_MAX``, may end within the final page, and ``buf_offset + length``
+  must not exceed the buffer length
 
 **Return values:**
 

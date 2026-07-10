@@ -65,10 +65,12 @@
  * ----------------------
  * At creation time, design_writer_open_qpair() allocates a QDMA queue pair in
  * Host-to-Card (H2C) memory-mapped mode, starts it, and obtains a file
- * descriptor for the queue.  The bitstream is then copied into a kernel-owned
- * QDMA buffer and submitted with slash_qdma_qpair_transfer() at offset
- * VRTD_DESIGN_WRITER_SEEK_ADDR (0x102100000), which the QDMA subsystem
- * translates into DMA writes to the FPGA's configuration memory.
+ * descriptor for the queue.  The queue is configured in libqdma keyhole mode
+ * so endpoint addresses wrap inside the PDI ingress aperture.  The bitstream
+ * is then copied into a kernel-owned QDMA buffer and submitted with
+ * slash_qdma_qpair_transfer() at offset VRTD_DESIGN_WRITER_SEEK_ADDR
+ * (0x102100000), which the QDMA subsystem translates into DMA writes to the
+ * FPGA's configuration memory.
  *
  * Error propagation
  * -----------------
@@ -118,12 +120,8 @@
  */
 #define VRTD_DESIGN_WRITER_SEEK_ADDR 0x102100000ull
 
-/*
- * The PDI boot stream is exposed as a 64 KiB aperture in the CIPS address map.
- * Large PDI payloads must be fed through that aperture instead of linearly
- * walking past it into unmapped NoC address space.
- */
-#define VRTD_DESIGN_WRITER_APERTURE_BYTES 0x10000ull
+/* Previously-working libqdma keyhole aperture for PDI delivery. */
+#define VRTD_DESIGN_WRITER_APERTURE_BYTES 0x1000u
 
 /* Maximum bitstream size accepted by the design writer (1 GiB). */
 #define VRTD_DESIGN_WRITER_MAX_BYTES (1ull * 1024 * 1024 * 1024) // 1 GiB
@@ -257,12 +255,12 @@ static ssize_t read_entire_file(int fd, void **bufp)
 }
 
 /**
- * Transfer the full contents of a buffer through the programming aperture.
+ * Transfer the full contents of a buffer through the programming keyhole.
  *
  * Copies the userspace bitstream into a kernel-owned QDMA buffer, then submits
- * H2C MM transfers through the design writer queue-pair fd.  The device-side
- * address wraps inside the boot-stream aperture so multi-megabyte PDIs do not
- * walk past the 64 KiB mapped programming window.
+ * one H2C MM transfer through the design writer queue-pair fd.  The queue is
+ * configured with a keyhole aperture, so libqdma wraps endpoint addresses as
+ * it consumes the multi-megabyte PDI stream.
  *
  * @param writer The design writer instance.
  * @param buf    Source buffer containing bitstream data.
@@ -287,35 +285,23 @@ static int transfer_all_at_pos(struct design_writer *writer, const void *buf, si
 
     LOG(
         LOG_INFO,
-        "Transferring design writer payload to device offset 0x%llx (bytes=%zu buffer_bytes=%llu aperture_bytes=%llu)",
+        "Transferring design writer payload to device offset 0x%llx (bytes=%zu buffer_bytes=%llu keyhole_bytes=%u)",
         (unsigned long long)pos, len, (unsigned long long)dma_len,
-        (unsigned long long)VRTD_DESIGN_WRITER_APERTURE_BYTES
+        VRTD_DESIGN_WRITER_APERTURE_BYTES
     );
 
-    uint64_t off = 0;
-    while (off < (uint64_t)len) {
-        uint64_t aperture_offset = off % VRTD_DESIGN_WRITER_APERTURE_BYTES;
-        uint64_t chunk = VRTD_DESIGN_WRITER_APERTURE_BYTES - aperture_offset;
-        uint64_t remaining = (uint64_t)len - off;
-        if (chunk > remaining) {
-            chunk = remaining;
-        }
-
-        ssize_t transferred = slash_qdma_qpair_transfer(
-            writer->fd,
-            dma_buf.fd,
-            off,
-            pos + aperture_offset,
-            chunk,
-            SLASH_QDMA_XFER_H2C
-        );
-        PROPAGATE_ERROR_STDC_LOG(transferred, LOG_ERR, "Failed to transfer design writer payload");
-        if ((uint64_t)transferred != chunk) {
-            errno = EIO;
-            PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Short design writer transfer");
-        }
-
-        off += chunk;
+    ssize_t transferred = slash_qdma_qpair_transfer(
+        writer->fd,
+        dma_buf.fd,
+        0,
+        pos,
+        (uint64_t)len,
+        SLASH_QDMA_XFER_H2C
+    );
+    PROPAGATE_ERROR_STDC_LOG(transferred, LOG_ERR, "Failed to transfer design writer payload");
+    if ((uint64_t)transferred != (uint64_t)len) {
+        errno = EIO;
+        PROPAGATE_ERROR_STDC_LOG(-1, LOG_ERR, "Short design writer transfer");
     }
 
     return 0;
@@ -613,6 +599,7 @@ static int design_writer_open_qpair(struct design_writer *writer)
     qpair.h2c_ring_sz = VRTD_QDMA_RING_SZ_IDX;
     qpair.c2h_ring_sz = VRTD_QDMA_RING_SZ_IDX;
     qpair.cmpt_ring_sz = VRTD_QDMA_RING_SZ_IDX;
+    qpair.aperture_size = VRTD_DESIGN_WRITER_APERTURE_BYTES;
 
     int ret = slash_qdma_qpair_add(writer->qdma, &qpair);
     PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Failed to add design writer QDMA qpair");

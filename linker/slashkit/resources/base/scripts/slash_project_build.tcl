@@ -147,6 +147,11 @@ foreach p [get_bd_intf_ports] {
     set_property HDL_ATTRIBUTE.LOCKED {TRUE} $p
 }
 source $generated_bd_tcl
+
+# Apply the default implementation strategy before sourcing the user pre-synth Tcl, so a
+# pre-synth script can override per-step directives (STEPS.*.ARGS.DIRECTIVE) on impl_1.
+set_property strategy Congestion_SSI_SpreadLogic_high [get_runs impl_1]
+
 foreach pre_synth_tcl $pre_synth_tcls {
     puts "Sourcing pre-synth Tcl: $pre_synth_tcl"
     source $pre_synth_tcl
@@ -158,7 +163,6 @@ wait_on_run "${slash_rm_name}_synth_1"
 set rm_synth_dcp [file join $rm_work_dir "${slash_proj_name}.runs" "${slash_rm_name}_synth_1" "slash_base.dcp"]
 add_files $rm_synth_dcp
 set_property SCOPED_TO_CELLS {top_i/slash} [get_files $rm_synth_dcp]
-set_property strategy Congestion_SSI_SpreadLogic_high [get_runs impl_1]
 
 launch_runs impl_1 -jobs $jobs
 wait_on_run impl_1

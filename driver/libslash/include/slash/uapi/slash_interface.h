@@ -189,6 +189,11 @@ enum slash_qdma_mm_channel {
  * 0–15), not byte or descriptor counts.  Each index selects a
  * pre-configured descriptor-ring depth from the global CSR ring-size
  * table (e.g. index 0 → 2049 descriptors, index 15 → 16385).
+ *
+ * \@aperture_size controls libqdma keyhole mode for memory-mapped queues:
+ * 0 keeps endpoint addressing linear; a non-zero power-of-two value wraps
+ * endpoint addresses within that byte aperture.  Ordinary DDR/HBM queues
+ * should leave this 0.
  */
 struct slash_qdma_qpair_add {
     __u32 size;          /**< Struct size for ABI versioning. */
@@ -204,6 +209,9 @@ struct slash_qdma_qpair_add {
 
     /* Kernel to userspace */
     __u32 qid;           /**< [out] Kernel-assigned queue pair ID. */
+
+    /* Userspace to kernel; appended for ABI compatibility. */
+    __u32 aperture_size; /**< [in]  0 = linear MM addressing, non-zero = keyhole aperture. */
 };
 
 /**
@@ -332,10 +340,11 @@ struct slash_qdma_buf_create {
  * Moves \@length bytes between the kernel buffer named by \@buf_fd at
  * \@buf_offset and the device endpoint address \@dev_addr, on the queue pair
  * selected by \@qpair_index (an index into the fd's bound qpairs).
- * \@buf_offset and \@length must be aligned to the buffer's 4 KiB page granule,
- * and \@buf_offset + \@length must not exceed the buffer length.  \@direction
- * must be one of enum slash_qdma_transfer_dir and must be enabled on the
- * selected queue pair.
+ * \@buf_offset must be aligned to the buffer's 4 KiB page granule.  \@length
+ * is an exact, non-zero byte count that may end within the final page, and
+ * \@buf_offset + \@length must not exceed the buffer length.  \@direction must
+ * be one of enum slash_qdma_transfer_dir and must be enabled on the selected
+ * queue pair.
  */
 struct slash_qdma_subxfer {
     __u32 qpair_index; /**< [in] Index into the fd's bound qpairs. */

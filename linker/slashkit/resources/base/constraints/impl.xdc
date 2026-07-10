@@ -21,7 +21,7 @@
 
 create_pblock pblock_slash
 add_cells_to_pblock [get_pblocks pblock_slash] [get_cells -quiet [list top_i/slash]]
-resize_pblock [get_pblocks pblock_slash] -add {SLICE_X28Y716:SLICE_X351Y879 SLICE_X48Y620:SLICE_X351Y715 SLICE_X244Y575:SLICE_X351Y619 SLICE_X84Y575:SLICE_X163Y619 SLICE_X244Y574:SLICE_X323Y574}
+resize_pblock [get_pblocks pblock_slash] -add {SLICE_X28Y716:SLICE_X351Y879 SLICE_X48Y620:SLICE_X351Y715 SLICE_X244Y575:SLICE_X351Y619 SLICE_X84Y575:SLICE_X163Y619 SLICE_X244Y574:SLICE_X323Y574 SLICE_X28Y716:SLICE_X351Y898}
 resize_pblock [get_pblocks pblock_slash] -add {BUFG_FABRIC_X4Y144:BUFG_FABRIC_X4Y239 BUFG_FABRIC_X3Y168:BUFG_FABRIC_X3Y239 BUFG_FABRIC_X0Y144:BUFG_FABRIC_X2Y239}
 resize_pblock [get_pblocks pblock_slash] -add {BUFG_PS_X2Y48:BUFG_PS_X2Y59}
 resize_pblock [get_pblocks pblock_slash] -add {DSP58_CPLX_X0Y310:DSP58_CPLX_X11Y439 DSP58_CPLX_X8Y287:DSP58_CPLX_X11Y309 DSP58_CPLX_X0Y287:DSP58_CPLX_X3Y309}
@@ -69,6 +69,12 @@ set_property NOC_HIGH_ID_MAX 63 [get_pblocks pblock_service_layer]
 set_property NOC_HIGH_ID_MIN 49 [get_pblocks pblock_service_layer]
 set_property NOC_HIGH_ID_MAX 48 [get_pblocks pblock_slash]
 set_property NOC_HIGH_ID_MIN 31 [get_pblocks pblock_slash]
+
+create_pblock pblock_dfx_decoupler
+add_cells_to_pblock [get_pblocks pblock_dfx_decoupler] [get_cells -hierarchical -filter {NAME =~ *static_region/dfx_decoupler_0* && IS_PRIMITIVE}]
+add_cells_to_pblock [get_pblocks pblock_dfx_decoupler] [get_cells top_i/static_region/dfx_decoupler_0]
+resize_pblock [get_pblocks pblock_dfx_decoupler] -add {SLICE_X16Y899:SLICE_X379Y903}
+set_property IS_SOFT FALSE [get_pblocks pblock_dfx_decoupler]
 
  #set_false_path -reset_path -from [get_pins {top_i/static_region/clk_rst_shell/proc_sys_reset_0/U0/ACTIVE_LOW_PR_OUT_DFF[0].FDRE_PER_N/C}]
  #set_false_path -reset_path -from [get_pins {top_i/static_region/clk_rst_shell/proc_sys_reset_1/U0/ACTIVE_LOW_PR_OUT_DFF[0].FDRE_PER_N/C}]

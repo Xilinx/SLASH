@@ -19,7 +19,7 @@
 # ##################################################################################################
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import re
 import os
 import shutil
@@ -67,7 +67,7 @@ class CommandConfiguration(object):
     @classmethod
     def populate_argument_parser(cls, ap: argparse.ArgumentParser):
         ap.formatter_class = argparse.RawTextHelpFormatter
-        ap.add_argument("--vivado", required=False, type=Path, default=None,
+        ap.add_argument("--vivado", required=False, type=Path, default=shutil.which("vivado"),
                         help="Vivado binary to use for linking. If not given, it will be derived from PATH.")
         ap.add_argument("--jobs", required=False, type=int, default=8,
                         help="Number of parallel jobs for Vivado runs.")
@@ -76,9 +76,11 @@ class CommandConfiguration(object):
         self._args = args
 
         # Resolve, if necessary find, and verify the Vivado binary
-        self._vivado_bin: Path = args.vivado if args.vivado is not None else Path(
-            shutil.which("vivado"))
-        self._vivado_bin = self._vivado_bin.expanduser().resolve()
+        if not args.vivado:
+            raise ValueError(
+                "Vivado binary not specified and could not be found on PATH.")
+
+        self._vivado_bin = Path(args.vivado).expanduser().resolve()
         if not self._vivado_bin.is_file():
             raise FileNotFoundError(self._vivado_bin)
 
@@ -229,13 +231,7 @@ class LinkerConfiguration(CommandConfiguration):
             self._build_dir.unlink()
         self._build_dir.mkdir(parents=True)
 
-        # Resolve and verify pre-synthesis TCLs (if any)
-        self._pre_synth_tcls: List[Path] = []
-        for path in args.pre_synth_tcls:
-            path: Path = path.expanduser().resolve()
-            if not path.is_file():
-                raise FileNotFoundError(path)
-            self._pre_synth_tcls.append(path)
+        # pre-synth Tcls are resolved below, once the config is parsed.
 
         # Misc. arguments
         self._platform = Platform(args.platform)
@@ -266,6 +262,20 @@ class LinkerConfiguration(CommandConfiguration):
             configuration_file)
         self._kernel_instances: List[KernelInstance] = apply_config_to_instances(
             self.configuration, self.kernels)
+
+        # merge config [user_region] pre_synth= entries with the --pre-synth-tcls
+        # flag. config entries source first, then CLI ones, with duplicates
+        # dropped at their first occurrence.
+        self._pre_synth_tcls: List[Path] = []
+        seen: Set[Path] = set()
+        for raw in [*self._configuration.user_region.pre_synth_tcls,
+                    *args.pre_synth_tcls]:
+            path = Path(raw).expanduser().resolve()
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            if path not in seen:
+                seen.add(path)
+                self._pre_synth_tcls.append(path)
 
     @property
     def block_design_ports(self) -> BlockDesignPorts:
@@ -366,9 +376,13 @@ class InstallerConfiguration(CommandConfiguration):
         ap.add_argument("--out-dir", required=True, type=Path,
                         help="The resource directory to install the artifacts to. "
                         + "If you have checked out the SLASH repository, this would be linker/slashkit/resources")
+        ap.add_argument("--ignore-timing-failure", action="store_true",
+                        help="Install static shell artifacts even when timing failed (WNS < 0 or WHS < 0).")
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
+
+        self._ignore_timing_failure: bool = args.ignore_timing_failure
 
         self._build_dir: Path = args.build_dir.expanduser().resolve()
         if self._build_dir.is_dir():
@@ -401,3 +415,12 @@ class InstallerConfiguration(CommandConfiguration):
     @property
     def out_dir(self) -> Path:
         return self._out_dir
+
+    @property
+    def ignore_timing_failure(self) -> bool:
+        return self._ignore_timing_failure
+
+    @property
+    def noninteractive(self) -> bool:
+        value = os.getenv("SLASH_NONINTERACTIVE", "")
+        return value not in ("", "0", "false", "False", "no", "No")

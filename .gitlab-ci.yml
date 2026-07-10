@@ -1,6 +1,6 @@
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "push" && ( $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH =~ /^pr\// )
+    - if: $CI_PIPELINE_SOURCE == "push"
 
 variables:
   SLURM_ACCOUNT: hpc-prf-cifi
@@ -38,7 +38,7 @@ package_linker:
       type: boolean
   variables:
     SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal -c 16 --mem 120G -t 12:00:00"
-    BASE_DESIGN_REF: feature/hardware_ci
+    BASE_DESIGN_REF: dev
   needs:
     - project: $CI_PROJECT_PATH
       job: package_linker
@@ -140,3 +140,9 @@ build 04_freq:
   variables:
     EXAMPLE_NO: "04"
     EXAMPLE_NAME: "freq"
+
+build 05_perf:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "05"
+    EXAMPLE_NAME: "perf"
