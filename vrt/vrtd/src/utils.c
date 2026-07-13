@@ -20,13 +20,14 @@
 
 #include "utils.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <pwd.h>
 #include <string.h>
 #include <syslog.h>
 
-static bool log_to_stderr = false;
+static FILE *log_stream = NULL;
 
 static const char *log_priority_name(int priority)
 {
@@ -43,10 +44,42 @@ static const char *log_priority_name(int priority)
     }
 }
 
-void vrtd_log_init(void)
+int vrtd_log_init(void)
 {
-    const char *log_stderr = getenv("VRTD_LOG_STDERR");
-    log_to_stderr = log_stderr != NULL && strcmp(log_stderr, "1") == 0;
+    const char *log_path = getenv("VRTD_LOG");
+    if (log_path == NULL || log_path[0] == '\0') {
+        return 0;
+    }
+
+    log_stream = fopen(log_path, "w");
+    if (log_stream == NULL) {
+        (void) fprintf(stderr, "Failed to open VRTD_LOG file '%s': %s\n",
+                       log_path, strerror(errno));
+        return -1;
+    }
+
+    errno = 0;
+    if (setvbuf(log_stream, NULL, _IOLBF, 0) != 0) {
+        int err = errno;
+        (void) fprintf(stderr, "Failed to configure VRTD_LOG file buffer '%s': %s\n",
+                       log_path, err != 0 ? strerror(err) : "unknown error");
+        (void) fclose(log_stream);
+        log_stream = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
+void vrtd_log_close(void)
+{
+    if (log_stream == NULL) {
+        return;
+    }
+
+    (void) fflush(log_stream);
+    (void) fclose(log_stream);
+    log_stream = NULL;
 }
 
 void vrtd_log(int priority, const char *fmt, ...)
@@ -54,10 +87,10 @@ void vrtd_log(int priority, const char *fmt, ...)
     va_list args;
 
     va_start(args, fmt);
-    if (log_to_stderr) {
-        (void) fprintf(stderr, "vrtd[%s]: ", log_priority_name(priority));
-        (void) vfprintf(stderr, fmt, args);
-        (void) fputc('\n', stderr);
+    if (log_stream != NULL) {
+        (void) fprintf(log_stream, "vrtd[%s]: ", log_priority_name(priority));
+        (void) vfprintf(log_stream, fmt, args);
+        (void) fputc('\n', log_stream);
     } else {
         (void) sd_journal_printv(priority, fmt, args);
     }

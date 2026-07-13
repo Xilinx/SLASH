@@ -170,6 +170,7 @@ int main(void)
     uint64_array_free(&state.deferred_buffer_cleanup_conn_ids);
 
     globals_destroy();
+    vrtd_log_close();
 
     return ret;
 }
@@ -179,13 +180,14 @@ int main(void)
  * Initialize the logging backend once and emit the startup banner.
  *
  * By default, vrtd logs to the system journal.  For direct test runs outside a
- * systemd service, setting VRTD_LOG_STDERR=1 switches all LOG() output to
- * stderr instead, which makes daemon logs visible in the invoking terminal or
- * redirected test log.
+ * systemd service, setting VRTD_LOG=<path> switches all LOG() output to that
+ * file.  Startup fails if the requested log file cannot be opened.
  */
 static void log_startup()
 {
-    vrtd_log_init();
+    if (vrtd_log_init() == -1) {
+        exit(EXIT_FAILURE);
+    }
 
     LOG(LOG_INFO, "Starting vrtd...");
 }

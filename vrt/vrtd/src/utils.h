@@ -80,8 +80,14 @@
 
 /**
  * @brief Initialize vrtd logging from environment once at daemon startup.
+ * @return 0 on success, -1 if the requested log backend cannot be initialized.
  */
-void vrtd_log_init(void);
+int vrtd_log_init(void);
+
+/**
+ * @brief Flush and close the configured logging backend.
+ */
+void vrtd_log_close(void);
 
 /**
  * @brief Log to the configured backend.
