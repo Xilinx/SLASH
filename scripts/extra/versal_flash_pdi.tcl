@@ -35,8 +35,14 @@
 #      Stress tests that use this flow must avoid AMI-triggered resets unless
 #      they also re-run this JTAG programming step afterward.
 #
+# PDI_PATH must point to a JTAG-bootable boot PDI (boot header at offset 0),
+# not a flash image. In particular the SLASH static-shell PDI
+# (amd_v80_gen5x8_25.1.pdi) has a 32 KiB FPT prepended for OSPI boot-search and
+# must have that header stripped before use here, or the PMC ROM rejects it
+# with "ROM failed to handle config data" (ROM State 0xA).
+#
 # Usage:
-#   PDI_PATH=/path/to/design.pdi xsdb scripts/extra/versal_flash_pdi.tcl
+#   PDI_PATH=/path/to/boot.pdi xsdb scripts/extra/versal_flash_pdi.tcl
 
 if {![info exists ::env(PDI_PATH)]} {
     error "PDI_PATH environment variable must be set to the PDI file to program"
@@ -64,7 +70,7 @@ set flash_error [catch {
     rst
 
     # 2. Program the PDI over JTAG.
-    targets -set -filter {name =~ "Versal *"}
+    targets -set -filter {name =~ "PMC"}
     device program $pdi_path
 } flash_error_message]
 
