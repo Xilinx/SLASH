@@ -93,11 +93,15 @@ public:
     /**
      * @brief Construct and connect to the vrtd socket.
      *
-     * @param socket_path Filesystem path to the vrtd UNIX socket.
-     *                    Defaults to the standard path.
+     * @param socket_path Filesystem path to the vrtd UNIX socket. When
+     *                    @c nullptr (the default), the path is taken from the
+     *                    @c VRTD_SOCKET environment variable if it is set and
+     *                    non-empty, otherwise it falls back to
+     *                    #VRTD_STANDARD_PATH. This mirrors how vrt::Device
+     *                    resolves the daemon socket.
      * @throws vrtd::Error if the connection cannot be established.
      */
-    explicit Session(const char *socket_path = VRTD_STANDARD_PATH);
+    explicit Session(const char *socket_path = nullptr);
 
     /**
      * @brief Destructor; closes the session if still open.

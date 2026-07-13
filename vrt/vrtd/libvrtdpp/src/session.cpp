@@ -46,6 +46,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cstdlib>
 #include <iostream>
 #include <utility>
 #include <string>
@@ -70,6 +71,17 @@ CfgmemProgramStatus convertCfgmemStatus(const struct vrtd_cfgmem_program_status&
 
 Session::Session(const char *socketPath)
 : m(std::make_unique<std::mutex>()) {
+    // When no explicit path is given, honor the VRTD_SOCKET environment
+    // variable before falling back to the compiled-in default, so tools like
+    // v80-smi can target a non-standard daemon socket the same way
+    // vrt::Device does.
+    if (socketPath == nullptr) {
+        const char *envPath = getenv("VRTD_SOCKET");
+        socketPath = (envPath != nullptr && envPath[0] != '\0')
+            ? envPath
+            : VRTD_STANDARD_PATH;
+    }
+
     fd = vrtd_connect(socketPath);
 
     if (fd == -1) {
