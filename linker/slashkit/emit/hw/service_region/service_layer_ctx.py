@@ -56,9 +56,9 @@ def dcmac_paths(dcmac_dir: Path) -> Dict[str, Any]:
     Resolve absolute paths for service-layer DCMAC assets.
 
     """
-    dcmac_tcl         = dcmac_dir / "tcl" / "slash_wrapper.tcl"
-    versal_dcmac_tcl  = _DCMAC_VERSAL / "tcl" / "dcmac.tcl"
-    versal_dcmac_hdl  = _DCMAC_VERSAL / "hdl"
+    dcmac_tcl = dcmac_dir / "tcl" / "slash_wrapper.tcl"
+    versal_dcmac_tcl = _DCMAC_VERSAL / "tcl" / "dcmac.tcl"
+    versal_dcmac_hdl = _DCMAC_VERSAL / "hdl"
 
     # add/remove files as needed
     hdl_files = [
