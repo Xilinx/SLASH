@@ -78,6 +78,10 @@ if [[ "${_prereq_ok}" -eq 0 ]]; then
     exit 1
 fi
 
+if [[ "${NONINTERACTIVE}" -eq 1 ]]; then
+    export SLASH_NONINTERACTIVE=1
+fi
+
 set -x
 
 rm -rf "${TOPDIR}" "${ARTIFACTS_DIR}" pbuild

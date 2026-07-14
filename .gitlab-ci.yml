@@ -140,3 +140,29 @@ build 04_freq:
   variables:
     EXAMPLE_NO: "04"
     EXAMPLE_NAME: "freq"
+
+build 05_perf:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "05"
+    EXAMPLE_NAME: "perf"
+
+package_rpm:
+  tags:
+    - otus
+  allow_failure: false
+  before_script: []
+  needs:
+    - job: package_linker
+      artifacts: true
+  variables:
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p fpga -t 01:00:00"
+    SLASH_PKG_SKIP_ROOT_DESIGN_BUILD: "1"
+    PIP_REQUIRE_VIRTUALENV: "0"
+  script:
+    - ./scripts/package-rpm.sh --noninteractive
+  artifacts:
+    public: false
+    paths:
+      - rpm/
+

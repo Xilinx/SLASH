@@ -33,6 +33,7 @@ from contextlib import ExitStack
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
 from slashkit.core.command_config import LinkerConfiguration, InstallerConfiguration, CommandConfiguration
+from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +385,13 @@ def install_static_shell(config: InstallerConfiguration) -> None:
     ], check=True)
 
     create_build_project(config)
+
+    require_static_shell_timing_or_confirm(
+        build_dir=config.build_dir,
+        project_name=config.project_name,
+        ignore_failure=config.ignore_timing_failure,
+        noninteractive=config.noninteractive,
+    )
 
     impl_dir = config.build_dir / "slash.runs" / "impl_1"
     dcp_sources = (

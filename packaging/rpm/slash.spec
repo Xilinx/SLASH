@@ -184,6 +184,9 @@ bash scripts/pbuild.sh
 %install
 bash scripts/pinstall.sh %{buildroot}
 
+install -d %{buildroot}%{_prefix}/lib/vrt
+mv %{buildroot}%{_bindir}/vrtd* %{buildroot}%{_prefix}/lib/vrt/
+
 # systemd units (mirrors debian/rules rsync lines)
 install -D -m 0644 vrt/vrtd/systemd/vrtd.service \
     %{buildroot}%{_unitdir}/vrtd.service
@@ -276,8 +279,8 @@ udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 
 %files -n vrtd
-%{_bindir}/vrtd
-%{_bindir}/vrtd-*
+%{_prefix}/lib/vrt/vrtd
+%{_prefix}/lib/vrt/vrtd-*
 %{_unitdir}/vrtd.service
 %{_unitdir}/vrtd.socket
 %{_udevrulesdir}/99-vrtd.rules

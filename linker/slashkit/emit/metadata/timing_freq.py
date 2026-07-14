@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sys
 from pathlib import Path
 import re
 from typing import Optional
@@ -31,9 +32,10 @@ import xml.etree.ElementTree as ET
 logger = logging.getLogger(__name__)
 
 HW_BUILD_DIR_ENV_KEYS = ("SLASH_HW_BUILD_DIR", "slash_hw_build_dir")
+_FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
 
-def extract_design_wns_ns(report_text: str) -> Optional[float]:
+def _find_design_timing_summary_row(report_text: str) -> Optional[list[float]]:
     if not report_text:
         return None
 
@@ -60,14 +62,98 @@ def extract_design_wns_ns(report_text: str) -> Optional[float]:
             continue
         if set(line) <= {"-", " "}:
             continue
-        m = re.match(r"^[-+]?\d+(?:\.\d+)?", line)
-        if m:
-            try:
-                return float(m.group(0))
-            except ValueError:
-                return None
+        values = [float(m.group(0)) for m in _FLOAT_RE.finditer(line)]
+        if values:
+            return values
 
     return None
+
+
+def extract_design_timing_slacks_ns(report_text: str) -> Optional[tuple[float, float]]:
+    values = _find_design_timing_summary_row(report_text)
+    if values is None or len(values) < 3:
+        return None
+    return values[0], values[2]
+
+
+def extract_design_wns_ns(report_text: str) -> Optional[float]:
+    slacks = extract_design_timing_slacks_ns(report_text)
+    if slacks is None:
+        return None
+    return slacks[0]
+
+
+def design_timing_met(wns_ns: float, whs_ns: float) -> bool:
+    return wns_ns >= 0 and whs_ns >= 0
+
+
+def find_static_shell_timing_report(build_dir: Path, project_name: str) -> Optional[Path]:
+    path = build_dir / f"report_timing_{project_name}.txt"
+    if path.is_file():
+        return path
+    return None
+
+
+def require_static_shell_timing_or_confirm(
+    *,
+    build_dir: Path,
+    project_name: str,
+    ignore_failure: bool,
+    noninteractive: bool,
+) -> None:
+    timing_report = find_static_shell_timing_report(build_dir, project_name)
+    if timing_report is None:
+        raise RuntimeError(
+            f"Static shell timing report not found: {build_dir / f'report_timing_{project_name}.txt'}"
+        )
+
+    report_text = timing_report.read_text(encoding="utf-8", errors="replace")
+    slacks = extract_design_timing_slacks_ns(report_text)
+    if slacks is None:
+        raise RuntimeError(
+            f"Could not parse WNS/WHS from static shell timing report: {timing_report}"
+        )
+
+    wns_ns, whs_ns = slacks
+    if design_timing_met(wns_ns, whs_ns):
+        logger.info(
+            "Static shell timing met: WNS(ns)=%.3f, WHS(ns)=%.3f (%s)",
+            wns_ns,
+            whs_ns,
+            timing_report,
+        )
+        return
+
+    print("ERROR: Static shell timing failed.", file=sys.stderr)
+    print(f"  WNS(ns)={wns_ns:.3f}", file=sys.stderr)
+    print(f"  WHS(ns)={whs_ns:.3f}", file=sys.stderr)
+    print(f"  Report: {timing_report}", file=sys.stderr)
+
+    if ignore_failure:
+        logger.warning(
+            "Proceeding despite static shell timing failure (--ignore-timing-failure)"
+        )
+        return
+
+    if noninteractive:
+        raise RuntimeError(
+            "Static shell timing failed and SLASH_NONINTERACTIVE is set; "
+            "use --ignore-timing-failure to override"
+        )
+
+    if sys.stdin.isatty():
+        answer = input(
+            "Proceed with install/packaging anyway? [y/N] ").strip().lower()
+        if answer in ("y", "yes"):
+            logger.warning(
+                "User confirmed install despite static shell timing failure")
+            return
+        raise SystemExit(1)
+
+    raise RuntimeError(
+        "Static shell timing failed and no interactive terminal is available; "
+        "use --ignore-timing-failure to override"
+    )
 
 
 def compute_max_freq_hz_from_wns(wns_ns: float, base_freq_hz: int = 400_000_000) -> Optional[int]:

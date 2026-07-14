@@ -60,7 +60,7 @@ read_the_docs_build = os.environ.get('READTHEDOCS', None) == 'True'
 # ones.
 #...
 
-extensions = [ "breathe", 'sphinxcontrib.tikz', 'sphinx.ext.todo', 'sphinx_design']
+extensions = [ "breathe", 'sphinxcontrib.tikz', 'sphinx.ext.todo', 'sphinx_design', 'sphinx_rtd_theme']
 
 #...
 
