@@ -86,7 +86,7 @@ def main(args):
     tp0.start()
     time.sleep(1)
 
-    tp1.flits = 22
+    tp1.flits = 8
     tp1.dest = 0
     tp1.start()
     time.sleep(1)
