@@ -100,7 +100,7 @@ def main(args):
         print('\n')
 
     print(f'{dcmac0.tx_stats(verbose=1)=}')
-    print(f'{dcmac0.rx_stats(verbose=1)=}')
+    print(f'{dcmac0.rx_stats(verbose=1)=}\n\n')
 
     print(f'{dcmac1.tx_stats(verbose=1)=}')
     print(f'{dcmac1.rx_stats(verbose=1)=}')
