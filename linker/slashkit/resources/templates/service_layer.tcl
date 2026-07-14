@@ -1228,10 +1228,6 @@ slash_setup_dcmac [file normalize "{{ versal_dcmac_root }}"]
   # Restore previous instance
   current_bd_instance $__oldCurInst
 
-  # DCMAC s_axi addresses are assigned by add_dcmac_inst (in slash_wrapper.tcl).
-  # The four axi_gpio_* control surfaces from the legacy DCMAC_subsys are no
-  # longer instantiated — see TODO #12 follow-ups in dcmac_coyote/TODO.md.
-
 {% else %}
   # No QSFP <-> NoC links required
 {% endif %}
