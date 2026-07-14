@@ -296,10 +296,6 @@ class DCMAC(GenericMMIO):
         It Follows the reset procedure outlined in the DCMAC user guide pg369,
         page 161 ("Transmit Fixed Ethernet Startup Procedure when Using tx_core_reset")
         """
-        # TODO: reset_rx uses targeted reset codes (7/2/1) per PG369, while
-        # the TX path here writes 0xFFFFFFFF to every reset register. Verify
-        # against PG369 whether the TX control regs really tolerate all-ones
-        # writes, or whether they should also use targeted codes.
         rst_successful = True
         offset = lambda x: registers[x]['offset']
         rst_core_regs = [offset('GLOBAL_CONTROL_REG_TX')]
