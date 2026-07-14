@@ -72,10 +72,9 @@ def main(args):
     if not args.skip_clear:
         # Discard the link bring-up transient (e.g. the initial BAD_CODE_COUNT)
         # so the post-traffic numbers reflect only the packets we send below.
-        print('Baseline DCMAC stats before traffic (cleared by reading):')
         for d in (dcmac0, dcmac1):
-            d.tx_stats()
-            d.rx_stats()
+            d.pm_tick(direction='tx')
+            d.pm_tick(direction='rx')
 
     """Now we can generate some traffic"""
 

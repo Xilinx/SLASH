@@ -187,6 +187,35 @@ class DCMAC(GenericMMIO):
             print("Configuration Registers")
         print(tabulate(table, headers="firstrow", tablefmt="pretty"))
 
+    def pm_tick(self, port: int = 0, direction: str = 'tx'):
+        """Pulse the MAC PM tick for the given port and direction ('tx' or
+        'rx'). This latches the accumulated statistics and resets the
+        collection window, so it also serves to clear stats without reading
+        (and printing) them."""
+        if port not in (0, 1):
+            raise ValueError("'port' must be either 0 or 1")
+
+        chan_base = 0x1000 * (port + 1)
+        if direction == 'tx':
+            mode_off, tick_off, done_off = 0x40, 0xFC, 0x808
+            mode_bit = registers['C0_TX_MODE_REG']['fields']['c0_ctl_tx_tick_reg_mode_sel']['start']
+        elif direction == 'rx':
+            mode_off, tick_off, done_off = 0x44, 0xF4, 0xC08
+            mode_bit = registers['C0_RX_MODE_REG']['fields']['c0_ctl_rx_tick_reg_mode_sel']['start']
+        else:
+            raise ValueError("'direction' must be 'tx' or 'rx'")
+
+        # Set the tick to register-trigger mode, then pulse it.
+        value = self.read(chan_base + mode_off)
+        value |= (1 << mode_bit)
+        self.write(chan_base + mode_off, value)
+        self.write(chan_base + tick_off, 0)
+        self.write(chan_base + tick_off, 1)
+
+        for _ in range(10):
+            if self.read(chan_base + done_off) != 0:
+                break
+
     def tx_stats(self, port: int = 0, debug: bool = False,
                  verbose: int = 0):
         """Reads and print TX stats for the given port"""
@@ -195,27 +224,7 @@ class DCMAC(GenericMMIO):
             raise ValueError("'port' must be either 0 or 1")
 
         baseoffset = 0x1000 * (port + 1) + 0x0200
-
-        # Sets pm tick to be triggered by registers
-        value = self.read(baseoffset - 0x200 + 0x40)
-        pm_tick_bit = registers['C0_TX_MODE_REG']['fields']['c0_ctl_tx_tick_reg_mode_sel']['start']
-        value |= (1 * (2**pm_tick_bit))
-        self.write(baseoffset - 0x200 + 0x40, value)
-
-        # trigger ALL_CHANNEL_MAC_TICK_REG_TX
-        #offset = registers['ALL_CHANNEL_MAC_TICK_REG_TX']['offset']
-        #self.write(offset, 0)
-        #self.write(offset, 1)
-        #self.write(offset, 0)
-
-        # trigger pm tick
-        self.write(baseoffset - 0x200 + 0xFC, 0)
-        self.write(baseoffset - 0x200 + 0xFC, 1)
-
-        for i in range(10):
-            val = self.read(baseoffset - 0x200 + 0x808)
-            if val != 0:
-                break
+        self.pm_tick(port, 'tx')
 
         heading = [[f"TX Stats {port=}", "Value"]]
         if debug:
@@ -231,27 +240,7 @@ class DCMAC(GenericMMIO):
             raise ValueError("'port' must be either 0 or 1")
 
         baseoffset = 0x1000 * (port + 1) + 0x0400
-
-        # Sets pm tick to be triggered by registers
-        value = self.read(baseoffset - 0x400 + 0x44)
-        pm_tick_bit = registers['C0_RX_MODE_REG']['fields']['c0_ctl_rx_tick_reg_mode_sel']['start']
-        value |= (1 * (2**pm_tick_bit))
-        self.write(baseoffset - 0x400 + 0x44, value)
-
-        # trigger ALL_CHANNEL_MAC_TICK_REG_RX
-        #offset = registers['ALL_CHANNEL_MAC_TICK_REG_RX']['offset']
-        #self.write(offset, 0)
-        #self.write(offset, 1)
-        #self.write(offset, 0)
-
-        # trigger pm tick
-        self.write(baseoffset - 0x400 + 0xF4, 0)
-        self.write(baseoffset - 0x400 + 0xF4, 1)
-
-        for i in range(10):
-            val = self.read(baseoffset - 0x400 + 0xC08)
-            if val != 0:
-                break
+        self.pm_tick(port, 'rx')
 
         heading = [[f"RX Stats {port=}", "Value"]]
         if debug:
