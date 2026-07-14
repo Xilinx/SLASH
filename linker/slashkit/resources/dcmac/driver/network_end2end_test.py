@@ -69,6 +69,14 @@ def main(args):
         nl1.sockets[0] = (ip_if0, port_rx, port_tx, True)
         nl1.populate_socket_table(debug=True)
 
+    if not args.skip_clear:
+        # Discard the link bring-up transient (e.g. the initial BAD_CODE_COUNT)
+        # so the post-traffic numbers reflect only the packets we send below.
+        print('Baseline DCMAC stats before traffic (cleared by reading):')
+        for d in (dcmac0, dcmac1):
+            d.tx_stats()
+            d.rx_stats()
+
     """Now we can generate some traffic"""
 
     tp0 = TrafficProducer(args.dev, resource=0, base_offset=0x004C_0000)
@@ -107,6 +115,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-u', '--udp', action='store_true',
                         help='Use UDP logic')
+    parser.add_argument('--skip-clear', action='store_true',
+                        help='Skip reading/clearing DCMAC stats before sending traffic')
     parser = add_common_args(parser, verbose=True)
     args = parser.parse_args()
     main(args)
