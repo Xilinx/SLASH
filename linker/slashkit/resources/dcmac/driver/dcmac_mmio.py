@@ -190,8 +190,7 @@ class DCMAC(GenericMMIO):
     def pm_tick(self, port: int = 0, direction: str = 'tx'):
         """Pulse the MAC PM tick for the given port and direction ('tx' or
         'rx'). This latches the accumulated statistics and resets the
-        collection window, so it also serves to clear stats without reading
-        (and printing) them."""
+        collection window."""
         if port not in (0, 1):
             raise ValueError("'port' must be either 0 or 1")
 
@@ -205,7 +204,6 @@ class DCMAC(GenericMMIO):
         else:
             raise ValueError("'direction' must be 'tx' or 'rx'")
 
-        # Set the tick to register-trigger mode, then pulse it.
         value = self.read(chan_base + mode_off)
         value |= (1 << mode_bit)
         self.write(chan_base + mode_off, value)
