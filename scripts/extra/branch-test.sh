@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
     cat <<EOF
-Usage: $0 --repo-url URL --branch BRANCH --scratch DIR --bdf BDF --smbus-ip ZIP [options]
+Usage: ${0} --repo-url URL --branch BRANCH --scratch DIR --bdf BDF --smbus-ip ZIP [options]
 
 Clone and test a SLASH branch on a V80 host using repo-built artifacts.
 
@@ -26,10 +26,10 @@ EOF
 }
 
 require_var() {
-    local name="$1"
-    local value="$2"
-    if [[ -z "$value" ]]; then
-        echo "ERROR: missing required option/env: $name" >&2
+    local name="${1}"
+    local value="${2}"
+    if [[ -z "${value}" ]]; then
+        echo "ERROR: missing required option/env: ${name}" >&2
         usage >&2
         exit 1
     fi
@@ -43,47 +43,47 @@ SMBUS_IP="${SMBUS_IP:-}"
 PROTECTED_USER="${PROTECTED_USER:-${SUDO_USER:-}}"
 SCRATCH_VRTD="${SCRATCH_VRTD:-}"
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
+while [[ ${#} -gt 0 ]]; do
+    case "${1}" in
         --repo-url)
-            [[ $# -ge 2 ]] || { echo "ERROR: --repo-url requires a value" >&2; exit 1; }
-            REPO_URL="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --repo-url requires a value" >&2; exit 1; }
+            REPO_URL="${2}"
             shift 2
             ;;
         --branch)
-            [[ $# -ge 2 ]] || { echo "ERROR: --branch requires a value" >&2; exit 1; }
-            BRANCH="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --branch requires a value" >&2; exit 1; }
+            BRANCH="${2}"
             shift 2
             ;;
         --scratch)
-            [[ $# -ge 2 ]] || { echo "ERROR: --scratch requires a value" >&2; exit 1; }
-            SCRATCH="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --scratch requires a value" >&2; exit 1; }
+            SCRATCH="${2}"
             shift 2
             ;;
         --bdf)
-            [[ $# -ge 2 ]] || { echo "ERROR: --bdf requires a value" >&2; exit 1; }
-            BDF="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --bdf requires a value" >&2; exit 1; }
+            BDF="${2}"
             shift 2
             ;;
         --smbus-ip)
-            [[ $# -ge 2 ]] || { echo "ERROR: --smbus-ip requires a value" >&2; exit 1; }
-            SMBUS_IP="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --smbus-ip requires a value" >&2; exit 1; }
+            SMBUS_IP="${2}"
             shift 2
             ;;
         --protected-user)
-            [[ $# -ge 2 ]] || { echo "ERROR: --protected-user requires a value" >&2; exit 1; }
-            PROTECTED_USER="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --protected-user requires a value" >&2; exit 1; }
+            PROTECTED_USER="${2}"
             shift 2
             ;;
         --scratch-vrtd)
-            [[ $# -ge 2 ]] || { echo "ERROR: --scratch-vrtd requires a value" >&2; exit 1; }
-            SCRATCH_VRTD="$2"
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --scratch-vrtd requires a value" >&2; exit 1; }
+            SCRATCH_VRTD="${2}"
             shift 2
             ;;
         --source)
-            [[ $# -ge 2 ]] || { echo "ERROR: --source requires a value" >&2; exit 1; }
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --source requires a value" >&2; exit 1; }
             set +u
-            source "$2"
+            source "${2}"
             set -u
             shift 2
             ;;
@@ -92,7 +92,7 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            echo "ERROR: unknown argument: $1" >&2
+            echo "ERROR: unknown argument: ${1}" >&2
             usage >&2
             exit 1
             ;;
@@ -104,22 +104,22 @@ if [[ "${EUID}" -ne 0 ]]; then
     exit 1
 fi
 
-require_var REPO_URL "$REPO_URL"
-require_var BRANCH "$BRANCH"
-require_var SCRATCH "$SCRATCH"
-require_var BDF "$BDF"
-require_var SMBUS_IP "$SMBUS_IP"
-require_var PROTECTED_USER "$PROTECTED_USER"
+require_var REPO_URL "${REPO_URL}"
+require_var BRANCH "${BRANCH}"
+require_var SCRATCH "${SCRATCH}"
+require_var BDF "${BDF}"
+require_var SMBUS_IP "${SMBUS_IP}"
+require_var PROTECTED_USER "${PROTECTED_USER}"
 
-if [[ -z "$SCRATCH_VRTD" ]]; then
+if [[ -z "${SCRATCH_VRTD}" ]]; then
     SCRATCH_VRTD="${SCRATCH}/vrtd"
 fi
 
-if [[ ! -f "$SMBUS_IP" ]]; then
-    echo "ERROR: SMBus IP zip file not found: $SMBUS_IP" >&2
+if [[ ! -f "${SMBUS_IP}" ]]; then
+    echo "ERROR: SMBus IP zip file not found: ${SMBUS_IP}" >&2
     exit 1
 fi
-SMBUS_IP="$(realpath "$SMBUS_IP")"
+SMBUS_IP="$(realpath "${SMBUS_IP}")"
 
 set -x
 
@@ -135,16 +135,59 @@ function protected() {
         XILINX_XRT="${XILINX_XRT:-}" \
         XILINXD_LICENSE_FILE="${XILINXD_LICENSE_FILE:-}" \
         LM_LICENSE_FILE="${LM_LICENSE_FILE:-}" \
-        "$@"
+        "${@}"
 }
+
+VRTD_PID=""
+RESTORE_SYSTEM_RUNTIME=0
+
+restore_system_runtime() {
+    local rc="${?}"
+    trap - EXIT
+    set +e
+
+    if [[ -n "${VRTD_PID}" ]]; then
+        kill "${VRTD_PID}" 2>/dev/null
+        wait "${VRTD_PID}" 2>/dev/null
+    fi
+
+    if [[ "${RESTORE_SYSTEM_RUNTIME}" -eq 1 ]]; then
+        echo 1 | tee "/sys/bus/pci/devices/${BDF}.0/remove"
+        echo 1 | tee "/sys/bus/pci/devices/${BDF}.1/remove"
+        echo 1 | tee "/sys/bus/pci/devices/${BDF}.2/remove"
+
+        rmmod slash
+        rmmod ami
+
+        modprobe ami
+        modprobe slash
+
+        echo 1 | tee /sys/bus/pci/rescan
+        sleep 5
+
+        systemctl restart vrtd.socket
+        systemctl restart vrtd.service
+        sleep 5
+
+        v80-smi reset -d "${BDF}"
+    fi
+
+    exit "${rc}"
+}
+
+trap restore_system_runtime EXIT
 
 protected git clone --depth 1 --branch "${BRANCH}" --single-branch "${REPO_URL}" "${SCRATCH}"
 pushd "${SCRATCH}"
+
+# Let repo-built tools resolve slashkit resources from this checkout.
+export PYTHONPATH="${PWD}/linker${PYTHONPATH:+:${PYTHONPATH}}"
+
 protected git submodule update --init --recursive
 
 # Build phase
 
-protected python3 -m zipfile -e "$SMBUS_IP" linker/slashkit/resources/base/iprepo
+protected python3 -m zipfile -e "${SMBUS_IP}" linker/slashkit/resources/base/iprepo
 if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' >/dev/null; then
     echo "ERROR: extracted SMBus IP zip did not create linker/slashkit/resources/base/iprepo/smbus*/" >&2
     exit 1
@@ -152,12 +195,6 @@ fi
 
 protected scripts/pconfigure.sh
 protected scripts/pbuild.sh
-
-PDI_PATH="linker/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi"
-if [[ ! -f "$PDI_PATH" ]]; then
-    echo "ERROR: expected static shell PDI from pbuild not found: $PDI_PATH" >&2
-    exit 1
-fi
 
 pushd driver
 protected make
@@ -169,26 +206,14 @@ popd
 
 # Install phase
 
+systemctl stop vrtd.socket vrtd.service || true
+RESTORE_SYSTEM_RUNTIME=1
+
 echo 1 | tee "/sys/bus/pci/devices/${BDF}.0/remove" || true
 echo 1 | tee "/sys/bus/pci/devices/${BDF}.1/remove" || true
 echo 1 | tee "/sys/bus/pci/devices/${BDF}.2/remove" || true
 rmmod slash || true
 rmmod ami || true
-
-# Flash phase
-#
-# The installed static-shell PDI is a flash image: AVED's fpt_pdi_gen.py
-# prepends a 32 KiB (0x8000) Flash Partition Table so the PMC ROM's OSPI
-# boot-search can locate the boot image at the 32 KiB boundary. JTAG
-# "device program" performs no boot-search and expects a boot header at
-# offset 0, so programming the FPT image directly fails with
-# "ROM failed to handle config data" (ROM State 0xA). Strip the 32 KiB FPT to
-# recover the bootgen boot PDI (byte-identical to AVED's
-# amd_v80_gen5x8_25.1_nofpt.pdi) and flash that over JTAG instead.
-BOOT_PDI="${SCRATCH}/amd_v80_gen5x8_25.1_boot.pdi"
-tail -c +32769 "${PDI_PATH}" >"${BOOT_PDI}"
-
-PDI_PATH="${BOOT_PDI}" xsdb scripts/extra/versal_flash_pdi.tcl
 
 insmod submodules/AVED/sw/AMI/driver/ami.ko
 insmod driver/slash.ko
@@ -208,18 +233,21 @@ protected cp vrt/vrtd/conf/vrtd.conf "${SCRATCH_VRTD}/vrtd.conf"
 VRTD_CONFIG="${SCRATCH_VRTD}/vrtd.conf" \
 VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" \
 VRTD_LOG="${SCRATCH_VRTD}/vrtd.log" \
-pbuild/smi/vrt/vrtd/src/vrtd &
+    pbuild/smi/vrt/vrtd/src/vrtd &
 
-VRTD_PID=$!
-cleanup() {
-    kill "${VRTD_PID}" 2>/dev/null || true
-    wait "${VRTD_PID}" 2>/dev/null || true
-}
-trap cleanup EXIT
+VRTD_PID="${!}"
 
 # Wait for vrtd startup
 
 sleep 5
+
+# Static shell load phase
+#
+# Keep the direct-run vrtd instance alive while v80-smi removes the PCIe
+# functions, programs the static shell over JTAG, and rescans the device.
+protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" \
+    SMI_VERSAL_FLASH_TCL="${PWD}/smi/resources/versal_flash_pdi.tcl" \
+    pbuild/smi/src/v80-smi write-static-shell --jtag -d "${BDF}"
 
 # Run tests phase
 
