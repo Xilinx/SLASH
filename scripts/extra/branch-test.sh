@@ -256,4 +256,4 @@ protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" pbuild/smi/src/v80-smi lis
 protected scripts/test-examples.sh --use-repo emu "${BDF}"
 protected scripts/test-examples.sh --use-repo sim "${BDF}"
 protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" scripts/test-examples.sh --use-repo hw "${BDF}"
-protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" scripts/stress-test.sh --use-pbuild "${BDF}" --no-reset
+protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" scripts/stress-test.sh "${BDF}" --use-pbuild --no-reset
