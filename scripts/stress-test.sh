@@ -321,7 +321,9 @@ for ((i = 1; i <= ITERATIONS; i++)); do
             ;;
 
         validate)
-            threads=$((RANDOM % 64 + 1))
+            # validate places 2 buffers/thread (512 MiB each) in the 64 x 512 MiB
+            # (32 GiB) space, so 2*threads <= 64 => cap threads at 32.
+            threads=$((RANDOM % 32 + 1))
             NO_RESET_FLAG=""
             if [[ "$NO_RESET" -eq 1 ]]; then NO_RESET_FLAG="--no-reset"; fi
             log "Running: $V80_SMI validate -d $BDF -j $threads $NO_RESET_FLAG"

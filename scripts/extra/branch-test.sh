@@ -204,6 +204,16 @@ pushd submodules/AVED/sw/AMI/driver
 protected make
 popd
 
+# Run phase: serialize against other concurrent branch-test runs on this
+# shared host. The build above is CPU-only and may run in parallel, but
+# everything below mutates shared state (kernel modules, PCIe functions,
+# vrtd, the board) and must not race. This is a cooperative advisory lock
+# (flock): only branch-test runs honor it. Held on fd 200 until the script
+# exits so the restore_system_runtime cleanup is covered too. Override the
+# path with BRANCH_TEST_LOCK if a narrower/wider scope is ever needed.
+exec 200>"${BRANCH_TEST_LOCK:-/run/lock/slash-branch-test.lock}"
+flock 200
+
 # Install phase
 
 systemctl stop vrtd.socket vrtd.service || true
