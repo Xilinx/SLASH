@@ -436,5 +436,6 @@ class InstallerConfiguration(CommandConfiguration):
         value = os.getenv("SLASH_NONINTERACTIVE", "")
         return value not in ("", "0", "false", "False", "no", "No")
 
+    @property
     def stage(self) -> str:
         return self._stage
