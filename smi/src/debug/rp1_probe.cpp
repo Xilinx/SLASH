@@ -47,6 +47,7 @@ namespace {
 
 constexpr uint32_t kSignalMagic     = 0xDEADBEEFu;
 constexpr uint32_t kBringupCqSize   = 64u;
+constexpr uint32_t kBringupTraceSize = 64u;
 constexpr auto     kPollTimeout     = std::chrono::seconds(3);
 constexpr auto     kPollInterval    = std::chrono::milliseconds(1);
 constexpr auto     kStallWindow     = std::chrono::milliseconds(500);
@@ -91,6 +92,24 @@ const char* stateStr(uint32_t s) {
     }
 }
 
+const char* traceEventStr(uint32_t e) {
+    switch (e) {
+    case RP1_TRACE_GRAPH_START:    return "GRAPH_START";
+    case RP1_TRACE_NODE_ACTIVATE:  return "NODE_ACTIVATE";
+    case RP1_TRACE_KERNEL_LAUNCH:  return "KERNEL_LAUNCH";
+    case RP1_TRACE_KERNEL_DONE:    return "KERNEL_DONE";
+    case RP1_TRACE_KERNEL_TIMEOUT: return "KERNEL_TIMEOUT";
+    case RP1_TRACE_LOOP_ITER:      return "LOOP_ITER";
+    case RP1_TRACE_COND_EVAL:      return "COND_EVAL";
+    case RP1_TRACE_WAIT_PARK:      return "WAIT_PARK";
+    case RP1_TRACE_WAIT_WAKE:      return "WAIT_WAKE";
+    case RP1_TRACE_PDI_LOAD:       return "PDI_LOAD";
+    case RP1_TRACE_IMAGE_MISMATCH: return "IMAGE_MISMATCH";
+    case RP1_TRACE_GRAPH_DONE:     return "GRAPH_DONE";
+    default:                       return "?";
+    }
+}
+
 void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  magic            = 0x%08x (%s)\n",
                 c->magic, (c->magic == RP1_CTRL_MAGIC) ? "SQR1" : "BAD");
@@ -101,6 +120,10 @@ void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  cq_base          = 0x%08x_%08x\n", c->cq_base_hi, c->cq_base_lo);
     std::printf("  arg_buf_base     = 0x%08x_%08x\n", c->arg_buf_base_hi, c->arg_buf_base_lo);
     std::printf("  sig_array_base   = 0x%08x_%08x\n", c->sig_array_base_hi, c->sig_array_base_lo);
+    std::printf("  trace_enable     = %u\n",   c->trace_enable);
+    std::printf("  trace_base       = 0x%08x_%08x\n", c->trace_base_hi, c->trace_base_lo);
+    std::printf("  trace_size       = %u\n",   c->trace_size);
+    std::printf("  trace_write_idx  = %u\n",   c->trace_write_idx);
     std::printf("  graph_seq        = %u\n",   c->graph_seq);
     std::printf("  graph_done_seq   = %u\n",   c->graph_done_seq);
     std::printf("  cq_write_idx     = %u\n",   c->cq_write_idx);
@@ -110,10 +133,10 @@ void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  heartbeat        = %u\n",   c->heartbeat);
 }
 
-/// Minimum BAR length needed to reach the whole signal array.
+/// Minimum BAR length needed to reach the bring-up trace ring.
 uint64_t requiredBarLen(uint64_t ctrlOffset) {
-    return ctrlOffset + RP1_DEFAULT_SIG_ARRAY_OFFSET
-         + static_cast<uint64_t>(RP1_MAX_SIGNALS) * sizeof(rp1_signal_slot_t);
+    return ctrlOffset + RP1_DEFAULT_TRACE_OFFSET
+         + static_cast<uint64_t>(kBringupTraceSize) * sizeof(rp1_trace_entry_t);
 }
 
 void barZero(volatile void* dst, size_t bytes) {
@@ -147,6 +170,11 @@ void programCtrl(volatile rp1_ctrl_t* c, uint32_t nodeCount) {
     c->arg_buf_base_hi   = 0;
     c->sig_array_base_lo = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_SIG_ARRAY_OFFSET);
     c->sig_array_base_hi = 0;
+    c->trace_enable      = 0;
+    c->trace_base_lo     = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET);
+    c->trace_base_hi     = 0;
+    c->trace_size        = kBringupTraceSize;
+    c->trace_write_idx   = 0;
 }
 
 /// Refuse to submit unless the firmware is alive and idle.  Prints a
@@ -318,5 +346,88 @@ int Rp1Probe::ping(const Options& options) {
 
     std::printf("PASS: slot[0] = 0x%08x, cq_write_idx=%u, state=%s\n",
                 observed, c->cq_write_idx, stateStr(c->rp1_state));
+    return 0;
+}
+
+int Rp1Probe::tracePing(const Options& options) {
+    const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
+
+    vrtd::Session session;
+    vrtd::BarFile barFile = openRp1Bar(options, session, ctrlOffset, "debug rp1-trace-ping");
+
+    auto base = barFile.getPtr<uint8_t>(vrtd::BarFile::Direction::Write, static_cast<size_t>(ctrlOffset));
+    volatile uint8_t* basePtr = base.get();
+    auto* c      = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
+    auto* nodes  = reinterpret_cast<volatile rp1_node_t*>(basePtr + RP1_DEFAULT_NODE_ARRAY_OFFSET);
+    auto* cq     = reinterpret_cast<volatile rp1_cq_entry_t*>(basePtr + RP1_DEFAULT_CQ_OFFSET);
+    auto* sigs   = reinterpret_cast<volatile rp1_signal_slot_t*>(basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
+    auto* traces = reinterpret_cast<volatile rp1_trace_entry_t*>(basePtr + RP1_DEFAULT_TRACE_OFFSET);
+
+    if (!checkFirmwareReady(c)) {
+        return 1;
+    }
+
+    barZero(&nodes[0], sizeof(rp1_node_t));
+    nodeSetHeader(&nodes[0], RP1_OP_SIGNAL, /*await*/ 0, 0x0, /*set*/ 0, 0x1);
+    nodes[0].payload.signal.target_slot = 0;
+    nodes[0].payload.signal.value       = kSignalMagic;
+    nodes[0].payload.signal.operation   = RP1_SIGOP_SET;
+
+    sigs[0].value            = 0;
+    sigs[0].last_writer_node = 0;
+    sigs[0].flags            = 0;
+    barZero(traces, kBringupTraceSize * sizeof(rp1_trace_entry_t));
+
+    programCtrl(c, /*nodeCount*/ 1);
+    c->trace_enable = 1;
+
+    const uint32_t cqStart = c->cq_write_idx;
+    const uint32_t wantSeq = c->graph_done_seq + 1;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    c->graph_seq = wantSeq;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    std::printf("rp1-trace-ping: submitted seq=%u, polling...\n", wantSeq);
+    if (waitForSeq(c, wantSeq) != 0) {
+        printCtrl(c);
+        return 1;
+    }
+
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const uint32_t observed = sigs[0].value;
+    if (observed != kSignalMagic) {
+        std::fprintf(stderr, "FAIL: signal slot 0 = 0x%08x, expected 0x%08x\n",
+                     observed, kSignalMagic);
+        printCtrl(c);
+        return 1;
+    }
+
+    const uint32_t cqEnd = c->cq_write_idx;
+    std::printf("PASS: slot[0] = 0x%08x, state=%s\n", observed, stateStr(c->rp1_state));
+    std::printf("CQ entries [%u, %u):\n", cqStart, cqEnd);
+    for (uint32_t i = cqStart; i < cqEnd; i++) {
+        const uint32_t idx = i % kBringupCqSize;
+        const auto& e = cq[idx];
+        std::printf("  cq[%u] node=%u status=%u detail=0x%08x timestamp=%u\n",
+                    idx, e.node_index, e.status, e.error_detail, e.timestamp);
+    }
+    c->cq_read_idx = cqEnd;
+
+    const uint32_t traceWritten = c->trace_write_idx;
+    const uint32_t traceCount = traceWritten > kBringupTraceSize
+                              ? kBringupTraceSize : traceWritten;
+    const uint32_t traceStart = traceWritten > kBringupTraceSize
+                              ? traceWritten % kBringupTraceSize : 0;
+    std::printf("Trace entries written=%u readable=%u%s:\n",
+                traceWritten, traceCount,
+                traceWritten > kBringupTraceSize ? " (overflow)" : "");
+    for (uint32_t i = 0; i < traceCount; i++) {
+        const uint32_t idx = (traceStart + i) % kBringupTraceSize;
+        const auto& e = traces[idx];
+        std::printf("  trace[%u] t=%u event=%s(%u) node=%u aux0=0x%08x aux1=0x%08x\n",
+                    idx, e.timestamp, traceEventStr(e.event), e.event,
+                    e.node_index, e.aux0, e.aux1);
+    }
+
     return 0;
 }

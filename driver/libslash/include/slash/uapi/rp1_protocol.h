@@ -63,6 +63,7 @@ extern "C" {
 #define RP1_DEFAULT_CQ_OFFSET           0x00041000UL  /*  64 KB */
 #define RP1_DEFAULT_ARG_BUF_OFFSET      0x00051000UL  /*   1 MB */
 #define RP1_DEFAULT_SIG_ARRAY_OFFSET    0x00151000UL  /*   4 KB */
+#define RP1_DEFAULT_TRACE_OFFSET        0x00152000UL  /* trace ring */
 
 /* =========================================================================
  * Opcodes
@@ -156,6 +157,25 @@ typedef enum {
     RP1_STATE_ERROR   = 3,
     RP1_STATE_HALTED  = 4,
 } rp1_state_t;
+
+/* =========================================================================
+ * Trace events (optional trace ring)
+ * ====================================================================== */
+
+typedef enum {
+    RP1_TRACE_GRAPH_START    = 0,
+    RP1_TRACE_NODE_ACTIVATE  = 1,
+    RP1_TRACE_KERNEL_LAUNCH  = 2,
+    RP1_TRACE_KERNEL_DONE    = 3,
+    RP1_TRACE_KERNEL_TIMEOUT = 4,
+    RP1_TRACE_LOOP_ITER      = 5,
+    RP1_TRACE_COND_EVAL      = 6,
+    RP1_TRACE_WAIT_PARK      = 7,
+    RP1_TRACE_WAIT_WAKE      = 8,
+    RP1_TRACE_PDI_LOAD       = 9,
+    RP1_TRACE_IMAGE_MISMATCH = 10,
+    RP1_TRACE_GRAPH_DONE     = 11,
+} rp1_trace_event_t;
 
 /* =========================================================================
  * Payload structures (each 48 bytes, embedded in rp1_node_t)
@@ -396,7 +416,12 @@ typedef struct {
     volatile uint32_t arg_buf_base_hi;  /* 0x44                                  */
     volatile uint32_t sig_array_base_lo;/* 0x48: signal array base               */
     volatile uint32_t sig_array_base_hi;/* 0x4C                                  */
-    uint8_t _reserved[0x1000 - 0x50];
+    volatile uint32_t trace_enable;     /* 0x50: non-zero enables trace writes   */
+    volatile uint32_t trace_base_lo;    /* 0x54: trace ring base (low 32 bits)   */
+    volatile uint32_t trace_base_hi;    /* 0x58: trace ring base (high 32 bits)  */
+    volatile uint32_t trace_size;       /* 0x5C: trace entries (power of 2)      */
+    volatile uint32_t trace_write_idx;  /* 0x60: next trace write position       */
+    uint8_t _reserved[0x1000 - 0x64];
 } rp1_ctrl_t;
 
 /* =========================================================================
@@ -430,6 +455,18 @@ typedef struct {
 } rp1_cq_entry_t;
 
 /* =========================================================================
+ * Trace queue entry -- 16 bytes
+ * ====================================================================== */
+
+typedef struct {
+    volatile uint32_t timestamp;  /* 64-cycle ticks since graph start       */
+    volatile uint16_t event;      /* rp1_trace_event_t                      */
+    volatile uint16_t node_index; /* Node index, or 0xFFFF for graph events */
+    volatile uint32_t aux0;       /* Event-specific detail                  */
+    volatile uint32_t aux1;       /* Event-specific detail                  */
+} rp1_trace_entry_t;
+
+/* =========================================================================
  * In-flight kernel table entry (BTCM, max RP1_MAX_INFLIGHT entries)
  * ====================================================================== */
 
@@ -454,7 +491,7 @@ typedef struct {
 #define RP1_MAX_SIGNALS   256
 #define RP1_MAX_BUCKETS    32
 
-#define RP1_PROTOCOL_VERSION  2u
+#define RP1_PROTOCOL_VERSION  3u
 
 /* =========================================================================
  * Static assertions -- enforced on every translation unit that includes
@@ -523,12 +560,19 @@ RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, rp1_state)          == 0x30, "ctrl.rp1_st
 RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, heartbeat)          == 0x3C, "ctrl.heartbeat offset");
 RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, arg_buf_base_lo)    == 0x40, "ctrl.arg_buf_base_lo offset");
 RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, sig_array_base_lo)  == 0x48, "ctrl.sig_array_base_lo offset");
+RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, trace_enable)       == 0x50, "ctrl.trace_enable offset");
+RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, trace_base_lo)      == 0x54, "ctrl.trace_base_lo offset");
+RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, trace_base_hi)      == 0x58, "ctrl.trace_base_hi offset");
+RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, trace_size)         == 0x5C, "ctrl.trace_size offset");
+RP1_STATIC_ASSERT(offsetof(rp1_ctrl_t, trace_write_idx)    == 0x60, "ctrl.trace_write_idx offset");
 
 /* Signal slot, CQ entry, inflight tracker sizes. */
 RP1_STATIC_ASSERT(sizeof(rp1_signal_slot_t) == 16,
                   "rp1_signal_slot_t must be 16 bytes");
 RP1_STATIC_ASSERT(sizeof(rp1_cq_entry_t) == 16,
                   "rp1_cq_entry_t must be 16 bytes");
+RP1_STATIC_ASSERT(sizeof(rp1_trace_entry_t) == 16,
+                  "rp1_trace_entry_t must be 16 bytes");
 RP1_STATIC_ASSERT(sizeof(rp1_inflight_t) == 24,
                   "rp1_inflight_t must be 24 bytes");
 

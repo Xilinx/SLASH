@@ -56,6 +56,11 @@ public:
     /// @param options Populated options struct.
     /// @return Exit code (0 on success).
     static int ping(const Options& options);
+
+    /// @brief Submit a one-node SIGNAL graph with RP1 tracing enabled.
+    /// @param options Populated options struct.
+    /// @return Exit code (0 on success).
+    static int tracePing(const Options& options);
 };
 
 #endif // SMI_DEBUG_RP1_PROBE_HPP

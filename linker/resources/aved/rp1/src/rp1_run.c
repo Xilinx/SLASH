@@ -9,6 +9,7 @@
  */
 
 #include "rp1_run.h"
+#include "rp1_cycles.h"
 #include "rp1_store.h"
 #include <slash/uapi/rp1_protocol.h>
 #include <stdint.h>
@@ -25,12 +26,29 @@ static inline void wfi(void)
 }
 #endif
 
+static void trace(uint16_t event, uint32_t node_index, uint32_t aux0, uint32_t aux1)
+{
+    if (!g_trace_enable || !g_trace || !g_trace_size)
+        return;
+
+    uint32_t idx = g_ctrl->trace_write_idx % g_trace_size;
+    g_trace[idx].timestamp  = rp1_cycles() - g_graph_start_cycles;
+    g_trace[idx].event      = event;
+    g_trace[idx].node_index = (uint16_t)node_index;
+    g_trace[idx].aux0       = aux0;
+    g_trace[idx].aux1       = aux1;
+    g_ctrl->trace_write_idx++;
+    dsb();
+}
+
 #ifdef QEMU_SEMIHOSTING
 int rp1_run(const rp1_hooks_t *hooks)
 #else
 int rp1_run(void)
 #endif
 {
+    rp1_pmu_init();
+
     g_ctrl->magic          = RP1_CTRL_MAGIC;
     g_ctrl->version        = RP1_PROTOCOL_VERSION;
     g_ctrl->rp1_state      = RP1_STATE_READY;
@@ -56,6 +74,8 @@ int rp1_run(void)
 
         /* New graph submitted — resolve DDR pointers and reset state. */
         rp1_store_init();
+        g_graph_start_cycles = rp1_cycles();
+        trace(RP1_TRACE_GRAPH_START, 0xFFFFu, g_ctrl->graph_seq, g_ctrl->node_count);
         g_ctrl->rp1_state      = RP1_STATE_RUNNING;
         g_ctrl->rp1_error_code = 0;
         dsb();
@@ -66,6 +86,7 @@ int rp1_run(void)
         int result = rp1_loop();
 #endif
 
+        trace(RP1_TRACE_GRAPH_DONE, 0xFFFFu, (uint32_t)result, g_ctrl->graph_seq);
         g_ctrl->graph_done_seq = g_ctrl->graph_seq;
 
         if (result == -1)

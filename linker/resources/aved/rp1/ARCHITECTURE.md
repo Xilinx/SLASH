@@ -420,7 +420,7 @@ DDR Address        Size      Purpose
 0x3004_1000        64KB      Completion Queue (CQ) -- 4096 x 16-byte entries  (RP1_DEFAULT_CQ_OFFSET)
 0x3005_1000        1MB       Argument Buffer -- pre-staged kernel arguments   (RP1_DEFAULT_ARG_BUF_OFFSET)
 0x3015_1000        4KB       Signal Array -- 256 x 16-byte value slots        (RP1_DEFAULT_SIG_ARRAY_OFFSET)
-0x3015_2000        ...       Free for future use within the BAR window
+0x3015_2000        ...       Optional trace ring -- 16-byte event entries     (RP1_DEFAULT_TRACE_OFFSET)
 ```
 
 The offsets above are the `RP1_DEFAULT_*_OFFSET` constants in
@@ -436,7 +436,7 @@ it programs the corresponding `*_base_lo/_hi` fields consistently.
 Offset  Size  Field              Writer  Reader
 ------  ----  -----              ------  ------
 0x00    4B    magic              RP1     Host    -- 0x53515231 ("SQR1")
-0x04    4B    version            RP1     Host    -- Protocol version (RP1_PROTOCOL_VERSION = 2)
+0x04    4B    version            RP1     Host    -- Protocol version (RP1_PROTOCOL_VERSION = 3)
 0x08    4B    node_count         Host    RP1     -- Number of nodes in this graph
 0x0C    4B    cq_size            Host    RP1     -- Number of CQ entries (power of 2)
 0x10    4B    node_base_lo       Host    RP1     -- Node array base address (low 32)
@@ -455,7 +455,12 @@ Offset  Size  Field              Writer  Reader
 0x44    4B    arg_buf_base_hi    Host    RP1
 0x48    4B    sig_array_base_lo  Host    RP1     -- Signal array base address
 0x4C    4B    sig_array_base_hi  Host    RP1
-0x50    ...   reserved
+0x50    4B    trace_enable       Host    RP1     -- Non-zero enables trace queue writes
+0x54    4B    trace_base_lo      Host    RP1     -- Trace queue base address
+0x58    4B    trace_base_hi      Host    RP1
+0x5C    4B    trace_size         Host    RP1     -- Trace entries (power of 2 recommended)
+0x60    4B    trace_write_idx    RP1     Host    -- Next trace write position
+0x64    ...   reserved
 ```
 
 ### Submission Protocol
@@ -480,7 +485,8 @@ doorbell/IRQ path described in earlier drafts of this document
    statuses, `g_loop_iters[]`, the inflight table); sets `rp1_state = RUNNING`
 7. **RP1 processes** the graph via `rp1_loop()` (Section D)
 8. **RP1 writes** CQ entries for completed/failed nodes as it goes (skipped
-   for `SILENT` nodes)
+   for `SILENT` nodes), and if `trace_enable != 0`, writes trace-ring events
+   for graph, scheduling, wait, control-flow, PDI, and kernel lifecycle points
 9. **RP1 sets** `graph_done_seq = graph_seq` and `rp1_state` to `READY`
    (normal completion), `ERROR` (`HALT_ON_ERROR` abort or inflight-full), or
    `HALTED` (`HALT` opcode)
@@ -495,9 +501,8 @@ doorbell/IRQ path described in earlier drafts of this document
   waking the host without polling is a `TODO` left in `rp1_run.c`; the
   symmetric host->RP1 `irq_sq` doorbell and a host-side `eventfd` consumer
   for `irq_cq` are not implemented either. Today both sides poll a DDR word.
-- **Debug/Status area.** No separate debug/status sub-region is defined in
-  `rp1_protocol.h`; `rp1_current_node` in the control block is the only
-  RP1-side debug visibility today.
+- **Host trace consumer.** The optional trace ring ABI exists and the firmware
+  can write it, but `Rp1Submitter`/SMI do not yet drain or decode it.
 
 ### Completion Queue Entry (16 bytes)
 
@@ -507,14 +512,52 @@ Offset  Size  Field
 0x00    4B    node_index          -- Which node this completes
 0x04    4B    status              -- 0=OK, 1=ERROR, 2=TIMEOUT
 0x08    4B    error_detail        -- Command-specific error code
-0x0C    4B    timestamp           -- R5 cycle counter at completion
+0x0C    4B    timestamp           -- 64-cycle PMU ticks since graph start
 ```
 
 Nodes with the SILENT flag set do not generate CQ entries.
 
-`timestamp` is currently always written as `0` -- the firmware has not yet
-wired up the R5 cycle counter (PMCCNTR); this is a known `TODO` in
-`write_cq_entry()`, not a protocol change.
+`timestamp` is written by the firmware as `PMCCNTR - g_graph_start_cycles`.
+The R5 PMU divider is left enabled, so the field is in 64-cycle ticks. It is
+monotonically meaningful within one graph execution; unsigned subtraction makes
+the per-graph delta robust across the 32-bit counter wrap.
+
+### Optional Trace Queue Entry (16 bytes)
+
+When `trace_enable != 0`, RP1 writes trace events into the ring described by
+`trace_base_lo/hi`, `trace_size`, and `trace_write_idx`. The ring uses the same
+monotonic-index convention as the CQ:
+
+```
+Offset  Size  Field
+------  ----  -----
+0x00    4B    timestamp           -- 64-cycle PMU ticks since graph start
+0x04    2B    event               -- rp1_trace_event_t
+0x06    2B    node_index          -- Node index, or 0xFFFF for graph events
+0x08    4B    aux0                -- Event-specific detail
+0x0C    4B    aux1                -- Event-specific detail
+```
+
+Current firmware events:
+
+```
+RP1_TRACE_GRAPH_START
+RP1_TRACE_NODE_ACTIVATE
+RP1_TRACE_KERNEL_LAUNCH
+RP1_TRACE_KERNEL_DONE
+RP1_TRACE_KERNEL_TIMEOUT
+RP1_TRACE_LOOP_ITER
+RP1_TRACE_COND_EVAL
+RP1_TRACE_WAIT_PARK
+RP1_TRACE_WAIT_WAKE
+RP1_TRACE_PDI_LOAD
+RP1_TRACE_IMAGE_MISMATCH
+RP1_TRACE_GRAPH_DONE
+```
+
+The firmware resets `trace_write_idx` at each graph submission. This keeps the
+first trace entry for a submission at index 0; a cumulative cross-graph trace
+can be added later when a host-side drainer exists.
 
 ### Memory Ordering
 

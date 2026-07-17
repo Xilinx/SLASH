@@ -243,6 +243,12 @@ void Rp1BarWindow::readCq(std::uint32_t idx, rp1_cq_entry_t& out,
            &out, sizeof(out));
 }
 
+void Rp1BarWindow::readTrace(std::uint32_t idx, rp1_trace_entry_t& out,
+                             std::uint32_t trace_offset) {
+    readAt(trace_offset + idx * sizeof(rp1_trace_entry_t),
+           &out, sizeof(out));
+}
+
 // ---- Diagnostics ---------------------------------------------------------
 
 std::size_t Rp1BarWindow::mappedLength() const noexcept {

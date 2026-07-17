@@ -26,6 +26,9 @@ uint8_t       g_node_status[RP1_MAX_NODES] BTCM_SECTION;
 uint32_t      g_loop_iters[RP1_MAX_LOOPS]  BTCM_SECTION;
 rp1_inflight_t g_inflight[RP1_MAX_INFLIGHT] BTCM_SECTION;
 uint32_t      g_inflight_count             BTCM_SECTION;
+uint32_t      g_graph_start_cycles         BTCM_SECTION;
+uint32_t      g_trace_size                 BTCM_SECTION;
+uint32_t      g_trace_enable               BTCM_SECTION;
 
 /* Persists across graphs (physical reconfig state); zeroed only at boot. */
 uint32_t      g_active_image_id            BTCM_SECTION;
@@ -39,6 +42,7 @@ rp1_node_t       *g_nodes   = NULL;
 rp1_cq_entry_t   *g_cq      = NULL;
 rp1_signal_slot_t *g_signals = NULL;
 uint32_t         *g_arg_buf  = NULL;
+rp1_trace_entry_t *g_trace   = NULL;
 
 /* -------------------------------------------------------------------------
  * Helpers
@@ -71,6 +75,11 @@ void rp1_store_init(void)
                     (uintptr_t)make64(g_ctrl->sig_array_base_lo, g_ctrl->sig_array_base_hi);
     g_arg_buf = (uint32_t *)
                     (uintptr_t)make64(g_ctrl->arg_buf_base_lo, g_ctrl->arg_buf_base_hi);
+    g_trace   = (rp1_trace_entry_t *)
+                    (uintptr_t)make64(g_ctrl->trace_base_lo, g_ctrl->trace_base_hi);
+    g_trace_size = g_ctrl->trace_size;
+    g_trace_enable = g_ctrl->trace_enable;
+    g_ctrl->trace_write_idx = 0;
 
     rp1_store_reset_graph();
 }

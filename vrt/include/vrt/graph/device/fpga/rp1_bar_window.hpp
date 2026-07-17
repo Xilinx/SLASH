@@ -172,12 +172,17 @@ class Rp1BarWindow {
     void readCq(std::uint32_t idx, rp1_cq_entry_t& out,
                 std::uint32_t cq_offset = RP1_DEFAULT_CQ_OFFSET);
 
+    /// Read trace-queue entry @p idx.
+    void readTrace(std::uint32_t idx, rp1_trace_entry_t& out,
+                   std::uint32_t trace_offset = RP1_DEFAULT_TRACE_OFFSET);
+
     // ---- Single-field accessors (cheap polling) ----------------------
 
     std::uint32_t readMagic()        { return readU32(offsetof(rp1_ctrl_t, magic)); }
     std::uint32_t readGraphSeq()     { return readU32(offsetof(rp1_ctrl_t, graph_seq)); }
     std::uint32_t readGraphDoneSeq() { return readU32(offsetof(rp1_ctrl_t, graph_done_seq)); }
     std::uint32_t readCqWriteIdx()   { return readU32(offsetof(rp1_ctrl_t, cq_write_idx)); }
+    std::uint32_t readTraceWriteIdx(){ return readU32(offsetof(rp1_ctrl_t, trace_write_idx)); }
     std::uint32_t readState()        { return readU32(offsetof(rp1_ctrl_t, rp1_state)); }
     std::uint32_t readErrorCode()    { return readU32(offsetof(rp1_ctrl_t, rp1_error_code)); }
     std::uint32_t readHeartbeat()    { return readU32(offsetof(rp1_ctrl_t, heartbeat)); }
@@ -190,6 +195,16 @@ class Rp1BarWindow {
     }
     void writeCqReadIdx(std::uint32_t value) {
         writeU32(offsetof(rp1_ctrl_t, cq_read_idx), value);
+    }
+    void writeTraceEnable(std::uint32_t value) {
+        writeU32(offsetof(rp1_ctrl_t, trace_enable), value);
+    }
+    void writeTraceBase(std::uint32_t lo, std::uint32_t hi) {
+        writeU32(offsetof(rp1_ctrl_t, trace_base_lo), lo);
+        writeU32(offsetof(rp1_ctrl_t, trace_base_hi), hi);
+    }
+    void writeTraceSize(std::uint32_t value) {
+        writeU32(offsetof(rp1_ctrl_t, trace_size), value);
     }
 
     // ---- Diagnostics --------------------------------------------------

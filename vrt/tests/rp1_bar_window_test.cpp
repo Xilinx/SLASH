@@ -70,6 +70,7 @@ TEST(Rp1BarWindowProtocol, WireSizesMatchHeader) {
     EXPECT_EQ(sizeof(rp1_ctrl_t),        std::size_t{0x1000});
     EXPECT_EQ(sizeof(rp1_signal_slot_t), std::size_t{16});
     EXPECT_EQ(sizeof(rp1_cq_entry_t),    std::size_t{16});
+    EXPECT_EQ(sizeof(rp1_trace_entry_t), std::size_t{16});
 }
 
 TEST_F(WindowFixture, MappedLengthAndWindowOffsetExposed) {
@@ -128,6 +129,15 @@ TEST_F(WindowFixture, SingleWordHotPathAccessors) {
 
     window_->writeNodeCount(7);
     EXPECT_EQ(window_->readU32(offsetof(rp1_ctrl_t, node_count)), 7u);
+
+    window_->writeTraceEnable(1);
+    window_->writeTraceBase(0x30152000u, 0);
+    window_->writeTraceSize(128);
+    window_->writeU32(offsetof(rp1_ctrl_t, trace_write_idx), 9);
+    EXPECT_EQ(window_->readU32(offsetof(rp1_ctrl_t, trace_enable)), 1u);
+    EXPECT_EQ(window_->readU32(offsetof(rp1_ctrl_t, trace_base_lo)), 0x30152000u);
+    EXPECT_EQ(window_->readU32(offsetof(rp1_ctrl_t, trace_size)), 128u);
+    EXPECT_EQ(window_->readTraceWriteIdx(), 9u);
 }
 
 TEST_F(WindowFixture, WriteNodesUsesDefaultNodeArrayOffset) {
@@ -207,6 +217,26 @@ TEST_F(WindowFixture, ReadCqEntryAtIndex) {
     EXPECT_EQ(out.node_index, 4u);
     EXPECT_EQ(out.status,     static_cast<std::uint32_t>(RP1_CQ_OK));
     EXPECT_EQ(out.timestamp,  0xABCDu);
+}
+
+TEST_F(WindowFixture, ReadTraceEntryAtIndex) {
+    rp1_trace_entry_t entry{};
+    entry.timestamp  = 0x1234u;
+    entry.event      = RP1_TRACE_KERNEL_LAUNCH;
+    entry.node_index = 2;
+    entry.aux0       = 0x88010000u;
+    entry.aux1       = 3;
+    std::memcpy(backing_.data() + kWindowOff + RP1_DEFAULT_TRACE_OFFSET
+                    + 5 * sizeof(rp1_trace_entry_t),
+                &entry, sizeof(entry));
+
+    rp1_trace_entry_t out{};
+    window_->readTrace(/*idx*/ 5, out);
+    EXPECT_EQ(out.timestamp,  0x1234u);
+    EXPECT_EQ(out.event,      static_cast<std::uint16_t>(RP1_TRACE_KERNEL_LAUNCH));
+    EXPECT_EQ(out.node_index, 2u);
+    EXPECT_EQ(out.aux0,       0x88010000u);
+    EXPECT_EQ(out.aux1,       3u);
 }
 
 TEST_F(WindowFixture, OutOfRangeWriteIsRejected) {

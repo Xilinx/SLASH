@@ -42,6 +42,9 @@ extern uint32_t g_loop_iters[RP1_MAX_LOOPS];
 extern rp1_inflight_t g_inflight[RP1_MAX_INFLIGHT];
 extern uint32_t       g_inflight_count;
 
+/* PMU cycle counter value captured at the start of the current graph. */
+extern uint32_t g_graph_start_cycles;
+
 /*
  * Image id last installed by a successful PDI_LOAD (0 = none loaded yet).
  * This reflects physical partial-reconfiguration state, so unlike the other
@@ -70,6 +73,11 @@ extern rp1_signal_slot_t *g_signals;
 
 /* Pointer to the argument buffer (from g_ctrl->arg_buf_base_lo/hi). */
 extern uint32_t *g_arg_buf;
+
+/* Optional trace ring (from g_ctrl->trace_*), enabled per graph. */
+extern rp1_trace_entry_t *g_trace;
+extern uint32_t g_trace_size;
+extern uint32_t g_trace_enable;
 
 /* -------------------------------------------------------------------------
  * Initialisation

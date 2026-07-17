@@ -68,6 +68,8 @@ struct DdrView {
                                          base + kWindowOff + RP1_DEFAULT_ARG_BUF_OFFSET); }
     rp1_signal_slot_t* signals()   { return reinterpret_cast<rp1_signal_slot_t*>(
                                          base + kWindowOff + RP1_DEFAULT_SIG_ARRAY_OFFSET); }
+    rp1_trace_entry_t* trace()     { return reinterpret_cast<rp1_trace_entry_t*>(
+                                         base + kWindowOff + RP1_DEFAULT_TRACE_OFFSET); }
 };
 
 /// Bring the fake firmware up to RP1_STATE_READY with the canonical
@@ -127,9 +129,12 @@ class FakeRp1 {
         const std::uint32_t count   = c.node_count;
         const std::uint32_t cq_size = c.cq_size;
         c.rp1_state = RP1_STATE_RUNNING;
+        c.trace_write_idx = 0;
+        emitTrace(RP1_TRACE_GRAPH_START, 0xFFFFu, c.graph_seq, count);
 
         for (std::uint32_t i = 0; i < count; ++i) {
             rp1_node_t& n = ddr_.nodes()[i];
+            emitTrace(RP1_TRACE_NODE_ACTIVATE, i, n.opcode, n.flags);
             switch (n.opcode) {
                 case RP1_OP_SIGNAL: {
                     const auto& pl = n.payload.signal;
@@ -141,6 +146,11 @@ class FakeRp1 {
                     // Pretend the kernel ran instantly.  Real firmware
                     // would also propagate barrier_set_mask; we just
                     // emit a CQ entry to keep counts honest.
+                    emitTrace(RP1_TRACE_KERNEL_LAUNCH, i,
+                              n.payload.kernel_dispatch.kernel_base_addr,
+                              n.payload.kernel_dispatch.arg_count);
+                    emitTrace(RP1_TRACE_KERNEL_DONE, i,
+                              n.payload.kernel_dispatch.kernel_base_addr, 0);
                     break;
                 }
                 case RP1_OP_NOP:
@@ -158,9 +168,26 @@ class FakeRp1 {
             }
             n.status = RP1_NODE_DONE;
         }
+        emitTrace(RP1_TRACE_GRAPH_DONE, 0xFFFFu, 0, c.graph_seq);
         // Use the limit-flag as a sentinel for the inflight cap; not
         // exercised here.
         (void)cq_cap_;
+    }
+
+    void emitTrace(std::uint16_t event, std::uint32_t node_index,
+                   std::uint32_t aux0, std::uint32_t aux1) {
+        auto& c = ddr_.ctrl();
+        if (c.trace_enable == 0 || c.trace_size == 0)
+            return;
+
+        const std::uint32_t idx = c.trace_write_idx % c.trace_size;
+        rp1_trace_entry_t& entry = ddr_.trace()[idx];
+        entry.timestamp  = 100u + c.trace_write_idx;
+        entry.event      = event;
+        entry.node_index = static_cast<std::uint16_t>(node_index);
+        entry.aux0       = aux0;
+        entry.aux1       = aux1;
+        ++c.trace_write_idx;
     }
 
     DdrView                 ddr_;
@@ -262,6 +289,10 @@ TEST_F(SubmitterFixture, EnsureReadyProgramsBaseAddresses) {
               static_cast<std::uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_ARG_BUF_OFFSET));
     EXPECT_EQ(c.sig_array_base_lo,
               static_cast<std::uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_SIG_ARRAY_OFFSET));
+    EXPECT_EQ(c.trace_base_lo,
+              static_cast<std::uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET));
+    EXPECT_EQ(c.trace_size, vrt::graph::fpga::kDefaultTraceSize);
+    EXPECT_EQ(c.trace_enable, 0u);
     EXPECT_EQ(c.node_base_hi, 0u);
 }
 
@@ -292,6 +323,16 @@ TEST_F(SubmitterFixture, SignalGraphRoundTrip) {
     EXPECT_EQ(cq[0].status, static_cast<std::uint32_t>(RP1_CQ_OK));
 }
 
+TEST_F(SubmitterFixture, TraceDisabledByDefaultDrainsEmpty) {
+    auto img = makeSignalGraph(/*slot*/ 2, /*value*/ 0xDEADBEEFu);
+    submitter_->submitAndWait(img, std::chrono::milliseconds(500));
+
+    auto trace = submitter_->drainTrace();
+    EXPECT_EQ(trace.written, 0u);
+    EXPECT_FALSE(trace.overflow);
+    EXPECT_TRUE(trace.entries.empty());
+}
+
 TEST_F(SubmitterFixture, DiamondImageEmitsFiveCqEntries) {
     auto img = makeDiamondImage();
     submitter_->submitAndWait(img, std::chrono::milliseconds(500));
@@ -305,6 +346,46 @@ TEST_F(SubmitterFixture, DiamondImageEmitsFiveCqEntries) {
         EXPECT_EQ(cq[i].status, static_cast<std::uint32_t>(RP1_CQ_OK));
     }
     EXPECT_EQ(submitter_->lastCqStart() - cq.size(), 0u);
+}
+
+TEST_F(SubmitterFixture, TraceEnabledCapturesGraphEventsAndPreservesCq) {
+    auto img = makeDiamondImage();
+    img.trace_enable = true;
+    submitter_->submitAndWait(img, std::chrono::milliseconds(500));
+
+    auto trace = submitter_->drainTrace();
+    ASSERT_FALSE(trace.overflow);
+    ASSERT_EQ(trace.written, trace.entries.size());
+    ASSERT_GE(trace.entries.size(), 2u);
+    EXPECT_EQ(trace.entries.front().event, static_cast<std::uint16_t>(RP1_TRACE_GRAPH_START));
+    EXPECT_EQ(trace.entries.front().node_index, 0xFFFFu);
+    EXPECT_EQ(trace.entries.back().event, static_cast<std::uint16_t>(RP1_TRACE_GRAPH_DONE));
+
+    std::uint32_t launch_count = 0;
+    std::uint32_t done_count = 0;
+    for (const auto& e : trace.entries) {
+        if (e.event == RP1_TRACE_KERNEL_LAUNCH) ++launch_count;
+        if (e.event == RP1_TRACE_KERNEL_DONE) ++done_count;
+    }
+    EXPECT_EQ(launch_count, 4u);
+    EXPECT_EQ(done_count, 4u);
+
+    auto cq = submitter_->drainCq();
+    ASSERT_EQ(cq.size(), 5u);
+    EXPECT_EQ(cq[0].status, static_cast<std::uint32_t>(RP1_CQ_OK));
+}
+
+TEST_F(SubmitterFixture, TinyTraceRingReportsOverflow) {
+    auto img = makeDiamondImage();
+    img.trace_enable = true;
+    img.trace_size_override = 4;
+    submitter_->submitAndWait(img, std::chrono::milliseconds(500));
+
+    auto trace = submitter_->drainTrace();
+    EXPECT_TRUE(trace.overflow);
+    EXPECT_GT(trace.written, trace.entries.size());
+    ASSERT_EQ(trace.entries.size(), 4u);
+    EXPECT_EQ(trace.entries.back().event, static_cast<std::uint16_t>(RP1_TRACE_GRAPH_DONE));
 }
 
 TEST_F(SubmitterFixture, SilentNodesDoNotProduceCqEntries) {

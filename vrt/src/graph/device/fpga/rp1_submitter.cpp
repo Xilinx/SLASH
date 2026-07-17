@@ -111,6 +111,12 @@ void Rp1Submitter::ensureReady(std::chrono::milliseconds timeout) {
                        static_cast<std::uint32_t>(
                            RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_SIG_ARRAY_OFFSET));
     window_->writeU32(offsetof(rp1_ctrl_t, sig_array_base_hi), 0);
+    window_->writeTraceBase(static_cast<std::uint32_t>(
+                                RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET),
+                            0);
+    window_->writeTraceSize(kDefaultTraceSize);
+    window_->writeTraceEnable(0);
+    last_trace_size_ = kDefaultTraceSize;
 
     // graph_seq / graph_done_seq / cq_*_idx / rp1_state are intentionally
     // left untouched: the firmware owns the read side of graph_seq and
@@ -184,6 +190,15 @@ void Rp1Submitter::submitAndWait(const Rp1GraphImage& image,
         window_->writeU32(offsetof(rp1_ctrl_t, cq_size), cq_size_);
     }
 
+    const std::uint32_t trace_size =
+        image.trace_size_override != 0 ? image.trace_size_override : kDefaultTraceSize;
+    window_->writeTraceBase(static_cast<std::uint32_t>(
+                                RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET),
+                            0);
+    window_->writeTraceSize(trace_size);
+    window_->writeTraceEnable(image.trace_enable ? 1u : 0u);
+    last_trace_size_ = trace_size;
+
     // Fence before bumping graph_seq so node_count etc. are visible.
     std::atomic_thread_fence(std::memory_order_seq_cst);
     window_->writeGraphSeq(want_seq);
@@ -240,6 +255,28 @@ std::vector<rp1_cq_entry_t> Rp1Submitter::drainCq() {
     window_->writeCqReadIdx(end);
     last_cq_start_ = end;
     return out;
+}
+
+Rp1TraceCapture Rp1Submitter::drainTrace() {
+    const std::uint32_t written = window_->readTraceWriteIdx();
+    const std::uint32_t count =
+        written > last_trace_size_ ? last_trace_size_ : written;
+    const bool overflow = written > last_trace_size_;
+
+    Rp1TraceCapture capture;
+    capture.written = written;
+    capture.overflow = overflow;
+    capture.entries.reserve(count);
+
+    const std::uint32_t start = overflow ? (written % last_trace_size_) : 0u;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const std::uint32_t idx = (start + i) % last_trace_size_;
+        rp1_trace_entry_t entry{};
+        window_->readTrace(idx, entry);
+        capture.entries.push_back(entry);
+    }
+
+    return capture;
 }
 
 // ---- Polling helpers -----------------------------------------------------

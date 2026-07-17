@@ -49,6 +49,7 @@ static int test_struct_sizes(void)
     CHECK_EQ32(sizeof(rp1_ctrl_t),         0x1000, "rp1_ctrl_t size");
     CHECK_EQ32(sizeof(rp1_signal_slot_t),  16,     "signal slot size");
     CHECK_EQ32(sizeof(rp1_cq_entry_t),     16,     "cq entry size");
+    CHECK_EQ32(sizeof(rp1_trace_entry_t),  16,     "trace entry size");
     CHECK_EQ32(sizeof(rp1_inflight_t),     24,     "inflight entry size");
     return 0;
 }
@@ -90,6 +91,11 @@ static int test_ctrl_offsets(void)
     CHECK_EQ32(offsetof(rp1_ctrl_t, heartbeat),        0x3C, "ctrl.heartbeat offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, arg_buf_base_lo),  0x40, "ctrl.arg_buf_base_lo offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, sig_array_base_lo),0x48, "ctrl.sig_array_base_lo offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, trace_enable),     0x50, "ctrl.trace_enable offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, trace_base_lo),    0x54, "ctrl.trace_base_lo offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, trace_base_hi),    0x58, "ctrl.trace_base_hi offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, trace_size),       0x5C, "ctrl.trace_size offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, trace_write_idx),  0x60, "ctrl.trace_write_idx offset");
     return 0;
 }
 

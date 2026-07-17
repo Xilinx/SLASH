@@ -310,6 +310,10 @@ static int smiMain(int argc, char **argv) {
         "Submit a one-node SIGNAL graph to RP1 and verify it completes end-to-end");
     addRp1ProbeCommonOptions(rp1PingCommand);
 
+    auto* rp1TracePingCommand = debugCommand->add_subcommand("rp1-trace-ping",
+        "Submit a one-node SIGNAL graph with RP1 tracing enabled and print CQ/trace entries");
+    addRp1ProbeCommonOptions(rp1TracePingCommand);
+
     CLI11_PARSE(app, argc, argv);
 
     // Route commands
@@ -341,6 +345,8 @@ static int smiMain(int argc, char **argv) {
         return Rp1Probe::dump(rp1ProbeOptions);
     } else if (rp1PingCommand->parsed()) {
         return Rp1Probe::ping(rp1ProbeOptions);
+    } else if (rp1TracePingCommand->parsed()) {
+        return Rp1Probe::tracePing(rp1ProbeOptions);
     } else {
         // No subcommand given - print help and exit with error.
         std::cerr << app.help() << std::endl;

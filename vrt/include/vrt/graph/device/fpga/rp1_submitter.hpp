@@ -90,6 +90,12 @@ struct Rp1GraphImage {
     /// "leave whatever was already programmed" (or use the submitter's
     /// default on the first submission).
     std::uint32_t cq_size_override = 0;
+
+    /// Enable RP1 firmware trace-ring writes for this submission.
+    bool trace_enable = false;
+
+    /// Optional override of trace_size. Zero uses kDefaultTraceSize.
+    std::uint32_t trace_size_override = 0;
 };
 
 /**
@@ -97,6 +103,25 @@ struct Rp1GraphImage {
  *        rp1-ping` probe).
  */
 constexpr std::uint32_t kDefaultCqSize = 64u;
+
+/**
+ * @brief Default optional trace-ring size programmed by Rp1Submitter.
+ */
+constexpr std::uint32_t kDefaultTraceSize = 256u;
+
+/**
+ * @brief Trace entries captured after an RP1 graph submission.
+ */
+struct Rp1TraceCapture {
+    /// Readable trace entries, in chronological order.
+    std::vector<rp1_trace_entry_t> entries;
+
+    /// Firmware's raw trace_write_idx value after graph completion.
+    std::uint32_t written = 0;
+
+    /// True when the firmware wrote more entries than fit in the ring.
+    bool overflow = false;
+};
 
 /**
  * @brief Polled-completion timeouts the firmware reasonably honours.
@@ -155,6 +180,14 @@ class Rp1Submitter {
     std::vector<rp1_cq_entry_t> drainCq();
 
     /**
+     * @brief Read trace entries from the most recent @c submitAndWait().
+     *
+     * RP1 resets @c trace_write_idx at graph start, so this drains the
+     * per-submission range @c [0, trace_write_idx).
+     */
+    Rp1TraceCapture drainTrace();
+
+    /**
      * @brief Sequence number of the most recently submitted graph.
      *
      * Useful for diagnostics; matches the value of @c graph_seq the
@@ -175,6 +208,7 @@ class Rp1Submitter {
     bool          ready_       = false;
     std::uint32_t last_graph_seq_ = 0;
     std::uint32_t last_cq_start_  = 0;
+    std::uint32_t last_trace_size_ = kDefaultTraceSize;
 
     void waitForMagic(std::chrono::milliseconds timeout);
     void waitForState(std::uint32_t target, std::chrono::milliseconds timeout);

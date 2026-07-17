@@ -60,7 +60,7 @@ EQUALS = =
 CMAKE_SOURCE_DIR = /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-qemu
+CMAKE_BINARY_DIR = /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-agent
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -87,9 +87,9 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-qemu/CMakeFiles /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-qemu//CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-agent/CMakeFiles /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-agent//CMakeFiles/progress.marks
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-qemu/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/vserbu/SLASH/.worktrees/feature/hsa-improved-rebased/linker/resources/aved/rp1/build-agent/CMakeFiles 0
 .PHONY : all
 
 # The main clean target

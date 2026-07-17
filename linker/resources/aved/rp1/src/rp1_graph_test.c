@@ -45,8 +45,11 @@
                  (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_ARG_BUF_OFFSET))
 #define G_SIGS  ((volatile rp1_signal_slot_t *)(uintptr_t) \
                  (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_SIG_ARRAY_OFFSET))
+#define G_TRACE ((volatile rp1_trace_entry_t *)(uintptr_t) \
+                 (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET))
 
 #define TEST_CQ_SIZE  64u
+#define TEST_TRACE_SIZE 128u
 
 /* Fake AXI-Lite kernel: 256-byte page per kernel, word 0 is the
  * ap_start/ap_done control reg, word 4 (offset 0x10) is arg 0.  Lives in
@@ -171,6 +174,7 @@ static void setup_graph(uint32_t node_count, uint32_t fake_kernel_count)
     tmemzero((volatile void *)G_CQ,    TEST_CQ_SIZE * sizeof(rp1_cq_entry_t));
     tmemzero((volatile void *)G_ARGS,  64u * sizeof(uint32_t));
     tmemzero((volatile void *)G_SIGS,  64u * sizeof(rp1_signal_slot_t));
+    tmemzero((volatile void *)G_TRACE, TEST_TRACE_SIZE * sizeof(rp1_trace_entry_t));
     if (fake_kernel_count > 0) {
         tmemzero((volatile void *)(uintptr_t)FAKE_KERNEL_BASE,
                  fake_kernel_count * FAKE_KERNEL_STRIDE);
@@ -182,6 +186,8 @@ static void setup_graph(uint32_t node_count, uint32_t fake_kernel_count)
     G_CTRL->cq_base_lo        = (uint32_t)(uintptr_t)G_CQ;
     G_CTRL->arg_buf_base_lo   = (uint32_t)(uintptr_t)G_ARGS;
     G_CTRL->sig_array_base_lo = (uint32_t)(uintptr_t)G_SIGS;
+    G_CTRL->trace_base_lo     = (uint32_t)(uintptr_t)G_TRACE;
+    G_CTRL->trace_size        = TEST_TRACE_SIZE;
     G_CTRL->graph_seq         = 1;
 
     hook_reset(node_count);
@@ -406,6 +412,24 @@ int rp1_pdi_load(uint32_t addr_lo, uint32_t addr_hi, uint32_t timeout_cycles)
     return s_pdi_force_rc;
 }
 
+static void prepare_diamond_graph(void)
+{
+    setup_graph(/* node_count */ 4, /* fake_kernels */ 4);
+
+    /* Protocol v2: one (reg_offset, value) pair per kernel -- write value i to
+     * register 0x10.  Each pair is two words, so kernel i's pair lives at byte
+     * offset i*8. */
+    for (uint32_t i = 0; i < 4; i++) {
+        G_ARGS[2u * i]      = 0x10u;  /* reg_offset */
+        G_ARGS[2u * i + 1u] = i;      /* value      */
+    }
+
+    make_kernel(&G_NODES[0], 0, 0, 0x00, 0, 0x01, 0u * 8u, 1);
+    make_kernel(&G_NODES[1], 1, 0, 0x01, 0, 0x02, 1u * 8u, 1);
+    make_kernel(&G_NODES[2], 2, 0, 0x01, 0, 0x04, 2u * 8u, 1);
+    make_kernel(&G_NODES[3], 3, 0, 0x06, 0, 0x08, 3u * 8u, 1);
+}
+
 /* -------------------------------------------------------------------------
  * test_diamond_dag
  *
@@ -424,20 +448,7 @@ int rp1_pdi_load(uint32_t addr_lo, uint32_t addr_hi, uint32_t timeout_cycles)
 
 static int test_diamond_dag(void)
 {
-    setup_graph(/* node_count */ 4, /* fake_kernels */ 4);
-
-    /* Protocol v2: one (reg_offset, value) pair per kernel -- write value i to
-     * register 0x10.  Each pair is two words, so kernel i's pair lives at byte
-     * offset i*8. */
-    for (uint32_t i = 0; i < 4; i++) {
-        G_ARGS[2u * i]      = 0x10u;  /* reg_offset */
-        G_ARGS[2u * i + 1u] = i;      /* value      */
-    }
-
-    make_kernel(&G_NODES[0], 0, 0, 0x00, 0, 0x01, 0u * 8u, 1);
-    make_kernel(&G_NODES[1], 1, 0, 0x01, 0, 0x02, 1u * 8u, 1);
-    make_kernel(&G_NODES[2], 2, 0, 0x01, 0, 0x04, 2u * 8u, 1);
-    make_kernel(&G_NODES[3], 3, 0, 0x06, 0, 0x08, 3u * 8u, 1);
+    prepare_diamond_graph();
 
     int rc = rp1_run(&s_hooks);
     CHECK_EQ32(rc, 0u, "diamond: rp1_run rc");
@@ -458,6 +469,76 @@ static int test_diamond_dag(void)
         CHECK_EQ32(ctrl[0],        0x3u, "diamond: ctrl reg ap_start|ap_done");
         CHECK_EQ32(ctrl[0x10 / 4], i,    "diamond: kernel arg[0]");
     }
+    return 0;
+}
+
+static int test_cq_timestamps(void)
+{
+    prepare_diamond_graph();
+
+    int rc = rp1_run(&s_hooks);
+    CHECK_EQ32(rc, 0u, "cq_ts: first rp1_run rc");
+    CHECK_EQ32(G_CTRL->cq_write_idx, 4u, "cq_ts: first cq entries");
+
+    for (uint32_t i = 1; i < G_CTRL->cq_write_idx; i++)
+        CHECK(G_CQ[i].timestamp >= G_CQ[i - 1u].timestamp,
+              "cq_ts: timestamps non-decreasing");
+    CHECK(G_CQ[3].timestamp > G_CQ[0].timestamp,
+          "cq_ts: timestamps advanced");
+
+    uint32_t first_last = G_CQ[3].timestamp;
+
+    prepare_diamond_graph();
+    rc = rp1_run(&s_hooks);
+    CHECK_EQ32(rc, 0u, "cq_ts: second rp1_run rc");
+    CHECK(G_CQ[0].timestamp < first_last,
+          "cq_ts: second graph timestamp baseline reset");
+    return 0;
+}
+
+static int test_trace_disabled_by_default(void)
+{
+    prepare_diamond_graph();
+
+    int rc = rp1_run(&s_hooks);
+    CHECK_EQ32(rc, 0u, "trace_default: rp1_run rc");
+    CHECK_EQ32(G_CTRL->trace_write_idx, 0u, "trace_default: trace disabled");
+    return 0;
+}
+
+static int test_trace_queue(void)
+{
+    prepare_diamond_graph();
+    G_CTRL->trace_enable = 1u;
+
+    int rc = rp1_run(&s_hooks);
+    CHECK_EQ32(rc, 0u, "trace_queue: rp1_run rc");
+
+    uint32_t writes = G_CTRL->trace_write_idx;
+    CHECK(writes > 0u, "trace_queue: wrote entries");
+    CHECK_EQ32(G_TRACE[0].event, RP1_TRACE_GRAPH_START,
+               "trace_queue: first event graph start");
+    CHECK_EQ32(G_TRACE[0].node_index, 0xFFFFu,
+               "trace_queue: graph start node");
+    CHECK_EQ32(G_TRACE[writes - 1u].event, RP1_TRACE_GRAPH_DONE,
+               "trace_queue: last event graph done");
+
+    uint32_t launch_count = 0;
+    uint32_t done_count = 0;
+    for (uint32_t i = 1; i < writes; i++) {
+        CHECK(G_TRACE[i].timestamp >= G_TRACE[i - 1u].timestamp,
+              "trace_queue: timestamps non-decreasing");
+        if (G_TRACE[i].event == RP1_TRACE_KERNEL_LAUNCH) {
+            CHECK_EQ32(G_TRACE[i].node_index, launch_count,
+                       "trace_queue: launch order");
+            launch_count++;
+        } else if (G_TRACE[i].event == RP1_TRACE_KERNEL_DONE) {
+            done_count++;
+        }
+    }
+
+    CHECK_EQ32(launch_count, 4u, "trace_queue: launch entries");
+    CHECK_EQ32(done_count, 4u, "trace_queue: done entries");
     return 0;
 }
 
@@ -1023,6 +1104,9 @@ static int run(const char *name, int (*fn)(void))
 void rp1_graph_test_run(void)
 {
     run("diamond_dag",         test_diamond_dag);
+    run("cq_timestamps",       test_cq_timestamps);
+    run("trace_disabled_by_default", test_trace_disabled_by_default);
+    run("trace_queue",         test_trace_queue);
     run("kernel_unblocks_signal", test_kernel_unblocks_signal);
     run("signal_chain",        test_signal_chain);
     run("loop_decrement",      test_loop_decrement);

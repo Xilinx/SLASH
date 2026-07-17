@@ -8,6 +8,7 @@
  */
 
 #include "rp1_loop.h"
+#include "rp1_cycles.h"
 #include "rp1_pdi.h"
 #include "rp1_store.h"
 #include <slash/uapi/rp1_protocol.h>
@@ -70,8 +71,23 @@ static void write_cq_entry(uint16_t flags, uint32_t node_index,
     g_cq[idx].node_index   = node_index;
     g_cq[idx].status       = status;
     g_cq[idx].error_detail = error_detail;
-    g_cq[idx].timestamp    = 0; /* TODO: read R5 cycle counter */
+    g_cq[idx].timestamp    = rp1_cycles() - g_graph_start_cycles;
     g_ctrl->cq_write_idx++;
+    dsb();
+}
+
+static void trace(uint16_t event, uint32_t node_index, uint32_t aux0, uint32_t aux1)
+{
+    if (!g_trace_enable || !g_trace || !g_trace_size)
+        return;
+
+    uint32_t idx = g_ctrl->trace_write_idx % g_trace_size;
+    g_trace[idx].timestamp  = rp1_cycles() - g_graph_start_cycles;
+    g_trace[idx].event      = event;
+    g_trace[idx].node_index = (uint16_t)node_index;
+    g_trace[idx].aux0       = aux0;
+    g_trace[idx].aux1       = aux1;
+    g_ctrl->trace_write_idx++;
     dsb();
 }
 
@@ -234,6 +250,7 @@ static int check_inflight(void)
                 write_cq_entry(g_nodes[k->node_index].flags,
                                k->node_index, RP1_CQ_OK, 0);
             }
+            trace(RP1_TRACE_KERNEL_DONE, k->node_index, k->base_addr, k->infinite);
             remove_inflight(i);
             made_progress = 1;
             /* don't increment i — slot was replaced by swap */
@@ -244,6 +261,7 @@ static int check_inflight(void)
                 g_node_status[k->node_index] = RP1_NODE_ERROR;
                 g_ctrl->rp1_error_code = RP1_ERR_KERNEL_TIMEOUT;
                 write_cq_entry(flags, k->node_index, RP1_CQ_TIMEOUT, 0);
+                trace(RP1_TRACE_KERNEL_TIMEOUT, k->node_index, k->base_addr, 0);
 
                 if (flags & RP1_FLAG_HALT_ON_ERROR) {
                     remove_inflight(i);
@@ -283,11 +301,12 @@ static int check_waits(uint32_t node_count)
 
         const rp1_node_t *node = &g_nodes[i];
         const rp1_payload_wait_t *w = &node->payload.wait;
-        if (compare(g_signals[w->condition_signal].value,
-                    w->condition_op, w->condition_value)) {
+        uint32_t sig_val = g_signals[w->condition_signal].value;
+        if (compare(sig_val, w->condition_op, w->condition_value)) {
             g_node_status[i] = RP1_NODE_DONE;
             g_barriers[node->barrier_set_bucket] |= node->barrier_set_mask;
             write_cq_entry(node->flags, i, RP1_CQ_OK, 0);
+            trace(RP1_TRACE_WAIT_WAKE, i, w->condition_signal, sig_val);
             made_progress = 1;
         }
     }
@@ -319,6 +338,7 @@ static int activate_nodes(uint32_t node_count)
             continue;
 
         g_ctrl->rp1_current_node = i;
+        trace(RP1_TRACE_NODE_ACTIVATE, i, node->opcode, node->flags);
 
         switch (node->opcode) {
 
@@ -332,6 +352,8 @@ static int activate_nodes(uint32_t node_count)
                 g_node_status[i] = RP1_NODE_ERROR;
                 g_ctrl->rp1_error_code = RP1_ERR_IMAGE_MISMATCH;
                 write_cq_entry(node->flags, i, RP1_CQ_ERROR, g_active_image_id);
+                trace(RP1_TRACE_IMAGE_MISMATCH, i,
+                      kd->expected_image_id, g_active_image_id);
                 if (node->flags & RP1_FLAG_HALT_ON_ERROR) {
                     g_ctrl->rp1_state = RP1_STATE_ERROR;
                     return -1;
@@ -347,6 +369,8 @@ static int activate_nodes(uint32_t node_count)
                 return -1;
             }
             launch_kernel(node);
+            trace(RP1_TRACE_KERNEL_LAUNCH, i,
+                  kd->kernel_base_addr, kd->arg_count);
             if (node->flags & RP1_FLAG_INFINITE) {
                 g_node_status[i] = RP1_NODE_DONE;
                 g_barriers[node->barrier_set_bucket] |= node->barrier_set_mask;
@@ -363,6 +387,7 @@ static int activate_nodes(uint32_t node_count)
             const rp1_payload_pdi_load_t *p = &node->payload.pdi_load;
             int rc = rp1_pdi_load(p->pdi_addr_lo, p->pdi_addr_hi,
                                   p->timeout_cycles);
+            trace(RP1_TRACE_PDI_LOAD, i, p->image_id, (uint32_t)rc);
 
             if (rc == 0) {
                 /* Record the now-active image for the dispatch guard. */
@@ -399,6 +424,8 @@ static int activate_nodes(uint32_t node_count)
                 exit_loop = 1;
             if (compare(sig_val, lp->condition_op, lp->condition_value))
                 exit_loop = 1;
+            trace(RP1_TRACE_LOOP_ITER, i, lp->loop_id,
+                  (g_loop_iters[lp->loop_id] << 1) | (uint32_t)exit_loop);
 
             if (exit_loop) {
                 g_node_status[i] = RP1_NODE_DONE;
@@ -420,8 +447,10 @@ static int activate_nodes(uint32_t node_count)
         case RP1_OP_COND: {
             const rp1_payload_cond_t *cd = &node->payload.cond;
             uint32_t sig_val = g_signals[cd->condition_signal].value;
+            uint32_t cond_met = compare(sig_val, cd->condition_op, cd->condition_value);
 
-            if (compare(sig_val, cd->condition_op, cd->condition_value)) {
+            trace(RP1_TRACE_COND_EVAL, i, cd->condition_signal, cond_met);
+            if (cond_met) {
                 /* Condition met — set done barriers. */
                 g_barriers[cd->done_bucket] |= cd->done_mask;
             } else {
@@ -462,6 +491,8 @@ static int activate_nodes(uint32_t node_count)
             } else {
                 /* Park the node; check_waits() re-polls the slot each pass. */
                 g_node_status[i] = RP1_NODE_WAITING;
+                trace(RP1_TRACE_WAIT_PARK, i,
+                      w->condition_signal, w->condition_value);
             }
             break;
         }
