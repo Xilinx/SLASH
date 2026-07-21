@@ -198,6 +198,7 @@ protected scripts/pbuild.sh
 
 pushd driver
 protected make
+protected make -C tests all # kernel-module kselftest binaries (userspace)
 popd
 
 pushd submodules/AVED/sw/AMI/driver
@@ -229,6 +230,14 @@ insmod submodules/AVED/sw/AMI/driver/ami.ko
 insmod driver/slash.ko
 
 echo 1 | tee /sys/bus/pci/rescan
+
+# Kselftest phase (non-destructive)
+#
+# Run the driver ABI suite before vrtd claims the device: kselftest drives the
+# driver directly and its hotplug tests remove/re-add PCIe functions, so it must
+# not race a live vrtd. SLASH_TEST_DESTRUCTIVE stays unset, so destructive tests SKIP.
+udevadm settle # let udev (re)create the misc device nodes after the rescan
+env -u SLASH_TEST_DESTRUCTIVE make -C driver/tests run
 
 # Launch vrtd phase
 
