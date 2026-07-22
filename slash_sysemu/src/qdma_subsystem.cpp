@@ -736,11 +736,23 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
         const bool to_reconfig =
             (sx.direction == SLASH_QDMA_XFER_H2C && dev_addr == kReconfigApertureAddr);
 
-        // TODO: Implement keyhole transfers if something actually needs it.
+        // Keyhole aperture: the whole sub-transfer funnels through a fixed window
+        // of size `aperture` based at sx.dev_addr, wrapping at the boundary rather
+        // than advancing linearly.  win_off tracks the position within the window.
+        const uint64_t aperture = apertures[i];
+        const bool     keyhole  = aperture != 0 && !to_reconfig;
+        uint64_t       win_off  = 0;
 
         while (remaining > 0) {
             std::size_t chunk = static_cast<std::size_t>(
                 std::min<uint64_t>(remaining, kTransferChunk));
+            // Never let a chunk cross the aperture boundary (kTransferChunk can be
+            // larger than the aperture), so each model request stays in one window.
+            if (keyhole) {
+                chunk = static_cast<std::size_t>(
+                    std::min<uint64_t>(chunk, aperture - win_off));
+            }
+            const uint64_t cur_dev = keyhole ? (dev_addr + win_off) : dev_addr;
 
             if (sx.direction == SLASH_QDMA_XFER_H2C) {
                 // Read from the user buffer (outside the model lock).
@@ -757,8 +769,8 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
                         return send_plain_response(fd, msg.header, -EIO, {});
                     }
                 } else {
-                    // H2C to HBM/DDR: populate the model at dev_addr.
-                    auto pr = model_.populate(dev_addr, std::span<const uint8_t>(data));
+                    // H2C to HBM/DDR: populate the model at the current address.
+                    auto pr = model_.populate(cur_dev, std::span<const uint8_t>(data));
                     if (!pr) {
                         // Transport error → model assumed dead → -ENODEV.
                         return send_plain_response(fd, msg.header, -ENODEV, {});
@@ -767,7 +779,7 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
             } else { // C2H
                 // Fetch from the model (serialised), then write to the user buffer
                 // outside the lock.
-                auto fr = model_.fetch_buffer(dev_addr, chunk);
+                auto fr = model_.fetch_buffer(cur_dev, chunk);
                 if (!fr) {
                     int32_t rv = (fr.error().kind == ErrorKind::Transport) ? -ENODEV : -EIO;
                     return send_plain_response(fd, msg.header, rv, {});
@@ -785,10 +797,13 @@ Result<void> QdmaSubsystem::handle_transfer(int fd, ReceivedMessage& msg,
 
             remaining -= chunk;
             buf_off   += chunk;
-            // Reconfig-aperture writes are a fixed "mailbox" append at a constant
-            // device address, so dev_addr is deliberately NOT advanced for them;
-            // HBM/DDR transfers walk forward through device memory as normal.
-            if (!to_reconfig) {
+            if (keyhole) {
+                // Keyhole: wrap within the fixed aperture window.
+                win_off = (win_off + chunk) % aperture;
+            } else if (!to_reconfig) {
+                // Reconfig-aperture writes are a fixed "mailbox" append at a constant
+                // device address, so dev_addr is deliberately NOT advanced for them;
+                // HBM/DDR transfers walk forward through device memory as normal.
                 dev_addr += chunk;
             }
             total     += chunk;
