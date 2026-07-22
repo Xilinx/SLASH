@@ -141,8 +141,8 @@ Install the AMI Driver
 
 The V80 board's PF0 function (device ID ``0x50B4``) is managed by the
 **AMI** (AVED Management Interface) kernel module. Install it before the
-rest of the SLASH stack — ``vrtd`` requires AMI to be bound to PF0 to
-manage the board.
+rest of the SLASH stack so it can bind to PF0 when the board enumerates over
+PCIe.
 
 .. tab-set::
 
@@ -166,13 +166,14 @@ manage the board.
    existing AMI installation before proceeding, or skip this step and
    ensure your installed AMI version is compatible with this SLASH release.
 
-After installation, verify that ``ami`` is bound to PF0:
+If the board already enumerates over PCIe, verify that ``ami`` is bound to PF0:
 
 .. code-block:: bash
 
    lspci -d 10ee:50b4 -k
 
-You should see ``Kernel driver in use: ami``.
+You should see ``Kernel driver in use: ami``. If no PF0 is visible yet, continue
+to `Program the Board`_ and boot the temporary JTAG image first.
 
 Install Runtime Packages
 =========================
@@ -235,54 +236,96 @@ that it starts on boot and is running now:
 
    sudo systemctl enable --now vrtd
 
-Check that the board is reachable through the daemon:
+Check whether the board is already reachable through the daemon:
 
 .. code-block:: bash
 
    v80-smi list
 
-You should see one entry per V80 board with all four readiness indicators
-passing (PF0, PF1, PF2, VRTD).
+Boards that already enumerate over PCIe should show all four readiness
+indicators passing (PF0, PF1, PF2, VRTD). If a fresh board is not listed yet,
+continue to step A below and boot the temporary JTAG image first.
 
 Program the Board
 ==================
 
-.. note::
+After installing the packages and starting ``vrtd``, program the board with the
+SLASH static shell. New users should complete both steps below:
 
-   This step assumes the AMI driver is already bound to PF0
-   (``10ee:50b4``). If your V80 has never been programmed with AVED — for
-   example, a brand-new board — first complete
-   :doc:`/tutorials/admin/bootstrap-aved` to install AVED via JTAG.
+A. boot a temporary image over JTAG so the board enumerates over PCIe, then
+B. use PCIe to write the permanent image to the on-board flash.
 
-After installing the packages, the board's flash memory must be programmed
-with the static shell before the system can be used. This step is required:
-
-- on the **first install** of SLASH, and
-- when **upgrading** to a version that changes the static shell (noted in
-  the release notes).
-
-It is **not** required after crashes, daemon restarts, or other normal
+If the board is already running AVED or a previous SLASH static shell, skip
+step A and perform only step B. In normal operation, repeat step B only when
+upgrading to a release that changes the static shell, as noted in the release
+notes. It is **not** required after crashes, daemon restarts, or other normal
 operations — SLASH reads from flash but never writes to it during regular use.
 
+No system restart is required after either step.
+
+A. Write a Temporary Image via JTAG Boot
+---------------------------------------
+
+This step loads the no-FPT static-shell PDI over JTAG. The image is temporary:
+it lets the board enumerate over PCIe so that step B can write the permanent
+flash image.
+
+A1. Identify the XSDB Target if Multiple Boards Are Present
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the host has more than one V80 connected over USB-JTAG, use ``xsdb`` to find
+the ``target_id`` for the ``Versal xcv80`` device you want to program:
+
+.. code-block:: text
+
+   xsdb
+   connect
+   targets -target-properties
+
+Use the ``target_id`` from the matching ``Versal xcv80`` target. Its child
+``PMC`` target is selected automatically.
+
+A2. Write via JTAG
+~~~~~~~~~~~~~~~~~~
+
+For a single V80, run:
+
+.. code-block:: bash
+
+   sudo v80-smi write-static-shell --jtag --no-remove-device
+
+For multiple V80s, pass the XSDB target ID from step A1:
+
+.. code-block:: bash
+
+   sudo v80-smi write-static-shell --jtag --no-remove-device --xsdb-target-id <XSDB_TARGET_ID>
+
+B. Flash the Permanent Image via PCIe
+-------------------------------------
+
+B1. Identify the Board in ``v80-smi list``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+After step A completes, or if the board was already running AVED or SLASH, find
+the board's PCIe bus address:
+
+.. code-block:: bash
+
+   v80-smi list
+
+B2. Write via PCIe
+~~~~~~~~~~~~~~~~~~
+
 Program the primary flash partition (replace ``<BDF>`` with the bus address
-from ``v80-smi list``, e.g. ``03:00``):
+shown by ``v80-smi list``, e.g. ``03:00``):
 
 .. code-block:: bash
 
-   # For Ubuntu 22.04
-   sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-      -i /usr/lib/python3.10/dist-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
-      
-   # For Rocky 9
-   sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-      -i /usr/lib/python3.9/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
+   sudo v80-smi write-static-shell --flash -d <BDF>
 
-After programming completes, reboot the system for the new flash contents
-to take effect:
-
-.. code-block:: bash
-
-   sudo reboot
+The command resolves the packaged static shell PDI, programs it through VRTD,
+and resets the board into the programmed partition. No host reboot or system
+restart is required.
 
 Install Development Packages
 ==============================

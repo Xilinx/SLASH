@@ -30,6 +30,14 @@ if [[ $# -ne 1 ]]; then
     exit 1
 fi
 
+if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    echo "Deactivating virtual environment: ${VIRTUAL_ENV}" 1>&2
+    PATH="${PATH//$VIRTUAL_ENV\/bin:}"
+    PATH="${PATH//:$VIRTUAL_ENV\/bin/}"
+    unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT
+    hash -r
+fi
+
 # Install smi, vrt, vrtd, libvrt*, libslash
 DESTDIR="$1" cmake --build pbuild/smi --target install
 
@@ -39,7 +47,7 @@ DESTDIR="$1" cmake --build pbuild/slash_sysemu --target install
 # Install CMake toolchain modules (SlashTools)
 DESTDIR="$1" cmake --build pbuild/cmake-tools --target install
 
-python3 -m pip install --no-deps --root $1 linker/dist/slashkit-*.whl
+python3 -m pip install --no-deps --ignore-installed --root "$1" linker/dist/slashkit-*.whl
 if [ -f $1/usr/local/bin/slashkit ]; then
     mv $1/usr/local/bin/slashkit $1/usr/bin/
     mv $1/usr/local/lib/python3* $1/usr/lib/

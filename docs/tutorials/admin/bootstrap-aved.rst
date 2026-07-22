@@ -16,7 +16,7 @@ When you need this tutorial
 ===========================
 
 The rest of the SLASH platform-setup flow — including
-``ami_tool cfgmem_program`` for writing the SLASH static shell —
+``v80-smi write-static-shell --flash`` for writing the SLASH static shell —
 requires that ``ami`` is already bound to PF0. That, in turn, requires
 a valid AVED image in the V80's OSPI flash. Follow this tutorial when:
 
@@ -167,4 +167,4 @@ With AVED bootstrapped and PF0 visible, continue with the regular
 platform-setup flow:
 
 - :doc:`platform-setup` — install the SLASH stack and program the
-  SLASH static shell over PCIe with ``ami_tool cfgmem_program``.
+  SLASH static shell over PCIe with ``v80-smi write-static-shell --flash``.

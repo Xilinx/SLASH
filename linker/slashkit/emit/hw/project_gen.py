@@ -179,7 +179,7 @@ def _environment_with_udev_ld_preload() -> Dict[str, str]:
     return env
 
 
-def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
+def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Path]:
     aved_dir = config.build_dir / "AVED"
 
     aved_hw_dir = aved_dir / "hw" / AVED_DESIGN_NAME
@@ -215,8 +215,14 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> Path:
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
     if not aved_pdi.exists():
         raise FileNotFoundError(f"Expected AVED output not found: {aved_pdi}")
+
+    aved_nofpt_pdi = aved_build_dir / f"{AVED_DESIGN_NAME}_nofpt.pdi"
+    if not aved_nofpt_pdi.exists():
+        raise FileNotFoundError(
+            f"Expected AVED nofpt PDI not found: {aved_nofpt_pdi}")
+
     logger.info("AVED fallback complete. Generated %s", aved_pdi)
-    return aved_pdi
+    return aved_pdi, aved_nofpt_pdi
 
 
 def create_build_project(
@@ -394,16 +400,20 @@ def install_static_shell(config: InstallerConfiguration) -> None:
     )
 
     impl_dir = config.build_dir / "slash.runs" / "impl_1"
-    dcp_sources = (
+    # debug_nets.ltx is auto-emitted by Vivado because the base shell instantiates the
+    # debug hub. It is the full debug probe file (FULL_PROBES.FILE) that must be loaded
+    # before a user region's partial probe file in the Vivado Hardware Manager.
+    install_sources = (
         impl_dir / "top_wrapper_routed_bb.dcp",
         impl_dir / "static_shell_slash.dcp",
         impl_dir / "static_shell_service_layer.dcp",
+        impl_dir / "debug_nets.ltx",
     )
-    for src in dcp_sources:
+    for src in install_sources:
         if not src.exists():
             raise FileNotFoundError(
                 f"Expected install artifact not found: {src}")
-    _copy_files(list(dcp_sources), static_shell_dir)
+    _copy_files(list(install_sources), static_shell_dir)
 
     src_dirs = config.build_dir / "slash.srcs" / "sources_1" / "bd"
     for src_dir in (src_dirs / "slash_base", src_dirs / "service_layer"):
@@ -412,11 +422,13 @@ def install_static_shell(config: InstallerConfiguration) -> None:
                 f"Expected install BD directory not found: {src_dir}")
         _copy_tree(src_dir, static_shell_dir)
 
-    aved_pdi_path = generate_base_pdi_with_aved(config)
-    if not aved_pdi_path.exists():
-        raise FileNotFoundError(
-            f"Expected AVED PDI not found in results/base: {aved_pdi_path}")
-    _copy_files([aved_pdi_path], static_shell_dir)
+    aved_pdi_path, aved_nofpt_pdi_path = generate_base_pdi_with_aved(
+        config)
+    for pdi_path in (aved_pdi_path, aved_nofpt_pdi_path):
+        if not pdi_path.exists():
+            raise FileNotFoundError(
+                f"Expected AVED PDI not found in results/base: {pdi_path}")
+    _copy_files([aved_pdi_path, aved_nofpt_pdi_path], static_shell_dir)
 
     def add_init_files(path: Path):
         (path / "__init__.py").touch()

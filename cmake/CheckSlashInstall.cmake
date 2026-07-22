@@ -26,6 +26,7 @@ set(_required_files
   "static_shell_service_layer.dcp"
   "static_shell_slash.dcp"
   "amd_v80_gen5x8_25.1.pdi"
+  "amd_v80_gen5x8_25.1_nofpt.pdi"
   "top_wrapper_routed_bb.dcp"
 )
 

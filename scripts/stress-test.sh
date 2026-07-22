@@ -25,6 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXAMPLES_DIR="$REPO_ROOT/examples"
+V80_SMI="v80-smi"
 
 # Examples: directory:vbin_prefix:executable
 EXAMPLES=(
@@ -55,7 +56,7 @@ START_TIME=$(date +%s)
 #  Usage
 # =========================================================================
 usage() {
-    echo "Usage: $0 <BDF> [--iterations N]"
+    echo "Usage: $0 <BDF> [--iterations N] [--use-pbuild]"
     echo ""
     echo "  Stress test a V80 board by randomly running examples, resets,"
     echo "  programming vbins, and memory validation."
@@ -63,6 +64,7 @@ usage() {
     echo "  Arguments:"
     echo "    BDF              Device BDF address (e.g. 0000:e2:00.0)"
     echo "    --iterations N   Number of iterations (default: 100)"
+    echo "    --use-pbuild     Use v80-smi from pbuild/smi/src instead of PATH"
     echo ""
     echo "  Pre-built vbins and executables must exist in examples/*/build/."
     exit 1
@@ -109,9 +111,9 @@ bdf_to_base() {
 }
 
 check_device() {
-    log "v80-smi list -j"
+    log "$V80_SMI list -j"
     local json
-    json=$(v80-smi list -j)
+    json=$("$V80_SMI" list -j)
     echo "$json"
 
     local bdf_base
@@ -172,6 +174,10 @@ while [[ $# -gt 0 ]]; do
             NO_RESET=1
             shift
             ;;
+        --use-pbuild)
+            V80_SMI="$REPO_ROOT/pbuild/smi/src/v80-smi"
+            shift
+            ;;
         *)
             echo "ERROR: Unknown argument '$1'"
             usage
@@ -184,10 +190,15 @@ if [[ "$NO_RESET" -eq 1 ]]; then
     NUM_ACTIONS=${#ACTION_NAMES[@]}
 fi
 
+if [[ ! -x "$V80_SMI" ]]; then
+    echo "ERROR: v80-smi executable not found or not executable: $V80_SMI"
+    exit 1
+fi
+
 # =========================================================================
 #  Pre-flight checks
 # =========================================================================
-log "Starting stress test: BDF=$BDF, iterations=$ITERATIONS"
+log "Starting stress test: BDF=$BDF, iterations=$ITERATIONS, v80-smi=$V80_SMI"
 echo ""
 
 log "Checking device visibility..."
@@ -217,7 +228,7 @@ done
 if [[ $MISSING -ne 0 ]]; then
     echo ""
     echo "Pre-built vbins and executables are required. Build them first:"
-    echo "  ./scripts/test-examples.sh hw $BDF"
+    echo "  ./scripts/test-examples.sh --use-repo hw $BDF"
     exit 1
 fi
 
@@ -270,8 +281,8 @@ for ((i = 1; i <= ITERATIONS; i++)); do
             ;;
 
         reset)
-            log "Running: v80-smi reset -d $BDF"
-            if ! v80-smi reset -d "$BDF"; then
+            log "Running: $V80_SMI reset -d $BDF"
+            if ! "$V80_SMI" reset -d "$BDF"; then
                 log "FAILED: $action at iteration $i"
                 ACTION_FAIL[$action]=$((ACTION_FAIL[$action] + 1))
                 ITERATIONS_DONE=$i
@@ -291,8 +302,8 @@ for ((i = 1; i <= ITERATIONS; i++)); do
             IFS=':' read -r dir vbin_prefix executable <<< "$(pick_random_example)"
             vbin_file="$EXAMPLES_DIR/$dir/build/${vbin_prefix}_hw.vbin"
 
-            log "Running: v80-smi program -d $BDF $vbin_file"
-            if ! v80-smi program -d "$BDF" "$vbin_file"; then
+            log "Running: $V80_SMI program -d $BDF $vbin_file"
+            if ! "$V80_SMI" program -d "$BDF" "$vbin_file"; then
                 log "FAILED: $action ($dir) at iteration $i"
                 ACTION_FAIL[$action]=$((ACTION_FAIL[$action] + 1))
                 ITERATIONS_DONE=$i
@@ -306,15 +317,17 @@ for ((i = 1; i <= ITERATIONS; i++)); do
                 print_summary
                 exit 1
             fi
-            # TODO: Add "v80-smi query -d $BDF -j" here once the query bug is fixed
+            # TODO: Add "$V80_SMI query -d $BDF -j" here once the query bug is fixed
             ;;
 
         validate)
-            threads=$((RANDOM % 64 + 1))
+            # validate places 2 buffers/thread (512 MiB each) in the 64 x 512 MiB
+            # (32 GiB) space, so 2*threads <= 64 => cap threads at 32.
+            threads=$((RANDOM % 32 + 1))
             NO_RESET_FLAG=""
             if [[ "$NO_RESET" -eq 1 ]]; then NO_RESET_FLAG="--no-reset"; fi
-            log "Running: v80-smi validate -d $BDF -j $threads $NO_RESET_FLAG"
-            if ! v80-smi validate -d "$BDF" -j "$threads" $NO_RESET_FLAG; then
+            log "Running: $V80_SMI validate -d $BDF -j $threads $NO_RESET_FLAG"
+            if ! "$V80_SMI" validate -d "$BDF" -j "$threads" $NO_RESET_FLAG; then
                 log "FAILED: $action (threads=$threads) at iteration $i"
                 ACTION_FAIL[$action]=$((ACTION_FAIL[$action] + 1))
                 ITERATIONS_DONE=$i

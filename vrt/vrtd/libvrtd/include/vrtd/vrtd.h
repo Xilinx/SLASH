@@ -439,16 +439,113 @@ enum vrtd_ret vrtd_design_write_file(
 );
 
 /**
+ * @brief Program a PDI into cfgmem and reset into the programmed partition.
+ *
+ * The input FD is sent to the daemon via SCM_RIGHTS.  On success the daemon
+ * programs @p partition on @p boot_device through AMI, selects that partition,
+ * and performs the vrtd-managed reset sequence.
+ *
+ * @param fd          Connected vrtd socket file descriptor.
+ * @param dev         Device index (0-based).
+ * @param input_fd    Input PDI file descriptor to read from.
+ * @param boot_device AMI boot device selector.
+ * @param partition   Flash partition to program and boot.
+ *
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ * @pre @p input_fd must be a valid, readable file descriptor.
+ */
+enum vrtd_ret vrtd_cfgmem_program(
+    int fd,
+    uint32_t dev,
+    int input_fd,
+    uint8_t boot_device,
+    uint32_t partition
+);
+
+/**
+ * @brief Open a PDI file and program it into cfgmem.
+ *
+ * Convenience helper that opens @p path read-only and passes the FD to the
+ * daemon via vrtd_cfgmem_program(). The FD is closed before returning.
+ *
+ * @param fd          Connected vrtd socket file descriptor.
+ * @param dev         Device index (0-based).
+ * @param path        Path to the PDI file to program.
+ * @param boot_device AMI boot device selector.
+ * @param partition   Flash partition to program and boot.
+ *
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ * @pre @p path must not be NULL.
+ */
+enum vrtd_ret vrtd_cfgmem_program_file(
+    int fd,
+    uint32_t dev,
+    const char *path,
+    uint8_t boot_device,
+    uint32_t partition
+);
+
+typedef void (*vrtd_cfgmem_progress_callback)(
+    const struct vrtd_cfgmem_program_status *status,
+    void *ctx
+);
+
+enum vrtd_ret vrtd_cfgmem_program_start(
+    int fd,
+    uint32_t dev,
+    int input_fd,
+    uint8_t boot_device,
+    uint32_t partition,
+    uint64_t *job_id_out
+);
+
+enum vrtd_ret vrtd_cfgmem_program_file_start(
+    int fd,
+    uint32_t dev,
+    const char *path,
+    uint8_t boot_device,
+    uint32_t partition,
+    uint64_t *job_id_out
+);
+
+enum vrtd_ret vrtd_cfgmem_program_status(
+    int fd,
+    uint64_t job_id,
+    struct vrtd_cfgmem_program_status *status_out
+);
+
+enum vrtd_ret vrtd_cfgmem_program_wait(
+    int fd,
+    uint64_t job_id,
+    uint64_t poll_interval_msec,
+    vrtd_cfgmem_progress_callback progress_cb,
+    void *progress_ctx
+);
+
+enum vrtd_ret vrtd_cfgmem_program_file_progress(
+    int fd,
+    uint32_t dev,
+    const char *path,
+    uint8_t boot_device,
+    uint32_t partition,
+    uint64_t poll_interval_msec,
+    vrtd_cfgmem_progress_callback progress_cb,
+    void *progress_ctx
+);
+
+/**
  * @brief Perform a PCIe hotplug operation for a device.
  *
- * For board-level operations (RESCAN, RESET_SEQUENCE), @p function is ignored.
- * For PF-level operations (REMOVE, TOGGLE_SBR, HOTPLUG), @p function selects
- * the PCI physical function (0-7).
+ * For RESET_SEQUENCE, @p function is ignored. Use
+ * vrtd_device_hotplug_rescan() for device-independent bus rescan.
+ * For REMOVE and HOTPLUG, @p function selects the PCI physical function (0-7)
+ * or VRTD_DEVICE_HOTPLUG_FUNCTION_ALL for all V80 PFs. TOGGLE_SBR requires a
+ * single PCI physical function (0-7).
  *
  * @param fd       Connected vrtd socket file descriptor.
  * @param dev      Device index (0-based).
  * @param op       One of vrtd_device_hotplug_op.
- * @param function PCI function number (0-7) for PF-level ops.
+ * @param function PCI function number (0-7), or FUNCTION_ALL where allowed.
  *
  * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
  */
@@ -460,8 +557,7 @@ enum vrtd_ret vrtd_device_hotplug_op(
 );
 
 enum vrtd_ret vrtd_device_hotplug_rescan(
-    int fd,
-    uint32_t dev
+    int fd
 );
 
 enum vrtd_ret vrtd_device_hotplug_remove(

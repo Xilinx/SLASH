@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -18,28 +18,29 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef VRTD_RESET_H
-#define VRTD_RESET_H
+#ifndef VRTD_FLASH_H
+#define VRTD_FLASH_H
 
 #include <stdint.h>
-
-#include "flash.h"
 
 struct device;
 struct device_ptr_array;
 
-uint16_t reset_with_ami(struct device *device, struct device_ptr_array *devices);
-uint16_t reset_with_ami_partition(
-    struct device *device,
-    struct device_ptr_array *devices,
-    uint32_t partition
+typedef void (*cfgmem_progress_callback)(
+    void *ctx,
+    uint32_t phase,
+    uint64_t bytes_written,
+    uint64_t bytes_total
 );
-uint16_t reset_with_ami_partition_progress(
+
+uint16_t cfgmem_program_with_ami(
     struct device *device,
     struct device_ptr_array *devices,
+    int input_fd,
+    uint8_t boot_device,
     uint32_t partition,
     cfgmem_progress_callback progress_cb,
     void *progress_ctx
 );
 
-#endif /* VRTD_RESET_H */
+#endif /* VRTD_FLASH_H */

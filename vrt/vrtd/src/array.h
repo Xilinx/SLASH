@@ -67,6 +67,7 @@
 #ifndef VRTD_ARRAY_H
 #define VRTD_ARRAY_H
 
+#include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -345,6 +346,8 @@
 DECLARE_ARRAY(int_array, int)
 /** @brief Dynamic array of unsigned int values. */
 DECLARE_ARRAY(uint_array, unsigned int)
+/** @brief Dynamic array of uint64_t values. */
+DECLARE_ARRAY(uint64_array, uint64_t)
 /** @brief Dynamic array of gid_t values (POSIX group IDs). */
 DECLARE_ARRAY(gid_t_array, gid_t)
 /** @brief Owning dynamic array of heap-allocated strings (freed with free()). */

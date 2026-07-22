@@ -40,6 +40,8 @@ def build_vbin(config: LinkerConfiguration) -> Path:
         f"top_i_service_layer_service_layer_{config.project_name}_inst_0_partial.pdi"
     slash_pdi_path = images_dir / \
         f"top_i_slash_slash_{config.project_name}_inst_0_partial.pdi"
+    slash_ltx_path = images_dir / \
+        f"top_i_slash_slash_{config.project_name}_inst_0_hw_probes.ltx"
     util_xml = config.build_dir / \
         f"report_utilization_{config.project_name}.xml"
     system_map = config.build_dir / "system_map.xml"
@@ -51,6 +53,10 @@ def build_vbin(config: LinkerConfiguration) -> Path:
     for file in files:
         if not file.exists():
             raise FileNotFoundError(file)
+
+    # The partial debug probe file is only produced when the design has [debug] nets.
+    if slash_ltx_path.exists():
+        files.append(slash_ltx_path)
 
     logger.info("Creating vbin archive: %s", config.out_path)
 

@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 from collections import OrderedDict
-from typing import Dict, List
+from typing import Dict, List, Optional
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
@@ -32,6 +32,7 @@ def build_axilite_smartconnect_context(
     max_mi: int = 16,
     chain_slot: int = 15,
     base_name: str = "smartconnect",
+    extra_slaves: Optional[List[str]] = None,
 ) -> dict:
     """
     SmartConnects to fan out AXI-Lite control to all kernel AXI-Lite ports.
@@ -56,6 +57,11 @@ def build_axilite_smartconnect_context(
     for inst in ordered.values():
         for p in sorted((pp for pp in inst.kernel.ports.values() if pp.ptype == BusType.AXILITE), key=lambda x: x.name):
             endpoints.append(f"{inst.name}/{p.name}")
+
+    # Append non-kernel AXI-Lite slaves (e.g. the debug hub S_AXI) last so they
+    # take the trailing MI slot(s), spilling to a new SC via the packer below.
+    for dst in (extra_slaves or []):
+        endpoints.append(dst)
 
     N = len(endpoints)
     if N == 0:

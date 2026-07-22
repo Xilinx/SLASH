@@ -36,6 +36,8 @@ Device::Device(uint32_t num,
                std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
                std::function<void(const Device&, int)> fDesignWrite,
                std::function<void(const Device&, std::string_view)> fDesignWriteFile,
+               std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
+               std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
                std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
                std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate,
                std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo) {
@@ -53,6 +55,8 @@ Device::Device(uint32_t num,
     this->fHotplugOp = fHotplugOp;
     this->fDesignWrite = fDesignWrite;
     this->fDesignWriteFile = fDesignWriteFile;
+    this->fCfgmemProgram = fCfgmemProgram;
+    this->fCfgmemProgramFile = fCfgmemProgramFile;
     this->fGetClockRate = fGetClockRate;
     this->fSetClockRate = fSetClockRate;
     this->fGetSensorInfo = fGetSensorInfo;
@@ -119,6 +123,14 @@ void Device::designWrite(int input_fd) const {
 
 void Device::designWriteFile(std::string_view path) const {
     fDesignWriteFile(*this, path);
+}
+
+void Device::cfgmemProgram(int input_fd, uint8_t bootDevice, uint32_t partition) const {
+    fCfgmemProgram(*this, input_fd, bootDevice, partition);
+}
+
+void Device::cfgmemProgramFile(std::string_view path, uint8_t bootDevice, uint32_t partition) const {
+    fCfgmemProgramFile(*this, path, bootDevice, partition);
 }
 
 uint32_t Device::getClockRate(ClockRegion region) const {

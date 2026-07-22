@@ -337,6 +337,7 @@ int role_merge_add_role(struct role *dst, const struct role *src)
         dst_dp->qdma         = dst_dp->qdma         || src_dp->qdma;
         dst_dp->buffer       = dst_dp->buffer       || src_dp->buffer;
         dst_dp->design_write = dst_dp->design_write || src_dp->design_write;
+        dst_dp->cfgmem_program = dst_dp->cfgmem_program || src_dp->cfgmem_program;
         dst_dp->clock        = dst_dp->clock        || src_dp->clock;
         dst_dp->pcie_hotplug    = dst_dp->pcie_hotplug    || src_dp->pcie_hotplug;
         dst_dp->raw_mem_access  = dst_dp->raw_mem_access  || src_dp->raw_mem_access;
@@ -747,8 +748,8 @@ static int role_find_and_add_value(struct config *config, const char *objname, c
  * device selector).  Supported keys:
  *   - "query-devices":"yes" | "no"  -- controls device enumeration / info queries.
  *
- * All other permissions (bar-access, qdma, buffer, design-write, clock,
- * pcie-hotplug) must be specified in device-scoped sections
+ * All other permissions (bar-access, qdma, buffer, design-write,
+ * cfgmem-program, clock, pcie-hotplug) must be specified in device-scoped sections
  * @c [role:\<name\>:\<bdf\>].
  *
  * @param role   The role to modify.
@@ -1012,6 +1013,7 @@ static int role_device_find_and_add_value(
  *   - "qdma":          "yes" | "no" -- controls QDMA queue pair operations.
  *   - "buffer":        "yes" | "no" -- controls DMA buffer operations.
  *   - "design-write":  "yes" | "no" -- controls FPGA bitstream programming.
+ *   - "cfgmem-program": "yes" | "no" -- controls AMI cfgmem programming and reset.
  *   - "clock":         "yes" | "no" -- controls clock get/set operations.
  *   - "pcie-hotplug":  "yes" | "no" -- controls per-device hotplug operations.
  *   - "raw-mem-access": "yes" | "no" -- controls raw DMA buffer open (bypasses allocator).
@@ -1062,6 +1064,17 @@ static int device_policy_add_value(struct device_policy *dp, const char *name, c
             return 0;
         } else {
             LOG(LOG_ERR, "Invalid value for device design-write: '%s'", value);
+            return -1;
+        }
+    } else if (strcmp(name, "cfgmem-program") == 0) {
+        if (strcmp(value, "yes") == 0) {
+            dp->cfgmem_program = true;
+            return 0;
+        } else if (strcmp(value, "no") == 0) {
+            dp->cfgmem_program = false;
+            return 0;
+        } else {
+            LOG(LOG_ERR, "Invalid value for device cfgmem-program: '%s'", value);
             return -1;
         }
     } else if (strcmp(name, "clock") == 0) {
