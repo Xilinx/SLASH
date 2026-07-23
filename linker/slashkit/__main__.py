@@ -19,6 +19,7 @@
 # ##################################################################################################
 
 import argparse
+import importlib.resources as resources
 import logging
 import os
 import threading
@@ -146,6 +147,19 @@ def link(config: LinkerConfiguration) -> None:
         build_vbin(config)
 
 
+def static_shell_path(args) -> None:
+    file_name = "amd_v80_gen5x8_25.1_nofpt.pdi" if args.nofpt else \
+        "amd_v80_gen5x8_25.1.pdi"
+    traversable = resources.files(
+        "slashkit.resources.static_shell") / file_name
+
+    with resources.as_file(traversable) as path:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Static shell PDI not found in slashkit resources: {file_name}")
+        print(path.resolve())
+
+
 MAIN_HELP_EPILOG = """
 Typical Workflow:
   Most users will use the 'link' subcommand to link kernel IP cores into
@@ -176,7 +190,20 @@ def main():
     install_parser.set_defaults(
         config_class=InstallerConfiguration, operation=install_static_shell)
 
+    static_shell_path_parser = sub_parsers.add_parser(
+        "static-shell-path",
+        help="Print the installed static shell PDI path")
+    static_shell_path_parser.add_argument(
+        "--nofpt", action="store_true",
+        help="Print the no-FPT PDI path used for JTAG programming")
+    static_shell_path_parser.set_defaults(
+        config_class=None, operation=static_shell_path)
+
     args = ap.parse_args()
+
+    if args.config_class is None:
+        args.operation(args)
+        return
 
     config = args.config_class(args)
     args.operation(config)

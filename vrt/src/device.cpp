@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -237,7 +238,12 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     this->zmqServer = std::make_shared<ZmqServer>();
     this->platform = vrtbin.getPlatform();
     if (platform == Platform::HARDWARE) {
-        vrtdSession = std::make_shared<vrtd::Session>();
+        const char *vrtdSocket = std::getenv("VRTD_SOCKET");
+        if (vrtdSocket != nullptr && vrtdSocket[0] != '\0') {
+            vrtdSession = std::make_shared<vrtd::Session>(vrtdSocket);
+        } else {
+            vrtdSession = std::make_shared<vrtd::Session>();
+        }
         vrtdDevice = vrtdSession->getDeviceByBdf(bdfFull);
         if (program) {
             programDevice();

@@ -65,6 +65,8 @@ struct device_policy {
     bool buffer;
     /** @brief If true, the client may program FPGA bitstreams on this device. */
     bool design_write;
+    /** @brief If true, the client may program cfgmem through AMI and reset this device. */
+    bool cfgmem_program;
     /** @brief If true, the client may get/set clock frequencies on this device. */
     bool clock;
     /** @brief If true, the client may perform PCIe hotplug operations on this device. */
@@ -92,8 +94,8 @@ DECLARE_OWNING_PTR_ARRAY(device_policy_ptr_array, struct device_policy *, cleanu
  *     permissions, via the @c device_policies array.
  *   - Whether the client may issue informational queries (@c query).
  *
- * Per-device permissions (bar-access, qdma, buffer, design-write, clock,
- * pcie-hotplug) are specified in the config file using sub-sections of the
+ * Per-device permissions (bar-access, qdma, buffer, design-write,
+ * cfgmem-program, clock, pcie-hotplug) are specified in the config file using sub-sections of the
  * form @c [role:\<name\>:\<bdf\>], where @c \<bdf\> is a board-level PCI
  * address or "any".
  */

@@ -29,12 +29,46 @@
 #include <vrtd/buffer.hpp>
 #include <vrtd/qdma_qpair.hpp>
 
+#include <functional>
 #include <mutex>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace vrtd {
 
+enum class CfgmemProgramState : uint32_t {
+    Queued = VRTD_CFGMEM_PROGRAM_STATE_QUEUED,
+    Running = VRTD_CFGMEM_PROGRAM_STATE_RUNNING,
+    Done = VRTD_CFGMEM_PROGRAM_STATE_DONE,
+    Failed = VRTD_CFGMEM_PROGRAM_STATE_FAILED,
+};
+
+enum class CfgmemProgramPhase : uint32_t {
+    Queued = VRTD_CFGMEM_PROGRAM_PHASE_QUEUED,
+    OpeningAmi = VRTD_CFGMEM_PROGRAM_PHASE_OPENING_AMI,
+    DownloadingPdi = VRTD_CFGMEM_PROGRAM_PHASE_DOWNLOADING_PDI,
+    SelectingPartition = VRTD_CFGMEM_PROGRAM_PHASE_SELECTING_PARTITION,
+    ResetPreparing = VRTD_CFGMEM_PROGRAM_PHASE_RESET_PREPARING,
+    RemovingPcie = VRTD_CFGMEM_PROGRAM_PHASE_REMOVING_PCIE,
+    TogglingSbr = VRTD_CFGMEM_PROGRAM_PHASE_TOGGLING_SBR,
+    RescanningPcie = VRTD_CFGMEM_PROGRAM_PHASE_RESCANNING_PCIE,
+    RediscoveringDevice = VRTD_CFGMEM_PROGRAM_PHASE_REDISCOVERING_DEVICE,
+    Done = VRTD_CFGMEM_PROGRAM_PHASE_DONE,
+    Failed = VRTD_CFGMEM_PROGRAM_PHASE_FAILED,
+};
+
+struct CfgmemProgramStatus {
+    uint64_t jobId = 0;
+    CfgmemProgramState state = CfgmemProgramState::Queued;
+    CfgmemProgramPhase phase = CfgmemProgramPhase::Queued;
+    uint64_t bytesWritten = 0;
+    uint64_t bytesTotal = 0;
+    uint64_t elapsedMsec = 0;
+    enum vrtd_ret result = VRTD_RET_OK;
+};
+
+using CfgmemProgressCallback = std::function<void(const CfgmemProgramStatus&)>;
 
 /**
  * @brief Owning session/connection to the V Runtime Daemon (vrtd).
@@ -59,11 +93,15 @@ public:
     /**
      * @brief Construct and connect to the vrtd socket.
      *
-     * @param socket_path Filesystem path to the vrtd UNIX socket.
-     *                    Defaults to the standard path.
+     * @param socket_path Filesystem path to the vrtd UNIX socket. When
+     *                    @c nullptr (the default), the path is taken from the
+     *                    @c VRTD_SOCKET environment variable if it is set and
+     *                    non-empty, otherwise it falls back to
+     *                    #VRTD_STANDARD_PATH. This mirrors how vrt::Device
+     *                    resolves the daemon socket.
      * @throws vrtd::Error if the connection cannot be established.
      */
-    explicit Session(const char *socket_path = VRTD_STANDARD_PATH);
+    explicit Session(const char *socket_path = nullptr);
 
     /**
      * @brief Destructor; closes the session if still open.
@@ -122,6 +160,34 @@ public:
      * @throws vrtd::Error if the device cannot be found or if the session is not usable.
      */
     Device getDeviceByBdf(std::string_view bdf) const;
+
+    /**
+     * @brief Trigger a PCI bus rescan.
+     *
+     * Rescan is a global hotplug operation. It does not target a specific
+     * vrtd device and does not require a Device handle.
+     *
+     * @throws vrtd::Error on error.
+     */
+    void hotplugRescan() const;
+
+    uint64_t cfgmemProgramStart(
+        const Device& device,
+        int input_fd,
+        uint8_t bootDevice,
+        uint32_t partition
+    ) const;
+
+    CfgmemProgramStatus cfgmemProgramStatus(uint64_t jobId) const;
+
+    void cfgmemProgramFileProgress(
+        const Device& device,
+        std::string_view path,
+        uint8_t bootDevice,
+        uint32_t partition,
+        CfgmemProgressCallback progressCallback,
+        uint64_t pollIntervalMsec = 10000
+    ) const;
 
     /**
      * @brief Query QDMA capabilities for a device.
@@ -225,13 +291,15 @@ private:
     /**
      * @internal Perform a PCIe hotplug operation.
      *
-     * For board-level operations (Rescan, ResetSequence), @p function is ignored.
-     * For PF-level operations (Remove, ToggleSbr, Hotplug), @p function selects
-     * the PCI physical function (0-7).
+     * For ResetSequence, @p function is ignored. For Remove and Hotplug,
+     * @p function selects the PCI physical function (0-7) or
+     * HotplugFunctionAll for all V80 PFs. ToggleSbr requires a single PCI
+     * physical function (0-7). Use hotplugRescan() for device-independent
+     * bus rescan.
      *
      * @param device   Device target.
      * @param op       One of vrtd::HotplugOp.
-     * @param function PCI function number (0-7) for PF-level ops.
+     * @param function PCI function number (0-7), or HotplugFunctionAll where allowed.
      * @throws vrtd::Error on error.
      */
     void hotplugOp(const Device& device, HotplugOp op,
@@ -254,6 +322,38 @@ private:
      * @throws vrtd::Error on error.
      */
     void designWriteFile(const Device& device, std::string_view path) const;
+
+    /**
+     * @internal Program a PDI into cfgmem using an input FD.
+     *
+     * @param device     Device to program.
+     * @param input_fd   Input PDI file descriptor.
+     * @param bootDevice AMI boot device selector.
+     * @param partition  Flash partition to program and boot.
+     * @throws vrtd::Error on error.
+     */
+    void cfgmemProgram(
+        const Device& device,
+        int input_fd,
+        uint8_t bootDevice,
+        uint32_t partition
+    ) const;
+
+    /**
+     * @internal Program a PDI into cfgmem using a file path.
+     *
+     * @param device     Device to program.
+     * @param path       Input PDI file path.
+     * @param bootDevice AMI boot device selector.
+     * @param partition  Flash partition to program and boot.
+     * @throws vrtd::Error on error.
+     */
+    void cfgmemProgramFile(
+        const Device& device,
+        std::string_view path,
+        uint8_t bootDevice,
+        uint32_t partition
+    ) const;
 
     /**
      * @internal Get clock rate for a region.

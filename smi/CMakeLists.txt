@@ -74,3 +74,8 @@ install(
     TARGETS v80-smi
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/versal_flash_pdi.tcl"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/v80-smi"
+)

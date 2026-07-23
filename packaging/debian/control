@@ -89,7 +89,7 @@ Description: VRT Runtime (development files)
 
 Package: v80-smi
 Architecture: any
-Depends: libvrt (= ${binary:Version}), libslash (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Depends: libvrt (= ${binary:Version}), libslash (= ${binary:Version}), slashkit (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
 Description: V80 System Management Interface
 
 Package: slashkit

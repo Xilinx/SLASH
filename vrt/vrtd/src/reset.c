@@ -60,8 +60,8 @@
  *   2. Remove the device from vrtd's tracked device list (it is about to
  *      disappear from the bus).
  *   3. Open the AMI device on PF0, request access.
- *   4. Issue AMI_IOC_DEVICE_BOOT ioctl to tell the AMC firmware to boot
- *      from partition 0 on the next reset.
+ *   4. Issue AMI_IOC_DEVICE_BOOT ioctl to tell the AMC firmware which
+ *      partition to boot from on the next reset.
  *   5. Write a trigger value to BAR0 offset 0x1040000 to initiate the
  *      firmware-level reconfiguration.
  *      TODO(vserbu): explain what BAR0 register 0x1040000 controls in AMI
@@ -93,12 +93,24 @@
 #include <ami_device_internal.h>
 #include <ami_ioctl.h>
 #include <ami_mem_access.h>
+#include <vrtd/wire.h>
 
 #include "device.h"
 #include "hotplug.h"
 #include "utils.h"
 
 #define GPIO_ALLOW_SBR 0x1040000
+
+static void reset_emit_progress(
+    cfgmem_progress_callback progress_cb,
+    void *progress_ctx,
+    uint32_t phase
+)
+{
+    if (progress_cb != NULL) {
+        progress_cb(progress_ctx, phase, 0, 0);
+    }
+}
 
 /**
  * Perform a full device reset using AMI firmware commands and PCIe hotplug.
@@ -117,7 +129,13 @@
  *                 the newly-discovered device is added back.
  * @return VRTD_RET_OK on success, or a VRTD_RET_* error code on failure.
  */
-uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices)
+uint16_t reset_with_ami_partition_progress(
+    struct device *device,
+    struct device_ptr_array *devices,
+    uint32_t partition,
+    cfgmem_progress_callback progress_cb,
+    void *progress_ctx
+)
 {
     /*
      * Step 1: Compute BDF (Bus:Device.Function) strings for all three PFs.
@@ -151,6 +169,12 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
      * so we must stop tracking it before proceeding.  After this point,
      * the @device pointer is invalid and must not be dereferenced.
      */
+    reset_emit_progress(
+        progress_cb,
+        progress_ctx,
+        VRTD_CFGMEM_PROGRAM_PHASE_RESET_PREPARING
+    );
+
     // We are now removing this device.
     device_ptr_array_rm_by_reference(devices, device);
     device = NULL;
@@ -178,7 +202,7 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
     }
 
     /*
-     * Step 4: Issue AMI_IOC_DEVICE_BOOT ioctl to select boot partition 0.
+     * Step 4: Issue AMI_IOC_DEVICE_BOOT ioctl to select the boot partition.
      *
      * We issue AMI_IOC_DEVICE_BOOT directly rather than calling
      * ami_prog_device_boot(), even though the latter is the intended public
@@ -207,9 +231,15 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
      * check passes for the unprivileged vrtd user without requiring
      * CAP_DAC_OVERRIDE or root.
      */
+    reset_emit_progress(
+        progress_cb,
+        progress_ctx,
+        VRTD_CFGMEM_PROGRAM_PHASE_SELECTING_PARTITION
+    );
+
     {
         struct ami_ioc_data_payload boot_payload = { 0 };
-        boot_payload.partition = 0;
+        boot_payload.partition = partition;
         boot_payload.cap_override = ami_device->cap_override;
 
         if (ami_open_cdev(ami_device) != AMI_STATUS_OK) {
@@ -226,7 +256,8 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
             return VRTD_RET_INTERNAL_ERROR;
         }
     }
-    LOG(LOG_INFO, "reset_with_ami: AMI_IOC_DEVICE_BOOT(%s) OK", pf0_bdf);
+    LOG(LOG_INFO, "reset_with_ami: AMI_IOC_DEVICE_BOOT(%s, partition=%u) OK",
+        pf0_bdf, (unsigned int)partition);
 
     /*
      * Step 5: Write a trigger value to BAR0 register at offset 0x1040000
@@ -263,6 +294,12 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
         LOG(LOG_ERR, "reset_with_ami: hotplug handle not available (is slash_hotplug loaded?)");
         return VRTD_RET_INTERNAL_ERROR;
     }
+
+    reset_emit_progress(
+        progress_cb,
+        progress_ctx,
+        VRTD_CFGMEM_PROGRAM_PHASE_REMOVING_PCIE
+    );
 
     ret = slash_hotplug_remove(g_hotplug, pf0_bdf);
     LOG(LOG_INFO, "reset_with_ami: removed %s (ret=%d, errno=%d)", pf0_bdf, ret, errno);
@@ -302,6 +339,11 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
      * the boot partition selected in step 4.
      */
     LOG(LOG_INFO, "reset_with_ami: toggling SBR for %s", pf0_bdf);
+    reset_emit_progress(
+        progress_cb,
+        progress_ctx,
+        VRTD_CFGMEM_PROGRAM_PHASE_TOGGLING_SBR
+    );
     ret = slash_hotplug_toggle_sbr(g_hotplug, pf0_bdf);
     if (ret != 0) {
         LOG(LOG_ERR, "reset_with_ami: hotplug toggle_sbr(%s) failed: %m", pf0_bdf);
@@ -327,6 +369,11 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
     #define RESCAN_RETRY_DELAY_US 3000000
 
     for (int attempt = 1; attempt <= RESCAN_MAX_RETRIES; attempt++) {
+        reset_emit_progress(
+            progress_cb,
+            progress_ctx,
+            VRTD_CFGMEM_PROGRAM_PHASE_RESCANNING_PCIE
+        );
         ret = slash_hotplug_rescan(g_hotplug);
         if (ret != 0) {
             LOG(LOG_ERR, "reset_with_ami: hotplug rescan failed: %m");
@@ -381,6 +428,11 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
      * and makes the device available for user requests again.
      */
     // We now rescan for the reset device
+    reset_emit_progress(
+        progress_cb,
+        progress_ctx,
+        VRTD_CFGMEM_PROGRAM_PHASE_REDISCOVERING_DEVICE
+    );
     ret = devices_discover_and_open(devices);
     if (ret != 0) {
         LOG(LOG_ERR, "reset_with_ami: devices_discover_and_open failed after reset");
@@ -388,4 +440,18 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
     }
 
     return VRTD_RET_OK;
+}
+
+uint16_t reset_with_ami_partition(
+    struct device *device,
+    struct device_ptr_array *devices,
+    uint32_t partition
+)
+{
+    return reset_with_ami_partition_progress(device, devices, partition, NULL, NULL);
+}
+
+uint16_t reset_with_ami(struct device *device, struct device_ptr_array *devices)
+{
+    return reset_with_ami_partition(device, devices, 0);
 }

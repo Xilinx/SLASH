@@ -33,6 +33,7 @@ from slashkit.emit.hw.user_region.terminator_ctx import build_ddr_noc_terminator
 from slashkit.emit.hw.user_region.terminator_ctx import build_mem_noc_terminators
 from slashkit.emit.hw.user_region.terminator_ctx import build_virt_noc_terminators
 from slashkit.emit.hw.user_region.terminator_ctx import build_host_noc_terminator
+from slashkit.emit.hw.user_region.debug_ctx import build_system_ila_debug_context, build_debug_hub_slaves
 from slashkit.emit.hw.service_region.network_ctx import build_network_axis_context
 from slashkit.emit.hw.service_region.stream_ctx import build_stream_connect_context
 from slashkit.emit.hw.user_region.host_ctx import build_host_smartconnect_context
@@ -239,9 +240,14 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     kernel_hls_by_type = {
         kernel.name: kernel.hls_data_path for kernel in config.kernels}
 
+    # Debug hub S_AXI joins the AXI-Lite control fan-out as an extra slave
+    # (empty when no debug nets are configured).
+    hub_slaves = build_debug_hub_slaves(cfg.debug)
+
     ctx = build_kernel_add_context(instances)
     ctx.update(build_data_width_param_context(instances))
-    ctx.update(build_axilite_smartconnect_context(instances))
+    ctx.update(build_axilite_smartconnect_context(
+        instances, extra_slaves=[s["dst_pin"] for s in hub_slaves]))
     ctx.update(build_hbm_smartconnect_context(instances, bd, max_si=16))
     ctx.update(build_ddr_smartconnect_context(instances, max_si=16))
     ctx.update(build_mem_smartconnect_context(
@@ -298,8 +304,10 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         addr_space="S_AXILITE_INI",
         base_offset=0x0202_0000_0000,
         min_align=0x0001_0000,
+        extra_slaves=hub_slaves,
     )
     ctx.update(axilite_ctx)
+    ctx.update(build_system_ila_debug_context(instances, cfg.debug))
     ctx["project_name"] = config.project_name
     ctx["slash_bd_name"] = f"slash_{config.project_name}"
     out_path = config.build_dir / "slash.tcl"  # slash.tcl

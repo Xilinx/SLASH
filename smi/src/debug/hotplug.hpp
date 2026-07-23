@@ -1,6 +1,6 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
  * and associated documentation files (the "Software"), to deal in the Software without restriction,
@@ -18,28 +18,34 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef VRTD_RESET_H
-#define VRTD_RESET_H
+/// @file debug/hotplug.hpp
+/// @brief Declaration of the Hotplug debug command.
 
-#include <stdint.h>
+#ifndef SMI_DEBUG_HOTPLUG_HPP
+#define SMI_DEBUG_HOTPLUG_HPP
 
-#include "flash.h"
+#include <cstdint>
+#include <optional>
+#include <string>
 
-struct device;
-struct device_ptr_array;
+/// @brief Static entry-point for the debug hotplug-op command.
+///
+/// This class is not instantiable; it groups the command options and
+/// its run() entry-point.
+class Hotplug {
+    Hotplug() = delete;
+public:
+    /// @brief Options parsed from the CLI for the hotplug-op command.
+    struct Options {
+        std::string bdf;                    ///< Target board address for device-level ops.
+        std::string opText;                 ///< Hotplug operation selector.
+        std::optional<uint8_t> function;    ///< Optional PCI function number.
+    };
 
-uint16_t reset_with_ami(struct device *device, struct device_ptr_array *devices);
-uint16_t reset_with_ami_partition(
-    struct device *device,
-    struct device_ptr_array *devices,
-    uint32_t partition
-);
-uint16_t reset_with_ami_partition_progress(
-    struct device *device,
-    struct device_ptr_array *devices,
-    uint32_t partition,
-    cfgmem_progress_callback progress_cb,
-    void *progress_ctx
-);
+    /// @brief Executes the hotplug-op command.
+    /// @param options Populated options struct.
+    /// @return Exit code (0 on success).
+    static int run(const Options& options);
+};
 
-#endif /* VRTD_RESET_H */
+#endif // SMI_DEBUG_HOTPLUG_HPP

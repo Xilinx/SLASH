@@ -246,6 +246,21 @@ int auth_request_design_write(
 );
 
 /**
+ * @brief Authorize a CFGMEM_PROGRAM request (persistent flash programming).
+ *
+ * Checks that the client's role permits AMI cfgmem programming on the specified
+ * device. This operation also resets the board into the programmed partition.
+ *
+ * @param client   The requesting client.
+ * @param req_body The parsed request body containing the target device index.
+ * @return 0 if authorized, non-zero if denied.
+ */
+int auth_request_cfgmem_program(
+    struct client *client,
+    const struct vrtd_req_cfgmem_program *req_body
+);
+
+/**
  * @brief Authorize a DEVICE_HOTPLUG_OP request (PCIe SBR toggle).
  *
  * Checks that the client's role has the @c pcie_hotplug permission
