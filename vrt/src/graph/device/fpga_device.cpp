@@ -982,8 +982,11 @@ class FpgaDevicePlan : public IDevicePlan {
     std::size_t emitKernelPacket(fpga::Rp1GraphImage& image, const CompiledKernelNode& k,
                                  std::uint8_t awBucket, std::uint32_t awMask,
                                  std::uint8_t setBucket, std::uint32_t setMask,
-                                 const std::set<std::string>& skipInputScalars = {}) {
-        const FpgaKernelLocation loc = device_->resolveKernelLocation(k.kernel);
+                                 const std::set<std::string>& skipInputScalars = {},
+                                 std::optional<FpgaKernelLocation> resolvedLocation = std::nullopt) {
+        const FpgaKernelLocation loc = resolvedLocation
+                                           ? *resolvedLocation
+                                           : device_->resolveKernelLocation(k.kernel);
         const std::uint32_t argOffset =
             static_cast<std::uint32_t>(image.arg_buf.size()) * sizeof(std::uint32_t);
         const std::uint32_t argCount = packKernelArgs(image, k, skipInputScalars);
@@ -1035,10 +1038,27 @@ class FpgaDevicePlan : public IDevicePlan {
         reserveReferencedSignalSlots(dg, slotAlloc);
         std::size_t totalWork = N;
         std::vector<bool> hasOutputScalarReads(N, false);
+        std::set<std::string> availableScalarKeys;
         for (std::size_t p = 0; p < N; ++p) {
             if (const auto* k = std::get_if<CompiledKernelNode>(&dg.nodes[p])) {
+                for (const ScalarPort& sp : k->kernel.ioType.inputScalars) {
+                    auto bindIt = k->ioMap.inputScalars().find(sp.name);
+                    if (bindIt == k->ioMap.inputScalars().end()) continue;
+                    const GraphScalar& gs = bindIt->second;
+                    if (availableScalarKeys.count(
+                            scopedScalarKey(gs.scopeId(), gs.varName())) != 0) {
+                        ++totalWork;
+                    }
+                }
                 totalWork += k->kernel.ioType.outputScalars.size();
                 hasOutputScalarReads[p] = !k->kernel.ioType.outputScalars.empty();
+                for (const ScalarPort& sp : k->kernel.ioType.outputScalars) {
+                    auto bindIt = k->ioMap.outputScalars().find(sp.name);
+                    if (bindIt == k->ioMap.outputScalars().end()) continue;
+                    const GraphScalar& gs = bindIt->second;
+                    availableScalarKeys.insert(
+                        scopedScalarKey(gs.scopeId(), gs.varName()));
+                }
             }
         }
         const std::size_t nodeBuckets =
@@ -1070,6 +1090,12 @@ class FpgaDevicePlan : public IDevicePlan {
 
         fpga::Rp1GraphImage image;
         std::vector<rp1_node_t> aggregators;
+        struct ScalarReady {
+            std::uint32_t slot;
+            std::uint8_t bucket;
+            std::uint32_t mask;
+        };
+        std::unordered_map<std::string, ScalarReady> scalarReady;
         std::uint8_t  joinBucket = static_cast<std::uint8_t>(nodeBuckets);
         std::uint32_t joinBit = 0;
         auto resolveAwait =
@@ -1113,12 +1139,51 @@ class FpgaDevicePlan : public IDevicePlan {
                 auto it = posOf.find(depId);
                 if (it != posOf.end()) predGroups[nodeBucketOf(it->second)] |= nodeBitOf(it->second);
             }
-            const auto [awBucket, awMask] = resolveAwait(predGroups);
             const std::uint8_t setBucket = nodeBucketOf(p);
             const std::uint32_t setMask = nodeBitOf(p);
 
             if (const auto* k = std::get_if<CompiledKernelNode>(&n)) {
-                emitKernelPacket(image, *k, awBucket, awMask, setBucket, setMask);
+                std::set<std::string> forwardedInputs;
+                std::map<std::uint8_t, std::uint32_t> kernelGroups = predGroups;
+                std::optional<FpgaKernelLocation> loc;
+                std::optional<std::map<std::string, std::uint32_t>> inputOffsets;
+                for (const ScalarPort& sp : k->kernel.ioType.inputScalars) {
+                    auto bindIt = k->ioMap.inputScalars().find(sp.name);
+                    if (bindIt == k->ioMap.inputScalars().end()) continue;
+                    const GraphScalar& gs = bindIt->second;
+                    const std::string key = scopedScalarKey(gs.scopeId(), gs.varName());
+                    auto readyIt = scalarReady.find(key);
+                    if (readyIt == scalarReady.end()) continue;
+
+                    if (!loc) {
+                        loc = device_->resolveKernelLocation(k->kernel);
+                        inputOffsets = inputScalarRegOffsets(k->kernel);
+                    }
+                    forwardedInputs.insert(sp.name);
+                    std::map<std::uint8_t, std::uint32_t> copyGroups = predGroups;
+                    copyGroups[readyIt->second.bucket] |= readyIt->second.mask;
+                    const auto [copyAwBucket, copyAwMask] = resolveAwait(copyGroups);
+                    const std::size_t cpos = nextExtraPos++;
+                    const std::uint8_t cbucket = nodeBucketOf(cpos);
+                    const std::uint32_t cmask = nodeBitOf(cpos);
+
+                    rp1_node_t cp{};
+                    cp.opcode = RP1_OP_SCALAR_COPY;
+                    cp.status = RP1_NODE_PENDING;
+                    cp.barrier_await_bucket = copyAwBucket;
+                    cp.barrier_await_mask = copyAwMask;
+                    cp.barrier_set_bucket = cbucket;
+                    cp.barrier_set_mask = cmask;
+                    cp.payload.scalar_copy.source_slot = readyIt->second.slot;
+                    cp.payload.scalar_copy.dest_addr =
+                        loc->r5_base_addr + inputOffsets->at(sp.name);
+                    image.nodes.push_back(cp);
+                    kernelGroups[cbucket] |= cmask;
+                }
+
+                const auto [kernelAwBucket, kernelAwMask] = resolveAwait(kernelGroups);
+                emitKernelPacket(image, *k, kernelAwBucket, kernelAwMask,
+                                 setBucket, setMask, forwardedInputs, loc);
                 std::uint8_t lastBucket = setBucket;
                 std::uint32_t lastMask = setMask;
                 for (const ScalarPort& sp : k->kernel.ioType.outputScalars) {
@@ -1145,13 +1210,18 @@ class FpgaDevicePlan : public IDevicePlan {
                         const GraphScalar& gs = bindIt->second;
                         const std::string key = scopedScalarKey(gs.scopeId(), gs.varName());
                         scalarSlots_[key] = slot;
+                        scalarReady[key] = ScalarReady{slot, rbucket, rmask};
                         registerDeviceScalarSlot(key, slot);
                     }
                     extraLeafGroups[rbucket] |= rmask;
                     lastBucket = rbucket;
                     lastMask = rmask;
                 }
-            } else if (const auto* r = std::get_if<CompiledReprogramNode>(&n)) {
+                continue;
+            }
+
+            const auto [awBucket, awMask] = resolveAwait(predGroups);
+            if (const auto* r = std::get_if<CompiledReprogramNode>(&n)) {
                 emitReprogramPacket(image, *r, awBucket, awMask, setBucket, setMask);
             } else if (const auto* sg = std::get_if<CompiledSignalNode>(&n)) {
                 rp1_node_t pkt{};
@@ -2018,9 +2088,8 @@ class FpgaDevicePlan : public IDevicePlan {
     std::exception_ptr                                         workerEx_;
     std::vector<rp1_cq_entry_t>                                lastCq_;
     bool                                                       signalsPrepared_ = false;
-    // Output scalars captured into RP1 signal slots by SCALAR_READ during
-    // control-image lowering, keyed by the bound scalar's scoped name so a
-    // downstream condition (Phase F) can locate the slot to evaluate.
+    // Output scalars captured into RP1 signal slots by SCALAR_READ, keyed by
+    // scoped name for downstream SCALAR_COPY inputs and control predicates.
     std::unordered_map<std::string, std::uint32_t> scalarSlots_;
 
    public:

@@ -1268,6 +1268,60 @@ TEST_F(FpgaDeviceFixture, OutputScalarPortsEmitScalarRead) {
     EXPECT_EQ(ddr_.nodes()[1].payload.scalar_read.source_addr, kKernelA_R5 + 0x10u);
 }
 
+TEST_F(FpgaDeviceFixture, OutputScalarFeedsDownstreamKernelViaScalarCopy) {
+    IOTypeMap producerType;
+    producerType.outputScalars.push_back({"level", ScalarType::I32});
+    IOTypeMap consumerType;
+    consumerType.inputScalars.push_back({"level", ScalarType::I32});
+
+    auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.device = dev;
+    dg.scalarValues = std::make_shared<std::map<std::string, std::uint64_t>>();
+
+    const GraphScalar level = GraphScalar::ref(ScalarType::I32, "level");
+
+    CompiledKernelNode producer;
+    producer.id = "producer";
+    producer.deviceId = "fpga:0";
+    producer.kernel = fpgaKernel("kA", producerType);
+    producer.ioMap.bindOutputScalar("level", level);
+    dg.nodes.push_back(producer);
+
+    CompiledKernelNode consumer;
+    consumer.id = "consumer";
+    consumer.deviceId = "fpga:0";
+    consumer.kernel = fpgaKernel("kB", consumerType);
+    consumer.ioMap.bindInputScalar("level", level);
+    consumer.dependsOn = {"producer"};
+    dg.nodes.push_back(consumer);
+
+    auto plan = dev->compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+    ASSERT_NO_THROW(plan->launch());
+    ASSERT_NO_THROW(plan->wait());
+
+    const rp1_node_t& scalarRead = ddr_.nodes()[1];
+    const rp1_node_t& scalarCopy = ddr_.nodes()[2];
+    const rp1_node_t& dispatch = ddr_.nodes()[3];
+
+    ASSERT_EQ(scalarRead.opcode, RP1_OP_SCALAR_READ);
+    ASSERT_EQ(scalarCopy.opcode, RP1_OP_SCALAR_COPY);
+    EXPECT_EQ(scalarCopy.payload.scalar_copy.source_slot,
+              scalarRead.payload.scalar_read.target_slot);
+    EXPECT_EQ(scalarCopy.payload.scalar_copy.dest_addr, kKernelB_R5 + 0x10u);
+    EXPECT_EQ(scalarCopy.barrier_await_bucket, scalarRead.barrier_set_bucket);
+    EXPECT_NE(scalarCopy.barrier_await_mask & scalarRead.barrier_set_mask, 0u);
+
+    ASSERT_EQ(dispatch.opcode, RP1_OP_KERNEL_DISPATCH);
+    EXPECT_EQ(dispatch.payload.kernel_dispatch.kernel_base_addr, kKernelB_R5);
+    EXPECT_EQ(dispatch.payload.kernel_dispatch.arg_count, 0u);
+    EXPECT_EQ(dispatch.barrier_await_bucket, scalarCopy.barrier_set_bucket);
+    EXPECT_NE(dispatch.barrier_await_mask & scalarCopy.barrier_set_mask, 0u);
+}
+
 TEST_F(FpgaDeviceFixture, WideOutputScalarPortsAreRejected) {
     IOTypeMap iot;
     iot.outputScalars.push_back({"result", ScalarType::U64});
