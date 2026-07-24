@@ -3445,18 +3445,15 @@ class RegionCompiler {
             for (const ConsumedScalarRef& ref : consumedScalarRefs(op)) {
                 routeScalarTransferIfNeeded(rc, op, consumerDevId, ref);
             }
-            // A loop placed on a non-CPU (FPGA) queue consumes its carried/
-            // initial inputs through the body's import boundaries rather than
-            // its own IOMap, so enumerate those consumed buffers and bridge any
-            // whose producer lives on another device (the Phase-A entry bridge).
-            if (std::holds_alternative<LoopOp>(op) && consumerDevId != cpuDeviceId(rc)) {
+            // Control ops consume parent buffers through child start boundaries,
+            // which are not necessarily represented in the control op's IOMap.
+            // Route those boundary inputs just like direct kernel inputs.
+            if (std::holds_alternative<LoopOp>(op) ||
+                std::holds_alternative<ConditionalOp>(op)) {
                 for (const ConsumedBufferRef& ref : consumedBufferRefs(op)) {
                     if (const GraphBuffer* gb = producedBufferObject(rc, id, ref.key)) {
                         routeBufferTransferIfNeeded(rc, op, consumerDevId, *gb);
                     }
-                }
-                for (const ConsumedScalarRef& ref : consumedScalarRefs(op)) {
-                    routeScalarTransferIfNeeded(rc, op, consumerDevId, ref);
                 }
             }
         }
@@ -3653,6 +3650,20 @@ class RegionCompiler {
         }
         for (const IOMap::InoutBinding& rw : io.inouts()) {
             if (scopedBufferKey(rw.out.scopeId(), rw.out.name()) == key) return &rw.out;
+        }
+        if (const auto* loop = std::get_if<LoopOp>(opIt->second)) {
+            if (loop->body) return findBufferObject(*loop->body, key);
+        }
+        if (const auto* cond = std::get_if<ConditionalOp>(opIt->second)) {
+            if (cond->thenRegion) {
+                if (const GraphBuffer* buffer =
+                        findBufferObject(*cond->thenRegion, key)) {
+                    return buffer;
+                }
+            }
+            if (cond->elseRegion) {
+                return findBufferObject(*cond->elseRegion, key);
+            }
         }
         return nullptr;
     }

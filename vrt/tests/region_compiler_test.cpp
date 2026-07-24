@@ -2325,6 +2325,65 @@ TEST(RegionCompilerTest, ParentKernelReadsControlOutputAcrossDevices) {
     EXPECT_TRUE(dependsOn(*consumerNode, consumerBridge->id));
 }
 
+TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    graph.registerDevice(std::make_shared<StubDevice>("fpga:0", DeviceType::FPGA));
+
+    GraphScalar size = testSize(graph.rootRegion());
+    auto body = graph.rootRegion().createChild();
+    IOTypeMap producerType = singleOutputType();
+    IOMap producerIo;
+    GraphBuffer localOutput;
+    producerIo.bindOutput("out", BufferType::I32, localOutput, size, body->scopeId());
+    const std::string producerId = body->addKernel(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, producerType},
+        std::move(producerIo), "fpga:0");
+
+    GraphBuffer loopOutput = GraphBuffer::make(
+        BufferType::I32, "loop_output", graph.rootRegion().scopeId(), size);
+    body->exportToParent({{localOutput, loopOutput}}, {producerId});
+    const std::string loopId = graph.addLoop(fixedLoopSpec(
+        tripCount(tripCountScalar(graph.rootRegion())), body));
+
+    IOTypeMap consumerType;
+    consumerType.inputs.push_back({"in", BufferType::I32});
+    auto makeBranch = [&](const std::string& name) {
+        auto branch = graph.rootRegion().createChild();
+        GraphBuffer localInput = branch->inputBuffer(
+            BufferType::I32, name + "_input", size);
+        branch->importFromParent({{loopOutput, localInput}});
+        IOMap io;
+        io.bindInput("in", localInput);
+        branch->addKernel(cpuKernel(name, consumerType), std::move(io), "cpu");
+        return branch;
+    };
+    auto thenRegion = makeBranch("then");
+    auto elseRegion = makeBranch("else");
+
+    GraphScalar flag = graph.rootRegion().inputScalar(ScalarType::I32, "flag");
+    const std::string conditionalId = graph.addConditional(ifElseSpec(
+        flag >= 0,
+        thenRegion, elseRegion));
+
+    InspectionBridge bridge;
+    auto dgraphs = compileForInspection(graph, bridge);
+    const DGraph* fpgaDGraph = findDGraph(dgraphs, "fpga:0");
+    const DGraph* cpuDGraph = findDGraph(dgraphs, "cpu");
+    ASSERT_NE(fpgaDGraph, nullptr);
+    ASSERT_NE(cpuDGraph, nullptr);
+    ASSERT_NE(findCompiledNode(*fpgaDGraph, loopId), nullptr);
+
+    const auto* transfer = findBridgeNode(
+        *cpuDGraph, CompiledBridgeOpNode::Side::Producer, conditionalId);
+    ASSERT_NE(transfer, nullptr);
+
+    const CompiledNode* conditionalNode =
+        findCompiledNode(*cpuDGraph, conditionalId);
+    ASSERT_NE(conditionalNode, nullptr);
+    EXPECT_TRUE(dependsOn(*conditionalNode, transfer->id));
+}
+
 TEST(RegionCompilerTest, GraphRunExecutesEmptyStructuredControlOnCpu) {
     Graph graph;
     graph.registerDevice(std::make_shared<CpuDevice>("cpu"));
