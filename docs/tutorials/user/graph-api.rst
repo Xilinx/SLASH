@@ -1204,11 +1204,18 @@ written above.
    #pragma HLS interface m_axi bundle=gmem0 port=in  max_widen_bitwidth=64
    #pragma HLS interface m_axi bundle=gmem1 port=out max_widen_bitwidth=64
 
+       if (n == 0) return;
+
+       // Loop-carried buffers may alias in and out. Retain original neighbour
+       // values in a sliding window so an in-place call remains correct.
+       ap_int<32> left = in[0];
+       ap_int<32> current = in[0];
        for (ap_uint<64> i = 0; i < n; ++i) {
-           ap_int<32> left  = (i == 0)     ? in[i] : in[i - 1];
-           ap_int<32> right = (i + 1 == n) ? in[i] : in[i + 1];
-           ap_int<32> lap   = 2 * in[i] - left - right;
-           out[i] = in[i] + alpha * lap;
+           ap_int<32> right = (i + 1 == n) ? current : in[i + 1];
+           ap_int<32> lap = 2 * current - left - right;
+           out[i] = current + alpha * lap;
+           left = current;
+           current = right;
        }
    }
 
@@ -1255,7 +1262,11 @@ A single kernel, a single image:
    nk=sharpen_kernel:1
 
    sp=sharpen_kernel_0.m_axi_gmem0:HBM0
-   sp=sharpen_kernel_0.m_axi_gmem1:HBM1
+   sp=sharpen_kernel_0.m_axi_gmem1:HBM0
+
+The loop carries one physical buffer across iterations, so both kernel ports
+must address the same HBM bank. The sliding-window implementation above also
+keeps the stencil correct when ``in`` and ``out`` are that same buffer.
 
 Modifying the Code to Use the FPGA Kernel
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -90,3 +90,7 @@ Only `sharpen_kernel` moved to the FPGA; `cpu_level`, `cpu_passthrough`, and
 `sharpened` cross the loop and conditional region boundaries with no extra
 plumbing -- both are ordinary token references resolved by the compiler
 through the authored `.inputs` / `.outputs` port maps.
+
+The loop carries `state` in one physical buffer, so the HLS input and output
+ports both target HBM0. `sharpen_kernel` uses a sliding window and is therefore
+safe when those two pointers alias during in-place loop execution.

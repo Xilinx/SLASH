@@ -694,13 +694,41 @@ class FpgaDevicePlan : public IDevicePlan {
             throw std::runtime_error(
                 "FpgaDevicePlan: deferred buffer aliases require an FpgaDevice");
         }
+
+        std::vector<const DeferredBufferAlias*> pending;
+        pending.reserve(deferredBufferAliases_.size());
         for (const DeferredBufferAlias& alias : deferredBufferAliases_) {
-            const std::size_t bytes =
-                resolvedBufferSizeBytes(alias.sizeToken, scalarValues_, "FpgaDevicePlan");
-            if (device_->bufferSize(alias.sourceKey) == 0) {
-                device_->setInputBuffer(alias.sourceKey, nullptr, bytes);
+            pending.push_back(&alias);
+        }
+
+        while (!pending.empty()) {
+            std::vector<const DeferredBufferAlias*> unresolved;
+            bool madeProgress = false;
+            for (const DeferredBufferAlias* alias : pending) {
+                if (device_->hasBuffer(alias->sourceKey)) {
+                    device_->aliasBufferKey(alias->targetKey, alias->sourceKey);
+                    madeProgress = true;
+                } else if (device_->hasBuffer(alias->targetKey)) {
+                    // Loop-carried outputs are unallocated before the first
+                    // iteration, while their initial parent input is already
+                    // staged. Preserve that seed by making the output alias it.
+                    device_->aliasBufferKey(alias->sourceKey, alias->targetKey);
+                    madeProgress = true;
+                } else {
+                    unresolved.push_back(alias);
+                }
             }
-            device_->aliasBufferKey(alias.targetKey, alias.sourceKey);
+            if (unresolved.empty()) break;
+            if (!madeProgress) {
+                for (const DeferredBufferAlias* alias : unresolved) {
+                    const std::size_t bytes = resolvedBufferSizeBytes(
+                        alias->sizeToken, scalarValues_, "FpgaDevicePlan");
+                    device_->setInputBuffer(alias->sourceKey, nullptr, bytes);
+                    device_->aliasBufferKey(alias->targetKey, alias->sourceKey);
+                }
+                break;
+            }
+            pending = std::move(unresolved);
         }
     }
 
@@ -2200,21 +2228,31 @@ void FpgaDevice::aliasBufferKey(const std::string& targetName,
     if (target == source) return;
     std::lock_guard<std::mutex> lk(bufferMutex_);
     const std::string canonicalSource = canonicalBufferKey(source);
+    const std::string canonicalTarget = canonicalBufferKey(target);
+    if (canonicalTarget == canonicalSource) return;
     auto it = buffers_.find(canonicalSource);
     if (it == buffers_.end()) {
         throw std::runtime_error(
             "FpgaDevice: cannot alias buffer '" + targetName + "' to unallocated source '" +
             sourceName + "' (carried-buffer boundary expects the source staged first)");
     }
+    auto sourceRegion = bufferRegion_.find(canonicalSource);
+    auto targetRegion = bufferRegion_.find(canonicalTarget);
+    if (sourceRegion != bufferRegion_.end() &&
+        targetRegion != bufferRegion_.end() &&
+        (sourceRegion->second.type != targetRegion->second.type ||
+         sourceRegion->second.hbmPort != targetRegion->second.hbmPort)) {
+        throw std::logic_error(
+            "FpgaDevice: cannot alias buffers '" + targetName + "' and '" +
+            sourceName + "' across incompatible memory regions");
+    }
     // Keep aliases as canonical-key indirections, not BufferRecord copies, so
     // later growth/reallocation of either name updates one shared record.
-    bufferAliases_[target] = canonicalSource;
+    bufferAliases_[canonicalTarget] = canonicalSource;
     // The region mapping can be known from either side: source for parent
     // buffers already used by a kernel, target for loop-local carried buffers.
-    auto sourceRegion = bufferRegion_.find(canonicalSource);
-    auto targetRegion = bufferRegion_.find(target);
     if (sourceRegion != bufferRegion_.end()) {
-        bufferRegion_[target] = sourceRegion->second;
+        bufferRegion_[canonicalTarget] = sourceRegion->second;
     } else if (targetRegion != bufferRegion_.end()) {
         bufferRegion_[canonicalSource] = targetRegion->second;
     }

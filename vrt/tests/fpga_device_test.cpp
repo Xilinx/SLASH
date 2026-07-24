@@ -726,6 +726,87 @@ TEST_F(FpgaDeviceFixture, CarriedBufferAliasStaysCoherentAfterGrowth) {
     EXPECT_EQ(readback[1], grown[1]);
 }
 
+TEST_F(FpgaDeviceFixture, LoopCarriedOutputAliasPreservesInitialInput) {
+    FpgaDevice dev("fpga:0", window_,
+                   [](const std::string&) {
+                       return FpgaKernelLocation{kKernelA_R5, 0};
+                   });
+
+    GraphScalar elements = GraphScalar::ref(ScalarType::U64, "elements");
+    GraphBuffer parentInput =
+        GraphBuffer::make(BufferType::I32, "input", 0, elements);
+    GraphBuffer parentOutput =
+        GraphBuffer::make(BufferType::I32, "output", 0, elements);
+    GraphBuffer localInput =
+        GraphBuffer::make(BufferType::I32, "local_input", 1, elements);
+    GraphBuffer localOutput =
+        GraphBuffer::make(BufferType::I32, "local_output", 1, elements);
+
+    const std::int32_t seed[] = {7, 11};
+    dev.setInputBuffer(scopedBufferKey(0, "input"), seed, sizeof(seed));
+
+    CompiledBoundaryNode importB;
+    importB.id = "import";
+    importB.deviceId = "fpga:0";
+    importB.side = CompiledBoundaryNode::Side::Start;
+    importB.bufferCopies.push_back(
+        {parentInput.name(), 0, localInput.name(), 1});
+
+    IOTypeMap bodyType;
+    bodyType.inputs.push_back({"in", BufferType::I32});
+    bodyType.outputs.push_back({"out", BufferType::I32});
+    CompiledKernelNode bodyK;
+    bodyK.id = "body";
+    bodyK.deviceId = "fpga:0";
+    bodyK.kernel = fpgaKernel("body", bodyType);
+    bodyK.ioMap.bindInput("in", localInput)
+               .bindExistingOutput("out", localOutput);
+
+    CompiledBoundaryNode exportB;
+    exportB.id = "export";
+    exportB.deviceId = "fpga:0";
+    exportB.side = CompiledBoundaryNode::Side::End;
+    exportB.dependsOn = {"body"};
+    exportB.bufferCopies.push_back(
+        {localOutput.name(), 1, parentOutput.name(), 0});
+    exportB.bufferCopies.push_back(
+        {localOutput.name(), 1, parentInput.name(), 0});
+
+    auto body = std::make_shared<DGraph>();
+    body->deviceId = "fpga:0";
+    body->nodes = {importB, bodyK, exportB};
+    body->scalarValues =
+        std::make_shared<std::map<std::string, std::uint64_t>>();
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.scalarValues =
+        std::make_shared<std::map<std::string, std::uint64_t>>();
+    (*dg.scalarValues)[scopedScalarKey(0, "elements")] = 2;
+    CompiledLoopNode loop;
+    loop.id = "loop";
+    loop.deviceId = "fpga:0";
+    loop.loopKind = CompiledLoopKind::FixedCount;
+    loop.tripCount = bindTripCount(dg, 1);
+    dg.nodes.emplace_back(loop);
+    DGraphChild child;
+    child.parentNodeId = "loop";
+    child.role = DGraphChildRole::LoopBody;
+    child.dgraphs.push_back(body);
+    dg.childDGraphs.push_back(child);
+
+    auto plan = dev.compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+    ASSERT_NO_THROW(plan->launch());
+    ASSERT_NO_THROW(plan->wait());
+
+    std::int32_t readback[] = {0, 0};
+    ASSERT_NO_THROW(dev.getOutputBuffer(
+        scopedBufferKey(0, "output"), readback, sizeof(readback)));
+    EXPECT_EQ(readback[0], seed[0]);
+    EXPECT_EQ(readback[1], seed[1]);
+}
+
 TEST_F(FpgaDeviceFixture, GraphReprogramNodeCompilesIntoFpgaDGraph) {
     auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
     Graph g = Graph::withDefaults();
