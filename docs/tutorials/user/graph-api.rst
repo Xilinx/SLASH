@@ -464,7 +464,7 @@ Below is a self-contained kernel that implements step A (local derivative):
 
        for (ap_uint<64> i = 0; i + 1 < n; ++i) {
            ap_int<32> diff = in[i + 1] - in[i];
-           edges[i] = diff < 0 ? -diff : diff;
+           edges[i] = diff < 0 ? ap_int<32>(-diff) : ap_int<32>(diff);
        }
        edges[n - 1] = 0;  // last element has no right neighbour
    }
