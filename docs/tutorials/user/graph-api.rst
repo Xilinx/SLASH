@@ -583,7 +583,9 @@ any unused PL resources across kernels in the same image.
    target_link_libraries(${PROJECT_NAME} PRIVATE vrt::vrt)
 
 The ``config.cfg`` linker configuration assigns each kernel's memory ports to
-HBM banks. Scalar ports do not need ``sp=`` entries:
+HBM banks. Ports that exchange the same graph buffer must use the same bank:
+both readers of ``input`` use HBM0, while the ``edges`` producer and consumer
+use HBM1. Scalar ports do not need ``sp=`` entries:
 
 .. code-block:: ini
 
@@ -595,8 +597,8 @@ HBM banks. Scalar ports do not need ``sp=`` entries:
 
    sp=edges_kernel_0.m_axi_gmem0:HBM0
    sp=edges_kernel_0.m_axi_gmem1:HBM1
-   sp=level_kernel_0.m_axi_gmem0:HBM2
-   sp=normalize_kernel_0.m_axi_gmem0:HBM3
+   sp=level_kernel_0.m_axi_gmem0:HBM0
+   sp=normalize_kernel_0.m_axi_gmem0:HBM1
 
 Build the vbin:
 

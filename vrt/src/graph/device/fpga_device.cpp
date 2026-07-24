@@ -2288,13 +2288,22 @@ std::uint64_t FpgaDevice::bufferDeviceAddress(const GraphBuffer& buffer,
 }
 
 void FpgaDevice::populateBufferRegions(const DGraph& dg) {
+    std::map<std::string, ::vrt::MemoryConfig> resolvedRegions;
     auto record = [&](const KernelDescriptor& kernel, const std::string& portName,
                       const GraphBuffer& buffer) {
         auto region = resolveBufferRegion(kernel, portName);
         if (!region) return;
         const std::string key = scopedBufferKey(buffer.scopeId(), buffer.name());
-        std::lock_guard<std::mutex> lk(bufferMutex_);
-        bufferRegion_[key] = *region;
+        auto [it, inserted] = resolvedRegions.emplace(key, *region);
+        if (!inserted &&
+            (it->second.type != region->type ||
+             it->second.hbmPort != region->hbmPort)) {
+            throw std::logic_error(
+                "FpgaDevice: buffer '" + key +
+                "' is bound to incompatible memory regions; kernel '" +
+                kernel.name + "' port '" + portName +
+                "' must use the same region as every other producer and consumer");
+        }
     };
 
     std::function<void(const DGraph&)> walk = [&](const DGraph& g) {
@@ -2330,6 +2339,11 @@ void FpgaDevice::populateBufferRegions(const DGraph& dg) {
         }
     };
     walk(dg);
+
+    std::lock_guard<std::mutex> lk(bufferMutex_);
+    for (const auto& [key, region] : resolvedRegions) {
+        bufferRegion_[key] = region;
+    }
 }
 
 FpgaKernelLocation FpgaDevice::resolveKernelLocation(const KernelDescriptor& kernel) const {
@@ -2388,9 +2402,10 @@ FpgaDevice::descriptorPortToArgName(const KernelDescriptor& kernel) const {
     // regardless of data-flow direction.  A descriptor that splits ports into
     // input/output by intent would then fail to line up per-category.  Instead
     // we use the spec's idx-ordered `args` (the authoritative argument order)
-    // and split scalar vs buffer by the arg type (matching the classification
-    // in ioTypeMapFromFunctionalArgs), not by the m_axi port (a buffer may have
-    // no connection and an empty port).
+    // and split scalar vs buffer primarily by arg type. A readable-only pointer
+    // with no m_axi port is ambiguous: HLS uses that shape for AXI-Lite scalar
+    // outputs, while old metadata fixtures may omit the port on output buffers.
+    // The descriptor's scalar count tells us how many such pointers to promote.
     auto isBufferArg = [](const fpga::FpgaKernelArgSpec& arg) {
         std::string t = arg.type;
         std::transform(t.begin(), t.end(), t.begin(), [](unsigned char c) {
@@ -2398,15 +2413,6 @@ FpgaDevice::descriptorPortToArgName(const KernelDescriptor& kernel) const {
         });
         return t == "buffer" || t.find('*') != std::string::npos;
     };
-    std::vector<std::string> specScalars;
-    std::vector<std::string> specBuffers;
-    for (const fpga::FpgaKernelArgSpec& arg : kit->second.args) {
-        if (isBufferArg(arg)) {
-            specBuffers.push_back(arg.name);
-        } else {
-            specScalars.push_back(arg.name);
-        }
-    }
 
     // Flatten the descriptor ports in the order the packer emits them
     // (scalars first, then input/output buffers, then RW in-pointers).
@@ -2419,6 +2425,27 @@ FpgaDevice::descriptorPortToArgName(const KernelDescriptor& kernel) const {
     // An RW pair collapses onto a single underlying pointer arg: its in-port
     // consumes one buffer slot; its out-port aliases the same arg afterwards.
     for (const RWBufferPort& p : d.inouts) descBuffers.push_back(p.in.name);
+
+    std::size_t specScalarCount = 0;
+    for (const fpga::FpgaKernelArgSpec& arg : kit->second.args) {
+        if (!isBufferArg(arg)) ++specScalarCount;
+    }
+    std::size_t pointerOutputsToPromote =
+        descScalars.size() > specScalarCount
+            ? descScalars.size() - specScalarCount
+            : 0u;
+
+    std::vector<std::string> specScalars;
+    std::vector<std::string> specBuffers;
+    for (const fpga::FpgaKernelArgSpec& arg : kit->second.args) {
+        bool buffer = isBufferArg(arg);
+        if (buffer && pointerOutputsToPromote > 0 &&
+            arg.readable && !arg.writable && arg.port.empty()) {
+            buffer = false;
+            --pointerOutputsToPromote;
+        }
+        (buffer ? specBuffers : specScalars).push_back(arg.name);
+    }
 
     for (std::size_t i = 0; i < descScalars.size() && i < specScalars.size(); ++i) {
         out[descScalars[i]] = specScalars[i];

@@ -92,7 +92,10 @@ IOTypeMap ioTypeMapFromFunctionalArgs(const std::vector<FunctionalArg>& args) {
     IOTypeMap ioType;
     for (const FunctionalArg& arg : args) {
         const std::string type = lower(arg.type);
-        if (type == "buffer" || type.find('*') != std::string::npos) {
+        const bool registerOutput =
+            arg.readable && !arg.writable && arg.port.empty();
+        if (!registerOutput &&
+            (type == "buffer" || type.find('*') != std::string::npos)) {
             BufferPort port{arg.name, BufferType::U8};
             // system_map does not currently distinguish buffer direction
             // precisely enough for graph tokens. Treat readable+writable

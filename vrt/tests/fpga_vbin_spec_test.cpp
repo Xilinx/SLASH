@@ -32,6 +32,7 @@ TEST(FpgaVbinSpecTest, ConvertsFunctionalArgsToIoTypeMap) {
     args.push_back(vrt::FunctionalArg{0, "n", "scalar", 0x10, 32, false, true, ""});
     args.push_back(vrt::FunctionalArg{1, "in", "buffer", 0x18, 64, false, true, "m_axi_gmem0"});
     args.push_back(vrt::FunctionalArg{2, "result", "uint64_t", 0x20, 64, true, false, ""});
+    args.push_back(vrt::FunctionalArg{3, "level", "int*", 0x28, 32, true, false, ""});
 
     IOTypeMap io = fpga::ioTypeMapFromFunctionalArgs(args);
     ASSERT_EQ(io.inputScalars.size(), 1u);
@@ -39,9 +40,11 @@ TEST(FpgaVbinSpecTest, ConvertsFunctionalArgsToIoTypeMap) {
     EXPECT_EQ(io.inputScalars[0].type, ScalarType::U32);
     ASSERT_EQ(io.inputs.size(), 1u);
     EXPECT_EQ(io.inputs[0].name, "in");
-    ASSERT_EQ(io.outputScalars.size(), 1u);
+    ASSERT_EQ(io.outputScalars.size(), 2u);
     EXPECT_EQ(io.outputScalars[0].name, "result");
     EXPECT_EQ(io.outputScalars[0].type, ScalarType::U64);
+    EXPECT_EQ(io.outputScalars[1].name, "level");
+    EXPECT_EQ(io.outputScalars[1].type, ScalarType::I32);
 }
 
 TEST(FpgaVbinSpecTest, ComputesR5AddressFromSystemMapBase) {

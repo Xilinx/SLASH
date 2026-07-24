@@ -1217,6 +1217,49 @@ TEST_F(FpgaDeviceFixture, RenamedDescriptorPortsResolveToSystemMapArgs) {
     EXPECT_EQ(a[10], 0x2cu);
 }
 
+TEST_F(FpgaDeviceFixture, ConflictingBufferMemoryRegionsAreRejected) {
+    auto spec = std::make_shared<fpga::FpgaVbinSpec>();
+    fpga::FpgaImageSpec image;
+    image.id = "imageA";
+
+    auto addKernel = [&](const std::string& name, std::uint32_t base,
+                         std::uint8_t hbmPort) {
+        fpga::FpgaKernelSpec kernel;
+        kernel.name = name;
+        kernel.r5_base_addr = base;
+        kernel.ioType.inputs.push_back({"in", BufferType::I32});
+        kernel.args.push_back(
+            {0u, "in", "int*", 0x10u, 64u, false, true, "m_axi_gmem0"});
+        kernel.argMemory["in"] =
+            ::vrt::MemoryConfig{::vrt::MemoryRangeType::HBM, hbmPort};
+        image.kernels.emplace(name, std::move(kernel));
+    };
+    addKernel("kA", kKernelA_R5, 0u);
+    addKernel("kB", kKernelB_R5, 1u);
+    spec->addImage(std::move(image));
+
+    auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, spec, "imageA");
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.device = dev;
+    const GraphBuffer shared = GraphBuffer::make(BufferType::I32, "shared", 0);
+
+    for (const std::string& name : {"kA", "kB"}) {
+        CompiledKernelNode node;
+        node.id = name;
+        node.deviceId = "fpga:0";
+        IOTypeMap ioType;
+        ioType.inputs.push_back({"in", BufferType::I32});
+        node.kernel =
+            KernelDescriptor{name, DeviceType::FPGA, std::string("imageA"), ioType};
+        node.ioMap.bindInput("in", shared);
+        dg.nodes.push_back(std::move(node));
+    }
+
+    EXPECT_THROW(dev->compilePlan(dg), std::logic_error);
+}
+
 TEST_F(FpgaDeviceFixture, LookupReturningZeroAddressIsRejected) {
     auto bad_lookup = [](const std::string&) {
         return FpgaKernelLocation{0u, 0u};
@@ -1266,6 +1309,45 @@ TEST_F(FpgaDeviceFixture, OutputScalarPortsEmitScalarRead) {
     EXPECT_EQ(ddr_.nodes()[0].opcode, RP1_OP_KERNEL_DISPATCH);
     EXPECT_EQ(ddr_.nodes()[1].opcode, RP1_OP_SCALAR_READ);
     EXPECT_EQ(ddr_.nodes()[1].payload.scalar_read.source_addr, kKernelA_R5 + 0x10u);
+}
+
+TEST_F(FpgaDeviceFixture, PointerTypedOutputScalarUsesSystemMapOffset) {
+    auto spec = std::make_shared<fpga::FpgaVbinSpec>();
+    fpga::FpgaImageSpec image;
+    image.id = "imageA";
+
+    fpga::FpgaKernelSpec kernel;
+    kernel.name = "kA";
+    kernel.r5_base_addr = kKernelA_R5;
+    kernel.ioType.outputScalars.push_back({"level", ScalarType::I32});
+    kernel.args.push_back(
+        {0u, "level", "ap_int<32>*", 0x24u, 32u, true, false, ""});
+    image.kernels.emplace(kernel.name, kernel);
+    spec->addImage(std::move(image));
+
+    auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, spec, "imageA");
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.device = dev;
+
+    CompiledKernelNode producer;
+    producer.id = "producer";
+    producer.deviceId = "fpga:0";
+    producer.kernel = KernelDescriptor{
+        "kA", DeviceType::FPGA, std::string("imageA"), kernel.ioType};
+    producer.ioMap.bindOutputScalar(
+        "level", GraphScalar::ref(ScalarType::I32, "level"));
+    dg.nodes.push_back(producer);
+
+    auto plan = dev->compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+    ASSERT_NO_THROW(plan->launch());
+    ASSERT_NO_THROW(plan->wait());
+
+    ASSERT_EQ(ddr_.nodes()[1].opcode, RP1_OP_SCALAR_READ);
+    EXPECT_EQ(ddr_.nodes()[1].payload.scalar_read.source_addr,
+              kKernelA_R5 + 0x24u);
 }
 
 TEST_F(FpgaDeviceFixture, OutputScalarFeedsDownstreamKernelViaScalarCopy) {
