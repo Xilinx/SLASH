@@ -2480,6 +2480,7 @@ std::uint64_t FpgaDevice::bufferDeviceAddress(const GraphBuffer& buffer,
 
 void FpgaDevice::populateBufferRegions(const DGraph& dg) {
     std::map<std::string, ::vrt::MemoryConfig> resolvedRegions;
+    std::vector<std::pair<std::string, std::string>> boundaryAliases;
     auto record = [&](const KernelDescriptor& kernel, const std::string& portName,
                       const GraphBuffer& buffer) {
         auto region = resolveBufferRegion(kernel, portName);
@@ -2504,6 +2505,14 @@ void FpgaDevice::populateBufferRegions(const DGraph& dg) {
 
     std::function<void(const DGraph&)> walk = [&](const DGraph& g) {
         for (const CompiledNode& node : g.nodes) {
+            if (const auto* boundary = std::get_if<CompiledBoundaryNode>(&node)) {
+                for (const CompiledBufferBoundaryCopy& copy : boundary->bufferCopies) {
+                    boundaryAliases.emplace_back(
+                        scopedBufferKey(copy.sourceScopeId, copy.sourceName),
+                        scopedBufferKey(copy.targetScopeId, copy.targetName));
+                }
+                continue;
+            }
             const auto* k = std::get_if<CompiledKernelNode>(&node);
             if (!k) continue;
 
@@ -2535,6 +2544,30 @@ void FpgaDevice::populateBufferRegions(const DGraph& dg) {
         }
     };
     walk(dg);
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto& [source, target] : boundaryAliases) {
+            auto sourceIt = resolvedRegions.find(source);
+            auto targetIt = resolvedRegions.find(target);
+            if (sourceIt != resolvedRegions.end() &&
+                targetIt != resolvedRegions.end()) {
+                if (sourceIt->second.type != targetIt->second.type ||
+                    sourceIt->second.hbmPort != targetIt->second.hbmPort) {
+                    throw std::logic_error(
+                        "FpgaDevice: boundary alias '" + source + "' -> '" +
+                        target + "' spans incompatible memory regions");
+                }
+            } else if (sourceIt != resolvedRegions.end()) {
+                resolvedRegions[target] = sourceIt->second;
+                changed = true;
+            } else if (targetIt != resolvedRegions.end()) {
+                resolvedRegions[source] = targetIt->second;
+                changed = true;
+            }
+        }
+    }
 
     std::lock_guard<std::mutex> lk(bufferMutex_);
     for (const auto& [key, region] : resolvedRegions) {
