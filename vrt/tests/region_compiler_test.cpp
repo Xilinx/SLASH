@@ -2594,23 +2594,40 @@ TEST(RegionCompilerTest, ParentKernelReadsControlOutputAcrossDevices) {
 TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
     Graph graph;
     graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
-    graph.registerDevice(std::make_shared<StubDevice>("fpga:0", DeviceType::FPGA));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("produce", "in", "HBM0");
+    fpga->setRegion("produce", "out", "HBM0");
+    graph.registerDevice(fpga);
 
     GraphScalar size = testSize(graph.rootRegion());
     auto body = graph.rootRegion().createChild();
-    IOTypeMap producerType = singleOutputType();
+    GraphBuffer rootInput = graph.rootRegion().inputBuffer(BufferType::I32, "input", size);
+    GraphBuffer localInput = body->inputBuffer(BufferType::I32, "state", size);
+    body->importFromParent({{rootInput, localInput}});
+
+    IOTypeMap producerType = singleInputOutputType();
     IOMap producerIo;
     GraphBuffer localOutput;
-    producerIo.bindOutput("out", BufferType::I32, localOutput, size, body->scopeId());
+    producerIo.bindInput("in", localInput)
+              .bindOutput("out", BufferType::I32, localOutput, size, body->scopeId());
     const std::string producerId = body->addKernel(
         KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, producerType},
         std::move(producerIo), "fpga:0");
 
     GraphBuffer loopOutput = GraphBuffer::make(
         BufferType::I32, "loop_output", graph.rootRegion().scopeId(), size);
-    body->exportToParent({{localOutput, loopOutput}}, {producerId});
+    body->exportToParent({{localOutput, loopOutput}, {localOutput, rootInput}}, {producerId});
     const std::string loopId = graph.addLoop(fixedLoopSpec(
         tripCount(tripCountScalar(graph.rootRegion())), body));
+
+    GraphScalar brightness = graph.rootRegion().scalar(ScalarType::I32, "brightness");
+    IOTypeMap levelType;
+    levelType.inputs.push_back({"input", BufferType::I32});
+    levelType.outputScalars.push_back({"level", ScalarType::I32});
+    IOMap levelIo;
+    levelIo.bindInput("input", rootInput)
+           .bindOutputScalar("level", brightness);
+    graph.addNode(cpuKernel("level", levelType), std::move(levelIo), "cpu");
 
     IOTypeMap consumerType;
     consumerType.inputs.push_back({"in", BufferType::I32});
@@ -2627,9 +2644,8 @@ TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
     auto thenRegion = makeBranch("then");
     auto elseRegion = makeBranch("else");
 
-    GraphScalar flag = graph.rootRegion().inputScalar(ScalarType::I32, "flag");
     const std::string conditionalId = graph.addConditional(ifElseSpec(
-        flag >= 0,
+        brightness >= 0,
         thenRegion, elseRegion));
 
     InspectionBridge bridge;
@@ -2639,6 +2655,8 @@ TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
     ASSERT_NE(fpgaDGraph, nullptr);
     ASSERT_NE(cpuDGraph, nullptr);
     ASSERT_NE(findCompiledNode(*fpgaDGraph, loopId), nullptr);
+    EXPECT_EQ(findCompiledNode(*cpuDGraph, loopId), nullptr)
+        << "all-FPGA loop should stay autonomous, not split onto the CPU queue";
 
     const auto* transfer = findBridgeNode(
         *cpuDGraph, CompiledBridgeOpNode::Side::Producer, conditionalId);

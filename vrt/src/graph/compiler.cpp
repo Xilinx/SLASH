@@ -1205,6 +1205,49 @@ std::vector<std::string>& mutableCompiledNodeDependsOn(CompiledNode& node) {
     }, node);
 }
 
+const char* compiledNodeKind(const CompiledNode& node) {
+    return std::visit([](const auto& concrete) -> const char* {
+        using T = std::decay_t<decltype(concrete)>;
+        if constexpr (std::is_same_v<T, CompiledKernelNode>) return "kernel";
+        else if constexpr (std::is_same_v<T, CompiledBridgeOpNode>) return "bridge";
+        else if constexpr (std::is_same_v<T, CompiledDeviceCopyNode>) return "device_copy";
+        else if constexpr (std::is_same_v<T, CompiledSourceNode>) return "source";
+        else if constexpr (std::is_same_v<T, CompiledSinkNode>) return "sink";
+        else if constexpr (std::is_same_v<T, CompiledReprogramNode>) return "reprogram";
+        else if constexpr (std::is_same_v<T, CompiledBoundaryNode>) return "boundary";
+        else if constexpr (std::is_same_v<T, CompiledLoopNode>) return "loop";
+        else if constexpr (std::is_same_v<T, CompiledConditionalNode>) return "conditional";
+        else if constexpr (std::is_same_v<T, CompiledSignalNode>) return "signal";
+        else if constexpr (std::is_same_v<T, CompiledWaitNode>) return "wait";
+        else return "unknown";
+    }, node);
+}
+
+void dumpCompiledDGraphs(const std::vector<DGraph>& dgraphs,
+                         const std::string& prefix = {}) {
+    for (const DGraph& dgraph : dgraphs) {
+        std::cerr << "[graph-debug] " << prefix << "DGraph " << dgraph.deviceId << '\n';
+        for (const CompiledNode& node : dgraph.nodes) {
+            std::cerr << "[graph-debug]   " << compiledNodeKind(node)
+                      << ' ' << compiledNodeId(node) << " deps:";
+            for (const std::string& dep : compiledNodeDependsOn(node)) {
+                std::cerr << ' ' << dep;
+            }
+            std::cerr << '\n';
+        }
+        for (const DGraphChild& child : dgraph.childDGraphs) {
+            std::cerr << "[graph-debug]   child parent=" << child.parentNodeId
+                      << " role=" << static_cast<int>(child.role) << '\n';
+            std::vector<DGraph> nested;
+            nested.reserve(child.dgraphs.size());
+            for (const auto& sub : child.dgraphs) {
+                if (sub) nested.push_back(*sub);
+            }
+            dumpCompiledDGraphs(nested, prefix + "  ");
+        }
+    }
+}
+
 struct OutputBufferBinding {
     std::string portName;
     std::string tokenName;
@@ -4507,7 +4550,11 @@ std::vector<DGraph> GraphCompiler::compile(
     validateSizeScalarReferences(rootRegion);
     validateRootScopeScalarReferences(rootRegion);
     RegionCompiler compiler(devices, bridgeFor, scalarValues);
-    return compiler.compileRegion(rootRegion);
+    std::vector<DGraph> dgraphs = compiler.compileRegion(rootRegion);
+    if (std::getenv("VRT_GRAPH_DEBUG")) {
+        dumpCompiledDGraphs(dgraphs);
+    }
+    return dgraphs;
 }
 
 }  // namespace vrt::graph
