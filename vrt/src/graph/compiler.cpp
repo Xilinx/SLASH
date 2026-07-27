@@ -4272,6 +4272,14 @@ class RegionCompiler {
             producerNodeId = prodIt->second;
         }
         if (producerNodeId.empty()) return;
+        if (std::getenv("VRT_GRAPH_DEBUG")) {
+            std::cerr << "[graph-debug] route buffer " << bufKey
+                      << " producer=" << producerNodeId
+                      << " consumer=" << regionOpId(consumerOp)
+                      << " target=" << consumerDevId;
+            if (consumerPort) std::cerr << " port=" << *consumerPort;
+            std::cerr << std::endl;
+        }
         std::string producerDevId = rc.nodeDevice.at(producerNodeId);
         if (!usingCarriedInitial) {
             if (auto devIt = rc.bufferProducerDeviceByKey.find(bufKey);

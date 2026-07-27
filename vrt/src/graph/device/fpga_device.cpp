@@ -502,6 +502,27 @@ class FpgaDevicePlan : public IDevicePlan {
         std::cerr << std::flush;
     }
 
+    static void dumpResolvedKernelArgs(const fpga::Rp1GraphImage& image) {
+        for (std::size_t nodeIndex = 0; nodeIndex < image.nodes.size(); ++nodeIndex) {
+            const rp1_node_t& node = image.nodes[nodeIndex];
+            if (node.opcode != RP1_OP_KERNEL_DISPATCH) continue;
+            const auto& dispatch = node.payload.kernel_dispatch;
+            std::size_t cursor =
+                dispatch.arg_buffer_offset / sizeof(std::uint32_t);
+            std::cerr << "[rp1-args] node=" << nodeIndex
+                      << " kernel=0x" << std::hex
+                      << dispatch.kernel_base_addr << std::dec
+                      << " count=" << dispatch.arg_count;
+            for (std::uint16_t i = 0; i < dispatch.arg_count; ++i) {
+                if (cursor + 1 >= image.arg_buf.size()) break;
+                std::cerr << " [0x" << std::hex << image.arg_buf[cursor]
+                          << "=0x" << image.arg_buf[cursor + 1] << std::dec << ']';
+                cursor += 2;
+            }
+            std::cerr << std::endl;
+        }
+    }
+
     static const char* traceEventName(std::uint16_t event) {
         switch (event) {
             case RP1_TRACE_GRAPH_START:    return "GRAPH_START";
@@ -598,6 +619,9 @@ class FpgaDevicePlan : public IDevicePlan {
                 waitForPreLaunchSignals();
                 resolveDeferredBufferAliases();
                 resolveDeferredBufferAddresses();
+                if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+                    dumpResolvedKernelArgs(image_);
+                }
                 const bool signalsPrepared = signalsPrepared_;
                 signalsPrepared_ = false;
                 fpga::Rp1GraphImage submitImage = image_;
@@ -855,6 +879,13 @@ class FpgaDevicePlan : public IDevicePlan {
             const std::size_t bytes =
                 resolvedBufferSizeBytes(d.buffer, scalarValues_, "FpgaDevicePlan");
             const std::uint64_t addr = device_->bufferDeviceAddress(d.buffer, bytes);
+            if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+                std::cerr << "[fpga-buffer] arg " << d.diagnostic
+                          << " key=" << scopedBufferKey(
+                                 d.buffer.scopeId(), d.buffer.name())
+                          << " addr=0x" << std::hex << addr << std::dec
+                          << " size=" << bytes << std::endl;
+            }
             std::uint32_t words[2] = {0u, 0u};
             writeU64ToArgWords(addr, words);
             image_.arg_buf[d.arg_word_offset] = words[0];
