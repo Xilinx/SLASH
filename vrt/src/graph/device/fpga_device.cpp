@@ -566,7 +566,22 @@ class FpgaDevicePlan : public IDevicePlan {
 
     void prepareLaunch() override {
         wait();
+        if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+            std::cerr << "[fpga-buffer] clear signal slots:";
+            for (std::uint32_t slot : image_.clear_signal_slots) {
+                std::cerr << ' ' << slot;
+            }
+            std::cerr << std::endl;
+        }
         submitter_->clearSignalSlots(image_.clear_signal_slots);
+        if (std::getenv("VRT_FPGA_BUFFER_TRACE") && device_ && device_->window_) {
+            for (std::uint32_t slot : image_.clear_signal_slots) {
+                rp1_signal_slot_t value{};
+                device_->window_->readSignal(slot, value);
+                std::cerr << "[fpga-buffer] cleared slot " << slot
+                          << " value=" << value.value << std::endl;
+            }
+        }
         signalsPrepared_ = true;
     }
 
