@@ -31,7 +31,10 @@
 #ifndef VRT_GRAPH_DEVICE_DEVICE_HPP
 #define VRT_GRAPH_DEVICE_DEVICE_HPP
 
+#include <functional>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 
 #include <vrt/graph/core/types.hpp>
@@ -39,6 +42,8 @@
 namespace vrt::graph {
 
 struct DGraph;
+class GraphBuffer;
+struct KernelDescriptor;
 
 class IDevicePlan {
    public:
@@ -67,6 +72,28 @@ class IDevice {
      * Matched against authored kernel placement during compilation.
      */
     virtual std::string id() const = 0;
+
+    /**
+     * @brief Optional memory-region identity for a kernel buffer port.
+     *
+     * Devices with banked local memories (for example FPGA HBM ports) can
+     * return a stable region tag. Devices with a flat address space keep the
+     * default `std::nullopt`, which disables same-device region routing.
+     */
+    virtual std::optional<std::string> resolveMemoryRegion(
+        const KernelDescriptor& /*kernel*/, const std::string& /*portName*/) const {
+        return std::nullopt;
+    }
+
+    /**
+     * @brief Build an action that copies one device-local buffer replica to another.
+     */
+    virtual std::function<void()> makeDeviceCopyAction(
+        const GraphBuffer& /*source*/, const GraphBuffer& /*target*/,
+        BufferType /*type*/, const std::string& /*sourceRegion*/,
+        const std::string& /*targetRegion*/) {
+        throw std::logic_error("IDevice: device-local buffer copies are not supported");
+    }
 
     /**
      * @brief Compile the per-device subgraph into an executable plan.

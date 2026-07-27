@@ -627,6 +627,36 @@ TEST(RenderDotTest, DGraphIncludesBridgeOpNodes) {
     EXPECT_TRUE(contains(dot, "\"kA_0\" -> \"_bridge_0_p\""));
 }
 
+TEST(RenderDotTest, DGraphIncludesDeviceCopyNodes) {
+    CompiledKernelNode k;
+    k.id = "producer";
+    k.kernel = cpuKernel("producer");
+
+    CompiledDeviceCopyNode copy;
+    copy.id = "_device_copy_0";
+    copy.deviceId = "cpu";
+    copy.source = GraphBuffer::make(BufferType::I32, "buf", 0);
+    copy.target = GraphBuffer::make(BufferType::I32, "buf__copy", 0);
+    copy.sourceRegion = "HBM0";
+    copy.targetRegion = "HBM1";
+    copy.mechanism = "host_qdma";
+    copy.dependsOn = {"producer"};
+
+    DGraph dg;
+    dg.deviceId = "cpu";
+    dg.nodes.emplace_back(std::move(k));
+    dg.nodes.emplace_back(std::move(copy));
+
+    auto dot = render::renderToDot(dg);
+    dumpSection("DGraph DOT (with device copy)", dot);
+
+    EXPECT_TRUE(contains(dot, "_device_copy_0"));
+    EXPECT_TRUE(contains(dot, "DeviceCopy"));
+    EXPECT_TRUE(contains(dot, "HBM0 -> HBM1"));
+    EXPECT_TRUE(contains(dot, "host_qdma"));
+    EXPECT_TRUE(contains(dot, "\"producer\" -> \"_device_copy_0\""));
+}
+
 // ---------------------------------------------------------------------------
 // Every dependsOn entry must produce exactly one edge in the rendered DOT.
 // ---------------------------------------------------------------------------

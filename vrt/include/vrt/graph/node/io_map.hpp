@@ -228,6 +228,19 @@ class IOMap {
     const std::map<std::string, GraphBuffer>& inputs() const { return inputs_; }
     const std::map<std::string, GraphBuffer>& outputs() const { return outputs_; }
 
+    void rebindInputForCompiler(const std::string& portName, GraphBuffer buf) {
+        auto it = inputs_.find(portName);
+        if (it == inputs_.end()) {
+            throw std::invalid_argument(
+                "rebindInputForCompiler: input port '" + portName + "' is not bound");
+        }
+        if (!buf.valid()) {
+            throw std::invalid_argument(
+                "rebindInputForCompiler: invalid (default-constructed) GraphBuffer");
+        }
+        it->second = std::move(buf);
+    }
+
     struct InoutBinding {
         std::string inPort;
         std::string outPort;

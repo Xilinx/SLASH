@@ -115,6 +115,31 @@ leg. If not, it asks ``BridgeRouter`` for a CPU-bounce route:
 The same bridge mechanism handles buffer transfers, scalar transfers, and pure
 ordering barriers introduced by cross-device ``after`` dependencies.
 
+Same-Device Memory Routing
+==========================
+
+Some devices have multiple independently addressed local memory regions. On the
+V80, an FPGA kernel port connected to HBM0 cannot use an address allocated from
+HBM1. For ordinary buffer dependencies inside one FPGA device, the graph
+compiler treats a region mismatch as an explicit same-device copy rather than a
+cross-device bridge:
+
+.. code-block:: text
+
+   producer kernel (HBM0)
+   device-copy node: HBM0 -> HBM1 (host/QDMA fallback)
+   consumer kernel (HBM1)
+
+The copy is visible in compiled ``DGraph`` rendering and currently uses a
+host/QDMA fallback: the source device buffer is synchronized to host memory,
+copied, and synchronized back to the destination HBM region. This keeps the
+operation correct before RP1 has an HBM-capable DMA path. It also makes the
+cost visible instead of hiding it behind a silent address mismatch.
+
+Cross-bank in-place buffers and loop-carried buffers are intentionally still
+rejected. Those flows require per-iteration versioning or ping-pong buffers,
+which would change the autonomous FPGA loop contract.
+
 FPGA Control
 ============
 

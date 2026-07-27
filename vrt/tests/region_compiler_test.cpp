@@ -76,6 +76,34 @@ class StubDevice : public IDevice {
     DeviceType type_ = DeviceType::CPU;
 };
 
+class RegionAwareStubDevice : public StubDevice {
+   public:
+    RegionAwareStubDevice(std::string id, DeviceType type)
+        : StubDevice(std::move(id), type) {}
+
+    void setRegion(const std::string& kernel, const std::string& port,
+                   std::string region) {
+        regions_[{kernel, port}] = std::move(region);
+    }
+
+    std::optional<std::string> resolveMemoryRegion(
+        const KernelDescriptor& kernel, const std::string& portName) const override {
+        auto it = regions_.find({kernel.name, portName});
+        if (it == regions_.end()) return std::nullopt;
+        return it->second;
+    }
+
+    std::function<void()> makeDeviceCopyAction(
+        const GraphBuffer& /*source*/, const GraphBuffer& /*target*/,
+        BufferType /*type*/, const std::string& /*sourceRegion*/,
+        const std::string& /*targetRegion*/) override {
+        return []() {};
+    }
+
+   private:
+    std::map<std::pair<std::string, std::string>, std::string> regions_;
+};
+
 struct InspectionBridgeOp : IBridgeOp {
     explicit InspectionBridgeOp(std::string labelValue)
         : labelValue(std::move(labelValue)) {}
@@ -288,6 +316,23 @@ const CompiledBridgeOpNode* findBridgeNode(const DGraph& dgraph,
         if (bridge->side == side && bridge->pairedKernelId == pairedKernelId) return bridge;
     }
     return nullptr;
+}
+
+const CompiledDeviceCopyNode* findDeviceCopyNode(const DGraph& dgraph) {
+    for (const auto& node : dgraph.nodes) {
+        if (const auto* copy = std::get_if<CompiledDeviceCopyNode>(&node)) return copy;
+    }
+    return nullptr;
+}
+
+std::size_t countDeviceCopyNodes(const std::vector<DGraph>& dgraphs) {
+    std::size_t count = 0;
+    for (const DGraph& dgraph : dgraphs) {
+        for (const auto& node : dgraph.nodes) {
+            if (std::holds_alternative<CompiledDeviceCopyNode>(node)) ++count;
+        }
+    }
+    return count;
 }
 
 bool dependsOn(const CompiledNode& node, const std::string& dependencyId) {
@@ -1004,6 +1049,227 @@ TEST(RegionCompilerTest, TopLevelCpuFpgaBridgeMovesHostActionToCpuDGraph) {
     std::set_intersection(cpuSlots.begin(), cpuSlots.end(), fpgaSlots.begin(), fpgaSlots.end(),
                           std::back_inserter(shared));
     EXPECT_FALSE(shared.empty()) << "CPU signal and FPGA wait must share a rendezvous slot";
+}
+
+TEST(RegionCompilerTest, InsertsDeviceCopyForSameFpgaDifferentRegion) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("produce", "out", "HBM0");
+    fpga->setRegion("consume", "in", "HBM1");
+    graph.registerDevice(fpga);
+
+    GraphScalar size = testSize(graph.rootRegion());
+    IOTypeMap produceType = singleOutputType();
+    IOMap produceIo;
+    GraphBuffer produced;
+    produceIo.bindOutput("out", BufferType::I32, produced, size);
+    const std::string producerId = graph.addNode(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, produceType},
+        std::move(produceIo), "fpga:0");
+
+    IOTypeMap consumeType;
+    consumeType.inputs.push_back({"in", BufferType::I32});
+    IOMap consumeIo;
+    consumeIo.bindInput("in", produced);
+    const std::string consumerId = graph.addNode(
+        KernelDescriptor{"consume", DeviceType::FPGA, std::nullopt, consumeType},
+        std::move(consumeIo), "fpga:0");
+
+    auto dgraphs = compileForInspection(graph);
+    const DGraph* fpgaDGraph = findDGraph(dgraphs, "fpga:0");
+    const DGraph* cpuDGraph = findDGraph(dgraphs, "cpu");
+    ASSERT_NE(fpgaDGraph, nullptr);
+    ASSERT_NE(cpuDGraph, nullptr);
+    const CompiledDeviceCopyNode* copy = findDeviceCopyNode(*cpuDGraph);
+    ASSERT_NE(copy, nullptr);
+    EXPECT_EQ(copy->sourceRegion, "HBM0");
+    EXPECT_EQ(copy->targetRegion, "HBM1");
+    EXPECT_EQ(copy->source.name(), produced.name());
+    EXPECT_NE(copy->target.name(), produced.name());
+
+    const CompiledNode* consumer = findCompiledNode(*fpgaDGraph, consumerId);
+    ASSERT_NE(consumer, nullptr);
+    ASSERT_TRUE(dependsOn(*consumer, "_device_copy_1_done_wait") ||
+                dependsOn(*consumer, "_device_copy_0_done_wait"));
+    (void)producerId;
+}
+
+TEST(RegionCompilerTest, SkipsDeviceCopyWhenRegionsMatch) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("produce", "out", "HBM0");
+    fpga->setRegion("consume", "in", "HBM0");
+    graph.registerDevice(fpga);
+
+    GraphScalar size = testSize(graph.rootRegion());
+    IOMap produceIo;
+    GraphBuffer produced;
+    produceIo.bindOutput("out", BufferType::I32, produced, size);
+    const std::string producerId = graph.addNode(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, singleOutputType()},
+        std::move(produceIo), "fpga:0");
+
+    IOTypeMap consumeType;
+    consumeType.inputs.push_back({"in", BufferType::I32});
+    IOMap consumeIo;
+    consumeIo.bindInput("in", produced);
+    const std::string consumerId = graph.addNode(
+        KernelDescriptor{"consume", DeviceType::FPGA, std::nullopt, consumeType},
+        std::move(consumeIo), "fpga:0");
+
+    auto dgraphs = compileForInspection(graph);
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 0u);
+    const DGraph* fpgaDGraph = findDGraph(dgraphs, "fpga:0");
+    ASSERT_NE(fpgaDGraph, nullptr);
+    const CompiledNode* consumer = findCompiledNode(*fpgaDGraph, consumerId);
+    ASSERT_NE(consumer, nullptr);
+    EXPECT_TRUE(dependsOn(*consumer, producerId));
+}
+
+TEST(RegionCompilerTest, SkipsDeviceCopyWhenDeviceReportsNoRegions) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    graph.registerDevice(std::make_shared<StubDevice>("fpga:0", DeviceType::FPGA));
+
+    GraphScalar size = testSize(graph.rootRegion());
+    IOMap produceIo;
+    GraphBuffer produced;
+    produceIo.bindOutput("out", BufferType::I32, produced, size);
+    const std::string producerId = graph.addNode(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, singleOutputType()},
+        std::move(produceIo), "fpga:0");
+
+    IOTypeMap consumeType;
+    consumeType.inputs.push_back({"in", BufferType::I32});
+    IOMap consumeIo;
+    consumeIo.bindInput("in", produced);
+    const std::string consumerId = graph.addNode(
+        KernelDescriptor{"consume", DeviceType::FPGA, std::nullopt, consumeType},
+        std::move(consumeIo), "fpga:0");
+
+    auto dgraphs = compileForInspection(graph);
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 0u);
+    const DGraph* fpgaDGraph = findDGraph(dgraphs, "fpga:0");
+    ASSERT_NE(fpgaDGraph, nullptr);
+    const CompiledNode* consumer = findCompiledNode(*fpgaDGraph, consumerId);
+    ASSERT_NE(consumer, nullptr);
+    EXPECT_TRUE(dependsOn(*consumer, producerId));
+}
+
+TEST(RegionCompilerTest, DoesNotDeviceCopyInoutBuffers) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("produce", "out", "HBM0");
+    graph.registerDevice(fpga);
+
+    GraphScalar size = testSize(graph.rootRegion());
+    IOMap produceIo;
+    GraphBuffer produced;
+    produceIo.bindOutput("out", BufferType::I32, produced, size);
+    graph.addNode(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, singleOutputType()},
+        std::move(produceIo), "fpga:0");
+
+    IOTypeMap rwType;
+    rwType.inouts.push_back({{"rw_in", BufferType::I32}, {"rw_out", BufferType::I32}});
+    IOMap rwIo;
+    GraphBuffer updated;
+    rwIo.bindInout("rw_in", "rw_out", produced, updated);
+    graph.addNode(
+        KernelDescriptor{"mutate", DeviceType::FPGA, std::nullopt, rwType},
+        std::move(rwIo), "fpga:0");
+
+    auto dgraphs = compileForInspection(graph);
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 0u);
+}
+
+TEST(RegionCompilerTest, SharesDeviceCopyForFanoutToSameRegion) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("produce", "out", "HBM0");
+    fpga->setRegion("consume_a", "in", "HBM1");
+    fpga->setRegion("consume_b", "in", "HBM1");
+    graph.registerDevice(fpga);
+
+    GraphScalar size = testSize(graph.rootRegion());
+    IOMap produceIo;
+    GraphBuffer produced;
+    produceIo.bindOutput("out", BufferType::I32, produced, size);
+    graph.addNode(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, singleOutputType()},
+        std::move(produceIo), "fpga:0");
+
+    IOTypeMap consumeType;
+    consumeType.inputs.push_back({"in", BufferType::I32});
+    for (const std::string& name : {"consume_a", "consume_b"}) {
+        IOMap consumeIo;
+        consumeIo.bindInput("in", produced);
+        graph.addNode(
+            KernelDescriptor{name, DeviceType::FPGA, std::nullopt, consumeType},
+            std::move(consumeIo), "fpga:0");
+    }
+
+    auto dgraphs = compileForInspection(graph);
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 1u);
+}
+
+TEST(RegionCompilerTest, GraphInputFanoutCopiesToSecondFpgaRegion) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("consume_a", "in", "HBM0");
+    fpga->setRegion("consume_b", "in", "HBM1");
+    graph.registerDevice(fpga);
+
+    GraphScalar size = testSize(graph.rootRegion());
+    GraphBuffer input = graph.rootRegion().inputBuffer(BufferType::I32, "input", size);
+    IOTypeMap consumeType;
+    consumeType.inputs.push_back({"in", BufferType::I32});
+    for (const std::string& name : {"consume_a", "consume_b"}) {
+        IOMap io;
+        io.bindInput("in", input);
+        graph.addNode(
+            KernelDescriptor{name, DeviceType::FPGA, std::nullopt, consumeType},
+            std::move(io), "fpga:0");
+    }
+
+    auto dgraphs = compileForInspection(graph);
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 1u);
+}
+
+TEST(RegionCompilerTest, NestedDeviceCopyIsRejected) {
+    Graph graph;
+    graph.registerDevice(std::make_shared<StubDevice>("cpu", DeviceType::CPU));
+    auto fpga = std::make_shared<RegionAwareStubDevice>("fpga:0", DeviceType::FPGA);
+    fpga->setRegion("produce", "out", "HBM0");
+    fpga->setRegion("consume", "in", "HBM1");
+    graph.registerDevice(fpga);
+
+    GraphScalar size = testSize(graph.rootRegion());
+    auto body = graph.rootRegion().createChild();
+    IOMap produceIo;
+    GraphBuffer produced;
+    produceIo.bindOutput("out", BufferType::I32, produced, size, body->scopeId());
+    const std::string producerId = body->addKernel(
+        KernelDescriptor{"produce", DeviceType::FPGA, std::nullopt, singleOutputType()},
+        std::move(produceIo), "fpga:0");
+
+    IOTypeMap consumeType;
+    consumeType.inputs.push_back({"in", BufferType::I32});
+    IOMap consumeIo;
+    consumeIo.bindInput("in", produced);
+    body->addKernel(
+        KernelDescriptor{"consume", DeviceType::FPGA, std::nullopt, consumeType},
+        std::move(consumeIo), "fpga:0", {producerId});
+
+    graph.addLoop(fixedLoopSpec(
+        tripCount(tripCountScalar(graph.rootRegion())), body));
+
+    EXPECT_THROW(compileForInspection(graph), std::logic_error);
 }
 
 // Phase F.3b: a *data-dependent* (while) loop whose body spans FPGA + CPU splits

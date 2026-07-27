@@ -113,6 +113,24 @@ config can be passed directly to the ``Buffer<T>`` constructor:
 
 This ensures the buffer allocation always matches the linker configuration.
 
+Graph Buffers Across HBM Banks
+==============================
+
+The graph API can transparently move ordinary buffers between HBM banks when
+two FPGA kernels on the same device share a graph token but their ports are
+wired to different regions in ``system_map.xml``. The compiler inserts a
+visible device-copy node in the compiled graph and the FPGA backend performs a
+host/QDMA fallback copy between the source and destination device buffers.
+
+This only applies to ordinary producer/consumer and read-only fan-out edges.
+In-place buffers and loop-carried buffers still require one region shared by
+all participating ports, because those flows intentionally alias one physical
+allocation.
+
+The classic ``vrt::Buffer<T>`` API remains explicit: when constructing buffers
+manually, allocate them with the ``MemoryConfig`` required by the kernel port
+you pass them to.
+
 Buddy Allocator
 ===============
 

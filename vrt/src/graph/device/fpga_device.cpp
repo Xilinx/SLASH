@@ -233,6 +233,18 @@ std::uint64_t unsignedScalarValue(ScalarType type, std::uint64_t bits) {
     }
 }
 
+std::string memoryRegionTag(const ::vrt::MemoryConfig& region) {
+    switch (region.type) {
+        case ::vrt::MemoryRangeType::HBM:
+            return "HBM" + std::to_string(region.hbmPort.value_or(0));
+        case ::vrt::MemoryRangeType::HBM_VNOC:
+            return "HBM";
+        case ::vrt::MemoryRangeType::DDR:
+            return "DDR";
+    }
+    return "UNKNOWN";
+}
+
 void ensureArgCapacity(std::uint32_t cursor_words,
                        std::uint32_t width,
                        const std::string& kernelName,
@@ -902,8 +914,11 @@ class FpgaDevicePlan : public IDevicePlan {
             }
             appendBufferAddress(image, node, layout, port.in.name, it->in,
                                 0, cursor_words, arg_count);
-            appendBufferAddress(image, node, layout, port.out.name, it->out,
-                                0, cursor_words, arg_count);
+            deferredBufferAliases_.push_back(DeferredBufferAlias{
+                scopedBufferKey(it->in.scopeId(), it->in.name()),
+                scopedBufferKey(it->out.scopeId(), it->out.name()),
+                it->in,
+                node.id + "." + port.out.name});
         }
 
         if (arg_count > UINT16_MAX) {
@@ -2202,6 +2217,37 @@ void FpgaDevice::setPdiStagingDevice(::vrt::Device device) {
     stagedPdis_.clear();
 }
 
+std::optional<std::string>
+FpgaDevice::resolveMemoryRegion(const KernelDescriptor& kernel,
+                                const std::string& portName) const {
+    auto region = resolveBufferRegion(kernel, portName);
+    if (!region) return std::nullopt;
+    return memoryRegionTag(*region);
+}
+
+std::function<void()> FpgaDevice::makeDeviceCopyAction(
+    const GraphBuffer& source, const GraphBuffer& target, BufferType /*type*/,
+    const std::string& sourceRegion, const std::string& targetRegion) {
+    const std::string sourceKey = scopedBufferKey(source.scopeId(), source.name());
+    const std::string targetKey = scopedBufferKey(target.scopeId(), target.name());
+    return [this, sourceKey, targetKey, sourceRegion, targetRegion]() {
+        const std::size_t bytes = bufferSize(sourceKey);
+        std::vector<std::uint8_t> staging(bytes);
+        if (bytes > 0) {
+            getOutputBuffer(sourceKey, staging.data(), staging.size());
+        }
+        setInputBuffer(targetKey,
+                       staging.empty() ? nullptr : staging.data(),
+                       staging.size());
+        if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+            std::cerr << "[FpgaDevice] cross-region copy '" << sourceKey
+                      << "' -> '" << targetKey << "' "
+                      << sourceRegion << " -> " << targetRegion
+                      << " (" << bytes << " bytes, host/QDMA fallback)" << std::endl;
+        }
+    };
+}
+
 std::string FpgaDevice::normalizeBufferKey(const std::string& bufferName) {
     if (bufferName.rfind("scope:", 0) == 0) return bufferName;
     return scopedBufferKey(0, bufferName);
@@ -2809,6 +2855,11 @@ std::unique_ptr<IDevicePlan> FpgaDevice::compilePlan(const DGraph& dg) {
                     throw std::logic_error(
                         std::string("FpgaDevice: top-level graph-region boundaries are not "
                                     "yet supported, got '") + concrete.id + "'");
+                } else if constexpr (std::is_same_v<T, CompiledDeviceCopyNode>) {
+                    throw std::logic_error(
+                        std::string("FpgaDevice: device-local copy node '") +
+                        concrete.id + "' must be lowered to a host/QDMA fallback before "
+                        "reaching the FPGA DGraph");
                 }
             },
             node);

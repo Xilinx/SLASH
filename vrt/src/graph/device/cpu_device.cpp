@@ -129,6 +129,9 @@ class CpuDevicePlan : public IDevicePlan {
                                       : NodeKind::ConsumerOp;
                         rt.tryReady = n.tryReady;
                         rt.action = n.action;
+                    } else if constexpr (std::is_same_v<T, CompiledDeviceCopyNode>) {
+                        rt.kind = NodeKind::ProducerOp;
+                        rt.action = n.action;
                     } else if constexpr (std::is_same_v<T, CompiledSourceNode> ||
                                          std::is_same_v<T, CompiledSinkNode>) {
                         rt.kind = NodeKind::Noop;

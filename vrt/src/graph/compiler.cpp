@@ -28,6 +28,7 @@
 #include <queue>
 #include <set>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 
 #include <vrt/graph/device/fpga/control_lowering.hpp>
@@ -2351,15 +2352,23 @@ class RegionCompiler {
         populateDependsOn(rc);
         splitCrossQueueLoops(rc);
         auto dgraphs = assembleDGraphs(rc);
-        if (topLevel) convertTopLevelBridgesToRendezvous(dgraphs);
+        if (topLevel) {
+            convertTopLevelBridgesToRendezvous(dgraphs);
+            convertDeviceCopiesToHostRoundTrip(dgraphs);
+        }
         return dgraphs;
     }
 
    private:
     struct DeviceInsertions {
-        std::map<size_t, std::vector<CompiledBridgeOpNode>> beforeNode;
-        std::map<size_t, std::vector<CompiledBridgeOpNode>> afterNode;
-        std::vector<CompiledBridgeOpNode>                    trailing;
+        std::map<size_t, std::vector<CompiledNode>> beforeNode;
+        std::map<size_t, std::vector<CompiledNode>> afterNode;
+        std::vector<CompiledNode>                    trailing;
+    };
+
+    struct DeviceCopyRecord {
+        std::string id;
+        GraphBuffer target;
     };
 
     /// Per-call state for a single compileRegion() invocation. Lives on the
@@ -2388,8 +2397,13 @@ class RegionCompiler {
         std::map<std::string, std::vector<CompiledNode>>      nodesByDevice;
         std::map<std::string, DeviceInsertions>               insertions;
         std::map<std::pair<std::string, std::string>, std::string> remoteConsumerBridgeIds;
+        std::map<std::pair<std::string, std::string>, std::string> remoteConsumerBridgeRegions;
         std::map<std::pair<std::string, std::string>, std::string> remoteConsumerScalarBridgeIds;
+        std::map<std::tuple<std::string, std::string, std::string>, DeviceCopyRecord>
+            deviceCopyRecords;
+        std::map<std::pair<std::string, std::string>, std::string> consumerCopyOverride;
         uint32_t bridgeCounter = 0;
+        uint32_t deviceCopyCounter = 0;
         std::string graphStartId;
         std::string graphEndId;
         std::set<std::string> graphInputBufferKeys;
@@ -3186,6 +3200,127 @@ class RegionCompiler {
         }
     }
 
+    void convertDeviceCopiesToHostRoundTrip(std::vector<DGraph>& dgraphs) {
+        bool hasCopies = false;
+        for (const DGraph& dg : dgraphs) {
+            for (const CompiledNode& node : dg.nodes) {
+                if (std::holds_alternative<CompiledDeviceCopyNode>(node)) {
+                    hasCopies = true;
+                    break;
+                }
+            }
+            if (hasCopies) break;
+        }
+        if (!hasCopies) return;
+
+        IDevice* cpu = findSingletonCpuDevice(devices_);
+        if (!cpu) {
+            throw std::runtime_error(
+                "GraphCompiler: intra-device copies require a CPU device for host/QDMA fallback");
+        }
+        auto ensureDGraph = [&](const std::string& deviceId) -> DGraph& {
+            for (DGraph& dg : dgraphs) {
+                if (dg.deviceId == deviceId) return dg;
+            }
+            DGraph dg;
+            dg.deviceId = deviceId;
+            dg.device = devices_.at(deviceId);
+            dg.scalarValues = scalarValues_;
+            dgraphs.push_back(std::move(dg));
+            return dgraphs.back();
+        };
+
+        DGraph& cpuDGraph = ensureDGraph(cpu->id());
+        std::map<DGraph*, std::set<std::string>> removeIds;
+        std::map<DGraph*, std::vector<CompiledNode>> appendNodes;
+        std::map<std::string, std::string> depRewrite;
+
+        for (DGraph& dg : dgraphs) {
+            std::vector<CompiledDeviceCopyNode> copies;
+            for (const CompiledNode& node : dg.nodes) {
+                if (const auto* copy = std::get_if<CompiledDeviceCopyNode>(&node)) {
+                    copies.push_back(*copy);
+                }
+            }
+            for (CompiledDeviceCopyNode& copy : copies) {
+                const std::string originalId = copy.id;
+                const std::uint32_t ready = rendezvousSlots_.alloc();
+                const std::uint32_t done = rendezvousSlots_.alloc();
+                const std::string tag = "_device_copy_" + std::to_string(ready) + "_";
+
+                CompiledSignalNode readySet;
+                readySet.id = tag + "ready_set";
+                readySet.deviceId = copy.deviceId;
+                readySet.dependsOn = copy.dependsOn;
+                readySet.slot = ready;
+                readySet.value = 1;
+                readySet.operation = RP1_SIGOP_SET;
+
+                CompiledWaitNode readyWait;
+                readyWait.id = tag + "ready_wait";
+                readyWait.deviceId = cpu->id();
+                readyWait.slot = ready;
+                readyWait.value = 1;
+                readyWait.conditionOp = RP1_COP_AND_NZ;
+
+                copy.id = tag + "xfer";
+                copy.deviceId = cpu->id();
+                copy.action = devices_.at(readySet.deviceId)->makeDeviceCopyAction(
+                    copy.source, copy.target, copy.source.type(),
+                    copy.sourceRegion, copy.targetRegion);
+                copy.dependsOn = {readyWait.id};
+
+                CompiledSignalNode doneSet;
+                doneSet.id = tag + "done_set";
+                doneSet.deviceId = cpu->id();
+                doneSet.dependsOn = {copy.id};
+                doneSet.slot = done;
+                doneSet.value = 1;
+                doneSet.operation = RP1_SIGOP_SET;
+
+                CompiledWaitNode doneWait;
+                doneWait.id = tag + "done_wait";
+                doneWait.deviceId = readySet.deviceId;
+                doneWait.slot = done;
+                doneWait.value = 1;
+                doneWait.conditionOp = RP1_COP_AND_NZ;
+
+                removeIds[&dg].insert(originalId);
+                appendNodes[&dg].emplace_back(std::move(readySet));
+                appendNodes[&dg].emplace_back(std::move(doneWait));
+                appendNodes[&cpuDGraph].emplace_back(std::move(readyWait));
+                appendNodes[&cpuDGraph].emplace_back(std::move(copy));
+                appendNodes[&cpuDGraph].emplace_back(std::move(doneSet));
+                depRewrite[originalId] = tag + "done_wait";
+            }
+        }
+
+        for (DGraph& dg : dgraphs) {
+            auto rmIt = removeIds.find(&dg);
+            auto apIt = appendNodes.find(&dg);
+            if (rmIt == removeIds.end() && apIt == appendNodes.end() && depRewrite.empty()) {
+                continue;
+            }
+            std::vector<CompiledNode> kept;
+            kept.reserve(dg.nodes.size() + (apIt == appendNodes.end() ? 0 : apIt->second.size()));
+            for (CompiledNode& node : dg.nodes) {
+                if (rmIt != removeIds.end() && rmIt->second.count(compiledNodeId(node))) {
+                    continue;
+                }
+                auto& deps = mutableCompiledNodeDependsOn(node);
+                for (std::string& dep : deps) {
+                    auto rw = depRewrite.find(dep);
+                    if (rw != depRewrite.end()) dep = rw->second;
+                }
+                kept.push_back(std::move(node));
+            }
+            if (apIt != appendNodes.end()) {
+                for (CompiledNode& node : apIt->second) kept.push_back(std::move(node));
+            }
+            dg.nodes = std::move(kept);
+        }
+    }
+
     /// Topologically sort the region's ops and pin each one to a device
     /// (kernels via required device, control / boundary ops to the singleton CPU).
     void assignDevices(RegionCompilation& rc) const {
@@ -3436,11 +3571,10 @@ class RegionCompiler {
             const std::string& consumerDevId = rc.nodeDevice.at(id);
             const IOMap& ioMap = regionOpIoMap(op);
             for (const auto& [port, buf] : ioMap.inputs()) {
-                (void)port;
-                routeBufferTransferIfNeeded(rc, op, consumerDevId, buf);
+                routeBufferTransferIfNeeded(rc, op, consumerDevId, buf, port);
             }
             for (const auto& rw : ioMap.inouts()) {
-                routeBufferTransferIfNeeded(rc, op, consumerDevId, rw.in);
+                routeBufferTransferIfNeeded(rc, op, consumerDevId, rw.in, std::nullopt);
             }
             for (const ConsumedScalarRef& ref : consumedScalarRefs(op)) {
                 routeScalarTransferIfNeeded(rc, op, consumerDevId, ref);
@@ -3452,7 +3586,7 @@ class RegionCompiler {
                 std::holds_alternative<ConditionalOp>(op)) {
                 for (const ConsumedBufferRef& ref : consumedBufferRefs(op)) {
                     if (const GraphBuffer* gb = producedBufferObject(rc, id, ref.key)) {
-                        routeBufferTransferIfNeeded(rc, op, consumerDevId, *gb);
+                        routeBufferTransferIfNeeded(rc, op, consumerDevId, *gb, std::nullopt);
                     }
                 }
             }
@@ -3754,7 +3888,7 @@ class RegionCompiler {
 
                 auto bIt = devIns.beforeNode.find(i);
                 if (bIt != devIns.beforeNode.end()) {
-                    for (const auto& bop : bIt->second) addDep(node, seen, bop.id);
+                    for (const auto& bop : bIt->second) addDep(node, seen, compiledNodeId(bop));
                 }
 
                 for (const auto& a : regionOpAfterOps(source)) {
@@ -3895,12 +4029,143 @@ class RegionCompiler {
         return {pOpId, cOpId};
     }
 
+    CompiledKernelNode* mutableKernelNode(RegionCompilation& rc,
+                                          const std::string& deviceId,
+                                          const std::string& nodeId) {
+        auto devIt = rc.nodesByDevice.find(deviceId);
+        if (devIt == rc.nodesByDevice.end()) return nullptr;
+        for (CompiledNode& node : devIt->second) {
+            if (compiledNodeId(node) != nodeId) continue;
+            return std::get_if<CompiledKernelNode>(&node);
+        }
+        return nullptr;
+    }
+
+    struct BufferPortRef {
+        std::string portName;
+        GraphBuffer buffer;
+    };
+
+    std::optional<BufferPortRef> outputBufferPortForKey(const KernelOp& op,
+                                                        const std::string& key) const {
+        for (const auto& [port, buffer] : op.ioMap.outputs()) {
+            if (scopedBufferKey(buffer.scopeId(), buffer.name()) == key) {
+                return BufferPortRef{port, buffer};
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<BufferPortRef> inputBufferPortForKey(const KernelOp& op,
+                                                       const std::string& key,
+                                                       const std::optional<std::string>& portHint) const {
+        for (const auto& [port, buffer] : op.ioMap.inputs()) {
+            if (portHint && port != *portHint) continue;
+            if (scopedBufferKey(buffer.scopeId(), buffer.name()) == key) {
+                return BufferPortRef{port, buffer};
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> insertDeviceCopyIfNeeded(
+        RegionCompilation& rc,
+        const std::string& producerNodeId,
+        const std::string& deviceId,
+        const RegionOp& consumerOp,
+        const std::optional<std::string>& consumerPort,
+        const GraphBuffer& consumerBuffer,
+        const std::optional<std::string>& forcedSourceRegion = std::nullopt,
+        const std::optional<GraphBuffer>& forcedSourceBuffer = std::nullopt) {
+        const std::string consumerId = regionOpId(consumerOp);
+        const auto* consumerKernel = std::get_if<KernelOp>(&consumerOp);
+        if (!consumerKernel || !consumerPort) return std::nullopt;
+        auto prodIt = rc.opById.find(producerNodeId);
+        const KernelOp* producerKernel =
+            (prodIt == rc.opById.end()) ? nullptr : std::get_if<KernelOp>(prodIt->second);
+        if (!producerKernel && (!forcedSourceRegion || !forcedSourceBuffer)) {
+            return std::nullopt;
+        }
+
+        const std::string key = scopedBufferKey(
+            consumerBuffer.scopeId(), consumerBuffer.name());
+        auto targetPort = inputBufferPortForKey(*consumerKernel, key, consumerPort);
+
+        IDevice& device = *devices_.at(deviceId);
+        std::optional<BufferPortRef> producerPort;
+        if (producerKernel) {
+            producerPort = outputBufferPortForKey(*producerKernel, key);
+        } else {
+            producerPort = BufferPortRef{"", *forcedSourceBuffer};
+        }
+        if (!producerPort || !targetPort) return std::nullopt;
+
+        auto sourceRegion = forcedSourceRegion
+                                ? forcedSourceRegion
+                                : device.resolveMemoryRegion(
+                                      producerKernel->kernel, producerPort->portName);
+        auto targetRegion =
+            device.resolveMemoryRegion(consumerKernel->kernel, targetPort->portName);
+        if (!sourceRegion || !targetRegion || *sourceRegion == *targetRegion) {
+            return std::nullopt;
+        }
+        if (!rc.topLevel) {
+            // ponytail: nested same-device region copies need per-region
+            // rendezvous conversion; keep Phase 1 root-only and fail early.
+            throw std::logic_error(
+                "GraphCompiler: intra-device copy for buffer '" + key +
+                "' inside a nested region is not yet supported");
+        }
+
+        const auto copyKey = std::make_tuple(key, deviceId, *targetRegion);
+        auto copyIt = rc.deviceCopyRecords.find(copyKey);
+        if (copyIt == rc.deviceCopyRecords.end()) {
+            const std::string targetName =
+                consumerBuffer.name() + "__copy_" + std::to_string(rc.deviceCopyCounter++);
+            GraphBuffer target = GraphBuffer::make(
+                consumerBuffer.type(), targetName, consumerBuffer.scopeId(),
+                consumerBuffer.maybeSizeScalar());
+            const std::string copyId =
+                "_device_copy_" + std::to_string(rc.deviceCopyCounter++);
+            CompiledDeviceCopyNode copy;
+            copy.id = copyId;
+            copy.deviceId = deviceId;
+            copy.source = producerPort->buffer;
+            copy.target = target;
+            copy.sourceRegion = *sourceRegion;
+            copy.targetRegion = *targetRegion;
+            copy.dependsOn = {producerNodeId};
+
+            size_t pIdx = nodeIndex(rc, deviceId, producerNodeId);
+            if (pIdx == std::numeric_limits<size_t>::max()) {
+                rc.insertions[deviceId].trailing.emplace_back(std::move(copy));
+            } else {
+                rc.insertions[deviceId].afterNode[pIdx].emplace_back(std::move(copy));
+            }
+            copyIt = rc.deviceCopyRecords.emplace(
+                copyKey, DeviceCopyRecord{copyId, target}).first;
+        }
+
+        CompiledKernelNode* consumer =
+            mutableKernelNode(rc, deviceId, consumerId);
+        if (!consumer) {
+            throw std::logic_error(
+                "GraphCompiler: device-copy consumer '" + consumerId +
+                "' was not lowered to a kernel node");
+        }
+        consumer->ioMap.rebindInputForCompiler(
+            *consumerPort, copyIt->second.target);
+        rc.consumerCopyOverride[{consumerId, key}] = copyIt->second.id;
+        return copyIt->second.id;
+    }
+
     /// Inspect a single consumed buffer; if the producer lives on a different
     /// device, route a bridge chain (CPU-bounced when needed).
     void routeBufferTransferIfNeeded(RegionCompilation& rc,
                                      const RegionOp& consumerOp,
                                      const std::string& consumerDevId,
-                                     const GraphBuffer& bufObj) {
+                                     const GraphBuffer& bufObj,
+                                     const std::optional<std::string>& consumerPort) {
         const std::string bufKey = scopedBufferKey(bufObj.scopeId(), bufObj.name());
         std::string producerNodeId;
         bool usingCarriedInitial = false;
@@ -3921,7 +4186,11 @@ class RegionCompiler {
                 producerDevId = devIt->second;
             }
         }
-        if (producerDevId == consumerDevId) return;
+        if (producerDevId == consumerDevId) {
+            insertDeviceCopyIfNeeded(
+                rc, producerNodeId, producerDevId, consumerOp, consumerPort, bufObj);
+            return;
+        }
 
         const RegionOp* producerOpPtr = nullptr;
         auto producerIt = rc.opById.find(producerNodeId);
@@ -3957,7 +4226,23 @@ class RegionCompiler {
         }
 
         auto edgeKey = std::make_pair(bufKey, consumerDevId);
-        if (rc.remoteConsumerBridgeIds.count(edgeKey)) return;
+        auto targetRegion = [&]() -> std::optional<std::string> {
+            const auto* consumerKernel = std::get_if<KernelOp>(&consumerOp);
+            if (!consumerKernel || !consumerPort) return std::nullopt;
+            return devices_.at(consumerDevId)->resolveMemoryRegion(
+                consumerKernel->kernel, *consumerPort);
+        }();
+        auto existingBridge = rc.remoteConsumerBridgeIds.find(edgeKey);
+        if (existingBridge != rc.remoteConsumerBridgeIds.end()) {
+            auto primaryRegion = rc.remoteConsumerBridgeRegions.find(edgeKey);
+            if (targetRegion && primaryRegion != rc.remoteConsumerBridgeRegions.end() &&
+                primaryRegion->second != *targetRegion) {
+                insertDeviceCopyIfNeeded(rc, existingBridge->second, consumerDevId,
+                                         consumerOp, consumerPort, bufObj,
+                                         primaryRegion->second, bufObj);
+            }
+            return;
+        }
 
         if (!rc.cpuDevice) {
             throw std::runtime_error(
@@ -3982,6 +4267,7 @@ class RegionCompiler {
                 "' did not produce a consumer-side bridge op");
         }
         rc.remoteConsumerBridgeIds[edgeKey] = prevConsumerId;
+        if (targetRegion) rc.remoteConsumerBridgeRegions[edgeKey] = *targetRegion;
     }
 
     void routeScalarTransferIfNeeded(RegionCompilation& rc,
@@ -4106,6 +4392,12 @@ class RegionCompiler {
             producerNodeId = pit->second;
         }
         if (producerNodeId.empty()) return;
+        if (auto copyIt = rc.consumerCopyOverride.find(
+                std::make_pair(compiledNodeId(node), ref.key));
+            copyIt != rc.consumerCopyOverride.end()) {
+            addDep(node, seen, copyIt->second);
+            return;
+        }
         std::string producerDevId = rc.nodeDevice.at(producerNodeId);
         if (!usingCarriedInitial) {
             if (auto devIt = rc.bufferProducerDeviceByKey.find(ref.key);

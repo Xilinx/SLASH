@@ -63,6 +63,18 @@ struct CompiledBridgeOpNode {
     std::function<bool()> tryReady = []{ return true; };
 };
 
+struct CompiledDeviceCopyNode {
+    std::string id;
+    std::string deviceId;
+    GraphBuffer source;
+    GraphBuffer target;
+    std::string sourceRegion;
+    std::string targetRegion;
+    std::string mechanism = "host_qdma";
+    std::function<void()> action;
+    std::vector<std::string> dependsOn;
+};
+
 struct CompiledSourceNode {
     std::string id;
     std::string deviceId;
@@ -248,6 +260,7 @@ struct CompiledWaitNode {
 
 using CompiledNode = std::variant<CompiledKernelNode,
                                   CompiledBridgeOpNode,
+                                  CompiledDeviceCopyNode,
                                   CompiledSourceNode,
                                   CompiledSinkNode,
                                   CompiledReprogramNode,

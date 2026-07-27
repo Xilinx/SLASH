@@ -73,6 +73,8 @@ The compiled view is lower level than the authored graph:
 
 - each file contains only nodes assigned to that device;
 - bridge-injected nodes are visible where data or ordering crosses devices;
+- device-copy nodes are visible where the compiler inserted an intra-FPGA
+  HBM-bank transfer using the host/QDMA fallback;
 - child DGraphs appear under compiled loop and conditional nodes;
 - device-specific execution order is easier to inspect than in the authored
   view.

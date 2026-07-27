@@ -154,6 +154,13 @@ class FpgaDevice : public IDevice {
     DeviceType  type() const override { return DeviceType::FPGA; }
     std::string id()   const override { return id_; }
 
+    std::optional<std::string> resolveMemoryRegion(
+        const KernelDescriptor& kernel, const std::string& portName) const override;
+    std::function<void()> makeDeviceCopyAction(
+        const GraphBuffer& source, const GraphBuffer& target,
+        BufferType type, const std::string& sourceRegion,
+        const std::string& targetRegion) override;
+
     std::unique_ptr<IDevicePlan> compilePlan(const DGraph& dg) override;
 
     // ---- BAR-backed buffer accessors (also used by CPU↔FPGA bridges) --

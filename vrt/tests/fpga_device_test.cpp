@@ -807,6 +807,79 @@ TEST_F(FpgaDeviceFixture, LoopCarriedOutputAliasPreservesInitialInput) {
     EXPECT_EQ(readback[1], seed[1]);
 }
 
+TEST_F(FpgaDeviceFixture, DeviceCopyActionRefreshesTargetBuffer) {
+    FpgaDevice dev("fpga:0", window_,
+                   [](const std::string&) {
+                       return FpgaKernelLocation{kKernelA_R5, 0};
+                   });
+
+    const GraphBuffer source = GraphBuffer::make(BufferType::I32, "source", 0);
+    const GraphBuffer target = GraphBuffer::make(BufferType::I32, "target", 0);
+    const std::string sourceKey = scopedBufferKey(source.scopeId(), source.name());
+    const std::string targetKey = scopedBufferKey(target.scopeId(), target.name());
+
+    const std::int32_t first[] = {1, 2, 3};
+    dev.setInputBuffer(sourceKey, first, sizeof(first));
+    auto copy = dev.makeDeviceCopyAction(source, target, BufferType::I32, "HBM0", "HBM1");
+    ASSERT_NO_THROW(copy());
+
+    std::int32_t out[] = {0, 0, 0};
+    ASSERT_NO_THROW(dev.getOutputBuffer(targetKey, out, sizeof(out)));
+    EXPECT_EQ(out[0], first[0]);
+    EXPECT_EQ(out[1], first[1]);
+    EXPECT_EQ(out[2], first[2]);
+
+    const std::int32_t second[] = {4, 5, 6};
+    dev.setInputBuffer(sourceKey, second, sizeof(second));
+    ASSERT_NO_THROW(copy());
+    ASSERT_NO_THROW(dev.getOutputBuffer(targetKey, out, sizeof(out)));
+    EXPECT_EQ(out[0], second[0]);
+    EXPECT_EQ(out[1], second[1]);
+    EXPECT_EQ(out[2], second[2]);
+}
+
+TEST_F(FpgaDeviceFixture, InoutBufferPacksOnePointerAndAliasesOutput) {
+    FpgaDevice dev("fpga:0", window_,
+                   [](const std::string&) {
+                       return FpgaKernelLocation{kKernelA_R5, 0};
+                   });
+
+    GraphScalar elements = GraphScalar::ref(ScalarType::U64, "elements");
+    GraphBuffer input = GraphBuffer::make(BufferType::I32, "input", 0, elements);
+    GraphBuffer output = GraphBuffer::make(BufferType::I32, "output", 0, elements);
+    const std::int32_t seed[] = {3, 5};
+    dev.setInputBuffer(scopedBufferKey(0, "input"), seed, sizeof(seed));
+
+    IOTypeMap rwType;
+    rwType.inouts.push_back({{"data", BufferType::I32}, {"data_out", BufferType::I32}});
+
+    CompiledKernelNode kernel;
+    kernel.id = "rw";
+    kernel.deviceId = "fpga:0";
+    kernel.kernel = fpgaKernel("kA", rwType);
+    kernel.ioMap.bindExistingInout("data", "data_out", input, output);
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.scalarValues = std::make_shared<std::map<std::string, std::uint64_t>>();
+    (*dg.scalarValues)[scopedScalarKey(0, "elements")] = 2;
+    dg.nodes.emplace_back(kernel);
+
+    auto plan = dev.compilePlan(dg);
+    ASSERT_NE(plan, nullptr);
+    ASSERT_NO_THROW(plan->launch());
+    ASSERT_NO_THROW(plan->wait());
+
+    ASSERT_EQ(ddr_.nodes()[0].opcode, RP1_OP_KERNEL_DISPATCH);
+    EXPECT_EQ(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 2u);
+
+    std::int32_t readback[] = {0, 0};
+    ASSERT_NO_THROW(dev.getOutputBuffer(scopedBufferKey(0, "output"),
+                                        readback, sizeof(readback)));
+    EXPECT_EQ(readback[0], seed[0]);
+    EXPECT_EQ(readback[1], seed[1]);
+}
+
 TEST_F(FpgaDeviceFixture, GraphReprogramNodeCompilesIntoFpgaDGraph) {
     auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, makeDiamondLookup());
     Graph g = Graph::withDefaults();

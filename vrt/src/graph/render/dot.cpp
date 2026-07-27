@@ -157,6 +157,15 @@ void emitBridgeOpNode(std::ostringstream& os, const CompiledBridgeOpNode& b,
        << sideLabel << ")\"];\n";
 }
 
+void emitDeviceCopyNode(std::ostringstream& os, const CompiledDeviceCopyNode& c,
+                        const std::string& indent) {
+    os << indent << "\"" << escape(c.id) << "\""
+       << " [shape=box, style=dashed, label=\""
+       << escape(c.id) << "\\n[DeviceCopy]\\n"
+       << escape(c.sourceRegion) << " -> " << escape(c.targetRegion)
+       << "\\n(" << escape(c.mechanism) << ")\"];\n";
+}
+
 const char* compiledLoopKindLabel(CompiledLoopKind kind) {
     switch (kind) {
         case CompiledLoopKind::FixedCount:     return "FixedCount";
@@ -839,6 +848,8 @@ std::string renderToDot(const DGraph& dgraph) {
                     kernels.push_back(n);
                 } else if constexpr (std::is_same_v<T, CompiledBridgeOpNode>) {
                     emitBridgeOpNode(os, n, "  ");
+                } else if constexpr (std::is_same_v<T, CompiledDeviceCopyNode>) {
+                    emitDeviceCopyNode(os, n, "  ");
                 } else if constexpr (std::is_same_v<T, CompiledBoundaryNode>) {
                     emitBoundaryNode(os, n, "  ");
                 } else if constexpr (std::is_same_v<T, CompiledLoopNode>) {
