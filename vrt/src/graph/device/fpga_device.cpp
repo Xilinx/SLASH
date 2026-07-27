@@ -749,10 +749,19 @@ class FpgaDevicePlan : public IDevicePlan {
             pending.push_back(&alias);
         }
 
+        const auto stagingDeadline =
+            std::chrono::steady_clock::now() + kBridgeWaitTimeout;
         while (!pending.empty()) {
             std::vector<const DeferredBufferAlias*> unresolved;
             bool madeProgress = false;
             for (const DeferredBufferAlias* alias : pending) {
+                if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+                    std::cerr << "[fpga-buffer] resolve alias "
+                              << alias->targetKey << " <- " << alias->sourceKey
+                              << " source=" << device_->hasBuffer(alias->sourceKey)
+                              << " target=" << device_->hasBuffer(alias->targetKey)
+                              << std::endl;
+                }
                 if (device_->hasBuffer(alias->sourceKey)) {
                     device_->aliasBufferKey(alias->targetKey, alias->sourceKey);
                     madeProgress = true;
@@ -768,6 +777,22 @@ class FpgaDevicePlan : public IDevicePlan {
             }
             if (unresolved.empty()) break;
             if (!madeProgress) {
+                const bool awaitingRootInput = std::any_of(
+                    unresolved.begin(), unresolved.end(),
+                    [&](const DeferredBufferAlias* alias) {
+                        return alias->sourceKey.rfind("scope:0:", 0) == 0 &&
+                               alias->targetKey.rfind("scope:0:", 0) != 0 &&
+                               !device_->hasBuffer(alias->sourceKey);
+                    });
+                if (awaitingRootInput) {
+                    if (std::chrono::steady_clock::now() > stagingDeadline) {
+                        throw std::runtime_error(
+                            "FpgaDevicePlan: timed out waiting for a root input "
+                            "buffer to be staged before resolving loop aliases");
+                    }
+                    std::this_thread::yield();
+                    continue;
+                }
                 for (const DeferredBufferAlias* alias : unresolved) {
                     const std::size_t bytes = resolvedBufferSizeBytes(
                         alias->sizeToken, scalarValues_, "FpgaDevicePlan");
@@ -2312,6 +2337,11 @@ void FpgaDevice::aliasBufferKey(const std::string& targetName,
     const std::string canonicalSource = canonicalBufferKey(source);
     const std::string canonicalTarget = canonicalBufferKey(target);
     if (canonicalTarget == canonicalSource) return;
+    if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+        std::cerr << "[fpga-buffer] alias " << target
+                  << " (" << canonicalTarget << ") <- " << source
+                  << " (" << canonicalSource << ")" << std::endl;
+    }
     auto it = buffers_.find(canonicalSource);
     if (it == buffers_.end()) {
         throw std::runtime_error(
@@ -2790,6 +2820,13 @@ void FpgaDevice::setInputBuffer(const std::string& bufferName,
         type = existing->second.type;
     }
     const BufferRecord rec = ensureBufferByKey(key, type, sizeBytes);
+    if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+        std::cerr << "[fpga-buffer] set " << key
+                  << " canonical=" << canonicalKey
+                  << " size=" << sizeBytes
+                  << " device=" << static_cast<bool>(rec.mem)
+                  << std::endl;
+    }
 
     if (sizeBytes == 0) return;
     if (rec.mem) {
@@ -2850,7 +2887,13 @@ bool FpgaDevice::hasBuffer(const std::string& bufferName) const {
     const std::string key = normalizeBufferKey(bufferName);
     std::lock_guard<std::mutex> lk(bufferMutex_);
     const std::string canonicalKey = canonicalBufferKey(key);
-    return buffers_.find(canonicalKey) != buffers_.end();
+    const bool found = buffers_.find(canonicalKey) != buffers_.end();
+    if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+        std::cerr << "[fpga-buffer] has " << key
+                  << " canonical=" << canonicalKey
+                  << " -> " << found << std::endl;
+    }
+    return found;
 }
 
 void FpgaDevice::setInputScalar(const std::string& scalarKey, std::uint64_t bits) {

@@ -21,6 +21,8 @@
 #include <vrt/graph/crossdevice/cpu_fpga_bridge.hpp>
 
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -94,6 +96,12 @@ BridgeStepPair CpuFpgaBridge::makeTransfer(IDevice&            /*src*/,
     // Producer: snapshot the source buffer into staging and signal.
     auto producerClosure = [op, srcCpu, srcFpga, bufName]() {
         const bool exists = srcCpu ? srcCpu->hasBuffer(bufName) : srcFpga->hasBuffer(bufName);
+        if (std::getenv("VRT_FPGA_BUFFER_TRACE")) {
+            std::cerr << "[fpga-buffer] bridge producer "
+                      << (srcCpu ? "CPU" : "FPGA")
+                      << " key=" << bufName
+                      << " exists=" << exists << std::endl;
+        }
         if (!exists) {
             throw std::runtime_error(
                 "CpuFpgaBridge: producer-side buffer '" + bufName +

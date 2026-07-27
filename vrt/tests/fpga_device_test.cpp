@@ -827,6 +827,69 @@ TEST_F(FpgaDeviceFixture, LoopCarriedOutputAliasPreservesInitialInput) {
     EXPECT_EQ(readback[1], seed[1]);
 }
 
+TEST_F(FpgaDeviceFixture, AutonomousLoopPublishesCarriedOutputToCpu) {
+    rp1_.reset();
+    FaithfulRp1 faithfulRp1(ddr_);
+
+    Graph graph = Graph::withDefaults();
+    graph.cpuDevice()->registerKernel(std::make_shared<CopyKernel>());
+    auto fpga = std::make_shared<FpgaDevice>(
+        "fpga:0", window_,
+        [](const std::string&) {
+            return FpgaKernelLocation{kKernelA_R5, 0};
+        });
+    graph.registerDevice(fpga);
+
+    GraphScalar elements = graph.scalarInput<std::uint64_t>("elements");
+    GraphBuffer input = graph.inputBuffer(BufferType::I32, "input", elements);
+    GraphBuffer sharpened =
+        GraphBuffer::make(BufferType::I32, "sharpened", 0, elements);
+
+    auto body = graph.rootRegion().createChild();
+    GraphBuffer localInput = body->inputBuffer(BufferType::I32, "state", elements);
+    body->importFromParent({{input, localInput}});
+
+    IOTypeMap bodyType;
+    bodyType.inputs.push_back({"in", BufferType::I32});
+    bodyType.outputs.push_back({"out", BufferType::I32});
+    IOMap bodyIo;
+    GraphBuffer localOutput;
+    bodyIo.bindInput("in", localInput)
+          .bindOutput("out", BufferType::I32, localOutput, elements, body->scopeId());
+    const std::string bodyId = body->addKernel(
+        fpgaKernel("body", bodyType), std::move(bodyIo), "fpga:0");
+    body->exportToParent({{localOutput, sharpened}, {localOutput, input}}, {bodyId});
+
+    LoopSpec loopSpec = test_support::fixedLoopSpec(
+        test_support::tripCount(
+            graph.scalarInput<std::uint32_t>("iterations")),
+        body);
+    graph.addLoop(std::move(loopSpec));
+
+    IOTypeMap copyType;
+    copyType.inputs.push_back({"in", BufferType::I32});
+    copyType.outputs.push_back({"out", BufferType::I32});
+    IOMap copyIo;
+    GraphBuffer output = graph.output<std::int32_t>("output", elements);
+    copyIo.bindInput("in", sharpened)
+          .bindExistingOutput("out", output);
+    graph.addNode(
+        KernelDescriptor{"copy", DeviceType::CPU, std::nullopt, copyType},
+        std::move(copyIo), "cpu");
+
+    auto exec = graph.compile();
+    const std::int32_t seed[] = {7, 11};
+    exec.writeScalar(elements, std::uint64_t{2});
+    exec.writeScalar<std::uint32_t>("iterations", 1u);
+    exec.write(input, seed, sizeof(seed));
+    ASSERT_NO_THROW(exec.run());
+
+    std::int32_t readback[] = {0, 0};
+    ASSERT_NO_THROW(exec.read(output, readback, sizeof(readback)));
+    EXPECT_EQ(readback[0], seed[0]);
+    EXPECT_EQ(readback[1], seed[1]);
+}
+
 TEST_F(FpgaDeviceFixture, DeviceCopyActionRefreshesTargetBuffer) {
     FpgaDevice dev("fpga:0", window_,
                    [](const std::string&) {
