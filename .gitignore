@@ -92,3 +92,4 @@ __pycache__/
 
 # Personal/HSA-iteration scripts (not part of the released stack)
 /scripts/hsa/
+**/build-host/
