@@ -1504,6 +1504,36 @@ TEST_F(FpgaDeviceFixture, PointerTypedOutputScalarUsesSystemMapOffset) {
               kKernelA_R5 + 0x24u);
 }
 
+TEST_F(FpgaDeviceFixture, MissingOutputScalarOffsetIsRejectedWithVbinSpec) {
+    auto spec = std::make_shared<fpga::FpgaVbinSpec>();
+    fpga::FpgaImageSpec image;
+    image.id = "imageA";
+
+    fpga::FpgaKernelSpec kernel;
+    kernel.name = "kA";
+    kernel.r5_base_addr = kKernelA_R5;
+    kernel.ioType.outputScalars.push_back({"level", ScalarType::I32});
+    image.kernels.emplace(kernel.name, kernel);
+    spec->addImage(std::move(image));
+
+    auto dev = std::make_shared<FpgaDevice>("fpga:0", window_, spec, "imageA");
+
+    DGraph dg;
+    dg.deviceId = "fpga:0";
+    dg.device = dev;
+
+    CompiledKernelNode producer;
+    producer.id = "producer";
+    producer.deviceId = "fpga:0";
+    producer.kernel = KernelDescriptor{
+        "kA", DeviceType::FPGA, std::string("imageA"), kernel.ioType};
+    producer.ioMap.bindOutputScalar(
+        "level", GraphScalar::ref(ScalarType::I32, "level"));
+    dg.nodes.push_back(producer);
+
+    EXPECT_THROW(dev->compilePlan(dg), std::runtime_error);
+}
+
 TEST_F(FpgaDeviceFixture, OutputScalarFeedsDownstreamKernelViaScalarCopy) {
     IOTypeMap producerType;
     producerType.outputScalars.push_back({"level", ScalarType::I32});

@@ -23,7 +23,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <queue>
 #include <set>
@@ -4108,6 +4110,12 @@ class RegionCompiler {
             device.resolveMemoryRegion(consumerKernel->kernel, targetPort->portName);
         if (!sourceRegion || !targetRegion || *sourceRegion == *targetRegion) {
             return std::nullopt;
+        }
+        if (std::getenv("VRT_GRAPH_TRACE")) {
+            std::cerr << "[GraphCompiler] device-copy buffer '" << key
+                      << "' for consumer '" << consumerId << "' on " << deviceId
+                      << ": " << *sourceRegion << " -> " << *targetRegion
+                      << std::endl;
         }
         if (!rc.topLevel) {
             // ponytail: nested same-device region copies need per-region

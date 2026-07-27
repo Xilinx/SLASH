@@ -2378,6 +2378,11 @@ void FpgaDevice::populateBufferRegions(const DGraph& dg) {
         auto region = resolveBufferRegion(kernel, portName);
         if (!region) return;
         const std::string key = scopedBufferKey(buffer.scopeId(), buffer.name());
+        if (std::getenv("VRT_FPGA_PORT_TRACE")) {
+            std::cerr << "[FpgaDevice] port-region kernel='" << kernel.name
+                      << "' port='" << portName << "' buffer='" << key
+                      << "' region=" << memoryRegionTag(*region) << std::endl;
+        }
         auto [it, inserted] = resolvedRegions.emplace(key, *region);
         if (!inserted &&
             (it->second.type != region->type ||
@@ -2552,6 +2557,11 @@ FpgaDevice::outputScalarRegOffset(const KernelDescriptor& kernel,
     const auto offsets = kernelArgOffsets(kernel);
     auto it = offsets.find(portName);
     if (it != offsets.end()) return it->second;
+    if (vbinSpec_) {
+        throw std::runtime_error(
+            "FpgaDevice: output scalar port '" + portName + "' on kernel '" +
+            kernel.name + "' has no s_axilite register offset in the system_map");
+    }
     // Mock/lookup path (no system_map): a conventional output register offset.
     return 0x10u;
 }
@@ -2583,6 +2593,12 @@ FpgaDevice::kernelArgOffsets(const KernelDescriptor& kernel) const {
         auto a = byArgName.find(argName);
         if (a != byArgName.end()) {
             offsets[descPort] = a->second;
+            if (std::getenv("VRT_FPGA_PORT_TRACE")) {
+                std::cerr << "[FpgaDevice] arg-offset kernel='" << kernel.name
+                          << "' graph-port='" << descPort << "' hls-arg='"
+                          << argName << "' offset=0x" << std::hex << a->second
+                          << std::dec << std::endl;
+            }
         }
     }
     // Fallback for descriptors with no IOTypeMap to zip against: key by arg
