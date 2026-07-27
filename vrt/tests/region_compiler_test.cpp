@@ -2627,7 +2627,8 @@ TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
     IOMap levelIo;
     levelIo.bindInput("input", rootInput)
            .bindOutputScalar("level", brightness);
-    graph.addNode(cpuKernel("level", levelType), std::move(levelIo), "cpu");
+    const std::string levelId =
+        graph.addNode(cpuKernel("level", levelType), std::move(levelIo), "cpu");
 
     IOTypeMap consumerType;
     consumerType.inputs.push_back({"in", BufferType::I32});
@@ -2657,6 +2658,12 @@ TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
     ASSERT_NE(findCompiledNode(*fpgaDGraph, loopId), nullptr);
     EXPECT_EQ(findCompiledNode(*cpuDGraph, loopId), nullptr)
         << "all-FPGA loop should stay autonomous, not split onto the CPU queue";
+    const CompiledNode* levelNode = findCompiledNode(*cpuDGraph, levelId);
+    ASSERT_NE(levelNode, nullptr);
+    EXPECT_TRUE(dependsOn(*levelNode, "__graph_start"));
+    EXPECT_EQ(findBridgeNode(*cpuDGraph, CompiledBridgeOpNode::Side::Producer, levelId),
+              nullptr)
+        << "parallel CPU reader must keep using the original graph input";
 
     const auto* transfer = findBridgeNode(
         *cpuDGraph, CompiledBridgeOpNode::Side::Producer, conditionalId);

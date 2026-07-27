@@ -3477,20 +3477,35 @@ class RegionCompiler {
             const std::string& opId = regionOpId(op);
             auto devIt = rc.nodeDevice.find(opId);
             if (devIt == rc.nodeDevice.end()) continue;
+            const std::set<std::string> carriedBuffers =
+                std::holds_alternative<LoopOp>(op)
+                    ? loopCarriedBufferKeys(std::get<LoopOp>(op))
+                    : std::set<std::string>{};
             for (const std::string& key : producedBufferKeys(op)) {
+                if (carriedBuffers.count(key)) continue;
                 record(rc.bufferProducerDeviceByKey, key, devIt->second);
             }
             for (const std::string& key : producedScalarKeys(op)) {
+                if (std::holds_alternative<LoopOp>(op) &&
+                    loopCarriedScalarKeys(std::get<LoopOp>(op)).count(key)) {
+                    continue;
+                }
                 record(rc.scalarProducerDeviceByKey, key, devIt->second);
             }
         }
 
         for (const auto& [controlId, placement] : rc.loopOutputPlacements) {
-            (void)controlId;
+            const auto* loop = std::get_if<LoopOp>(rc.opById.at(controlId));
+            const std::set<std::string> carriedBuffers =
+                loop ? loopCarriedBufferKeys(*loop) : std::set<std::string>{};
+            const std::set<std::string> carriedScalars =
+                loop ? loopCarriedScalarKeys(*loop) : std::set<std::string>{};
             for (const auto& [key, dev] : placement.buffers) {
+                if (carriedBuffers.count(key)) continue;
                 record(rc.bufferProducerDeviceByKey, key, dev);
             }
             for (const auto& [key, dev] : placement.scalars) {
+                if (carriedScalars.count(key)) continue;
                 record(rc.scalarProducerDeviceByKey, key, dev);
             }
         }
@@ -3511,14 +3526,20 @@ class RegionCompiler {
             if (childIt == rc.childrenByControlId.end()) continue;
 
             if (const auto* loop = std::get_if<LoopOp>(&op)) {
+                const std::set<std::string> carriedBuffers =
+                    loopCarriedBufferKeys(*loop);
+                const std::set<std::string> carriedScalars =
+                    loopCarriedScalarKeys(*loop);
                 const DGraphChild& bodyChild =
                     requireChildDGraphs(childIt->second, opId, DGraphChildRole::LoopBody);
                 BoundaryExportDevices devices = collectBoundaryExportDevices(
                     *loop->body, bodyChild, loop->body->parentScopeId());
                 for (const auto& [key, dev] : devices.buffers) {
+                    if (carriedBuffers.count(key)) continue;
                     record(rc.bufferProducerDeviceByKey, key, dev);
                 }
                 for (const auto& [key, dev] : devices.scalars) {
+                    if (carriedScalars.count(key)) continue;
                     record(rc.scalarProducerDeviceByKey, key, dev);
                 }
             } else if (const auto* cond = std::get_if<ConditionalOp>(&op)) {
@@ -3630,7 +3651,11 @@ class RegionCompiler {
             if (std::holds_alternative<LoopOp>(op) ||
                 std::holds_alternative<ConditionalOp>(op)) {
                 for (const ConsumedBufferRef& ref : consumedBufferRefs(op)) {
-                    if (const GraphBuffer* gb = producedBufferObject(rc, id, ref.key)) {
+                    const GraphBuffer* gb = producedBufferObject(rc, id, ref.key);
+                    if (!gb && rc.region) {
+                        gb = findBufferObject(*rc.region, ref.key);
+                    }
+                    if (gb) {
                         routeBufferTransferIfNeeded(rc, op, consumerDevId, *gb, std::nullopt);
                     }
                 }
