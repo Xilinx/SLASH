@@ -71,8 +71,8 @@ constexpr std::uint32_t alignUp(std::uint32_t value, std::uint32_t alignment) {
 }
 
 constexpr std::uint32_t kBufferArenaStart =
-    alignUp(RP1_DEFAULT_SIG_ARRAY_OFFSET +
-                RP1_MAX_SIGNALS * sizeof(rp1_signal_slot_t),
+    alignUp(RP1_DEFAULT_TRACE_OFFSET +
+                fpga::kDefaultTraceSize * sizeof(rp1_trace_entry_t),
             4096u);
 
 /// How many 32-bit words does a scalar bit pattern occupy in the

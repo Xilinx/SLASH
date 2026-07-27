@@ -108,6 +108,8 @@ struct DdrView {
                                          base + kWindowOff + RP1_DEFAULT_ARG_BUF_OFFSET); }
     rp1_signal_slot_t* signals()   { return reinterpret_cast<rp1_signal_slot_t*>(
                                          base + kWindowOff + RP1_DEFAULT_SIG_ARRAY_OFFSET); }
+    rp1_trace_entry_t* traces()    { return reinterpret_cast<rp1_trace_entry_t*>(
+                                         base + kWindowOff + RP1_DEFAULT_TRACE_OFFSET); }
     std::byte*         rp1Ptr(std::uint64_t rp1Addr) {
         return base + kWindowOff + static_cast<std::size_t>(rp1Addr - RP1_CTRL_PHYS_ADDR);
     }
@@ -486,6 +488,24 @@ TEST_F(FpgaDeviceFixture, TypeAndIdMatchIDeviceContract) {
     FpgaDevice dev("fpga:0", window_, makeDiamondLookup());
     EXPECT_EQ(dev.type(), DeviceType::FPGA);
     EXPECT_EQ(dev.id(), "fpga:0");
+}
+
+TEST_F(FpgaDeviceFixture, BarBackedBufferArenaDoesNotOverlapTraceRing) {
+    FpgaDevice dev("fpga:0", window_, makeDiamondLookup());
+    ddr_.traces()[0].timestamp = 0x11223344u;
+    ddr_.traces()[0].event = RP1_TRACE_KERNEL_LAUNCH;
+    ddr_.traces()[0].node_index = 7u;
+    ddr_.traces()[0].aux0 = 0x55667788u;
+    ddr_.traces()[0].aux1 = 0x99aabbccu;
+
+    const std::uint8_t bytes[32] = {};
+    dev.setInputBuffer("scratch", bytes, sizeof(bytes));
+
+    EXPECT_EQ(ddr_.traces()[0].timestamp, 0x11223344u);
+    EXPECT_EQ(ddr_.traces()[0].event, static_cast<std::uint16_t>(RP1_TRACE_KERNEL_LAUNCH));
+    EXPECT_EQ(ddr_.traces()[0].node_index, 7u);
+    EXPECT_EQ(ddr_.traces()[0].aux0, 0x55667788u);
+    EXPECT_EQ(ddr_.traces()[0].aux1, 0x99aabbccu);
 }
 
 TEST_F(FpgaDeviceFixture, ImageNumericIdIsStableOneBasedAndZeroForUnguarded) {
