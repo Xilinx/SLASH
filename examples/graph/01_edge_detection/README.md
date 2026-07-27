@@ -77,3 +77,7 @@ onto their input slot). `level_kernel`'s scalar output is exposed as an
 `s_axilite`-mode pointer argument rather than an `m_axi` port, so the runtime
 can read it back as a register after the kernel completes instead of staging
 it through DDR.
+
+The read-only `input` fans out from HBM0 to a second replica on HBM2 through
+the transparent host/QDMA fallback. The mutable `edges` buffer stays on HBM1
+for both `edges_kernel` and the in-place `normalize_kernel`.

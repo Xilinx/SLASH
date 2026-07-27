@@ -583,10 +583,11 @@ any unused PL resources across kernels in the same image.
    target_link_libraries(${PROJECT_NAME} PRIVATE vrt::vrt)
 
 The ``config.cfg`` linker configuration assigns each kernel's memory ports to
-HBM banks. This example deliberately puts shared buffers on different HBM
-banks: the graph backend inserts visible device-copy nodes and uses the
-host/QDMA fallback to move ordinary buffers between banks. Scalar ports do not
-need ``sp=`` entries:
+HBM banks. This example deliberately makes the read-only ``input`` fan out
+across HBM0 and HBM2: the graph backend inserts a visible device-copy node and
+uses the host/QDMA fallback. The mutable ``edges`` token remains on HBM1 for
+both its producer and in-place consumer because cross-bank ``inout`` copies are
+not supported. Scalar ports do not need ``sp=`` entries:
 
 .. code-block:: ini
 
@@ -599,7 +600,7 @@ need ``sp=`` entries:
    sp=edges_kernel_0.m_axi_gmem0:HBM0
    sp=edges_kernel_0.m_axi_gmem1:HBM1
    sp=level_kernel_0.m_axi_gmem0:HBM2
-   sp=normalize_kernel_0.m_axi_gmem0:HBM3
+   sp=normalize_kernel_0.m_axi_gmem0:HBM1
 
 Build the vbin:
 
