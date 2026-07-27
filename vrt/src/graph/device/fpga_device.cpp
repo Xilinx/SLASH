@@ -496,6 +496,40 @@ class FpgaDevicePlan : public IDevicePlan {
         std::cerr << std::flush;
     }
 
+    static const char* traceEventName(std::uint16_t event) {
+        switch (event) {
+            case RP1_TRACE_GRAPH_START:    return "GRAPH_START";
+            case RP1_TRACE_NODE_ACTIVATE:  return "NODE_ACTIVATE";
+            case RP1_TRACE_KERNEL_LAUNCH:  return "KERNEL_LAUNCH";
+            case RP1_TRACE_KERNEL_DONE:    return "KERNEL_DONE";
+            case RP1_TRACE_KERNEL_TIMEOUT: return "KERNEL_TIMEOUT";
+            case RP1_TRACE_LOOP_ITER:      return "LOOP_ITER";
+            case RP1_TRACE_COND_EVAL:      return "COND_EVAL";
+            case RP1_TRACE_WAIT_PARK:      return "WAIT_PARK";
+            case RP1_TRACE_WAIT_WAKE:      return "WAIT_WAKE";
+            case RP1_TRACE_PDI_LOAD:       return "PDI_LOAD";
+            case RP1_TRACE_IMAGE_MISMATCH: return "IMAGE_MISMATCH";
+            case RP1_TRACE_GRAPH_DONE:     return "GRAPH_DONE";
+        }
+        return "UNKNOWN";
+    }
+
+    static void dumpTrace(const fpga::Rp1TraceCapture& trace) {
+        std::cerr << "[rp1-trace] written=" << trace.written
+                  << " entries=" << trace.entries.size()
+                  << (trace.overflow ? " overflow" : "") << "\n";
+        for (std::size_t i = 0; i < trace.entries.size(); ++i) {
+            const rp1_trace_entry_t& e = trace.entries[i];
+            std::cerr << "  trace[" << i << "]"
+                      << " t=" << e.timestamp
+                      << " event=" << traceEventName(e.event)
+                      << "(" << e.event << ")"
+                      << " node=" << e.node_index
+                      << " aux0=0x" << std::hex << e.aux0
+                      << " aux1=0x" << e.aux1 << std::dec << "\n";
+        }
+    }
+
     static void clearHandshakeSlots(fpga::Rp1GraphImage& image) {
         std::set<std::uint32_t> carried;
         for (const rp1_node_t& n : image.nodes) {
@@ -551,8 +585,10 @@ class FpgaDevicePlan : public IDevicePlan {
                 signalsPrepared_ = false;
                 fpga::Rp1GraphImage submitImage = image_;
                 if (signalsPrepared) submitImage.clear_signal_slots.clear();
+                if (std::getenv("VRT_RP1_TRACE")) submitImage.trace_enable = true;
                 submitter_->submitAndWait(submitImage, timeout_);
                 lastCq_ = submitter_->drainCq();
+                if (submitImage.trace_enable) dumpTrace(submitter_->drainTrace());
                 applyImageSideEffects();
             } catch (...) {
                 workerEx_ = std::current_exception();
