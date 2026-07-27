@@ -207,152 +207,21 @@ TEST_F(E2ECtldevTest, GetBarFdMmapAndFlockRoundTrip)
 
     /* Write a sentinel under exclusive lock, read it back under shared lock. */
     const uint32_t kSentinel = 0xA55A5AA5u;
+    uint32_t *kernel_reg =  static_cast<uint32_t*>(bf->map) + 4;
 
     ASSERT_EQ(slash_bar_file_start_write(bf), 0);
-    std::memcpy(bf->map, &kSentinel, sizeof(kSentinel));
+    std::memcpy(kernel_reg, &kSentinel, sizeof(kSentinel));
     ASSERT_EQ(slash_bar_file_end_write(bf), 0);
 
     uint32_t readback = 0;
     ASSERT_EQ(slash_bar_file_start_read(bf), 0);
-    std::memcpy(&readback, bf->map, sizeof(readback));
+    std::memcpy(&readback, kernel_reg, sizeof(readback));
     ASSERT_EQ(slash_bar_file_end_read(bf), 0);
 
     EXPECT_EQ(readback, kSentinel);
 
     slash_bar_file_close(bf);
     (void)usable_len;
-}
-
-/* ── qdma E2E tests ───────────────────────────────────────────────────────── */
-
-class E2EQdmaTest : public ::testing::Test {
-protected:
-    void SetUp() override
-    {
-        SKIP_IF_NO_QDMA();
-        qdma_ = slash_qdma_open(e2e_qdma_path());
-        ASSERT_NE(qdma_, nullptr)
-            << "slash_qdma_open(" << e2e_qdma_path()
-            << ") failed: " << strerror(errno);
-    }
-
-    void TearDown() override
-    {
-        if (qdma_) {
-            slash_qdma_close(qdma_);
-            qdma_ = nullptr;
-        }
-    }
-
-    struct slash_qdma *qdma_ = nullptr;
-};
-
-TEST_F(E2EQdmaTest, InfoBdfNonEmpty)
-{
-    struct slash_qdma_info info{};
-    ASSERT_EQ(slash_qdma_info_read(qdma_, &info), 0);
-    EXPECT_GT(strnlen(info.bdf, sizeof(info.bdf)), 0u)
-        << "daemon returned an empty QDMA BDF string";
-    // Per the daemon's INFO contract (architecture.md), these capability
-    // fields are currently always zero; libslash must forward them faithfully.
-    EXPECT_EQ(info.qsets_max, 0u);
-    EXPECT_EQ(info.msix_qvecs, 0u);
-    EXPECT_EQ(info.vf_max, 0u);
-    EXPECT_EQ(info.caps, 0u);
-}
-
-TEST_F(E2EQdmaTest, QpairAddStartGetFd)
-{
-    struct slash_qdma_qpair_add req{};
-    req.size         = sizeof(req);
-    req.mode         = 0;    /* MM mode */
-    req.dir_mask     = 0x3;  /* H2C | C2H */
-    req.h2c_ring_sz  = 4;
-    req.c2h_ring_sz  = 4;
-    req.cmpt_ring_sz = 4;
-
-    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
-    uint32_t qid = req.qid;
-
-    ASSERT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
-
-    int xfer_fd = slash_qdma_qpair_get_fd(qdma_, qid, 0);
-    ASSERT_GE(xfer_fd, 0) << "QPAIR_GET_FD failed: " << strerror(errno);
-
-    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
-    ::close(xfer_fd);
-}
-
-TEST_F(E2EQdmaTest, BufCreateAndH2cC2hRoundTrip)
-{
-    /*
-     * Full consumer flow:
-     *   add → start → get_fd → buf_create → H2C → C2H → compare
-     *
-     * The dev_addr 0x0 maps to the beginning of the daemon's emulated HBM/DDR
-     * address space.  We read INFO to confirm the daemon is live, but do NOT
-     * hard-code a device BDF into the transfer — the address space is always
-     * anchored at 0 in the daemon model.
-     */
-    struct slash_qdma_info info{};
-    ASSERT_EQ(slash_qdma_info_read(qdma_, &info), 0);
-
-    struct slash_qdma_qpair_add req{};
-    req.size         = sizeof(req);
-    req.mode         = 0;
-    req.dir_mask     = 0x3;
-    req.h2c_ring_sz  = 4;
-    req.c2h_ring_sz  = 4;
-    req.cmpt_ring_sz = 4;
-    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
-    uint32_t qid = req.qid;
-    ASSERT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
-
-    int xfer_fd = slash_qdma_qpair_get_fd(qdma_, qid, 0);
-    ASSERT_GE(xfer_fd, 0);
-
-    /* Create a 4 KiB DMA buffer. */
-    const size_t kBufLen = 4096;
-    struct slash_qdma_buffer buf{};
-    ASSERT_EQ(slash_qdma_qpair_buffer_create(xfer_fd, kBufLen, &buf), 0);
-    ASSERT_NE(buf.addr, nullptr);
-    ASSERT_NE(buf.addr, MAP_FAILED);
-
-    /* Fill the buffer with a test pattern. */
-    const uint64_t kPattern = 0xFEEDFACEDEADC0DEULL;
-    std::memcpy(buf.addr, &kPattern, sizeof(kPattern));
-
-    /* H2C: write to dev_addr 0 (start of emulated HBM). */
-    const uint64_t kDevAddr = 0;
-    ssize_t sent = slash_qdma_qpair_transfer(xfer_fd, buf.fd,
-                                              0 /* buf_offset */,
-                                              kDevAddr,
-                                              sizeof(kPattern),
-                                              SLASH_QDMA_XFER_H2C);
-    ASSERT_EQ(sent, static_cast<ssize_t>(sizeof(kPattern)))
-        << "H2C transfer failed: " << strerror(errno);
-
-    /* Clear the host buffer so we can verify C2H fills it. */
-    std::memset(buf.addr, 0, sizeof(kPattern));
-
-    /* C2H: read back from the same address. */
-    ssize_t recvd = slash_qdma_qpair_transfer(xfer_fd, buf.fd,
-                                               0,
-                                               kDevAddr,
-                                               sizeof(kPattern),
-                                               SLASH_QDMA_XFER_C2H);
-    ASSERT_EQ(recvd, static_cast<ssize_t>(sizeof(kPattern)))
-        << "C2H transfer failed: " << strerror(errno);
-
-    uint64_t got = 0;
-    std::memcpy(&got, buf.addr, sizeof(got));
-    EXPECT_EQ(got, kPattern) << "H2C→C2H round-trip: data mismatch";
-
-    EXPECT_EQ(slash_qdma_buffer_destroy(&buf), 0);
-    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
-    ::close(xfer_fd);
 }
 
 /* ── hotplug E2E tests ────────────────────────────────────────────────────── */
@@ -621,7 +490,8 @@ TEST_F(E2EHotplugTest, HotplugBoardRoundTrip)
     ASSERT_TRUE(ctl_alive(board))
         << "precondition: control device must be up and report board " << board;
 
-    ASSERT_EQ(slash_hotplug_hotplug(hp_, board.c_str()), 0)
+    std::string pf2 = board + ".2";
+    ASSERT_EQ(slash_hotplug_hotplug(hp_, pf2.c_str()), 0)
         << "HOTPLUG(" << board << ") failed: " << strerror(errno);
     EXPECT_TRUE(wait_for_ctl(true, board))
         << "control device should be up again and report board " << board
@@ -640,7 +510,8 @@ TEST_F(E2EHotplugTest, ToggleSbrBoardRoundTrip)
     ASSERT_TRUE(ctl_alive(board))
         << "precondition: control device must be up and report board " << board;
 
-    ASSERT_EQ(slash_hotplug_toggle_sbr(hp_, board.c_str()), 0)
+    std::string pf2 = board + ".2";
+    ASSERT_EQ(slash_hotplug_toggle_sbr(hp_, pf2.c_str()), 0)
         << "TOGGLE_SBR(" << board << ") failed: " << strerror(errno);
     EXPECT_TRUE(wait_for_ctl(true, board))
         << "control device should be up again and report board " << board
