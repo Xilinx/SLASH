@@ -3180,6 +3180,7 @@ class RegionCompiler {
                 waitReady.slot = ready;
                 waitReady.value = 1;
                 waitReady.conditionOp = RP1_COP_AND_NZ;
+                waitReady.preLaunch = true;
 
                 appendNodes[prodDg].emplace_back(std::move(xfer));
                 appendNodes[prodDg].emplace_back(std::move(readySet));

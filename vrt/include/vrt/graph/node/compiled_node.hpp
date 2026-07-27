@@ -256,6 +256,7 @@ struct CompiledWaitNode {
     std::uint32_t            slot = 0;
     std::uint32_t            value = 0;
     std::uint16_t            conditionOp = 0;  // rp1_condop_t
+    bool                     preLaunch = false;
 };
 
 using CompiledNode = std::variant<CompiledKernelNode,

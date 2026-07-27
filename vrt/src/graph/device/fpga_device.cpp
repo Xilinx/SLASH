@@ -424,6 +424,12 @@ class FpgaDevicePlan : public IDevicePlan {
           sentinelSlot_(sentinelSlot),
           sentinelValue_(sentinelValue),
           timeout_(timeout) {
+        for (const CompiledNode& node : dg.nodes) {
+            if (const auto* wait = std::get_if<CompiledWaitNode>(&node);
+                wait && wait->preLaunch) {
+                preLaunchWaitSlots_.push_back(wait->slot);
+            }
+        }
         image_ = dgraphHasControl(dg) ? buildControlImage(dg) : buildMainlineImage(dg);
     }
 
@@ -540,17 +546,12 @@ class FpgaDevicePlan : public IDevicePlan {
 
         std::set<std::uint32_t> toClear;
         for (const rp1_node_t& n : image.nodes) {
-            if (n.opcode != RP1_OP_LOOP) continue;
-            toClear.insert(n.payload.loop.condition_signal);
-            const std::uint32_t bs = n.payload.loop.body_start;
-            const std::uint32_t be = n.payload.loop.body_end;
-            for (std::uint32_t i = bs; i <= be && i < image.nodes.size(); ++i) {
-                const rp1_node_t& b = image.nodes[i];
-                if (b.opcode == RP1_OP_SIGNAL) {
-                    toClear.insert(b.payload.signal.target_slot);
-                } else if (b.opcode == RP1_OP_WAIT) {
-                    toClear.insert(b.payload.wait.condition_signal);
-                }
+            if (n.opcode == RP1_OP_LOOP) {
+                toClear.insert(n.payload.loop.condition_signal);
+            } else if (n.opcode == RP1_OP_SIGNAL) {
+                toClear.insert(n.payload.signal.target_slot);
+            } else if (n.opcode == RP1_OP_WAIT) {
+                toClear.insert(n.payload.wait.condition_signal);
             }
         }
         for (std::uint32_t s : toClear) {
@@ -579,6 +580,7 @@ class FpgaDevicePlan : public IDevicePlan {
                 resolveDeferredScalars();
                 resolveDeferredLoopTripCounts();
                 stageDeferredPdis();
+                waitForPreLaunchSignals();
                 resolveDeferredBufferAliases();
                 resolveDeferredBufferAddresses();
                 const bool signalsPrepared = signalsPrepared_;
@@ -802,6 +804,29 @@ class FpgaDevicePlan : public IDevicePlan {
                 break;
             }
             pending = std::move(unresolved);
+        }
+    }
+
+    void waitForPreLaunchSignals() {
+        if (preLaunchWaitSlots_.empty()) return;
+        if (!device_ || !device_->window_) {
+            throw std::runtime_error(
+                "FpgaDevicePlan: pre-launch input waits require an FPGA BAR window");
+        }
+        const auto deadline =
+            std::chrono::steady_clock::now() + kBridgeWaitTimeout;
+        for (std::uint32_t slot : preLaunchWaitSlots_) {
+            rp1_signal_slot_t signal{};
+            for (;;) {
+                device_->window_->readSignal(slot, signal);
+                if (signal.value != 0) break;
+                if (std::chrono::steady_clock::now() > deadline) {
+                    throw std::runtime_error(
+                        "FpgaDevicePlan: timed out waiting for CPU-to-FPGA "
+                        "input staging signal slot " + std::to_string(slot));
+                }
+                std::this_thread::yield();
+            }
         }
     }
 
@@ -2192,6 +2217,7 @@ class FpgaDevicePlan : public IDevicePlan {
     std::exception_ptr                                         workerEx_;
     std::vector<rp1_cq_entry_t>                                lastCq_;
     bool                                                       signalsPrepared_ = false;
+    std::vector<std::uint32_t>                                 preLaunchWaitSlots_;
     // Output scalars captured into RP1 signal slots by SCALAR_READ, keyed by
     // scoped name for downstream SCALAR_COPY inputs and control predicates.
     std::unordered_map<std::string, std::uint32_t> scalarSlots_;

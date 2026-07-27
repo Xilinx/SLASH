@@ -882,12 +882,17 @@ TEST_F(FpgaDeviceFixture, AutonomousLoopPublishesCarriedOutputToCpu) {
     exec.writeScalar(elements, std::uint64_t{2});
     exec.writeScalar<std::uint32_t>("iterations", 1u);
     exec.write(input, seed, sizeof(seed));
-    ASSERT_NO_THROW(exec.run());
-
-    std::int32_t readback[] = {0, 0};
-    ASSERT_NO_THROW(exec.read(output, readback, sizeof(readback)));
-    EXPECT_EQ(readback[0], seed[0]);
-    EXPECT_EQ(readback[1], seed[1]);
+    for (std::uint32_t slot = 0; slot < 8; ++slot) {
+        ddr_.signals()[slot].value = 1u;
+    }
+    for (int run = 0; run < 2; ++run) {
+        SCOPED_TRACE(run);
+        ASSERT_NO_THROW(exec.run());
+        std::int32_t readback[] = {0, 0};
+        ASSERT_NO_THROW(exec.read(output, readback, sizeof(readback)));
+        EXPECT_EQ(readback[0], seed[0]);
+        EXPECT_EQ(readback[1], seed[1]);
+    }
 }
 
 TEST_F(FpgaDeviceFixture, DeviceCopyActionRefreshesTargetBuffer) {
