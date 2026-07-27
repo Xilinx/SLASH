@@ -958,6 +958,18 @@ TEST(RegionCompilerTest, SplitLoopCpuOutputConsumerUsesCpuDeliveredParentBuffer)
     ASSERT_NE(cpuDG, nullptr);
     ASSERT_NE(fpgaDG, nullptr);
 
+    const CompiledNode* cpuLoop = findCompiledNode(*cpuDG, loopId);
+    ASSERT_NE(cpuLoop, nullptr);
+    bool waitsForTopLevelStaging = false;
+    for (const std::string& dep : compiledNodeDependsOn(*cpuLoop)) {
+        if (dep.rfind("_top_rdv_", 0) == 0 &&
+            dep.find("_ready_set") != std::string::npos) {
+            waitsForTopLevelStaging = true;
+        }
+    }
+    EXPECT_TRUE(waitsForTopLevelStaging)
+        << "CPU split-loop replica must not block before FPGA input staging";
+
     const CompiledNode* consumer = findCompiledNode(*cpuDG, consumerId);
     ASSERT_NE(consumer, nullptr);
     EXPECT_TRUE(dependsOn(*consumer, loopId));

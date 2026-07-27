@@ -3117,6 +3117,8 @@ class RegionCompiler {
         std::map<DGraph*, std::set<std::string>> removeIds;
         std::map<DGraph*, std::vector<CompiledNode>> appendNodes;
         std::map<std::string, std::string> depRewrite;
+        std::map<std::pair<std::string, std::string>, std::vector<std::string>>
+            replicatedControlDeps;
 
         for (auto& [op, halves] : byOp) {
             (void)op;
@@ -3187,6 +3189,11 @@ class RegionCompiler {
                 appendNodes[consDg].emplace_back(std::move(waitReady));
                 depRewrite[prod->id] = tag + "ready_set";
                 depRewrite[cons->id] = tag + "ready_wait";
+                if (!cons->pairedKernelId.empty()) {
+                    replicatedControlDeps[
+                        {prodDg->deviceId, cons->pairedKernelId}].push_back(
+                            tag + "ready_set");
+                }
             } else if (consCpu) {
                 // FPGA -> CPU: FPGA signals READY after its producer; CPU waits
                 // READY, then performs both bridge closures before the consumer.
@@ -3236,6 +3243,15 @@ class RegionCompiler {
                 for (std::string& dep : deps) {
                     auto rw = depRewrite.find(dep);
                     if (rw != depRewrite.end()) dep = rw->second;
+                }
+                if (auto ex = replicatedControlDeps.find(
+                        {dg.deviceId, compiledNodeId(n)});
+                    ex != replicatedControlDeps.end()) {
+                    for (const std::string& dep : ex->second) {
+                        if (std::find(deps.begin(), deps.end(), dep) == deps.end()) {
+                            deps.push_back(dep);
+                        }
+                    }
                 }
                 kept.push_back(std::move(n));
             }
