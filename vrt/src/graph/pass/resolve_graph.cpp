@@ -1390,6 +1390,7 @@ class GraphResolver {
             operations_[operation.id] = std::move(operation);
         }
 
+        addDerivedOrdering(region);
         resolvedRegion->topologicalOrder =
             topologicalOrder(region);
 
@@ -1486,6 +1487,87 @@ class GraphResolver {
         }
 
         return {std::move(resolvedRegion), std::move(finalValues)};
+    }
+
+    void addDerivedOrdering(const AuthoredRegion& region) {
+        auto hasAfter = [](const AuthoredOperation& operation,
+                           NodeId dependency) {
+            const auto& after = std::visit(
+                [](const auto& concrete)
+                    -> const std::vector<AuthoredDependency>& {
+                    return concrete.after;
+                },
+                operation);
+            return std::any_of(
+                after.begin(), after.end(),
+                [&](const AuthoredDependency& value) {
+                    return value.target ==
+                           std::optional<NodeId>(dependency);
+                });
+        };
+
+        for (const AuthoredOperation& operation : region.operations) {
+            const auto* reprogram =
+                std::get_if<AuthoredReprogram>(&operation);
+            if (!reprogram) continue;
+            for (const AuthoredDependency& dependency :
+                 reprogram->after) {
+                if (!dependency.target) continue;
+                auto prior = authoredOperations_.find(*dependency.target);
+                if (prior == authoredOperations_.end() ||
+                    !std::holds_alternative<AuthoredReprogram>(
+                        *prior->second)) {
+                    continue;
+                }
+                for (const AuthoredOperation& candidate :
+                     region.operations) {
+                    if (authoredNodeId(candidate) == reprogram->id ||
+                        !hasAfter(candidate, *dependency.target)) {
+                        continue;
+                    }
+                    operations_[reprogram->id].dependencies.push_back(
+                        authoredNodeId(candidate));
+                }
+            }
+        }
+
+        for (const AuthoredOperation& operation : region.operations) {
+            const IOMap* ioMap = operationIoMap(operation);
+            if (!ioMap || ioMap->inouts().empty()) continue;
+            for (const IOMap::InoutBinding& inout : ioMap->inouts()) {
+                const TokenKey mutated = keyOf(inout.in);
+                for (const AuthoredOperation& candidate :
+                     region.operations) {
+                    if (authoredNodeId(candidate) ==
+                        authoredNodeId(operation)) {
+                        continue;
+                    }
+                    const IOMap* candidateIo =
+                        operationIoMap(candidate);
+                    if (!candidateIo) continue;
+                    const bool reads = std::any_of(
+                        candidateIo->inputs().begin(),
+                        candidateIo->inputs().end(),
+                        [&](const auto& input) {
+                            return keyOf(input.second) == mutated;
+                        });
+                    if (reads) {
+                        operations_[authoredNodeId(operation)]
+                            .dependencies.push_back(
+                                authoredNodeId(candidate));
+                    }
+                }
+            }
+        }
+
+        for (const AuthoredOperation& operation : region.operations) {
+            auto& dependencies =
+                operations_[authoredNodeId(operation)].dependencies;
+            std::sort(dependencies.begin(), dependencies.end());
+            dependencies.erase(
+                std::unique(dependencies.begin(), dependencies.end()),
+                dependencies.end());
+        }
     }
 
     template <class ValueLookup, class DependencyAdder>

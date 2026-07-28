@@ -451,6 +451,87 @@ TEST(GraphPassTest, ResolveGraphMakesLoopCarryExplicit) {
               control.incoming[1].value);
 }
 
+TEST(GraphPassTest, ResolveGraphDrainsImageBeforeReprogramming) {
+    auto root = GraphRegion::createRoot();
+    ReprogramSpec loadA;
+    loadA.imageId = "imageA";
+    loadA.pdiPath = "imageA.pdi";
+    loadA.device = "accel";
+    const std::string reprogramA =
+        root->addReprogram(std::move(loadA));
+
+    KernelDescriptor kernel{
+        "kernelA", DeviceType::FPGA, "imageA", {}};
+    const std::string dispatch =
+        root->addKernel(std::move(kernel), {}, "accel", {reprogramA});
+
+    ReprogramSpec loadB;
+    loadB.imageId = "imageB";
+    loadB.pdiPath = "imageB.pdi";
+    loadB.device = "accel";
+    loadB.afterOps = {reprogramA};
+    root->addReprogram(std::move(loadB));
+
+    const AuthoredGraph authored = AuthoredGraph::snapshot(*root);
+    CompileResult<ResolvedGraph> resolved = resolveGraph(authored);
+    ASSERT_TRUE(resolved.ok());
+    const NodeId reprogramB =
+        authoredNodeId(authored.root().operations[2]);
+    const ResolvedOperation* operation =
+        resolved.output->findOperation(reprogramB);
+    ASSERT_NE(operation, nullptr);
+    EXPECT_NE(std::find(
+                  operation->dependencies.begin(),
+                  operation->dependencies.end(),
+                  authoredNodeId(authored.root().operations[1])),
+              operation->dependencies.end())
+        << "the next reprogram must drain " << dispatch;
+
+    auto host = std::make_shared<PlacementDevice>(
+        "cpu", DeviceType::CPU, hostCapabilities());
+    auto accelerator = std::make_shared<PlacementDevice>(
+        "accel", DeviceType::FPGA, acceleratorCapabilities());
+    std::map<std::string, std::shared_ptr<IDevice>> devices{
+        {"cpu", host}, {"accel", accelerator}};
+    CompileResult<PlacedGraph> placed = placeGraph(
+        *resolved.output,
+        DeviceCapabilityCatalog::fromDevices(devices));
+    ASSERT_TRUE(placed.ok());
+    CompileResult<RoutedGraph> routed = routeGraph(
+        *placed.output,
+        TransferCapabilityCatalog::fromGraph(devices, {}));
+    ASSERT_TRUE(routed.ok());
+    CompileResult<ScheduledGraph> scheduled =
+        scheduleGraph(*routed.output);
+    ASSERT_TRUE(scheduled.ok());
+
+    std::optional<ScheduleStepId> kernelStep;
+    std::optional<ScheduleStepId> reprogramStep;
+    for (const auto& [id, step] : scheduled.output->steps()) {
+        if (step.operation ==
+            std::optional<NodeId>(
+                authoredNodeId(authored.root().operations[1]))) {
+            kernelStep = id;
+        }
+        if (step.operation == std::optional<NodeId>(reprogramB)) {
+            reprogramStep = id;
+        }
+    }
+    ASSERT_TRUE(kernelStep.has_value());
+    ASSERT_TRUE(reprogramStep.has_value());
+    EXPECT_NE(std::find(
+                  scheduled.output->steps()
+                      .at(*reprogramStep)
+                      .dependencies.begin(),
+                  scheduled.output->steps()
+                      .at(*reprogramStep)
+                      .dependencies.end(),
+                  *kernelStep),
+              scheduled.output->steps()
+                  .at(*reprogramStep)
+                  .dependencies.end());
+}
+
 TEST(GraphPassTest, PlaceGraphUsesCapabilitiesAndMemoryRegions) {
     auto root = GraphRegion::createRoot();
     GraphScalar size =
