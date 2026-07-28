@@ -117,6 +117,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -134,10 +135,17 @@
 #include <vrt/graph/device/cpu_device.hpp>
 #include <vrt/graph/device/device.hpp>
 #include <vrt/graph/device/dgraph.hpp>
+#include <vrt/graph/diagnostics.hpp>
 #include <vrt/graph/device/fpga_device.hpp>
 #include <vrt/graph/core/graph_buffer.hpp>
+#include <vrt/graph/ir/authored_graph.hpp>
+#include <vrt/graph/ir/placed_graph.hpp>
+#include <vrt/graph/ir/resolved_graph.hpp>
+#include <vrt/graph/ir/routed_graph.hpp>
+#include <vrt/graph/ir/scheduled_graph.hpp>
 #include <vrt/graph/node/io_map.hpp>
 #include <vrt/graph/node/kernel_descriptor.hpp>
+#include <vrt/graph/semantic_plan.hpp>
 
 namespace vrt::graph {
 
@@ -555,45 +563,72 @@ class Graph {
      *
      * Compilation is the single, explicit validation step. It validates the
      * graph structure (root-scope scalar/buffer references, port bindings,
-     * scopes, cycles, bridge factory coverage), lowers it into per-device
-     * DGraphs, and returns an executable snapshot that owns device plans.
+     * scopes, cycles, bridge factory coverage), resolves placement, routes
+     * transfers, schedules queues, and returns an executable snapshot that
+     * owns backend device plans.
      *
      * Calling compile() again builds a new independent snapshot. Existing
      * CompiledGraph instances continue to execute the structure and scalar
      * state they were built with.
      *
-     * @throws std::runtime_error  On any structural violation; see
-     *                             GraphCompiler::compile for details.
+     * @throws GraphCompileError On any structural violation. The exception
+     *                           remains a std::runtime_error and carries
+     *                           structured diagnostics.
      */
     [[nodiscard]] CompiledGraph compile() {
-        GraphCompiler compiler;
-        auto snapshotScalars =
-            std::make_shared<std::map<std::string, uint64_t>>();
-        std::map<std::pair<std::string, std::string>, std::shared_ptr<IBridge>> bridgePins;
-        auto lookup = [this, &bridgePins](const std::string& s,
-                                          const std::string& d) -> IBridge* {
-            IBridge* bridge = this->bridgeFor(s, d);
-            if (bridge != nullptr) {
-                auto key = std::make_pair(s, d);
-                auto it = bridgeInstances_.find(key);
-                if (it != bridgeInstances_.end()) {
-                    bridgePins[key] = it->second;
+        try {
+            auto snapshotScalars =
+                std::make_shared<std::map<std::string, uint64_t>>();
+            std::map<std::pair<std::string, std::string>,
+                     std::shared_ptr<IBridge>> bridgePins;
+            auto lookup = [this, &bridgePins](const std::string& s,
+                                              const std::string& d) -> IBridge* {
+                IBridge* bridge = this->bridgeFor(s, d);
+                if (bridge != nullptr) {
+                    auto key = std::make_pair(s, d);
+                    auto it = bridgeInstances_.find(key);
+                    if (it != bridgeInstances_.end()) {
+                        bridgePins[key] = it->second;
+                    }
                 }
+                return bridge;
+            };
+            GraphCompiler compiler;
+            CompileResult<ExecutionPlan> compiled =
+                compiler.compile(rootRegion(), devices_, bridgeFactories_,
+                                 lookup, snapshotScalars);
+            if (!compiled.ok()) {
+                throw GraphCompileError(
+                    std::move(compiled.diagnostics));
             }
-            return bridge;
-        };
-        std::vector<DGraph> dgraphs = compiler.compile(rootRegion(), devices_, bridgeFactories_,
-                                                       lookup, snapshotScalars);
-        wireRendezvousAccessors();
-        std::vector<std::shared_ptr<IBridge>> bridgePinList;
-        bridgePinList.reserve(bridgePins.size());
-        for (auto& [key, bridge] : bridgePins) {
-            (void)key;
-            bridgePinList.push_back(std::move(bridge));
+            ExecutionPlan execution =
+                std::move(*compiled.output);
+            std::shared_ptr<const ScheduledGraph> scheduled =
+                execution.scheduledPtr();
+            std::vector<DGraph> dgraphs =
+                execution.takeDGraphs();
+            BackendResourceBindings resources =
+                execution.takeResources();
+            wireRendezvousAccessors();
+            std::vector<std::shared_ptr<IBridge>> bridgePinList;
+            bridgePinList.reserve(bridgePins.size());
+            for (auto& [key, bridge] : bridgePins) {
+                (void)key;
+                bridgePinList.push_back(std::move(bridge));
+            }
+            return CompiledGraph(std::move(dgraphs),
+                                 std::move(snapshotScalars),
+                                 rootRegion_->declaredScalars(),
+                                 std::move(bridgePinList),
+                                 std::move(scheduled),
+                                 std::move(resources));
+        } catch (const GraphCompileError&) {
+            throw;
+        } catch (const std::runtime_error& error) {
+            Diagnostics diagnostics;
+            diagnostics.error(DiagCode::CompilerError, error.what());
+            throw GraphCompileError(std::move(diagnostics), error.what());
         }
-        return CompiledGraph(std::move(dgraphs), std::move(snapshotScalars),
-                             rootRegion_->declaredScalars(),
-                             std::move(bridgePinList));
     }
 
    private:

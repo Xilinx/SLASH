@@ -111,11 +111,18 @@ constexpr std::uint32_t kNeverValue = 0u;
  */
 class SignalSlotAllocator {
    public:
-    SignalSlotAllocator() : used_(RP1_MAX_SIGNALS, false) {}
+    SignalSlotAllocator() : reservations_(RP1_MAX_SIGNALS, 0) {}
 
     /// Mark @p slot as unavailable for future @ref alloc calls.
     void reserve(std::uint32_t slot) {
-        if (slot < used_.size()) used_[slot] = true;
+        if (slot < reservations_.size()) ++reservations_[slot];
+    }
+
+    /// Return a previously allocated slot to the pool.
+    void release(std::uint32_t slot) {
+        if (slot < reservations_.size() && reservations_[slot] > 0) {
+            --reservations_[slot];
+        }
     }
 
     /// Return the lowest free slot and mark it used.
@@ -123,7 +130,7 @@ class SignalSlotAllocator {
     std::uint32_t alloc();
 
    private:
-    std::vector<bool> used_;
+    std::vector<std::uint32_t> reservations_;
 };
 
 /**

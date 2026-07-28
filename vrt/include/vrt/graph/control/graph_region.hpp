@@ -93,7 +93,10 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         }
         tokenNames_.insert(name);
         bufferNames_.insert(name);
-        return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
+        GraphBuffer token =
+            GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
+        inputBuffers_.emplace(token.name(), token);
+        return token;
     }
 
     /**
@@ -151,7 +154,10 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         }
         tokenNames_.insert(name);
         outputBufferNames_.insert(name);
-        return GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
+        GraphBuffer token =
+            GraphBuffer::make(type, std::move(name), scopeId_, std::move(size));
+        outputBuffers_.emplace(token.name(), token);
+        return token;
     }
 
     /**
@@ -416,6 +422,7 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         op.condition = std::move(spec.condition);
         op.body = std::move(spec.body);
         op.outputPlacement = std::move(spec.outputPlacement);
+        op.namedOutputBuffers = std::move(spec.namedOutputBuffers);
         op.afterOps = std::move(spec.afterOps);
         const std::string id = op.id;
         addOp(std::move(op));
@@ -448,6 +455,7 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
         op.thenRegion = std::move(spec.thenRegion);
         op.elseRegion = std::move(spec.elseRegion);
         op.outputPlacement = std::move(spec.outputPlacement);
+        op.namedOutputBuffers = std::move(spec.namedOutputBuffers);
         op.afterOps = std::move(spec.afterOps);
         const std::string id = op.id;
         addOp(std::move(op));
@@ -465,10 +473,24 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
     const std::set<std::string>& declaredInputBufferNames() const { return bufferNames_; }
 
     /**
+     * @brief Returns graph input buffer tokens keyed by region-local name.
+     */
+    const std::map<std::string, GraphBuffer>& declaredInputBuffers() const {
+        return inputBuffers_;
+    }
+
+    /**
      * @brief Returns the set of names registered via outputBuffer() on this region.
      */
     const std::set<std::string>& declaredOutputBufferNames() const {
         return outputBufferNames_;
+    }
+
+    /**
+     * @brief Returns graph output buffer tokens keyed by region-local name.
+     */
+    const std::map<std::string, GraphBuffer>& declaredOutputBuffers() const {
+        return outputBuffers_;
     }
 
     /**
@@ -553,6 +575,8 @@ class GraphRegion : public std::enable_shared_from_this<GraphRegion> {
     std::set<std::string> tokenNames_;   // every buffer token minted in this scope (uniqueness)
     std::set<std::string> bufferNames_;  // subset: producer-less graph input buffers
     std::set<std::string> outputBufferNames_;
+    std::map<std::string, GraphBuffer> inputBuffers_;
+    std::map<std::string, GraphBuffer> outputBuffers_;
     std::map<std::string, ScalarType> scalarTypes_;
     std::map<std::string, ScalarType> inputScalarTypes_;
     std::map<std::string, ScalarType> outputScalarTypes_;

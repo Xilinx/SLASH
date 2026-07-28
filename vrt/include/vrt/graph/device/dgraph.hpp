@@ -84,6 +84,11 @@ struct DGraph {
     std::shared_ptr<std::map<std::string, uint64_t>> scalarValues;
 
     /**
+     * @brief Physical synchronization resources are owned by ExecutionPlan.
+     */
+    bool resourcesLeased = false;
+
+    /**
      * @brief Nested per-device DGraphs owned by compiled control nodes in this DGraph.
      */
     std::vector<DGraphChild> childDGraphs;

@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -120,6 +121,17 @@ struct DdrView {
         return kWindowOff + off + bytes <= kBarSize;
     }
 };
+
+const rp1_node_t* findDispatch(DdrView ddr, std::uint32_t r5Address) {
+    for (std::uint32_t i = 0; i < ddr.ctrl().node_count; ++i) {
+        const rp1_node_t& node = ddr.nodes()[i];
+        if (node.opcode == RP1_OP_KERNEL_DISPATCH &&
+            node.payload.kernel_dispatch.kernel_base_addr == r5Address) {
+            return &node;
+        }
+    }
+    return nullptr;
+}
 
 class FakeRp1 {
    public:
@@ -490,6 +502,34 @@ TEST_F(FpgaDeviceFixture, TypeAndIdMatchIDeviceContract) {
     EXPECT_EQ(dev.id(), "fpga:0");
 }
 
+TEST_F(FpgaDeviceFixture, RendezvousLeasesAreUniqueAndReusable) {
+    FpgaDevice dev("fpga:0", window_, makeDiamondLookup());
+    auto first = dev.leaseRendezvousResources(
+        {RendezvousId(0), RendezvousId(1)});
+    auto second = dev.leaseRendezvousResources(
+        {RendezvousId(0), RendezvousId(1)});
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+
+    const std::set<std::uint32_t> firstSlots{
+        first->physicalIndex(RendezvousId(0)),
+        first->physicalIndex(RendezvousId(1))};
+    EXPECT_EQ(firstSlots.count(
+                  second->physicalIndex(RendezvousId(0))),
+              0u);
+    EXPECT_EQ(firstSlots.count(
+                  second->physicalIndex(RendezvousId(1))),
+              0u);
+
+    first.reset();
+    auto third = dev.leaseRendezvousResources(
+        {RendezvousId(0), RendezvousId(1)});
+    const std::set<std::uint32_t> thirdSlots{
+        third->physicalIndex(RendezvousId(0)),
+        third->physicalIndex(RendezvousId(1))};
+    EXPECT_EQ(thirdSlots, firstSlots);
+}
+
 TEST_F(FpgaDeviceFixture, BarBackedBufferArenaDoesNotOverlapTraceRing) {
     FpgaDevice dev("fpga:0", window_, makeDiamondLookup());
     ddr_.traces()[0].timestamp = 0x11223344u;
@@ -673,7 +713,9 @@ TEST_F(FpgaDeviceFixture, CpuFpgaCpuBufferRoundTripUsesPackedBufferPointers) {
     EXPECT_EQ(output, input);
 
     // The fake RP1 copied through the addresses packed after the scalar byte count.
-    EXPECT_GE(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 5u);
+    const rp1_node_t* dispatch = findDispatch(ddr_, kKernelA_R5);
+    ASSERT_NE(dispatch, nullptr);
+    EXPECT_GE(dispatch->payload.kernel_dispatch.arg_count, 5u);
 }
 
 TEST_F(FpgaDeviceFixture, CarriedBufferAliasStaysCoherentAfterGrowth) {
@@ -959,7 +1001,9 @@ TEST_F(FpgaDeviceFixture, InoutBufferPacksOnePointerAndAliasesOutput) {
     ASSERT_NO_THROW(plan->wait());
 
     ASSERT_EQ(ddr_.nodes()[0].opcode, RP1_OP_KERNEL_DISPATCH);
-    EXPECT_EQ(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 2u);
+    const rp1_node_t* dispatch = findDispatch(ddr_, kKernelA_R5);
+    ASSERT_NE(dispatch, nullptr);
+    EXPECT_EQ(dispatch->payload.kernel_dispatch.arg_count, 2u);
 
     std::int32_t readback[] = {0, 0};
     ASSERT_NO_THROW(dev.getOutputBuffer(scopedBufferKey(0, "output"),
@@ -1166,7 +1210,9 @@ TEST_F(FpgaDeviceFixture, ScalarArgsAreConstantsBakedAtCompileTime) {
     EXPECT_EQ(ddr_.args()[1], 123u);
     EXPECT_EQ(ddr_.args()[2], 0x14u);
     EXPECT_EQ(ddr_.args()[3], 7u);
-    EXPECT_EQ(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 2u);
+    const rp1_node_t* dispatch = findDispatch(ddr_, kKernelA_R5);
+    ASSERT_NE(dispatch, nullptr);
+    EXPECT_EQ(dispatch->payload.kernel_dispatch.arg_count, 2u);
 }
 
 TEST_F(FpgaDeviceFixture, U64ScalarArgsConsumeTwoArgWords) {
@@ -1192,16 +1238,11 @@ TEST_F(FpgaDeviceFixture, U64ScalarArgsConsumeTwoArgWords) {
     EXPECT_EQ(ddr_.args()[1], 0xCAFEBABEu);
     EXPECT_EQ(ddr_.args()[2], 0x14u);
     EXPECT_EQ(ddr_.args()[3], 0xDEADBEEFu);
-    EXPECT_EQ(ddr_.nodes()[0].payload.kernel_dispatch.arg_count, 2u);
+    const rp1_node_t* dispatch = findDispatch(ddr_, kKernelA_R5);
+    ASSERT_NE(dispatch, nullptr);
+    EXPECT_EQ(dispatch->payload.kernel_dispatch.arg_count, 2u);
 }
 
-// Note: the GraphCompiler currently rejects global-variable scalar
-// bindings on non-CPU kernels with "global scalar bindings are currently
-// supported only on CPU kernels". The FpgaDevice's deferred-scalar
-// resolution path is therefore unreachable through the public Graph API
-// today, but the code is kept (and exercised by direct DGraph
-// construction in DeferredScalarsResolvedAtLaunch) so that relaxing the
-// compiler restriction later Just Works.
 TEST_F(FpgaDeviceFixture, GlobalScalarOnFpgaKernelUsesDeferredLaunchValue) {
     IOTypeMap iot;
     iot.inputScalars.push_back({"size", ScalarType::U32});
@@ -1292,11 +1333,9 @@ TEST_F(FpgaDeviceFixture, ArgBufferIsContiguousAcrossMultipleKernels) {
 
     // Each kernel's arg_buffer_offset must point at its own (2-word) slot.
     auto findOffsetFor = [&](std::uint32_t r5) -> std::uint32_t {
-        for (std::size_t i = 0; i < 3; ++i) {
-            const auto& kd = ddr_.nodes()[i].payload.kernel_dispatch;
-            if (kd.kernel_base_addr == r5) return kd.arg_buffer_offset;
-        }
-        return UINT32_MAX;
+        const rp1_node_t* node = findDispatch(ddr_, r5);
+        return node ? node->payload.kernel_dispatch.arg_buffer_offset
+                    : UINT32_MAX;
     };
     EXPECT_EQ(findOffsetFor(kKernelA_R5), 0u * sizeof(std::uint32_t));
     EXPECT_EQ(findOffsetFor(kKernelB_R5), 2u * sizeof(std::uint32_t));

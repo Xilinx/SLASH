@@ -32,11 +32,14 @@
 #define VRT_GRAPH_DEVICE_DEVICE_HPP
 
 #include <functional>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
+#include <vrt/graph/capabilities.hpp>
 #include <vrt/graph/core/types.hpp>
 
 namespace vrt::graph {
@@ -44,6 +47,13 @@ namespace vrt::graph {
 struct DGraph;
 class GraphBuffer;
 struct KernelDescriptor;
+
+class IDeviceResourceLease {
+   public:
+    virtual ~IDeviceResourceLease() = default;
+    virtual std::uint32_t physicalIndex(
+        RendezvousId logical) const = 0;
+};
 
 class IDevicePlan {
    public:
@@ -72,6 +82,24 @@ class IDevice {
      * Matched against authored kernel placement during compilation.
      */
     virtual std::string id() const = 0;
+
+    /**
+     * @brief Return backend-neutral capabilities used by graph placement.
+     */
+    virtual DeviceCapabilities compilerCapabilities() const;
+
+    /**
+     * @brief Evaluate whether this device can own a concrete control shape.
+     */
+    virtual CapabilityDecision evaluateControlCapability(
+        const ControlCapabilityRequest& request) const;
+
+    /**
+     * @brief Lease backend-owned physical resources for logical rendezvous.
+     */
+    virtual std::unique_ptr<IDeviceResourceLease>
+    leaseRendezvousResources(
+        const std::vector<RendezvousId>& logical);
 
     /**
      * @brief Optional memory-region identity for a kernel buffer port.

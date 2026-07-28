@@ -423,7 +423,8 @@ class FpgaDevicePlan : public IDevicePlan {
           scalarValues_(std::move(scalarValues)),
           sentinelSlot_(sentinelSlot),
           sentinelValue_(sentinelValue),
-          timeout_(timeout) {
+          timeout_(timeout),
+          resourcesLeased_(dg.resourcesLeased) {
         for (const CompiledNode& node : dg.nodes) {
             if (const auto* wait = std::get_if<CompiledWaitNode>(&node);
                 wait && wait->preLaunch) {
@@ -662,7 +663,7 @@ class FpgaDevicePlan : public IDevicePlan {
 
    private:
     void reserveDeviceSignalSlot(std::uint32_t slot) {
-        if (!device_) return;
+        if (!device_ || resourcesLeased_) return;
         std::lock_guard<std::mutex> lk(device_->scalarMutex_);
         device_->scalarSlotAlloc_.reserve(slot);
     }
@@ -2263,6 +2264,7 @@ class FpgaDevicePlan : public IDevicePlan {
     std::exception_ptr                                         workerEx_;
     std::vector<rp1_cq_entry_t>                                lastCq_;
     bool                                                       signalsPrepared_ = false;
+    bool                                                       resourcesLeased_ = false;
     std::vector<std::uint32_t>                                 preLaunchWaitSlots_;
     // Output scalars captured into RP1 signal slots by SCALAR_READ, keyed by
     // scoped name for downstream SCALAR_COPY inputs and control predicates.
@@ -2326,6 +2328,37 @@ FpgaDevice::FpgaDevice(std::string                       id,
 
 FpgaDevice::~FpgaDevice() = default;
 
+class FpgaRendezvousLease final : public IDeviceResourceLease {
+   public:
+    FpgaRendezvousLease(
+        FpgaDevice& device,
+        std::map<RendezvousId, std::uint32_t> slots)
+        : device_(&device), slots_(std::move(slots)) {}
+
+    ~FpgaRendezvousLease() override {
+        if (!device_) return;
+        std::lock_guard<std::mutex> lock(device_->scalarMutex_);
+        for (const auto& [logical, slot] : slots_) {
+            (void)logical;
+            device_->scalarSlotAlloc_.release(slot);
+        }
+    }
+
+    std::uint32_t physicalIndex(
+        RendezvousId logical) const override {
+        auto it = slots_.find(logical);
+        if (it == slots_.end()) {
+            throw std::out_of_range(
+                "FpgaRendezvousLease: unknown logical rendezvous");
+        }
+        return it->second;
+    }
+
+   private:
+    FpgaDevice*                              device_ = nullptr;
+    std::map<RendezvousId, std::uint32_t> slots_;
+};
+
 void FpgaDevice::setSentinelSlot(std::uint32_t slot) {
     if (slot >= RP1_MAX_SIGNALS) {
         throw std::invalid_argument(
@@ -2348,6 +2381,80 @@ void FpgaDevice::setPdiStagingDevice(::vrt::Device device) {
     std::lock_guard<std::mutex> lk(pdiMutex_);
     pdiStagingDevice_ = std::make_shared<::vrt::Device>(std::move(device));
     stagedPdis_.clear();
+}
+
+DeviceCapabilities FpgaDevice::compilerCapabilities() const {
+    DeviceCapabilities result = IDevice::compilerCapabilities();
+    result.ownsRendezvousNamespace = true;
+    return result;
+}
+
+CapabilityDecision FpgaDevice::evaluateControlCapability(
+    const ControlCapabilityRequest& request) const {
+    auto reject = [&](std::string reason) {
+        return CapabilityDecision::reject(DeviceId(id_), std::move(reason));
+    };
+    if (!request.childHasWork) {
+        return reject("control body has no executable work");
+    }
+    if (request.childHasNestedControl) {
+        return reject("nested control is not autonomous on RP1");
+    }
+    if (request.childDevices.size() != 1 ||
+        request.childDevices.front() != DeviceId(id_)) {
+        return reject("control body is not confined to this device");
+    }
+
+    if (request.kind == ControlKind::Loop) {
+        if (!request.loopKind) {
+            return reject("loop kind is missing");
+        }
+        if (*request.loopKind == LoopKind::FixedCount) {
+            return CapabilityDecision::accept();
+        }
+        if (!request.condition ||
+            !fpga::isRp1EvaluableCondition(*request.condition)) {
+            return reject("loop predicate is not representable by RP1");
+        }
+        if (!request.predicateAvailableOnCandidate) {
+            return reject("loop predicate is not produced by the FPGA body");
+        }
+        return CapabilityDecision::accept();
+    }
+
+    if (!request.condition ||
+        !fpga::isRp1EvaluableCondition(*request.condition)) {
+        return reject("conditional predicate is not representable by RP1");
+    }
+    if (request.childHasDataBoundaries) {
+        return reject("conditional branches contain data-carrying boundaries");
+    }
+    if (!request.predicateAvailableOnCandidate) {
+        return reject("conditional predicate is not available on the FPGA queue");
+    }
+    return CapabilityDecision::accept();
+}
+
+std::unique_ptr<IDeviceResourceLease>
+FpgaDevice::leaseRendezvousResources(
+    const std::vector<RendezvousId>& logical) {
+    std::map<RendezvousId, std::uint32_t> slots;
+    std::vector<std::uint32_t> allocated;
+    std::lock_guard<std::mutex> lock(scalarMutex_);
+    try {
+        for (RendezvousId id : logical) {
+            const std::uint32_t slot = scalarSlotAlloc_.alloc();
+            slots.emplace(id, slot);
+            allocated.push_back(slot);
+        }
+    } catch (...) {
+        for (std::uint32_t slot : allocated) {
+            scalarSlotAlloc_.release(slot);
+        }
+        throw;
+    }
+    return std::make_unique<FpgaRendezvousLease>(
+        *this, std::move(slots));
 }
 
 std::optional<std::string>

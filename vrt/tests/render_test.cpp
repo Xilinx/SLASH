@@ -163,6 +163,28 @@ TEST(RenderDotTest, GraphLabelsCpuCluster) {
     EXPECT_TRUE(contains(dot, "cpu [CPU]"));
 }
 
+TEST(RenderDotTest, CompilerStagesAreIndependentlyRenderable) {
+    auto chain = buildChain();
+    CompiledGraph compiled = chain.g.compile();
+    ASSERT_NE(compiled.scheduledGraph(), nullptr);
+    const ScheduledGraph& scheduled = *compiled.scheduledGraph();
+    const RoutedGraph& routed = scheduled.routed();
+    const PlacedGraph& placed = routed.placed();
+    const ResolvedGraph& resolved = placed.resolved();
+
+    const std::string resolvedDot = render::renderToDot(resolved);
+    const std::string placedDot = render::renderToDot(placed);
+    const std::string routedDot = render::renderToDot(routed);
+    const std::string scheduledDot = render::renderToDot(scheduled);
+
+    EXPECT_TRUE(contains(resolvedDot, "digraph ResolvedGraph"));
+    EXPECT_TRUE(contains(placedDot, "digraph PlacedGraph"));
+    EXPECT_TRUE(contains(placedDot, "@cpu"));
+    EXPECT_TRUE(contains(routedDot, "digraph RoutedGraph"));
+    EXPECT_TRUE(contains(scheduledDot, "digraph ScheduledGraph"));
+    EXPECT_TRUE(contains(scheduledDot, "cluster_q"));
+}
+
 TEST(RenderDotTest, GraphRendersAuthoredLoopRegion) {
     Graph graph;
     graph.registerDevice(std::make_shared<CpuDevice>("cpu"));

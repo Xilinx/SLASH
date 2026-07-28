@@ -43,6 +43,7 @@
 #include <vector>
 
 #include <vrt/graph/control/condition.hpp>
+#include <vrt/graph/control/control_node.hpp>
 #include <vrt/graph/core/graph_buffer.hpp>
 #include <vrt/graph/core/graph_scalar.hpp>
 #include <vrt/graph/core/types.hpp>
@@ -150,10 +151,12 @@ struct KernelCallSpec {
  * final value is published to the `.outputs` token.
  */
 struct LoopBuildSpec {
-    TripCount              count;
-    std::vector<BufferArg> inputs;
-    std::vector<BufferArg> outputs;
-    std::vector<GraphNode> after;
+    std::optional<TripCount>       count;
+    std::optional<Condition>       condition;
+    std::vector<BufferArg>         inputs;
+    std::vector<BufferArg>         outputs;
+    ControlOutputPlacementHints    outputPlacement;
+    std::vector<GraphNode>         after;
 };
 
 /**
@@ -169,6 +172,7 @@ struct ConditionalBuildSpec {
     std::optional<Condition> condition;
     std::vector<BufferArg>   inputs;
     std::vector<BufferArg>   outputs;
+    ControlOutputPlacementHints outputPlacement;
     std::vector<GraphNode>   after;
 };
 

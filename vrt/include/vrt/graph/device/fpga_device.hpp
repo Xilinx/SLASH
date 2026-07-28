@@ -65,6 +65,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <vrt/allocator/allocator.hpp>
 #include <vrt/buffer.hpp>
@@ -78,6 +79,7 @@
 namespace vrt::graph {
 
 class Graph;
+class FpgaRendezvousLease;
 namespace fpga {
 class FpgaVbinSpec;
 }
@@ -153,6 +155,12 @@ class FpgaDevice : public IDevice {
 
     DeviceType  type() const override { return DeviceType::FPGA; }
     std::string id()   const override { return id_; }
+
+    DeviceCapabilities compilerCapabilities() const override;
+    CapabilityDecision evaluateControlCapability(
+        const ControlCapabilityRequest& request) const override;
+    std::unique_ptr<IDeviceResourceLease> leaseRendezvousResources(
+        const std::vector<RendezvousId>& logical) override;
 
     std::optional<std::string> resolveMemoryRegion(
         const KernelDescriptor& kernel, const std::string& portName) const override;
@@ -240,6 +248,7 @@ class FpgaDevice : public IDevice {
 
    private:
     friend class FpgaDevicePlan;
+    friend class FpgaRendezvousLease;
 
     struct BufferRecord {
         std::uint32_t offset = 0;     ///< Window-relative byte offset (BAR mode).

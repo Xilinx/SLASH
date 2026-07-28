@@ -24,6 +24,7 @@
  */
 
 #include <vrt/graph/device/cpu_device.hpp>
+#include <vrt/graph/device/cpu/cpu_lowering.hpp>
 
 #include <slash/uapi/rp1_protocol.h>
 
@@ -39,8 +40,6 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
-#include <unordered_map>
-#include <variant>
 #include <vector>
 
 namespace vrt::graph {
@@ -104,83 +103,16 @@ bool compareValues(CompareOp op, T lhs, T rhs) {
 }  // namespace
 
 class CpuDevicePlan : public IDevicePlan {
+    using NodeKind = CpuProgramNodeKind;
+    using NodeRuntime = CpuProgramNode;
+
    public:
     CpuDevicePlan(CpuDevice& device, const DGraph& dg)
         : device_(device),
           scalarValues_(dg.scalarValues
                             ? dg.scalarValues
-                            : std::make_shared<std::map<std::string, uint64_t>>()) {
-        runtime_.reserve(dg.nodes.size());
-        idToIdx_.reserve(dg.nodes.size());
-
-        // First pass: build per-node runtime records, keyed by id.
-        for (const CompiledNode& node : dg.nodes) {
-            NodeRuntime rt;
-            std::visit(
-                [&](const auto& n) {
-                    using T = std::decay_t<decltype(n)>;
-                    rt.id = n.id;
-                    if constexpr (std::is_same_v<T, CompiledKernelNode>) {
-                        rt.kind = NodeKind::Kernel;
-                        rt.kernel = n;
-                    } else if constexpr (std::is_same_v<T, CompiledBridgeOpNode>) {
-                        rt.kind = (n.side == CompiledBridgeOpNode::Side::Producer)
-                                      ? NodeKind::ProducerOp
-                                      : NodeKind::ConsumerOp;
-                        rt.tryReady = n.tryReady;
-                        rt.action = n.action;
-                    } else if constexpr (std::is_same_v<T, CompiledDeviceCopyNode>) {
-                        rt.kind = NodeKind::ProducerOp;
-                        rt.action = n.action;
-                    } else if constexpr (std::is_same_v<T, CompiledSourceNode> ||
-                                         std::is_same_v<T, CompiledSinkNode>) {
-                        rt.kind = NodeKind::Noop;
-                    } else if constexpr (std::is_same_v<T, CompiledBoundaryNode>) {
-                        rt.kind = NodeKind::Boundary;
-                        rt.boundary = n;
-                    } else if constexpr (std::is_same_v<T, CompiledLoopNode>) {
-                        rt.kind = NodeKind::Loop;
-                        rt.loop = n;
-                    } else if constexpr (std::is_same_v<T, CompiledConditionalNode>) {
-                        rt.kind = NodeKind::Conditional;
-                        rt.conditional = n;
-                    } else if constexpr (std::is_same_v<T, CompiledReprogramNode>) {
-                        throw std::runtime_error(
-                            "CpuDevice: reprogram nodes must execute on an FPGA device");
-                    } else if constexpr (std::is_same_v<T, CompiledSignalNode>) {
-                        rt.kind = NodeKind::Signal;
-                        rt.signalSlot = n.slot;
-                        rt.signalValue = n.value;
-                        rt.signalOp = n.operation;
-                    } else if constexpr (std::is_same_v<T, CompiledWaitNode>) {
-                        rt.kind = NodeKind::Wait;
-                        rt.signalSlot = n.slot;
-                        rt.signalValue = n.value;
-                        rt.conditionOp = n.conditionOp;
-                    } else {
-                        static_assert(sizeof(T) == 0, "Unhandled compiled node type");
-                    }
-                },
-                node);
-            idToIdx_[rt.id] = runtime_.size();
-            runtime_.push_back(std::move(rt));
-        }
-
-        // Second pass: convert dependsOn ids to indices, build successors and
-        // the immutable initial unmet counts used to seed each launch.
-        // dependsOn may legitimately reference ids from other DGraphs. Ids not
-        // local to this DGraph are ignored; bridge readiness handles cross-device
-        // synchronization.
-        for (size_t i = 0; i < dg.nodes.size(); ++i) {
-            const auto& deps = compiledNodeDependsOn(dg.nodes[i]);
-            for (const std::string& depId : deps) {
-                auto it = idToIdx_.find(depId);
-                if (it == idToIdx_.end()) continue;
-                runtime_[it->second].successors.push_back(i);
-                ++runtime_[i].initialUnmet;
-            }
-        }
-
+                            : std::make_shared<std::map<std::string, uint64_t>>()),
+          runtime_(CpuLowering::lower(dg).nodes) {
         for (const DGraphChild& child : dg.childDGraphs) {
             auto& plans = childPlans_[child.parentNodeId][child.role];
             plans.reserve(child.dgraphs.size());
@@ -229,26 +161,6 @@ class CpuDevicePlan : public IDevicePlan {
     }
 
    private:
-    enum class NodeKind { Kernel, ProducerOp, ConsumerOp, Noop, Boundary, Loop, Conditional,
-                          Signal, Wait };
-
-    struct NodeRuntime {
-        std::string id;
-        NodeKind kind = NodeKind::Boundary;
-        size_t initialUnmet = 0;
-        std::vector<size_t> successors;
-        CompiledKernelNode kernel;
-        CompiledBoundaryNode boundary;
-        CompiledLoopNode loop;
-        CompiledConditionalNode conditional;
-        std::function<bool()> tryReady;
-        std::function<void()> action;
-        std::uint32_t signalSlot = 0;
-        std::uint32_t signalValue = 0;
-        std::uint16_t signalOp = 0;     // rp1_sigop_t  (Signal nodes)
-        std::uint16_t conditionOp = 0;  // rp1_condop_t (Wait nodes)
-    };
-
     void runOnce() {
         std::vector<size_t> unmetCounts;
         unmetCounts.reserve(runtime_.size());
@@ -771,7 +683,6 @@ class CpuDevicePlan : public IDevicePlan {
     CpuDevice& device_;
     std::shared_ptr<std::map<std::string, uint64_t>> scalarValues_;
     std::vector<NodeRuntime> runtime_;
-    std::unordered_map<std::string, size_t> idToIdx_;
     std::map<std::string, std::map<DGraphChildRole, std::vector<std::unique_ptr<IDevicePlan>>>>
         childPlans_;
     std::thread worker_;

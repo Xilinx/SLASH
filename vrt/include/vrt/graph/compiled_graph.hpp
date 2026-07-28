@@ -42,12 +42,14 @@
 #include <utility>
 #include <vector>
 
+#include <vrt/graph/backend_resource_binding.hpp>
 #include <vrt/graph/core/graph_scalar.hpp>
 #include <vrt/graph/crossdevice/bridge.hpp>
 #include <vrt/graph/device/cpu_device.hpp>
 #include <vrt/graph/device/device.hpp>
 #include <vrt/graph/device/dgraph.hpp>
 #include <vrt/graph/device/fpga_device.hpp>
+#include <vrt/graph/ir/scheduled_graph.hpp>
 #if defined(VRT_HAS_GPU) && (VRT_HAS_GPU == 1)
 #include <vrt/graph/device/gpu_device.hpp>
 #endif
@@ -66,11 +68,15 @@ class CompiledGraph {
     CompiledGraph(std::vector<DGraph> dgraphs,
                   std::shared_ptr<std::map<std::string, uint64_t>> scalarValues,
                   std::map<std::string, ScalarType> scalarTypes,
-                  std::vector<std::shared_ptr<IBridge>> bridgePins)
+                  std::vector<std::shared_ptr<IBridge>> bridgePins,
+                  std::shared_ptr<const ScheduledGraph> scheduledGraph,
+                  BackendResourceBindings resources)
         : dgraphs_(std::move(dgraphs)),
           scalarValues_(std::move(scalarValues)),
           scalarTypes_(std::move(scalarTypes)),
-          bridgePins_(std::move(bridgePins)) {
+          bridgePins_(std::move(bridgePins)),
+          scheduledGraph_(std::move(scheduledGraph)),
+          resources_(std::move(resources)) {
         if (!scalarValues_) {
             scalarValues_ = std::make_shared<std::map<std::string, uint64_t>>();
         }
@@ -96,6 +102,13 @@ class CompiledGraph {
      * @brief Returns the lowered per-device DGraphs.
      */
     const std::vector<DGraph>& dgraphs() const { return dgraphs_; }
+
+    /**
+     * @brief Returns the staged schedule retained by the compiler.
+     */
+    const ScheduledGraph* scheduledGraph() const {
+        return scheduledGraph_.get();
+    }
 
     /**
      * @brief Set a root-scope scalar in this compiled snapshot from raw bits.
@@ -430,6 +443,8 @@ class CompiledGraph {
     std::set<std::string>                     outputScalarKeys_;
     CpuDevice*                                cpuDevice_ = nullptr;
     std::vector<std::shared_ptr<IBridge>>     bridgePins_;
+    std::shared_ptr<const ScheduledGraph>     scheduledGraph_;
+    BackendResourceBindings                  resources_;
     std::vector<std::unique_ptr<IDevicePlan>> plans_;
 };
 

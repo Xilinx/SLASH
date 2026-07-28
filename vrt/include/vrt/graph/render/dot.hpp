@@ -37,6 +37,10 @@ namespace vrt::graph {
 
 class Graph;
 struct DGraph;
+class ResolvedGraph;
+class PlacedGraph;
+class RoutedGraph;
+class ScheduledGraph;
 
 namespace render {
 
@@ -59,6 +63,18 @@ std::string renderToDot(const Graph& graph);
  * DGraph level.
  */
 std::string renderToDot(const DGraph& dgraph);
+
+/** @brief Render resolved value/dependency IR as Graphviz DOT. */
+std::string renderToDot(const ResolvedGraph& graph);
+
+/** @brief Render device and memory placement IR as Graphviz DOT. */
+std::string renderToDot(const PlacedGraph& graph);
+
+/** @brief Render declarative transfer routes as Graphviz DOT. */
+std::string renderToDot(const RoutedGraph& graph);
+
+/** @brief Render queue programs and logical rendezvous as Graphviz DOT. */
+std::string renderToDot(const ScheduledGraph& graph);
 
 /**
  * @brief Write `renderToDot(graph)` to @p path.

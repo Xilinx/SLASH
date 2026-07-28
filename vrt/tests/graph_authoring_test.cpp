@@ -363,3 +363,79 @@ TEST(GraphAuthoringTest, GatedFpgaDispatchCompiles) {
 
     EXPECT_NO_THROW((void)graph.compile());
 }
+
+TEST(GraphAuthoringTest, StructLiteralWhileLoopCarriesPlacementHints) {
+    Graph graph = Graph::withDefaults();
+    auto stage = graph.cpu().add<CpuStage>();
+    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
+    GraphScalar keepGoing = graph.scalarInput<std::uint32_t>("keep_going");
+    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphBuffer output = graph.output<std::int32_t>("output", size);
+
+    auto loop = graph.addLoop({
+        .condition = (keepGoing != 0),
+        .inputs = {{"state", input}},
+        .outputs = {{"state", output}},
+        .outputPlacement = {.buffers = {{"state", "cpu"}}},
+    });
+    loop.addKernelCall({
+        .kernel = stage,
+        .inputs = {{"in", loop.input("state")}},
+        .outputs = {{"out", loop.output("state")}},
+    });
+
+    const auto* authored =
+        std::get_if<LoopOp>(&graph.rootRegion().ops().front());
+    ASSERT_NE(authored, nullptr);
+    EXPECT_EQ(authored->kind, LoopKind::WhileCondition);
+    EXPECT_FALSE(authored->tripCount.has_value());
+    EXPECT_TRUE(authored->condition.has_value());
+    EXPECT_EQ(authored->outputPlacement.buffers.at("state"), "cpu");
+    EXPECT_NO_THROW((void)graph.compile());
+}
+
+TEST(GraphAuthoringTest, StructLiteralControlRequiresOneLoopMode) {
+    Graph graph = Graph::withDefaults();
+    GraphScalar count = graph.scalarInput<std::uint32_t>("count");
+    GraphScalar condition = graph.scalarInput<std::uint32_t>("condition");
+
+    EXPECT_THROW(
+        graph.addLoop({
+            .count = count,
+            .condition = (condition != 0),
+        }),
+        std::invalid_argument);
+    EXPECT_THROW(graph.addLoop(LoopBuildSpec{}), std::invalid_argument);
+}
+
+TEST(GraphAuthoringTest, StructLiteralConditionalCarriesPlacementHints) {
+    Graph graph = Graph::withDefaults();
+    auto stage = graph.cpu().add<CpuStage>();
+    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
+    GraphScalar flag = graph.scalarInput<std::uint32_t>("flag");
+    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphBuffer output = graph.output<std::int32_t>("output", size);
+
+    auto [thenBranch, elseBranch] = graph.addConditional({
+        .condition = (flag != 0),
+        .inputs = {{"value", input}},
+        .outputs = {{"result", output}},
+        .outputPlacement = {.buffers = {{"result", "cpu"}}},
+    });
+    thenBranch.addKernelCall({
+        .kernel = stage,
+        .inputs = {{"in", thenBranch.input("value")}},
+        .outputs = {{"out", thenBranch.output("result")}},
+    });
+    elseBranch.addKernelCall({
+        .kernel = stage,
+        .inputs = {{"in", elseBranch.input("value")}},
+        .outputs = {{"out", elseBranch.output("result")}},
+    });
+
+    const auto* authored =
+        std::get_if<ConditionalOp>(&graph.rootRegion().ops().front());
+    ASSERT_NE(authored, nullptr);
+    EXPECT_EQ(authored->outputPlacement.buffers.at("result"), "cpu");
+    EXPECT_NO_THROW((void)graph.compile());
+}

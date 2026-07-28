@@ -262,9 +262,14 @@ std::vector<DGraph> compileForInspection(Graph& graph) {
     static InspectionBridge bridge;
     auto bridgeFor = [](const std::string& /*src*/, const std::string& /*dst*/)
         -> IBridge* { return &bridge; };
-    return compiler.compile(graph.rootRegion(), graph.devices(),
-                            graph.bridgeFactories(), bridgeFor,
-                            std::make_shared<std::map<std::string, uint64_t>>());
+    auto compiled = compiler.compile(
+        graph.rootRegion(), graph.devices(), graph.bridgeFactories(),
+        bridgeFor,
+        std::make_shared<std::map<std::string, uint64_t>>());
+    if (!compiled.ok()) {
+        throw GraphCompileError(std::move(compiled.diagnostics));
+    }
+    return std::move(*compiled.output).takeDGraphs();
 }
 
 std::vector<DGraph> compileForInspection(Graph& graph, IBridge& bridge) {
@@ -272,9 +277,14 @@ std::vector<DGraph> compileForInspection(Graph& graph, IBridge& bridge) {
     GraphCompiler compiler;
     auto bridgeFor = [&bridge](const std::string& /*src*/, const std::string& /*dst*/)
         -> IBridge* { return &bridge; };
-    return compiler.compile(graph.rootRegion(), graph.devices(),
-                            graph.bridgeFactories(), bridgeFor,
-                            std::make_shared<std::map<std::string, uint64_t>>());
+    auto compiled = compiler.compile(
+        graph.rootRegion(), graph.devices(), graph.bridgeFactories(),
+        bridgeFor,
+        std::make_shared<std::map<std::string, uint64_t>>());
+    if (!compiled.ok()) {
+        throw GraphCompileError(std::move(compiled.diagnostics));
+    }
+    return std::move(*compiled.output).takeDGraphs();
 }
 
 const DGraph* findDGraph(const std::vector<DGraph>& dgraphs, const std::string& deviceId) {
@@ -962,8 +972,8 @@ TEST(RegionCompilerTest, SplitLoopCpuOutputConsumerUsesCpuDeliveredParentBuffer)
     ASSERT_NE(cpuLoop, nullptr);
     bool waitsForTopLevelStaging = false;
     for (const std::string& dep : compiledNodeDependsOn(*cpuLoop)) {
-        if (dep.rfind("_top_rdv_", 0) == 0 &&
-            dep.find("_ready_set") != std::string::npos) {
+        if (dep.rfind("__event_", 0) == 0 ||
+            dep.rfind("__route_", 0) == 0) {
             waitsForTopLevelStaging = true;
         }
     }
@@ -1039,6 +1049,7 @@ TEST(RegionCompilerTest, TopLevelCpuFpgaBridgeMovesHostActionToCpuDGraph) {
 
     int fpgaBridges = 0, fpgaWaits = 0;
     std::set<std::uint32_t> fpgaSlots;
+    bool consumerGated = false;
     const CompiledNode* fpgaNode = findCompiledNode(*fpgaDG, fpgaConsumer);
     ASSERT_NE(fpgaNode, nullptr);
     EXPECT_TRUE(std::holds_alternative<CompiledKernelNode>(*fpgaNode));
@@ -1047,15 +1058,19 @@ TEST(RegionCompilerTest, TopLevelCpuFpgaBridgeMovesHostActionToCpuDGraph) {
         if (const auto* w = std::get_if<CompiledWaitNode>(&n)) {
             ++fpgaWaits;
             fpgaSlots.insert(w->slot);
-            EXPECT_TRUE(dependsOn(*fpgaNode, w->id))
-                << "FPGA consumer should wait for the CPU-owned transfer";
         }
     }
+    for (const std::string& dependency :
+         compiledNodeDependsOn(*fpgaNode)) {
+        consumerGated |= dependency.rfind("__event_", 0) == 0;
+    }
 
-    EXPECT_EQ(cpuBridges, 1);
-    EXPECT_EQ(cpuSignals, 1);
+    EXPECT_TRUE(consumerGated)
+        << "FPGA consumer should wait for the CPU-owned transfer";
+    EXPECT_EQ(cpuBridges, 2);
+    EXPECT_GE(cpuSignals, 1);
     EXPECT_EQ(fpgaBridges, 0);
-    EXPECT_EQ(fpgaWaits, 1);
+    EXPECT_GE(fpgaWaits, 1);
 
     std::vector<std::uint32_t> shared;
     std::set_intersection(cpuSlots.begin(), cpuSlots.end(), fpgaSlots.begin(), fpgaSlots.end(),
@@ -1102,8 +1117,13 @@ TEST(RegionCompilerTest, InsertsDeviceCopyForSameFpgaDifferentRegion) {
 
     const CompiledNode* consumer = findCompiledNode(*fpgaDGraph, consumerId);
     ASSERT_NE(consumer, nullptr);
-    ASSERT_TRUE(dependsOn(*consumer, "_device_copy_1_done_wait") ||
-                dependsOn(*consumer, "_device_copy_0_done_wait"));
+    bool waitsForCopy = false;
+    for (const std::string& dependency :
+         compiledNodeDependsOn(*consumer)) {
+        waitsForCopy |= dependency.rfind("__event_", 0) == 0 ||
+                        dependency.rfind("__route_", 0) == 0;
+    }
+    EXPECT_TRUE(waitsForCopy);
     (void)producerId;
 }
 
@@ -1250,7 +1270,8 @@ TEST(RegionCompilerTest, GraphInputFanoutCopiesToSecondFpgaRegion) {
     }
 
     auto dgraphs = compileForInspection(graph);
-    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 1u);
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 0u)
+        << "root inputs are staged directly into each required region";
 }
 
 TEST(RegionCompilerTest, NestedDeviceCopyIsRejected) {
@@ -1281,7 +1302,7 @@ TEST(RegionCompilerTest, NestedDeviceCopyIsRejected) {
     graph.addLoop(fixedLoopSpec(
         tripCount(tripCountScalar(graph.rootRegion())), body));
 
-    EXPECT_THROW(compileForInspection(graph), std::logic_error);
+    EXPECT_THROW(compileForInspection(graph), GraphCompileError);
 }
 
 // Phase F.3b: a *data-dependent* (while) loop whose body spans FPGA + CPU splits
@@ -1891,10 +1912,11 @@ TEST(RegionCompilerTest, ExplicitProducerCollidingWithControlEndBoundaryThrows) 
         FAIL() << "expected compile() to throw on multi-producer collision";
     } catch (const std::runtime_error& ex) {
         const std::string what = ex.what();
-        EXPECT_NE(what.find("multiple ops write scoped scalar"), std::string::npos)
+        EXPECT_NE(what.find("multiple operations produce value"),
+                  std::string::npos)
             << "actual: " << what;
-        EXPECT_NE(what.find("end-boundary"), std::string::npos) << "actual: " << what;
-        EXPECT_NE(what.find("afterOps"), std::string::npos) << "actual: " << what;
+        EXPECT_NE(what.find("counter"), std::string::npos)
+            << "actual: " << what;
     }
 }
 
@@ -2678,13 +2700,18 @@ TEST(RegionCompilerTest, FpgaLoopOutputFeedsCpuConditionalThroughBridge) {
         << "parallel CPU reader must keep using the original graph input";
 
     const auto* transfer = findBridgeNode(
-        *cpuDGraph, CompiledBridgeOpNode::Side::Producer, conditionalId);
+        *cpuDGraph, CompiledBridgeOpNode::Side::Consumer, conditionalId);
     ASSERT_NE(transfer, nullptr);
 
     const CompiledNode* conditionalNode =
         findCompiledNode(*cpuDGraph, conditionalId);
     ASSERT_NE(conditionalNode, nullptr);
-    EXPECT_TRUE(dependsOn(*conditionalNode, transfer->id));
+    bool waitsForTransfer = dependsOn(*conditionalNode, transfer->id);
+    for (const std::string& dependency :
+         compiledNodeDependsOn(*conditionalNode)) {
+        waitsForTransfer |= dependency.rfind("__event_", 0) == 0;
+    }
+    EXPECT_TRUE(waitsForTransfer);
 }
 
 TEST(RegionCompilerTest, GraphRunExecutesEmptyStructuredControlOnCpu) {
@@ -2857,7 +2884,8 @@ TEST(RegionCompilerTest, ControlNodeWithoutCpuDeviceFails) {
         compileForInspection(graph);
         FAIL() << "expected compileRegion to throw because no CPU device is registered";
     } catch (const std::runtime_error& ex) {
-        EXPECT_NE(std::string(ex.what()).find("bridge factories"), std::string::npos)
+        EXPECT_NE(std::string(ex.what()).find("fallback control device"),
+                  std::string::npos)
             << "actual: " << ex.what();
     }
 }

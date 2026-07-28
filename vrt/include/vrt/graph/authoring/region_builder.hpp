@@ -151,20 +151,16 @@ class RegionBuilder {
 };
 
 inline RegionBuilder RegionBuilder::addLoop(const LoopBuildSpec& spec) {
+    if (spec.count.has_value() == spec.condition.has_value()) {
+        throw std::invalid_argument(
+            "RegionBuilder::addLoop: set exactly one of count or condition");
+    }
     auto body = region_->createChild();
 
     std::vector<BufferBoundaryMapping> imports;
     std::vector<BufferBoundaryMapping> exports;
 
     RegionBuilder loop(body);
-
-    // Carried ports appear in both inputs and outputs.
-    auto isOutput = [&](const std::string& port) {
-        for (const auto& o : spec.outputs) {
-            if (o.port == port) return true;
-        }
-        return false;
-    };
 
     for (const auto& in : spec.inputs) {
         GraphBuffer localIn = GraphBuffer::make(in.buffer.type(),
@@ -192,14 +188,22 @@ inline RegionBuilder RegionBuilder::addLoop(const LoopBuildSpec& spec) {
             }
         }
     }
-    (void)isOutput;
-
     if (!imports.empty()) body->importFromParent(imports);
     if (!exports.empty()) body->exportToParent(exports);
 
     LoopSpec loopSpec;
-    loopSpec.tripCount = spec.count.value;
+    for (const auto& out : spec.outputs) {
+        loopSpec.namedOutputBuffers[out.port] = out.buffer;
+    }
+    if (spec.count) {
+        loopSpec.kind = LoopKind::FixedCount;
+        loopSpec.tripCount = spec.count->value;
+    } else {
+        loopSpec.kind = LoopKind::WhileCondition;
+        loopSpec.condition = spec.condition;
+    }
     loopSpec.body = body;
+    loopSpec.outputPlacement = spec.outputPlacement;
     loopSpec.afterOps = idsOf(spec.after);
     region_->addLoop(std::move(loopSpec));
 
@@ -250,9 +254,13 @@ inline std::pair<RegionBuilder, RegionBuilder> RegionBuilder::addConditional(
     wireOutputs(elseRegion, elseBuilder);
 
     ConditionalSpec condSpec;
+    for (const auto& out : spec.outputs) {
+        condSpec.namedOutputBuffers[out.port] = out.buffer;
+    }
     condSpec.condition = spec.condition;
     condSpec.thenRegion = thenRegion;
     condSpec.elseRegion = elseRegion;
+    condSpec.outputPlacement = spec.outputPlacement;
     condSpec.afterOps = idsOf(spec.after);
     region_->addConditional(std::move(condSpec));
 

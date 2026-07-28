@@ -187,9 +187,9 @@ rp1_condop_t invertRp1Op(rp1_condop_t op) {
 }
 
 std::uint32_t SignalSlotAllocator::alloc() {
-    for (std::uint32_t s = 0; s < used_.size(); ++s) {
-        if (!used_[s]) {
-            used_[s] = true;
+    for (std::uint32_t s = 0; s < reservations_.size(); ++s) {
+        if (reservations_[s] == 0) {
+            reservations_[s] = 1;
             return s;
         }
     }

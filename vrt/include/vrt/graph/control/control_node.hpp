@@ -200,6 +200,8 @@ struct LoopSpec {
     std::shared_ptr<GraphRegion> body;
     /** Optional backend placement hints for loop outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Preferred-authoring port names mapped to parent output tokens. */
+    std::map<std::string, GraphBuffer> namedOutputBuffers;
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
@@ -224,6 +226,8 @@ struct LoopOp {
     std::shared_ptr<GraphRegion> body;
     /** Optional backend placement hints for loop outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Preferred-authoring port names mapped to parent output tokens. */
+    std::map<std::string, GraphBuffer> namedOutputBuffers;
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
@@ -244,6 +248,8 @@ struct ConditionalSpec {
     std::shared_ptr<GraphRegion> elseRegion;
     /** Optional backend placement hints for conditional outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Preferred-authoring port names mapped to parent output tokens. */
+    std::map<std::string, GraphBuffer> namedOutputBuffers;
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
@@ -266,6 +272,8 @@ struct ConditionalOp {
     std::shared_ptr<GraphRegion> elseRegion;
     /** Optional backend placement hints for conditional outputs. */
     ControlOutputPlacementHints outputPlacement;
+    /** Preferred-authoring port names mapped to parent output tokens. */
+    std::map<std::string, GraphBuffer> namedOutputBuffers;
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };

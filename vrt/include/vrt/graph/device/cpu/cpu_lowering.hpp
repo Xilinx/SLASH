@@ -19,47 +19,63 @@
  */
 
 /**
- * @file compiler.hpp
- * @brief Staged graph compiler entry point.
- *
- * Compilation snapshots authored regions, resolves typed values, places work,
- * routes transfers, schedules queues, binds resources, and lowers backend
- * programs.
+ * @file cpu_lowering.hpp
+ * @brief Pure DGraph to CPU runtime-program lowering.
  */
 
-#ifndef VRT_GRAPH_COMPILER_HPP
-#define VRT_GRAPH_COMPILER_HPP
+#ifndef VRT_GRAPH_DEVICE_CPU_CPU_LOWERING_HPP
+#define VRT_GRAPH_DEVICE_CPU_CPU_LOWERING_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <map>
-#include <memory>
 #include <string>
+#include <vector>
 
-#include <vrt/graph/compile_result.hpp>
-#include <vrt/graph/crossdevice/bridge.hpp>
-#include <vrt/graph/control/graph_region.hpp>
-#include <vrt/graph/device/device.hpp>
-#include <vrt/graph/execution_plan.hpp>
+#include <vrt/graph/node/compiled_node.hpp>
 
 namespace vrt::graph {
 
-class GraphCompiler {
-   public:
-    using BridgeFor =
-        std::function<IBridge*(const std::string& srcDevId,
-                               const std::string& dstDevId)>;
+struct DGraph;
 
-    CompileResult<ExecutionPlan> compile(
-        const GraphRegion&                                      rootRegion,
-        const std::map<std::string, std::shared_ptr<IDevice>>& devices,
-        const std::map<std::pair<DeviceType, DeviceType>,
-                       BridgeFactory>&                         bridgeFactories,
-        const BridgeFor&                                       bridgeFor,
-        const std::shared_ptr<std::map<std::string, std::uint64_t>>&
-            scalarValues) const;
+enum class CpuProgramNodeKind {
+    Kernel,
+    ProducerOp,
+    ConsumerOp,
+    Noop,
+    Boundary,
+    Loop,
+    Conditional,
+    Signal,
+    Wait,
+};
+
+struct CpuProgramNode {
+    std::string                  id;
+    CpuProgramNodeKind           kind = CpuProgramNodeKind::Boundary;
+    std::size_t                  initialUnmet = 0;
+    std::vector<std::size_t>     successors;
+    CompiledKernelNode           kernel;
+    CompiledBoundaryNode         boundary;
+    CompiledLoopNode             loop;
+    CompiledConditionalNode      conditional;
+    std::function<bool()>        tryReady;
+    std::function<void()>        action;
+    std::uint32_t                signalSlot = 0;
+    std::uint32_t                signalValue = 0;
+    std::uint16_t                signalOp = 0;
+    std::uint16_t                conditionOp = 0;
+};
+
+struct CpuProgram {
+    std::vector<CpuProgramNode> nodes;
+};
+
+class CpuLowering {
+   public:
+    static CpuProgram lower(const DGraph& dgraph);
 };
 
 }  // namespace vrt::graph
 
-#endif  // VRT_GRAPH_COMPILER_HPP
+#endif  // VRT_GRAPH_DEVICE_CPU_CPU_LOWERING_HPP

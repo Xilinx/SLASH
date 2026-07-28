@@ -152,6 +152,16 @@ TEST(ControlLowering, SignalSlotAllocatorSkipsReserved) {
     EXPECT_EQ(alloc.alloc(), 3u);
 }
 
+TEST(ControlLowering, SignalSlotReservationsAreReferenceCounted) {
+    SignalSlotAllocator alloc;
+    alloc.reserve(0);
+    alloc.reserve(0);
+    alloc.release(0);
+    EXPECT_EQ(alloc.alloc(), 1u);
+    alloc.release(0);
+    EXPECT_EQ(alloc.alloc(), 0u);
+}
+
 TEST(ControlLowering, LoopIdAllocatorIncrementsAndBounds) {
     LoopIdAllocator alloc;
     EXPECT_EQ(alloc.alloc(), 0u);
