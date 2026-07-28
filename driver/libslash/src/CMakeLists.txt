@@ -24,7 +24,7 @@ add_library(slash
   ${CMAKE_CURRENT_SOURCE_DIR}/ctldev_mock.c
   ${CMAKE_CURRENT_SOURCE_DIR}/hotplug.c
   ${CMAKE_CURRENT_SOURCE_DIR}/qdma.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/qdma_mock.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/qdma_mock_sock.c
   ${CMAKE_CURRENT_SOURCE_DIR}/sock_transport.c
 )
 
