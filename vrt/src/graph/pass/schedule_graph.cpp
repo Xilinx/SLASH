@@ -593,10 +593,7 @@ class GraphScheduler {
             if (authored == authoredOperations_.end()) continue;
             const auto* loop =
                 std::get_if<AuthoredLoop>(authored->second);
-            if (!loop ||
-                loop->kind != LoopKind::WhileCondition) {
-                continue;
-            }
+            if (!loop) continue;
             const ResolvedOperation* resolved =
                 routed_->placed().resolved().findOperation(control);
             if (!resolved) continue;

@@ -747,6 +747,22 @@ TEST(RegionCompilerTest, CrossDeviceLoopSplitsIntoPerQueueRendezvous) {
     ASSERT_NE(cpuLoop, nullptr);
     EXPECT_TRUE(std::holds_alternative<CompiledLoopNode>(*fpgaLoop));
     EXPECT_TRUE(std::holds_alternative<CompiledLoopNode>(*cpuLoop));
+    const auto& fpgaControl = std::get<CompiledLoopNode>(*fpgaLoop);
+    const auto& cpuControl = std::get<CompiledLoopNode>(*cpuLoop);
+    EXPECT_EQ(fpgaControl.broadcastRole, SplitBroadcastRole::Follower);
+    EXPECT_EQ(cpuControl.broadcastRole, SplitBroadcastRole::Authority);
+    EXPECT_EQ(fpgaControl.conditionBroadcastSlot,
+              cpuControl.conditionBroadcastSlot);
+    EXPECT_EQ(fpgaControl.broadcastReadySlot,
+              cpuControl.broadcastReadySlot);
+    EXPECT_EQ(fpgaControl.broadcastAckSlot,
+              cpuControl.broadcastAckSlot);
+    EXPECT_NE(fpgaControl.conditionBroadcastSlot,
+              fpgaControl.broadcastReadySlot);
+    EXPECT_NE(fpgaControl.conditionBroadcastSlot,
+              fpgaControl.broadcastAckSlot);
+    EXPECT_NE(fpgaControl.broadcastReadySlot,
+              fpgaControl.broadcastAckSlot);
 
     // FPGA slice: contains the FPGA kernel + rendezvous, and NO plain data bridge.
     const DGraphChild* fpgaBody =

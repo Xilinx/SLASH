@@ -688,6 +688,32 @@ TEST(GraphPassTest, PlaceGraphSplitsAcrossAuthorityAndFollower) {
     EXPECT_EQ(
         placement.participants,
         (std::vector<DeviceId>{DeviceId("accel"), DeviceId("cpu")}));
+
+    auto host = std::make_shared<PlacementDevice>(
+        "cpu", DeviceType::CPU, hostCapabilities());
+    std::map<std::string, std::shared_ptr<IDevice>> devices{
+        {"cpu", host}, {"accel", accelerator}};
+    CompileResult<RoutedGraph> routed = routeGraph(
+        *placed.output,
+        TransferCapabilityCatalog::fromGraph(devices, {}));
+    ASSERT_TRUE(routed.ok());
+    CompileResult<ScheduledGraph> scheduled =
+        scheduleGraph(*routed.output);
+    ASSERT_TRUE(scheduled.ok());
+
+    std::set<RendezvousPurpose> purposes;
+    for (const LogicalRendezvous& rendezvous :
+         scheduled.output->rendezvous()) {
+        if (rendezvous.control == std::optional<NodeId>(control)) {
+            purposes.insert(rendezvous.purpose);
+        }
+    }
+    EXPECT_EQ(
+        purposes,
+        (std::set<RendezvousPurpose>{
+            RendezvousPurpose::ControlValue,
+            RendezvousPurpose::ControlDecision,
+            RendezvousPurpose::ControlAcknowledged}));
 }
 
 TEST(GraphPassTest, RouteGraphPlansCrossDeviceGraphIoWithoutClosures) {
