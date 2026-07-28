@@ -869,7 +869,24 @@ class BackendProgramLowerer {
         for (const QueueProgram& queue : scheduled_->queues()) {
             auto program = programs_.find(queue.id);
             if (program == programs_.end()) continue;
-            std::vector<CompiledNode> deferredPreLaunchNodes;
+            const bool fpgaControlQueue =
+                program->second->device->type() == DeviceType::FPGA &&
+                std::any_of(
+                    queue.steps.begin(), queue.steps.end(),
+                    [&](ScheduleStepId id) {
+                        const ScheduledStep& candidate =
+                            scheduled_->steps().at(id);
+                        if (!candidate.operation) return false;
+                        auto authored = authoredOperations_.find(
+                            *candidate.operation);
+                        return authored != authoredOperations_.end() &&
+                               (std::holds_alternative<AuthoredLoop>(
+                                    *authored->second) ||
+                                std::holds_alternative<
+                                    AuthoredConditional>(
+                                    *authored->second));
+                    });
+            std::vector<CompiledNode> deferredEventNodes;
             for (ScheduleStepId stepId : queue.steps) {
                 const ScheduledStep& step =
                     scheduled_->steps().at(stepId);
@@ -905,15 +922,13 @@ class BackendProgramLowerer {
                 emittedSteps_[stepId] = emitted;
                 entryNodeByStep_[stepId] = {
                     queue.id, emitted.entry};
-                const bool deferPreLaunch =
-                    step.preLaunch &&
-                    program->second->device->type() ==
-                        DeviceType::FPGA &&
+                const bool deferEvent =
+                    fpgaControlQueue &&
                     (step.kind == ScheduledStepKind::EventPublish ||
                      step.kind == ScheduledStepKind::EventWait);
                 for (CompiledNode& node : nodes) {
-                    if (deferPreLaunch) {
-                        deferredPreLaunchNodes.push_back(
+                    if (deferEvent) {
+                        deferredEventNodes.push_back(
                             std::move(node));
                     } else {
                         program->second->nodes.push_back(
@@ -921,7 +936,7 @@ class BackendProgramLowerer {
                     }
                 }
             }
-            for (CompiledNode& node : deferredPreLaunchNodes) {
+            for (CompiledNode& node : deferredEventNodes) {
                 program->second->nodes.push_back(std::move(node));
             }
         }

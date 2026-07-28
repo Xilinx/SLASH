@@ -986,6 +986,9 @@ TEST(RegionCompilerTest, SplitLoopCpuOutputConsumerUsesCpuDeliveredParentBuffer)
     const DGraph* fpgaDG = findDGraph(dgraphs, "fpga:0");
     ASSERT_NE(cpuDG, nullptr);
     ASSERT_NE(fpgaDG, nullptr);
+    ASSERT_FALSE(fpgaDG->nodes.empty());
+    EXPECT_EQ(compiledNodeId(fpgaDG->nodes.front()), loopId)
+        << "top-level rendezvous packets must follow the FPGA LOOP";
 
     const CompiledNode* cpuLoop = findCompiledNode(*cpuDG, loopId);
     ASSERT_NE(cpuLoop, nullptr);
