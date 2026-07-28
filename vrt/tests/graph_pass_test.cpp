@@ -1027,6 +1027,10 @@ TEST(GraphPassTest, ScheduleGraphGatesAllSplitReplicasOnInputStaging) {
 
     std::set<ScheduleStepId> preLaunchCompletions;
     for (const auto& [id, step] : scheduled.output->steps()) {
+        if (step.preLaunch) {
+            EXPECT_EQ(step.region, authored.root().id)
+                << "pre-launch staging must be outside the loop body";
+        }
         if (step.preLaunch &&
             step.kind == ScheduledStepKind::TransferConsume) {
             preLaunchCompletions.insert(id);

@@ -2038,6 +2038,71 @@ TEST(FpgaControlExecution, FixedCountLoopExecutesNIterations) {
     EXPECT_EQ(rp1.dispatches(kBodyBase), 5u);
 }
 
+TEST(FpgaControlExecution,
+     FixedCountLoopWithReprogramExecutesNIterations) {
+    constexpr std::uint32_t iterations = 4u;
+    const auto pdiDirectory = makeTempDir("fpga-loop-reprogram-test");
+    const std::string pdiPath =
+        writeTempFile(pdiDirectory, "image.pdi", "fake-pdi-bytes");
+
+    std::vector<std::byte> backing(kBarSize, std::byte{0});
+    DdrView ddr{backing.data()};
+    primeAsReady(ddr);
+    auto window =
+        std::make_shared<fpga::Rp1BarWindow>(
+            backing.data(), backing.size(), kWindowOff);
+    FaithfulRp1 rp1(ddr);
+
+    constexpr std::uint32_t kBodyBase = 0x88010000u;
+    FpgaDevice dev(
+        "fpga:0", window,
+        [](const std::string&) {
+            return FpgaKernelLocation{kBodyBase, 0};
+        });
+
+    CompiledReprogramNode reprogram;
+    reprogram.id = "load";
+    reprogram.deviceId = "fpga:0";
+    reprogram.imageId = "image";
+    reprogram.pdiPath = pdiPath;
+
+    CompiledKernelNode kernel;
+    kernel.id = "body";
+    kernel.deviceId = "fpga:0";
+    kernel.kernel = fpgaKernel("body");
+    kernel.dependsOn = {reprogram.id};
+
+    auto body = std::make_shared<DGraph>();
+    body->deviceId = "fpga:0";
+    body->nodes = {reprogram, kernel};
+    body->scalarValues =
+        std::make_shared<std::map<std::string, std::uint64_t>>();
+
+    DGraph graph;
+    graph.deviceId = "fpga:0";
+    graph.scalarValues =
+        std::make_shared<std::map<std::string, std::uint64_t>>();
+    CompiledLoopNode loop;
+    loop.id = "loop";
+    loop.deviceId = "fpga:0";
+    loop.loopKind = CompiledLoopKind::FixedCount;
+    loop.tripCount = bindTripCount(graph, iterations);
+    graph.nodes.emplace_back(loop);
+    DGraphChild child;
+    child.parentNodeId = loop.id;
+    child.role = DGraphChildRole::LoopBody;
+    child.dgraphs.push_back(body);
+    graph.childDGraphs.push_back(std::move(child));
+
+    auto plan = dev.compilePlan(graph);
+    ASSERT_NE(plan, nullptr);
+    ASSERT_NO_THROW(plan->launch());
+    ASSERT_NO_THROW(plan->wait());
+    EXPECT_EQ(rp1.dispatches(kBodyBase), iterations);
+
+    std::filesystem::remove_all(pdiDirectory);
+}
+
 // Phase F.1: a data-dependent (while) FPGA loop terminates autonomously when a
 // body output scalar's SCALAR_READ slot crosses the predicate threshold.  The
 // body kernel produces a monotonically increasing "i"; the loop continues while

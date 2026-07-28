@@ -240,6 +240,26 @@ class GraphScheduler {
         return std::nullopt;
     }
 
+    RegionId preLaunchRegion(
+        std::optional<NodeId> consumer) const {
+        if (!consumer) return rootRegion_;
+        const ResolvedOperation* operation =
+            routed_->placed().resolved().findOperation(*consumer);
+        if (!operation) return rootRegion_;
+        RegionId region = operation->region;
+        auto parent = parentControlByRegion_.find(region);
+        while (parent != parentControlByRegion_.end() &&
+               parent->second) {
+            const ResolvedOperation* control =
+                routed_->placed().resolved().findOperation(
+                    *parent->second);
+            if (!control) break;
+            region = control->region;
+            parent = parentControlByRegion_.find(region);
+        }
+        return region;
+    }
+
     RendezvousScope routeScope(
         const TransferRoute& route) const {
         if (!route.requirement.source.operation) {
@@ -376,6 +396,10 @@ class GraphScheduler {
                               route.requirement.source.operation)
                         : rootRegion_;
                 const RegionId destinationRegion =
+                    preLaunch
+                        ? preLaunchRegion(
+                              route.requirement.destination.operation)
+                        :
                     leg.destination ==
                             route.requirement.destination.device
                         ? operationRegion(

@@ -354,6 +354,12 @@ class GraphRouter {
             for (const ResolvedBinding& binding :
                  operation.bindings) {
                 if (!consumesValue(binding.access)) continue;
+                if (binding.access == ValueAccess::BoundarySource &&
+                    (operation.kind == ResolvedOperationKind::Loop ||
+                     operation.kind ==
+                         ResolvedOperationKind::Conditional)) {
+                    continue;
+                }
                 const ValueId sourceValue = origin(binding.value);
                 const ResolvedValue* value =
                     placed_->resolved().findValue(sourceValue);
