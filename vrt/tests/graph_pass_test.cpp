@@ -659,6 +659,46 @@ TEST(GraphPassTest, RouteGraphPlansCrossDeviceGraphIoWithoutClosures) {
     }
 }
 
+TEST(GraphPassTest, RouteGraphSharesRootInputScalarsWithoutTransfers) {
+    auto root = GraphRegion::createRoot();
+    GraphScalar count =
+        root->inputScalar(ScalarType::U32, "count");
+    IOTypeMap type;
+    type.inputScalars.push_back({"count", ScalarType::U32});
+    IOMap io;
+    io.bindInputScalar("count", count);
+    root->addKernel(
+        KernelDescriptor{"device", DeviceType::FPGA,
+                         std::nullopt, type},
+        std::move(io), "accel");
+
+    CompileResult<ResolvedGraph> resolved =
+        resolveGraph(AuthoredGraph::snapshot(*root));
+    ASSERT_TRUE(resolved.ok());
+    auto host = std::make_shared<PlacementDevice>(
+        "cpu", DeviceType::CPU, hostCapabilities());
+    auto accelerator = std::make_shared<PlacementDevice>(
+        "accel", DeviceType::FPGA, acceleratorCapabilities());
+    std::map<std::string, std::shared_ptr<IDevice>> devices{
+        {"cpu", host}, {"accel", accelerator}};
+    CompileResult<PlacedGraph> placed = placeGraph(
+        *resolved.output,
+        DeviceCapabilityCatalog::fromDevices(devices));
+    ASSERT_TRUE(placed.ok());
+    std::map<std::pair<DeviceType, DeviceType>, BridgeFactory>
+        factories;
+    factories[{DeviceType::CPU, DeviceType::FPGA}] =
+        markerBridgeFactory();
+    factories[{DeviceType::FPGA, DeviceType::CPU}] =
+        markerBridgeFactory();
+
+    CompileResult<RoutedGraph> routed = routeGraph(
+        *placed.output,
+        TransferCapabilityCatalog::fromGraph(devices, factories));
+    ASSERT_TRUE(routed.ok());
+    EXPECT_TRUE(routed.output->routes().empty());
+}
+
 TEST(GraphPassTest, RouteGraphSelectsHostBounceDeclaratively) {
     auto root = GraphRegion::createRoot();
     GraphScalar size =

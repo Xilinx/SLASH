@@ -358,6 +358,14 @@ class GraphRouter {
                 const ResolvedValue* value =
                     placed_->resolved().findValue(sourceValue);
                 if (!value) continue;
+                if (value->type.kind == ValueKind::Scalar &&
+                    value->definition ==
+                        ValueDefinitionKind::GraphInput) {
+                    dependencies_.push_back(
+                        {std::nullopt, node, DependencyKind::Value,
+                         sourceValue, std::nullopt});
+                    continue;
+                }
                 std::optional<MemoryPlacement> source =
                     valuePlacement(sourceValue);
                 if (!source) {

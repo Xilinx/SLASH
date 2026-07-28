@@ -922,7 +922,7 @@ TEST_F(FpgaDeviceFixture, AutonomousLoopPublishesCarriedOutputToCpu) {
     auto exec = graph.compile();
     const std::int32_t seed[] = {7, 11};
     exec.writeScalar(elements, std::uint64_t{2});
-    exec.writeScalar<std::uint32_t>("iterations", 1u);
+    exec.writeScalar<std::uint32_t>("iterations", 4u);
     exec.write(input, seed, sizeof(seed));
     for (std::uint32_t slot = 0; slot < 8; ++slot) {
         ddr_.signals()[slot].value = 1u;
