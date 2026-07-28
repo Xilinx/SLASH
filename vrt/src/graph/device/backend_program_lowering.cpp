@@ -985,6 +985,127 @@ class BackendProgramLowerer {
         }
     }
 
+    std::set<DeviceId> operationDevices(NodeId operation) const {
+        std::set<DeviceId> result;
+        const PlacedGraph& placed = scheduled_->routed().placed();
+        auto control = placed.controlPlacements().find(operation);
+        if (control != placed.controlPlacements().end()) {
+            result.insert(control->second.participants.begin(),
+                          control->second.participants.end());
+            return result;
+        }
+        auto placement = placed.operationPlacements().find(operation);
+        if (placement != placed.operationPlacements().end()) {
+            result.insert(placement->second.device);
+        }
+        return result;
+    }
+
+    bool boundaryMappingNeeded(
+        const AuthoredBoundary& boundary,
+        const std::string& port, DeviceId device,
+        RegionId region) const {
+        const ResolvedGraph& resolved =
+            scheduled_->routed().placed().resolved();
+        const ResolvedOperation* boundaryOperation =
+            resolved.findOperation(boundary.id);
+        if (!boundaryOperation) return false;
+        std::optional<ValueId> source;
+        std::optional<ValueId> target;
+        for (const ResolvedBinding& binding :
+             boundaryOperation->bindings) {
+            if (binding.port != port) continue;
+            if (binding.access == ValueAccess::BoundarySource) {
+                source = binding.value;
+            } else if (
+                binding.access == ValueAccess::BoundaryTarget) {
+                target = binding.value;
+            }
+        }
+        if (!source || !target) return false;
+
+        if (boundary.side == BoundarySide::Start) {
+            bool hasConsumer = false;
+            for (const auto& [node, operation] :
+                 resolved.operations()) {
+                if (operation.region != region ||
+                    operation.structural) {
+                    continue;
+                }
+                const bool consumes = std::any_of(
+                    operation.bindings.begin(),
+                    operation.bindings.end(),
+                    [&](const ResolvedBinding& binding) {
+                        return binding.value == *target &&
+                               (binding.access == ValueAccess::Input ||
+                                binding.access ==
+                                    ValueAccess::InoutInput ||
+                                binding.access ==
+                                    ValueAccess::Condition ||
+                                binding.access ==
+                                    ValueAccess::TripCount ||
+                                binding.access ==
+                                    ValueAccess::BoundarySource);
+                    });
+                hasConsumer |= consumes;
+                if (consumes &&
+                    operationDevices(node).count(device) != 0) {
+                    return true;
+                }
+            }
+            if (hasConsumer) return false;
+            const auto parent = parentControlByRegion_.find(region);
+            if (parent != parentControlByRegion_.end() &&
+                parent->second) {
+                const ControlPlacement& placement =
+                    scheduled_->routed()
+                        .placed()
+                        .controlPlacements()
+                        .at(*parent->second);
+                return placement.primary == device;
+            }
+            return false;
+        }
+
+        bool hasProducer = false;
+        const ResolvedValue* sourceValue =
+            resolved.findValue(*source);
+        if (sourceValue && sourceValue->producer) {
+            hasProducer = true;
+            if (operationDevices(*sourceValue->producer).count(device) != 0) {
+                return true;
+            }
+        }
+        const auto parent = parentControlByRegion_.find(region);
+        if (parent != parentControlByRegion_.end() &&
+            parent->second) {
+            for (const DependencyEdge& edge :
+                 scheduled_->routed().dependencies()) {
+                if (edge.value != source ||
+                    edge.consumer != parent->second || !edge.route) {
+                    continue;
+                }
+                auto route = routes_.find(*edge.route);
+                if (route != routes_.end() &&
+                    route->second->requirement.destination.device ==
+                        device) {
+                    return true;
+                }
+                hasProducer = true;
+            }
+        }
+        if (!hasProducer && parent != parentControlByRegion_.end() &&
+            parent->second) {
+            const ControlPlacement& placement =
+                scheduled_->routed()
+                    .placed()
+                    .controlPlacements()
+                    .at(*parent->second);
+            return placement.primary == device;
+        }
+        return false;
+    }
+
     void emitBoundaries() {
         for (const auto& [regionId, region] : authoredRegions_) {
             auto queues = queuesByRegion_.find(regionId);
@@ -1025,16 +1146,34 @@ class BackendProgramLowerer {
                         boundary->side == BoundarySide::Start
                             ? CompiledBoundaryNode::Side::Start
                             : CompiledBoundaryNode::Side::End;
-                    for (const auto& mapping :
-                         boundary->scalarMappings) {
+                    for (std::size_t i = 0;
+                         i < boundary->scalarMappings.size(); ++i) {
+                        const auto& mapping =
+                            boundary->scalarMappings[i];
+                        if (!boundaryMappingNeeded(
+                                *boundary,
+                                "scalar." + std::to_string(i),
+                                DeviceId(program->second->deviceId),
+                                regionId)) {
+                            continue;
+                        }
                         node.scalarCopies.push_back({
                             mapping.source.varName(),
                             mapping.source.scopeId(),
                             mapping.target.varName(),
                             mapping.target.scopeId()});
                     }
-                    for (const auto& mapping :
-                         boundary->bufferMappings) {
+                    for (std::size_t i = 0;
+                         i < boundary->bufferMappings.size(); ++i) {
+                        const auto& mapping =
+                            boundary->bufferMappings[i];
+                        if (!boundaryMappingNeeded(
+                                *boundary,
+                                "buffer." + std::to_string(i),
+                                DeviceId(program->second->deviceId),
+                                regionId)) {
+                            continue;
+                        }
                         node.bufferCopies.push_back({
                             mapping.source.name(),
                             mapping.source.scopeId(),
@@ -1066,6 +1205,12 @@ class BackendProgramLowerer {
                         std::unique(node.dependsOn.begin(),
                                     node.dependsOn.end()),
                         node.dependsOn.end());
+                    if ((!boundary->scalarMappings.empty() ||
+                         !boundary->bufferMappings.empty()) &&
+                        node.scalarCopies.empty() &&
+                        node.bufferCopies.empty()) {
+                        continue;
+                    }
                     if (node.side ==
                         CompiledBoundaryNode::Side::Start) {
                         for (CompiledNode& existing :
