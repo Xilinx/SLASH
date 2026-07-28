@@ -405,6 +405,7 @@ class GraphScheduler {
         for (const TransferRoute& route :
              routed_->routes()) {
             const RendezvousScope scope = routeScope(route);
+            routeScopes_[route.requirement.id] = scope;
             const bool preLaunch =
                 scope == RendezvousScope::PreLaunch;
             std::optional<ScheduleStepId> previous;
@@ -571,9 +572,9 @@ class GraphScheduler {
             for (ScheduleStepId consumer : consumers->second) {
                 addDependency(consumer, completion->second);
             }
-            const ScheduledStep& completed =
-                steps_.at(completion->second);
-            if (completed.preLaunch) {
+            auto scope = routeScopes_.find(*edge.route);
+            if (scope != routeScopes_.end() &&
+                scope->second != RendezvousScope::PerIteration) {
                 gateAncestorControls(
                     *edge.consumer, completion->second);
             }
@@ -711,6 +712,7 @@ class GraphScheduler {
     std::map<NodeId, std::vector<ScheduleStepId>>
         operationStepLists_;
     std::map<RouteId, ScheduleStepId> routeCompletion_;
+    std::map<RouteId, RendezvousScope> routeScopes_;
     std::vector<LogicalRendezvous> rendezvous_;
     std::vector<LogicalResourceRequirement> resources_;
 };

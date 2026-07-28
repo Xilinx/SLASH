@@ -745,6 +745,9 @@ TEST(RegionCompilerTest, CrossDeviceLoopSplitsIntoPerQueueRendezvous) {
     const CompiledNode* cpuLoop  = findCompiledNode(*cpuDG, loopId);
     ASSERT_NE(fpgaLoop, nullptr);
     ASSERT_NE(cpuLoop, nullptr);
+    ASSERT_FALSE(fpgaDG->nodes.empty());
+    EXPECT_EQ(compiledNodeId(fpgaDG->nodes.front()), loopId)
+        << "FPGA follower LOOP must remain RP1 node zero";
     EXPECT_TRUE(std::holds_alternative<CompiledLoopNode>(*fpgaLoop));
     EXPECT_TRUE(std::holds_alternative<CompiledLoopNode>(*cpuLoop));
     const auto& fpgaControl = std::get<CompiledLoopNode>(*fpgaLoop);

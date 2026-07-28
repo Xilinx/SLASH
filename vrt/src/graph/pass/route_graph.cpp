@@ -361,9 +361,7 @@ class GraphRouter {
                 if (binding.access == ValueAccess::BoundarySource &&
                     (operation.kind == ResolvedOperationKind::Loop ||
                      operation.kind ==
-                         ResolvedOperationKind::Conditional) &&
-                    value->definition ==
-                        ValueDefinitionKind::GraphInput) {
+                         ResolvedOperationKind::Conditional)) {
                     continue;
                 }
                 if (value->type.kind == ValueKind::Scalar &&
