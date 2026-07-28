@@ -39,7 +39,7 @@ Device::Device(uint32_t num,
                std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
                std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
                std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
-               std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate,
+               std::function<uint32_t(const Device&, ClockRegion, uint32_t, bool)> fSetClockRate,
                std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo) {
     this->num = num;
     this->name = name;
@@ -137,8 +137,8 @@ uint32_t Device::getClockRate(ClockRegion region) const {
     return fGetClockRate(*this, region);
 }
 
-uint32_t Device::setClockRate(ClockRegion region, uint32_t rate_hz) const {
-    return fSetClockRate(*this, region, rate_hz);
+uint32_t Device::setClockRate(ClockRegion region, uint32_t rate_hz, bool roundDown) const {
+    return fSetClockRate(*this, region, rate_hz, roundDown);
 }
 
 std::vector<SensorEntry> Device::getSensorInfo() const {

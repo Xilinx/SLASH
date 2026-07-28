@@ -196,7 +196,7 @@ class LinkerConfiguration(CommandConfiguration):
         ap.add_argument("--pre-synth-tcls", type=Path, nargs="*", default=[],
                         help="Paths to TCL scripts to run before synthesis (applies to hardware builds only).")
         ap.add_argument("--clock-hz", required=False,
-                        type=int, default=None, help="Target clock frequency in MHz.")
+                        type=int, default=None, help="Target clock frequency in Hz.")
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)

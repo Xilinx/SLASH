@@ -43,6 +43,7 @@ array set opts {
     --rm-work-dir ""
     --artifact-out-dir ""
     --util-report-file ""
+    --user-clock-xdc ""
     --jobs 8
 }
 
@@ -89,6 +90,10 @@ set linker_results_dir [file normalize $opts(--linker-results-dir)]
 set rm_work_dir $opts(--rm-work-dir)
 set artifact_out_dir $opts(--artifact-out-dir)
 set util_report_file $opts(--util-report-file)
+set user_clock_xdc $opts(--user-clock-xdc)
+if {$user_clock_xdc ne ""} {
+    set user_clock_xdc [file normalize $user_clock_xdc]
+}
 set jobs $opts(--jobs)
 
 file mkdir $rm_work_dir
@@ -155,6 +160,18 @@ set_property strategy Congestion_SSI_SpreadLogic_high [get_runs impl_1]
 foreach pre_synth_tcl $pre_synth_tcls {
     puts "Sourcing pre-synth Tcl: $pre_synth_tcl"
     source $pre_synth_tcl
+}
+
+# Apply the user-region clock timing constraint (create_clock on user_clk),
+# derived from the requested --clock-hz target. Scoped to the slash cell so it
+# constrains the reconfigurable module's user clock. NOTE: the clock object and
+# scoping below must be validated against Vivado.
+if {$user_clock_xdc ne ""} {
+    puts "Applying user-clock constraint: $user_clock_xdc"
+    _require_file $user_clock_xdc "user-clock XDC"
+    add_files -fileset constrs_1 -norecurse $user_clock_xdc
+    set_property USED_IN {synthesis implementation} [get_files $user_clock_xdc]
+    set_property SCOPED_TO_CELLS {top_i/slash} [get_files $user_clock_xdc]
 }
 
 launch_runs "${slash_rm_name}_synth_1" -jobs $jobs

@@ -35,6 +35,7 @@
 #ifndef VRTD_CLOCK_H
 #define VRTD_CLOCK_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -149,14 +150,21 @@ int clock_driver_get_user_region_rate_hz(struct clock_driver *clk, uint32_t *rat
 /**
  * @brief Set the user-region clock to the requested frequency.
  *
- * Behaves identically to @c clock_driver_set_service_region_rate_hz but
- * targets the user-region clock wizard.
+ * Behaves like @c clock_driver_set_service_region_rate_hz but targets the
+ * user-region clock wizard. When @p no_exceed is true, the driver only
+ * considers realizable rates less than or equal to the request, so the user
+ * clock never runs faster than the requested (timed) frequency.
  *
  * @param clk              The clock driver instance.
  * @param[in,out] rate_hz_inout On entry, the desired frequency in Hz.
  *                              On exit, the actual frequency achieved.
+ * @param no_exceed        If true, never select a rate above the request.
  * @return 0 on success, -1 on error.
  */
-int clock_driver_set_user_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_inout);
+int clock_driver_set_user_region_rate_hz(
+    struct clock_driver *clk,
+    uint32_t *rate_hz_inout,
+    bool no_exceed
+);
 
 #endif // VRTD_CLOCK_H

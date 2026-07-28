@@ -92,7 +92,6 @@ namespace impl {
 class Device {
     static constexpr uint64_t QDMA_LOGIC_BASE = 0x20100020000;  ///< Base address for QDMA logic
     static constexpr uint32_t QDMA_LOGIC_OFFSET = 0x1000;       /// Offset for QDMA logic
-    static constexpr uint32_t CLOCK_MAX_FREQ = 333333333;
     uint8_t bar = 0;                                            ///< Base Address Register (BAR)
     uint64_t offset = 0;                                        ///< Offset for memory operations
     uint16_t pci_bdf = 0;                                       ///< PCI Bus:Device.Function identifier

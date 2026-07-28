@@ -3115,7 +3115,8 @@ static uint16_t client_handle_request_clock_op(
                     (unsigned int)req_body->dev_number);
                 return VRTD_RET_INTERNAL_ERROR;
             }
-        } else if (req_body->op == VRTD_CLOCK_OP_SET) {
+        } else if (req_body->op == VRTD_CLOCK_OP_SET
+                   || req_body->op == VRTD_CLOCK_OP_SET_ROUND_DOWN) {
             if (rate == 0) {
                 LOG(
                     LOG_WARNING,
@@ -3123,7 +3124,8 @@ static uint16_t client_handle_request_clock_op(
                 );
                 return VRTD_RET_INVALID_ARGUMENT;
             }
-            if (clock_driver_set_user_region_rate_hz(d->clock_driver, &rate) != 0) {
+            bool no_exceed = (req_body->op == VRTD_CLOCK_OP_SET_ROUND_DOWN);
+            if (clock_driver_set_user_region_rate_hz(d->clock_driver, &rate, no_exceed) != 0) {
                 LOG(
                     LOG_ERR,
                     "Failed to set user region frequency to %u Hz: %m",

@@ -176,7 +176,7 @@ Device Session::getDevice(size_t i) const {
             return cfgmemProgramFile(device, path, bootDevice, partition);
         },
         [&](const Device& device, ClockRegion region) { return getClockRate(device, region); },
-        [&](const Device& device, ClockRegion region, uint32_t rate_hz) { return setClockRate(device, region, rate_hz); },
+        [&](const Device& device, ClockRegion region, uint32_t rate_hz, bool roundDown) { return setClockRate(device, region, rate_hz, roundDown); },
         [&](const Device& device) { return getSensorInfo(device); }
     );
 }
@@ -247,7 +247,7 @@ Device Session::getDeviceByBdf(std::string_view bdf) const {
             return cfgmemProgramFile(device, path, bootDevice, partition);
         },
         [&](const Device& device, ClockRegion region) { return getClockRate(device, region); },
-        [&](const Device& device, ClockRegion region, uint32_t rate_hz) { return setClockRate(device, region, rate_hz); },
+        [&](const Device& device, ClockRegion region, uint32_t rate_hz, bool roundDown) { return setClockRate(device, region, rate_hz, roundDown); },
         [&](const Device& device) { return getSensorInfo(device); }
     );
 }
@@ -593,14 +593,19 @@ uint32_t Session::getClockRate(const Device& device, ClockRegion region) const {
     return rate;
 }
 
-uint32_t Session::setClockRate(const Device& device, ClockRegion region, uint32_t rate_hz) const {
+uint32_t Session::setClockRate(const Device& device, ClockRegion region, uint32_t rate_hz,
+                               bool roundDown) const {
     if (isClosed()) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
     std::lock_guard<std::mutex> lk(*m);
 
     uint32_t achieved = 0;
-    auto ret = vrtd_clock_set_rate(fd, device.getNum(), static_cast<uint32_t>(region), rate_hz, &achieved);
+    auto ret = roundDown
+        ? vrtd_clock_set_rate_round_down(fd, device.getNum(),
+                                         static_cast<uint32_t>(region), rate_hz, &achieved)
+        : vrtd_clock_set_rate(fd, device.getNum(),
+                              static_cast<uint32_t>(region), rate_hz, &achieved);
     if (ret != VRTD_RET_OK) {
         throw Error(ret);
     }

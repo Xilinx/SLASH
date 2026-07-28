@@ -33,7 +33,7 @@ from contextlib import ExitStack
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
 from slashkit.core.command_config import LinkerConfiguration, InstallerConfiguration, CommandConfiguration
-from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm
+from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm, read_system_map_clock_hz
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +313,33 @@ class RM_KIND(Enum):
     SERVICE_LAYER = "service_layer"
 
 
+def _generate_user_clock_xdc(config: LinkerConfiguration) -> Optional[Path]:
+    # Turn the resolved target user-clock frequency into an actual Vivado timing
+    # constraint for the reconfigurable-module build. The resolved target has
+    # already been written to system_map.xml by generate_tcl(), so we read it
+    # back here to keep a single source of truth (see resolve_system_map_clock).
+    system_map_path = config.build_dir / "system_map.xml"
+    target_hz = read_system_map_clock_hz(system_map_path)
+    if target_hz is None or target_hz <= 0:
+        logger.warning(
+            "No valid target ClockFrequency in %s; skipping user-clock constraint",
+            system_map_path,
+        )
+        return None
+
+    period_ns = 1e9 / float(target_hz)
+    xdc_path = config.build_dir / "user_clock.xdc"
+    # NOTE: the clock object below (the user_clk port, scoped to top_i/slash in
+    # the RM build) must be validated against Vivado.
+    xdc_path.write_text(
+        f"create_clock -name user_clk -period {period_ns:.6f} [get_ports user_clk]\n",
+        encoding="utf-8",
+    )
+    logger.info("Wrote user-clock constraint (%.6f ns / %d Hz) to %s",
+                period_ns, target_hz, xdc_path)
+    return xdc_path
+
+
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     if rm_kind == RM_KIND.SLASH_PROJECT:
         # Copy all base IP cores into the ip repository
@@ -396,6 +423,10 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
 
             for path in config.pre_synth_tcls:
                 cmd.extend(["--pre-synth-tcl", str(path)])
+
+            user_clock_xdc = _generate_user_clock_xdc(config)
+            if user_clock_xdc is not None:
+                cmd.extend(["--user-clock-xdc", str(user_clock_xdc)])
 
         if rm_kind == RM_KIND.SERVICE_LAYER:
             opt_post_tcl = stack.enter_context(

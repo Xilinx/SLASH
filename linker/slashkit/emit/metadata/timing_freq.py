@@ -233,7 +233,8 @@ def apply_timing_frequency_cap(
     *,
     project_name: str,
     system_map_path: Path,
-    base_freq_hz: int = 400_000_000,
+    base_freq_hz: Optional[int] = None,
+    timing_report: Optional[Path] = None,
     hw_build_dir: Optional[Path] = None,
 ) -> Optional[int]:
     user_clock_hz = read_system_map_clock_hz(system_map_path)
@@ -242,17 +243,32 @@ def apply_timing_frequency_cap(
             "ClockFrequency missing or invalid in system_map.xml: %s", system_map_path)
         return None
 
-    resolved_hw_build_dir = _resolve_hw_build_dir(hw_build_dir)
-    if resolved_hw_build_dir is None:
-        logger.warning(
-            "HW build directory env var is unset; keeping user clock_hz=%d", user_clock_hz)
-        return user_clock_hz
+    # The user region is implemented against the target period, so the WNS in
+    # the timing report is measured relative to the target frequency. Default the
+    # analysis base to the target so the computed achievable frequency is correct.
+    if base_freq_hz is None:
+        base_freq_hz = user_clock_hz
 
-    timing_report = _find_timing_report(project_name, resolved_hw_build_dir)
     if timing_report is None:
+        resolved_hw_build_dir = _resolve_hw_build_dir(hw_build_dir)
+        if resolved_hw_build_dir is None:
+            logger.warning(
+                "HW build directory env var is unset; keeping user clock_hz=%d", user_clock_hz)
+            return user_clock_hz
+
+        timing_report = _find_timing_report(project_name, resolved_hw_build_dir)
+        if timing_report is None:
+            logger.warning(
+                "Timing report not found under %s for project %s; keeping user clock_hz=%d",
+                resolved_hw_build_dir,
+                project_name,
+                user_clock_hz,
+            )
+            return user_clock_hz
+    elif not timing_report.is_file():
         logger.warning(
-            "Timing report not found under %s for project %s; keeping user clock_hz=%d",
-            resolved_hw_build_dir,
+            "Timing report %s not found for project %s; keeping user clock_hz=%d",
+            timing_report,
             project_name,
             user_clock_hz,
         )

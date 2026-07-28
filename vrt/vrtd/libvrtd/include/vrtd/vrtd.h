@@ -616,6 +616,30 @@ enum vrtd_ret vrtd_clock_set_rate(
     uint32_t *rate_hz_out
 );
 
+/**
+ * @brief Set the clock rate for a device region, never exceeding the request.
+ *
+ * Like vrtd_clock_set_rate(), but the daemon only selects a realizable rate
+ * less than or equal to @p rate_hz_in. Used to program the user clock to the
+ * achieved (timed) frequency without ever running the logic faster than timed.
+ *
+ * @param fd            Connected vrtd socket file descriptor.
+ * @param dev           Device index (0‑based).
+ * @param region        One of vrtd_clock_region.
+ * @param rate_hz_in    Requested rate in Hz (upper bound).
+ * @param rate_hz_out   Output pointer for the achieved rate in Hz.
+ *
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ * @pre @p rate_hz_out must not be NULL.
+ */
+enum vrtd_ret vrtd_clock_set_rate_round_down(
+    int fd,
+    uint32_t dev,
+    uint32_t region,
+    uint32_t rate_hz_in,
+    uint32_t *rate_hz_out
+);
+
 
 struct vrtd_buffer {
     int sock_fd;

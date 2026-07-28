@@ -38,6 +38,7 @@ from slashkit.emit.sim.project_gen import create_sim_project, build_sim_project
 from slashkit.emit.emu.project_gen import build_emu_project, package_emu_artifacts
 
 from slashkit.emit.metadata.prog_image import build_vbin
+from slashkit.emit.metadata.timing_freq import apply_timing_frequency_cap
 from slashkit.core.command_config import LinkerConfiguration, Platform, InstallerConfiguration, CommandConfiguration
 
 
@@ -143,6 +144,18 @@ def link(config: LinkerConfiguration) -> None:
     elif config.platform == Platform.EMULATION:
         package_emu_artifacts(config)
     else:
+        # Inspect the achieved user-clock frequency from the RM timing report and
+        # cap the value recorded in system_map.xml at the requested target, before
+        # it is packed into the vbin.
+        timing_report = (
+            config.build_dir / "slash_rm" /
+            f"report_timing_{config.project_name}.txt"
+        )
+        apply_timing_frequency_cap(
+            project_name=config.project_name,
+            system_map_path=config.build_dir / "system_map.xml",
+            timing_report=timing_report,
+        )
         generate_util_report(config)
         build_vbin(config)
 

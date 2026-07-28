@@ -307,10 +307,11 @@ public:
      *
      * @param region Clock region.
      * @param rate_hz Requested rate in Hz.
+     * @param roundDown If true, never select a realizable rate above the request.
      * @return Achieved rate in Hz.
      * @throws vrtd::Error on error.
      */
-    uint32_t setClockRate(ClockRegion region, uint32_t rate_hz) const;
+    uint32_t setClockRate(ClockRegion region, uint32_t rate_hz, bool roundDown = false) const;
 
     /**
      * @brief Convenience helper for service region get.
@@ -342,6 +343,17 @@ public:
      */
     uint32_t setUserClockRate(uint32_t rate_hz) const {
         return setClockRate(ClockRegion::User, rate_hz);
+    }
+
+    /**
+     * @brief Set the user region clock, never exceeding the requested rate.
+     *
+     * Programs the closest realizable rate that is <= @p rate_hz, so the user
+     * logic never runs faster than the requested (timed) frequency.
+     * @see setClockRate
+     */
+    uint32_t setUserClockRateRoundDown(uint32_t rate_hz) const {
+        return setClockRate(ClockRegion::User, rate_hz, true);
     }
 
     /**
@@ -382,7 +394,7 @@ private:
            std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
            std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
            std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
-           std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate,
+           std::function<uint32_t(const Device&, ClockRegion, uint32_t, bool)> fSetClockRate,
            std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo);
 
     uint32_t num;
@@ -403,7 +415,7 @@ private:
     std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram;
     std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile;
     std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate;
-    std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate;
+    std::function<uint32_t(const Device&, ClockRegion, uint32_t, bool)> fSetClockRate;
     std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo;
 };
 
