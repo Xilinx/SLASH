@@ -256,7 +256,8 @@ def apply_timing_frequency_cap(
                 "HW build directory env var is unset; keeping user clock_hz=%d", user_clock_hz)
             return user_clock_hz
 
-        timing_report = _find_timing_report(project_name, resolved_hw_build_dir)
+        timing_report = _find_timing_report(
+            project_name, resolved_hw_build_dir)
         if timing_report is None:
             logger.warning(
                 "Timing report not found under %s for project %s; keeping user clock_hz=%d",
