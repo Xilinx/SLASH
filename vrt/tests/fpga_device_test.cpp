@@ -935,6 +935,8 @@ TEST_F(FpgaDeviceFixture, AutonomousLoopPublishesCarriedOutputToCpu) {
         EXPECT_EQ(readback[0], seed[0]);
         EXPECT_EQ(readback[1], seed[1]);
     }
+    EXPECT_EQ(ddr_.nodes()[0].opcode, RP1_OP_LOOP)
+        << "host-side pre-launch polling must not displace LOOP";
 }
 
 TEST_F(FpgaDeviceFixture, DeviceCopyActionRefreshesTargetBuffer) {

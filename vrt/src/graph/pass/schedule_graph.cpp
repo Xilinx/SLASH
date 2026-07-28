@@ -366,8 +366,29 @@ class GraphScheduler {
                parent->second) {
             auto steps = operationStepLists_.find(*parent->second);
             if (steps != operationStepLists_.end()) {
+                const auto placement =
+                    routed_->placed().controlPlacements().find(
+                        *parent->second);
                 for (ScheduleStepId controlStep :
                      steps->second) {
+                    if (placement !=
+                            routed_->placed().controlPlacements().end()) {
+                        if (placement->second.mode ==
+                            ControlMode::AutonomousOnDevice) {
+                            continue;
+                        }
+                        if (placement->second.mode ==
+                                ControlMode::SplitAcrossDevices &&
+                            placement->second.authority) {
+                            const QueueProgram* queue =
+                                findQueue(steps_.at(controlStep).queue);
+                            if (!queue ||
+                                queue->device !=
+                                    *placement->second.authority) {
+                                continue;
+                            }
+                        }
+                    }
                     addDependency(controlStep, ready);
                 }
             }

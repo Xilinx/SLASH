@@ -962,7 +962,7 @@ TEST(GraphPassTest, ScheduleGraphUsesLogicalRendezvousAndValidSteps) {
     EXPECT_TRUE(hasPreLaunch);
 }
 
-TEST(GraphPassTest, ScheduleGraphGatesAllSplitReplicasOnInputStaging) {
+TEST(GraphPassTest, ScheduleGraphGatesSplitAuthorityOnInputStaging) {
     auto root = GraphRegion::createRoot();
     GraphScalar size =
         root->inputScalar(ScalarType::U64, "size");
@@ -1039,6 +1039,7 @@ TEST(GraphPassTest, ScheduleGraphGatesAllSplitReplicasOnInputStaging) {
     ASSERT_FALSE(preLaunchCompletions.empty());
 
     std::size_t replicas = 0;
+    std::size_t authorities = 0;
     for (const auto& [id, step] : scheduled.output->steps()) {
         (void)id;
         if (step.operation != std::optional<NodeId>(control)) continue;
@@ -1048,9 +1049,16 @@ TEST(GraphPassTest, ScheduleGraphGatesAllSplitReplicasOnInputStaging) {
             [&](ScheduleStepId dependency) {
                 return preLaunchCompletions.count(dependency) != 0;
             });
-        EXPECT_TRUE(gated);
+        if (step.controlRole == ControlReplicaRole::Authority) {
+            ++authorities;
+            EXPECT_TRUE(gated);
+        } else {
+            EXPECT_FALSE(gated)
+                << "FPGA launch uses synchronous pre-launch slot polling";
+        }
     }
     EXPECT_EQ(replicas, 2u);
+    EXPECT_EQ(authorities, 1u);
 }
 
 TEST(GraphPassTest, ScheduleGraphModelsWhileSplitDecisionAndAck) {

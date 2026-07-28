@@ -869,6 +869,7 @@ class BackendProgramLowerer {
         for (const QueueProgram& queue : scheduled_->queues()) {
             auto program = programs_.find(queue.id);
             if (program == programs_.end()) continue;
+            std::vector<CompiledNode> deferredPreLaunchNodes;
             for (ScheduleStepId stepId : queue.steps) {
                 const ScheduledStep& step =
                     scheduled_->steps().at(stepId);
@@ -904,9 +905,24 @@ class BackendProgramLowerer {
                 emittedSteps_[stepId] = emitted;
                 entryNodeByStep_[stepId] = {
                     queue.id, emitted.entry};
+                const bool deferPreLaunch =
+                    step.preLaunch &&
+                    program->second->device->type() ==
+                        DeviceType::FPGA &&
+                    (step.kind == ScheduledStepKind::EventPublish ||
+                     step.kind == ScheduledStepKind::EventWait);
                 for (CompiledNode& node : nodes) {
-                    program->second->nodes.push_back(std::move(node));
+                    if (deferPreLaunch) {
+                        deferredPreLaunchNodes.push_back(
+                            std::move(node));
+                    } else {
+                        program->second->nodes.push_back(
+                            std::move(node));
+                    }
                 }
+            }
+            for (CompiledNode& node : deferredPreLaunchNodes) {
+                program->second->nodes.push_back(std::move(node));
             }
         }
     }
