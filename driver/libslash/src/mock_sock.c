@@ -30,10 +30,26 @@
 #define MOCK_SOCK_SERVER_QDMA_BDF "0000:61:00.1"
 #define MOCK_SOCK_SERVER_CTLDEV_BDF "0000:61:00.2"
 
+#define MOCK_SOCK_MAX_QPAIRS 256
+
+struct slash_mock_sock_qdma_endpoint_state {
+    /** @brief Qpair state bitsets.
+     *
+     * Bit 0 (0b01): Qpair used.
+     * Bit 1 (0b10): Qpair started.
+     */
+    int qpairs[MOCK_SOCK_MAX_QPAIRS];
+    int aperture_size[MOCK_SOCK_MAX_QPAIRS];
+};
+
+union slash_mock_sock_endpoint_state {
+    struct slash_mock_sock_qdma_endpoint_state qdma;
+};
+
 /**
  * @brief The state of a mock sock server.
  */
-struct mock_sock_server_state {
+struct slash_mock_sock_server_state {
     /**
      * @brief The socket FD to communicate with a client.
      */
@@ -42,7 +58,70 @@ struct mock_sock_server_state {
      * @brief The kind of endpoint to implement.
      */
     enum slash_mock_sock_endpoint endpoint;
+    /**
+     * @brief Required state to mock-up the endpoint.
+     */
+    union slash_mock_sock_endpoint_state endpoint_state;
 };
+
+/**
+ * @brief Copy the the user's data into the destination, following the ABI
+ * versioning protocol.
+ *
+ * The ABI versioning protocol demands that first of all, the user must provide
+ * the size of the argument struct *as they know it* in the first field of the
+ * IOCTL argument. If this size is equal to or above a certain minimally
+ * supported size, the kernel/server must assume that fields that are not
+ * included in this size are not known to the client and thus ignore them.
+ *
+ * In the case of the mock sock server, we get an additional hint in the form of
+ * the received datagram size. This function therefore checks that:
+ *
+ * 1. The received message body is big enough to contain at least the size field
+ * 2. The user's size is at least as big as the minimum argument size.
+ * 3. The received message body is big enough to contain the alleged struct
+ * size.
+ *
+ * If this is all the case, it computes the minimum of the struct size known to
+ * the server and the user's struct size, zeroes the entire destination buffer,
+ * and copies the corresponding number of bytes to the destination.
+ *
+ * @param dst The destination buffer to write to.
+ * @param dst_size The size of the argument struct as it is known to the
+ * server.
+ * @param arg The argument buffer provided by the user.
+ * @param arg_size The size of the argument buffer, in bytes.
+ * @param min_size The minimum allowed argument struct size.
+ * @return The common size (i.e. min(user_size, server_size)) on success, -1 on
+ * failure.
+ */
+__u32 checked_copy_from_user(void *dst, size_t dst_size, void *arg,
+                               size_t arg_size, size_t min_size) {
+    __u32 user_size;
+    __u32 common_size;
+
+    /* Fetching the user's size field in the argument. */
+    if (arg_size < sizeof(user_size)) {
+        return -1;
+    }
+    user_size = *(__u32 *)arg;
+
+    /* Checking that the user's size field is valid and the actually transferred
+     * body size agrees to it. */
+    if (user_size < min_size || user_size > arg_size) {
+        return -1;
+    }
+
+    /* Deriving the common size that both we and the user can agree on. */
+    common_size = (dst_size < user_size) ? dst_size : user_size;
+
+    /* Finally, zero the destination and copy the data. */
+    memset(dst, 0, dst_size);
+    memcpy(dst, arg, common_size);
+
+    /* Return the derived common size */
+    return common_size;
+}
 
 /**
  * @brief Execute the SLASH_QDMA_IOCTL_INFO operation
@@ -55,18 +134,12 @@ struct mock_sock_server_state {
  */
 int slash_mock_sock_qdma_ioctl_info(void *arg, size_t arg_size) {
     struct slash_qdma_info info;
-    __u32 user_size;
-    __u32 out_size = sizeof(struct slash_qdma_info);
+    __u32 out_size;
 
-    if (arg_size < sizeof(__u32)) {
+    out_size = checked_copy_from_user(&info, sizeof(info), arg, arg_size,
+                                      SLASH_QDMA_INFO_MIN_SIZE);
+    if (out_size == -1) {
         return -EINVAL;
-    }
-    user_size = *(__u32 *)arg;
-    if (arg_size < (size_t)user_size) {
-        return -EINVAL;
-    }
-    if (user_size < out_size) {
-        out_size = user_size;
     }
 
     info.size = out_size;
@@ -80,12 +153,83 @@ int slash_mock_sock_qdma_ioctl_info(void *arg, size_t arg_size) {
     return 0;
 }
 
-int slash_mock_sock_dispatch_ioctl(int op, void *arg, size_t arg_size) {
+int slash_mock_sock_qdma_ioctl_qpair_add(
+    struct slash_mock_sock_qdma_endpoint_state *state, void *arg,
+    size_t arg_size) {
+    struct slash_qdma_qpair_add qpair_add;
+    __u32 out_size;
+    __u32 qid;
+    int rv;
+
+    out_size = checked_copy_from_user(&qpair_add, sizeof(qpair_add), arg,
+                                      arg_size, SLASH_QDMA_QPAIR_ADD_MIN_SIZE);
+    if (out_size < 0) {
+        return -EINVAL;
+    }
+
+    for (qid = 0; qid < MOCK_SOCK_MAX_QPAIRS; qid++) {
+        if (!(state->qpairs[qid] & 0b01)) {
+            state->qpairs[qid] = 0b01;
+            state->aperture_size[qid] = qpair_add.aperture_size;
+            break;
+        }
+    }
+    if (qid == MOCK_SOCK_MAX_QPAIRS) {
+        /* No qpair free, no need to write back data, thus exiting early */
+        return -EBUSY;
+    }
+
+    qpair_add.size = out_size;
+    qpair_add.qid = qid;
+    memcpy(arg, &qpair_add, out_size);
+    return 0;
+}
+
+int slash_mock_sock_qdma_ioctl_qpair_op(
+    struct slash_mock_sock_qdma_endpoint_state *state, void *arg,
+    size_t arg_size) {
+    struct slash_qdma_qpair_op qpair_op;
+    __u32 out_size;
+
+    out_size = checked_copy_from_user(&qpair_op, sizeof(qpair_op), arg,
+                                      arg_size, SLASH_QDMA_QPAIR_OP_MIN_SIZE);
+    if (out_size == -1) {
+        return -EINVAL;
+    }
+
+    if (qpair_op.qid >= MOCK_SOCK_MAX_QPAIRS ||
+        !(state->qpairs[qpair_op.qid] & 0b01)) {
+        return -ENOENT;
+    }
+
+    switch (qpair_op.op) {
+    case SLASH_QDMA_QUEUE_OP_START:
+        state->qpairs[qpair_op.qid] |= 0b10;
+        return 0;
+    case SLASH_QDMA_QUEUE_OP_STOP:
+        state->qpairs[qpair_op.qid] &= ~0b10;
+        return 0;
+    case SLASH_QDMA_QUEUE_OP_DEL:
+        state->qpairs[qpair_op.qid] = 0;
+        return 0;
+    default:
+        return -ENOTTY;
+    }
+    /* No out fields, no need to write back*/
+}
+
+int slash_mock_sock_dispatch_qdma_ioctl(
+    struct slash_mock_sock_qdma_endpoint_state *state, int op, void *arg,
+    size_t arg_size) {
     switch (op) {
     case SLASH_QDMA_IOCTL_INFO:
         return slash_mock_sock_qdma_ioctl_info(arg, arg_size);
+    case SLASH_QDMA_IOCTL_QPAIR_ADD:
+        return slash_mock_sock_qdma_ioctl_qpair_add(state, arg, arg_size);
+    case SLASH_QDMA_IOCTL_Q_OP:
+        return slash_mock_sock_qdma_ioctl_qpair_op(state, arg, arg_size);
     default:
-        return -EINVAL;
+        return -ENOTTY;
     }
 }
 
@@ -101,12 +245,20 @@ int slash_mock_sock_dispatch_ioctl(int op, void *arg, size_t arg_size) {
  * @return NULL
  */
 void *mock_sock_server_main(void *arg) {
-    struct mock_sock_server_state *state = (struct mock_sock_server_state *)arg;
+    struct slash_mock_sock_server_state *server_state;
+
     char recv_buffer[RECV_BUFFER_SIZE];
     char cmsg_buffer[CMSG_SPACE(sizeof(int) * MAX_FDS)];
     struct iovec iov;
     struct msghdr msg;
     ssize_t n;
+
+    struct slash_sysemu_socket_header *message_header;
+    int ioctl_op;
+    void *message_body;
+    size_t message_body_size;
+
+    server_state = (struct slash_mock_sock_server_state *)arg;
 
     while (1) {
         memset(&iov, 0, sizeof(iov));
@@ -121,31 +273,43 @@ void *mock_sock_server_main(void *arg) {
         msg.msg_control = cmsg_buffer;
         msg.msg_controllen = sizeof(cmsg_buffer);
 
-        n = recvmsg(state->server_fd, &msg, 0);
+        n = recvmsg(server_state->server_fd, &msg, 0);
 
         if (n <= 0) {
+            /* Receive failed or connection is closed, halting */
             break;
         }
 
         if ((size_t)n < sizeof(struct slash_sysemu_socket_header)) {
-            /* Message too small */
+            /* Message too small, ignoring */
             continue;
         }
 
-        struct slash_sysemu_socket_header *header =
-            (struct slash_sysemu_socket_header *)recv_buffer;
+        message_header = (struct slash_sysemu_socket_header *)recv_buffer;
+        ioctl_op = message_header->ioctl_op;
+        message_body = recv_buffer + sizeof(struct slash_sysemu_socket_header);
+        message_body_size =
+            ((size_t)n) - sizeof(struct slash_sysemu_socket_header);
 
-        header->return_value = slash_mock_sock_dispatch_ioctl(
-            header->ioctl_op,
-            recv_buffer + sizeof(struct slash_sysemu_socket_header),
-            ((size_t)n) - sizeof(struct slash_sysemu_socket_header));
+        if (server_state->endpoint == SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
+            message_header->return_value = slash_mock_sock_dispatch_qdma_ioctl(
+                &(server_state->endpoint_state.qdma), ioctl_op, message_body,
+                message_body_size);
+        } else {
+            /* This endpoint is not implemented yet */
+            message_header->return_value = -ENOSYS;
+        }
 
-        sendmsg(state->server_fd, &msg, MSG_CMSG_CLOEXEC);
+        n = sendmsg(server_state->server_fd, &msg, MSG_CMSG_CLOEXEC);
+        if (n <= 0) {
+            /* Sending failed, halting */
+            break;
+        }
     }
 
 cleanup:
-    close(state->server_fd);
-    free(state);
+    close(server_state->server_fd);
+    free(server_state);
     return NULL;
 }
 
@@ -153,7 +317,7 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
     int rv;
     int sockets[2];
     pthread_t thread;
-    struct mock_sock_server_state *state;
+    struct slash_mock_sock_server_state *state;
 
     /* TODO: Implement other kinds of mock socks */
     if (endpoint != SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
@@ -161,7 +325,7 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
         return -1;
     }
 
-    state = calloc(1, sizeof(struct mock_sock_server_state));
+    state = calloc(1, sizeof(struct slash_mock_sock_server_state));
     if (state == NULL) {
         errno = ENOMEM;
         return -1;

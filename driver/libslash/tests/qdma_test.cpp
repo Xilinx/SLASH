@@ -299,25 +299,25 @@ TEST_P(ParametrizedQdmaTest, QpairAddReturnsQid) {
     add_req.size = sizeof(add_req);
     add_req.mode = 0;
     add_req.dir_mask = 0x3;
-    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &add_req), 0);
+    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &add_req), 0) << strerror(errno);
 }
 
 TEST_P(ParametrizedQdmaTest, QpairStartSucceeds) {
     uint32_t qid = AddQpair();
-    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0) << strerror(errno);
 }
 
 TEST_P(ParametrizedQdmaTest, QpairStopSucceeds) {
     uint32_t qid = AddQpair();
-    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0) << strerror(errno);
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0) << strerror(errno);
 }
 
 TEST_P(ParametrizedQdmaTest, QpairDelSucceeds) {
     uint32_t qid = AddQpair();
-    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0) << strerror(errno);
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0) << strerror(errno);
+    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0) << strerror(errno);
 }
 
 TEST_P(ParametrizedQdmaTest, QpairAddAcceptsKeyholeAperture) {
@@ -326,12 +326,12 @@ TEST_P(ParametrizedQdmaTest, QpairAddAcceptsKeyholeAperture) {
     req.dir_mask = 0x1; /* H2C */
     req.aperture_size = 4096;
 
-    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
+    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0) << strerror(errno);
     uint32_t qid = req.qid;
 
-    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
-    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_start(qdma_, qid), 0) << strerror(errno);
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0) << strerror(errno);
+    EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0) << strerror(errno);
 }
 
 /* --- Buffers

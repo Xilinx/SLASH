@@ -159,6 +159,8 @@ struct slash_qdma_info {
     char  bdf[SLASH_PCI_BDF_LEN]; /**< [out] PCI BDF string of the QDMA PF (PF 1),
                                    *         NUL-terminated, e.g. "0000:61:00.1". */
 };
+#define SLASH_QDMA_INFO_MIN_SIZE \
+    offsetof(struct slash_qdma_info, qsets_max)
 
 /**
  * @brief AXI-MM / NoC channel selection for a queue pair.
@@ -213,6 +215,8 @@ struct slash_qdma_qpair_add {
     /* Userspace to kernel; appended for ABI compatibility. */
     __u32 aperture_size; /**< [in]  0 = linear MM addressing, non-zero = keyhole aperture. */
 };
+#define SLASH_QDMA_QPAIR_ADD_MIN_SIZE \
+    offsetof(struct slash_qdma_qpair_add, qid)
 
 /**
  * Queue pair lifecycle operations, used in slash_qdma_qpair_op::op.
@@ -236,6 +240,8 @@ struct slash_qdma_qpair_op {
     __u32 qid;  /**< [in] Queue pair ID (as returned by slash_qdma_qpair_add). */
     __u32 op;   /**< [in] One of the SLASH_QDMA_QUEUE_OP_* constants. */
 };
+#define SLASH_QDMA_QPAIR_OP_MIN_SIZE \
+    sizeof(struct slash_qdma_qpair_op)
 
 /**
  * @brief Maximum number of queue pairs a single transfer fd may own.
@@ -277,6 +283,8 @@ struct slash_qdma_qpair_fd_request {
     __u32 qpair_ids[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Queue pair IDs bound to
                         *  this fd; the array index is the qpair_index. */
 };
+#define SLASH_QDMA_QPAIR_FD_REQUEST_MIN_SIZE \
+    offsetof(struct slash_qdma_qpair_fd_request, qpair_count)
 
 /**
  * @brief Transfer direction for a registered-buffer DMA transfer.
@@ -333,6 +341,8 @@ struct slash_qdma_buf_create {
     __u32 granule;       /**< [out] Bytes per SGL descriptor (host page size). */
     __u32 transfer_hint; /**< [out] enum slash_qdma_transfer_hint. */
 };
+#define SLASH_QDMA_BUF_CREATE_MIN_SIZE \
+    offsetof(struct slash_qdma_buf_create, granule)
 
 /**
  * @brief One per-queue-pair sub-transfer within a transfer batch.
@@ -370,6 +380,8 @@ struct slash_qdma_transfer {
     __u32 count;       /**< [in] Number of sub-transfers (1..SLASH_QDMA_FD_MAX_QPAIRS). */
     struct slash_qdma_subxfer xfers[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Sub-transfers. */
 };
+#define SLASH_QDMA_TRANSFER_MIN_SIZE \
+    offsetof(struct slash_qdma_transfer, xfers)
 
 /** Query QDMA subsystem capabilities. */
 #define SLASH_QDMA_IOCTL_INFO          _IOWR('v', 0x50, struct slash_qdma_info)
