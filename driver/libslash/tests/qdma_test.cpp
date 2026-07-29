@@ -34,7 +34,8 @@
 #include "sysemu_test_server.h"
 
 extern "C" {
-#include <qdma_mock_sock.h>
+#include <mock_sock.h>
+#include <sock_transport.h>
 
 #include <slash/qdma.h>
 #include <slash/uapi/slash_interface.h>
@@ -59,15 +60,26 @@ enum class LibSlashBackend {
 /* --- mock sock tests --- */
 
 TEST(QdmaMockSock, CreateDestroy) {
-    struct slash_qdma_mock_sock_server server;
+    int mock_sock = slash_mock_sock_create(SLASH_MOCK_SOCK_ENDPOINT_QDMA);
+    ASSERT_GE(mock_sock, 0);
 
-    ASSERT_EQ(slash_qdma_mock_sock_create(&server), 0);
+    struct slash_qdma_info info;
+    memset(&info, 0, sizeof(info));
+    info.size = sizeof(info);
 
-    const char *message = "Hello World!\n";
-    ASSERT_EQ(send(server.client_fd, message, strlen(message), 0),
-              strlen(message));
+    uint32_t seq = 0;
 
-    ASSERT_EQ(slash_qdma_mock_sock_destroy(&server), 0);
+    int rv = slash_sock_request(mock_sock, SLASH_QDMA_IOCTL_INFO, &info,
+                                sizeof(info), NULL, 0, NULL, 0, 0, &seq);
+
+    EXPECT_EQ(rv, 0);
+    EXPECT_EQ(info.size, sizeof(info));
+    EXPECT_EQ(info.qsets_max, 0);
+    EXPECT_EQ(info.vf_max, 0);
+    EXPECT_EQ(info.caps, 0);
+    EXPECT_STREQ(info.bdf, "0000:61:00.1");
+
+    close(mock_sock);
 }
 
 /* ── Helper: count open file descriptors in /proc/self/fd ────────────────────
