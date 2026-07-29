@@ -31,6 +31,7 @@
 
 #include <slash/qdma.h>
 
+#include "mock_sock.h"
 #include "sock_transport.h"
 
 #include <errno.h>
@@ -60,7 +61,7 @@ static __thread uint32_t qdma_raw_fd_seq = 0;
 
 struct slash_qdma *slash_qdma_open(const char *path) {
     struct slash_qdma *qdma;
-    int is_sock;
+    int is_mock = 0, is_sock = 0;
 
     if (path == NULL) {
         errno = EINVAL;
@@ -72,20 +73,29 @@ struct slash_qdma *slash_qdma_open(const char *path) {
         return NULL;
     }
 
-    is_sock = slash_path_is_socket(path);
-    if (is_sock < 0) {
-        free(qdma);
-        return NULL;
+    is_mock = strcmp(path, "@mock") == 0;
+    if (!is_mock) {
+        is_sock = slash_path_is_socket(path);
+        if (is_sock < 0) {
+            free(qdma);
+            return NULL;
+        }
     }
 
-    if (is_sock) {
+    if (is_mock) {
+        qdma->fd = slash_mock_sock_create(SLASH_MOCK_SOCK_ENDPOINT_QDMA);
+        if (qdma->fd < 0) {
+            free(qdma);
+            return NULL;
+        }
+        qdma->transport = SLASH_TRANSPORT_SOCKET;
+    } else if (is_sock) {
         qdma->fd = slash_sock_connect(path);
         if (qdma->fd < 0) {
             free(qdma);
             return NULL;
         }
         qdma->transport = SLASH_TRANSPORT_SOCKET;
-        qdma->seq = 0;
     } else {
         qdma->fd = open(path, O_RDWR);
         if (qdma->fd < 0) {
@@ -93,7 +103,6 @@ struct slash_qdma *slash_qdma_open(const char *path) {
             return NULL;
         }
         qdma->transport = SLASH_TRANSPORT_IOCTL;
-        qdma->seq = 0;
     }
 
     return qdma;

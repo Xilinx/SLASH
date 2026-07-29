@@ -55,6 +55,7 @@ static constexpr uint64_t DDR_BASE_ADDRESS = 0x60000000000ULL;
 enum class LibSlashBackend {
     DRIVER,
     SYSEMU,
+    MOCK,
 };
 
 /* --- mock sock tests --- */
@@ -214,11 +215,17 @@ class ParametrizedQdmaTest : public ::testing::TestWithParam<LibSlashBackend> {
                 GTEST_SKIP() << DRIVER_QDMA_PATH << " not available ("
                              << strerror(errno) << ")";
             }
-        } else {
+        } else if (backend == LibSlashBackend::SYSEMU) {
             qdma_ = slash_qdma_open(SYSEMU_QDMA_PATH);
             if (!qdma_) {
                 GTEST_SKIP() << SYSEMU_QDMA_PATH << " not available ("
                              << strerror(errno) << ")";
+            }
+        } else if (backend == LibSlashBackend::MOCK) {
+            qdma_ = slash_qdma_open("@mock");
+            if (!qdma_) {
+                GTEST_FAIL()
+                    << "Mock support not available (" << strerror(errno) << ")";
             }
         }
         EXPECT_GE(qdma_->fd, 0);
@@ -261,16 +268,27 @@ TEST_P(ParametrizedQdmaTest, TransportMatchesParameter) {
         ASSERT_TRUE(S_ISCHR(st.st_mode));
         break;
     case LibSlashBackend::SYSEMU:
+    case LibSlashBackend::MOCK:
         ASSERT_EQ(qdma_->transport, SLASH_TRANSPORT_SOCKET);
         ASSERT_EQ(::fstat(qdma_->fd, &st), 0);
         ASSERT_TRUE(S_ISSOCK(st.st_mode));
         break;
+    default:
+        GTEST_FAIL() << "Unknown backend tested!";
     }
 }
 
 TEST_P(ParametrizedQdmaTest, InfoRead) {
     struct slash_qdma_info info{};
     EXPECT_EQ(slash_qdma_info_read(qdma_, &info), 0) << strerror(errno);
+    if (backend == LibSlashBackend::MOCK) {
+        EXPECT_EQ(info.size, sizeof(info));
+        EXPECT_EQ(info.qsets_max, 0);
+        EXPECT_EQ(info.msix_qvecs, 0);
+        EXPECT_EQ(info.vf_max, 0);
+        EXPECT_EQ(info.caps, 0);
+        EXPECT_STREQ(info.bdf, "0000:61:00.1");
+    }
 }
 
 /* ── QPAIR lifecycle ────────────────────────────────────────────────────────
@@ -651,13 +669,16 @@ TEST_P(ParametrizedQdmaTest, CloseSucceeds) {
 
 INSTANTIATE_TEST_SUITE_P(QdmaTest, ParametrizedQdmaTest,
                          testing::Values(LibSlashBackend::DRIVER,
-                                         LibSlashBackend::SYSEMU),
+                                         LibSlashBackend::SYSEMU,
+                                         LibSlashBackend::MOCK),
                          [](auto info) {
                              switch (info.param) {
                              case LibSlashBackend::DRIVER:
                                  return "driver";
                              case LibSlashBackend::SYSEMU:
                                  return "sysemu";
+                             case LibSlashBackend::MOCK:
+                                 return "mock";
                              default:
                                  return "unknown";
                              }

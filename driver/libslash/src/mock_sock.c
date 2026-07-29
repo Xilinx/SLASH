@@ -59,11 +59,11 @@ int slash_mock_sock_qdma_ioctl_info(void *arg, size_t arg_size) {
     __u32 out_size = sizeof(struct slash_qdma_info);
 
     if (arg_size < sizeof(__u32)) {
-        return EINVAL;
+        return -EINVAL;
     }
     user_size = *(__u32 *)arg;
     if (arg_size < (size_t)user_size) {
-        return EINVAL;
+        return -EINVAL;
     }
     if (user_size < out_size) {
         out_size = user_size;
@@ -85,7 +85,7 @@ int slash_mock_sock_dispatch_ioctl(int op, void *arg, size_t arg_size) {
     case SLASH_QDMA_IOCTL_INFO:
         return slash_mock_sock_qdma_ioctl_info(arg, arg_size);
     default:
-        return EINVAL;
+        return -EINVAL;
     }
 }
 
