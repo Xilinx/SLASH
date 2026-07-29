@@ -240,7 +240,7 @@ class GraphScheduler {
         return std::nullopt;
     }
 
-    RegionId preLaunchRegion(
+    RegionId outerControlRegion(
         std::optional<NodeId> consumer) const {
         if (!consumer) return rootRegion_;
         const ResolvedOperation* operation =
@@ -408,11 +408,19 @@ class GraphScheduler {
             routeScopes_[route.requirement.id] = scope;
             const bool preLaunch =
                 scope == RendezvousScope::PreLaunch;
+            const bool hostPreLaunchCopy =
+                preLaunch && route.requirement.prerequisite &&
+                !route.legs.empty() &&
+                route.legs.front().mechanism ==
+                    TransferMechanism::HostMediatedDeviceCopy;
             std::optional<ScheduleStepId> previous;
             if (route.requirement.prerequisite) {
-                auto prerequisite = routeCompletion_.find(
+                const auto& completions =
+                    hostPreLaunchCopy ? routeActionCompletion_
+                                      : routeCompletion_;
+                auto prerequisite = completions.find(
                     *route.requirement.prerequisite);
-                if (prerequisite == routeCompletion_.end()) {
+                if (prerequisite == completions.end()) {
                     diagnostics_.error(
                         DiagCode::InternalInvariant,
                         "GraphCompiler: transfer prerequisite was not "
@@ -430,8 +438,8 @@ class GraphScheduler {
                               route.requirement.source.operation)
                         : rootRegion_;
                 const RegionId destinationRegion =
-                    preLaunch
-                        ? preLaunchRegion(
+                    scope != RendezvousScope::PerIteration
+                        ? outerControlRegion(
                               route.requirement.destination.operation)
                         :
                     leg.destination ==
@@ -456,6 +464,38 @@ class GraphScheduler {
                     leg.executor
                         ? queueFor(actionRegion, *leg.executor)
                         : destinationQueue;
+
+                if (hostPreLaunchCopy) {
+                    const ScheduleStepId action =
+                        createStep(
+                            ScheduledStepKind::TransferAction,
+                            actionQueue, actionRegion);
+                    ScheduledStep& actionStep = steps_.at(action);
+                    actionStep.route = route.requirement.id;
+                    actionStep.preLaunch = true;
+                    if (previous) addDependency(action, *previous);
+                    routeActionCompletion_[route.requirement.id] = action;
+
+                    ScheduleStepId delivered = action;
+                    if (actionQueue != destinationQueue) {
+                        delivered = publishAndWait(
+                            RendezvousPurpose::DataReady,
+                            RendezvousScope::PreLaunch,
+                            actionQueue, actionRegion, action,
+                            destinationQueue, destinationRegion,
+                            route.requirement.id, true);
+                    }
+                    const ScheduleStepId consume =
+                        createStep(
+                            ScheduledStepKind::TransferConsume,
+                            destinationQueue, destinationRegion);
+                    ScheduledStep& consumeStep = steps_.at(consume);
+                    consumeStep.route = route.requirement.id;
+                    consumeStep.preLaunch = true;
+                    addDependency(consume, delivered);
+                    previous = consume;
+                    continue;
+                }
 
                 const ScheduleStepId produce =
                     createStep(
@@ -488,6 +528,7 @@ class GraphScheduler {
                 actionStep.route = route.requirement.id;
                 actionStep.preLaunch = preLaunch;
                 addDependency(action, ready);
+                routeActionCompletion_[route.requirement.id] = action;
 
                 ScheduleStepId delivered = action;
                 if (actionQueue != destinationQueue) {
@@ -724,6 +765,7 @@ class GraphScheduler {
     std::map<NodeId, std::vector<ScheduleStepId>>
         operationStepLists_;
     std::map<RouteId, ScheduleStepId> routeCompletion_;
+    std::map<RouteId, ScheduleStepId> routeActionCompletion_;
     std::map<RouteId, RendezvousScope> routeScopes_;
     std::vector<LogicalRendezvous> rendezvous_;
     std::vector<LogicalResourceRequirement> resources_;

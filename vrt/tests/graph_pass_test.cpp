@@ -806,6 +806,85 @@ TEST(GraphPassTest, RouteGraphSharesRootInputScalarsWithoutTransfers) {
     EXPECT_TRUE(routed.output->routes().empty());
 }
 
+TEST(GraphPassTest, ScheduleGraphRunsPreLaunchHbmCopyOnHost) {
+    auto root = GraphRegion::createRoot();
+    GraphScalar size = root->inputScalar(ScalarType::U64, "size");
+    GraphBuffer input =
+        root->inputBuffer(BufferType::I32, "input", size);
+
+    IOTypeMap firstType;
+    firstType.inputs.push_back({"first", BufferType::I32});
+    IOMap firstIo;
+    firstIo.bindInput("first", input);
+    root->addKernel(
+        KernelDescriptor{"first", DeviceType::FPGA,
+                         std::nullopt, firstType},
+        std::move(firstIo), "accel");
+
+    IOTypeMap secondType;
+    secondType.inputs.push_back({"second", BufferType::I32});
+    IOMap secondIo;
+    secondIo.bindInput("second", input);
+    root->addKernel(
+        KernelDescriptor{"second", DeviceType::FPGA,
+                         std::nullopt, secondType},
+        std::move(secondIo), "accel");
+
+    CompileResult<ResolvedGraph> resolved =
+        resolveGraph(AuthoredGraph::snapshot(*root));
+    ASSERT_TRUE(resolved.ok());
+    auto host = std::make_shared<PlacementDevice>(
+        "cpu", DeviceType::CPU, hostCapabilities());
+    auto accelerator = std::make_shared<PlacementDevice>(
+        "accel", DeviceType::FPGA, acceleratorCapabilities());
+    accelerator->setRegion("first", "HBM[0]");
+    accelerator->setRegion("second", "HBM[1]");
+    std::map<std::string, std::shared_ptr<IDevice>> devices{
+        {"cpu", host}, {"accel", accelerator}};
+    CompileResult<PlacedGraph> placed = placeGraph(
+        *resolved.output,
+        DeviceCapabilityCatalog::fromDevices(devices));
+    ASSERT_TRUE(placed.ok());
+    std::map<std::pair<DeviceType, DeviceType>, BridgeFactory>
+        factories;
+    factories[{DeviceType::CPU, DeviceType::FPGA}] =
+        markerBridgeFactory();
+    factories[{DeviceType::FPGA, DeviceType::CPU}] =
+        markerBridgeFactory();
+    CompileResult<RoutedGraph> routed = routeGraph(
+        *placed.output,
+        TransferCapabilityCatalog::fromGraph(devices, factories));
+    ASSERT_TRUE(routed.ok());
+    ASSERT_EQ(routed.output->routes().size(), 2u);
+
+    const TransferRoute* copy = nullptr;
+    for (const TransferRoute& route : routed.output->routes()) {
+        if (!route.legs.empty() &&
+            route.legs.front().mechanism ==
+                TransferMechanism::HostMediatedDeviceCopy) {
+            copy = &route;
+        }
+    }
+    ASSERT_NE(copy, nullptr);
+    EXPECT_TRUE(copy->requirement.prerequisite.has_value());
+
+    CompileResult<ScheduledGraph> scheduled =
+        scheduleGraph(*routed.output);
+    ASSERT_TRUE(scheduled.ok());
+    std::vector<RendezvousPurpose> purposes;
+    for (const LogicalRendezvous& rendezvous :
+         scheduled.output->rendezvous()) {
+        if (rendezvous.route ==
+            std::optional<RouteId>(copy->requirement.id)) {
+            purposes.push_back(rendezvous.purpose);
+        }
+    }
+    EXPECT_EQ(
+        purposes,
+        (std::vector<RendezvousPurpose>{
+            RendezvousPurpose::DataReady}));
+}
+
 TEST(GraphPassTest, RouteGraphSelectsHostBounceDeclaratively) {
     auto root = GraphRegion::createRoot();
     GraphScalar size =
@@ -1237,6 +1316,79 @@ TEST(GraphPassTest, ScheduleGraphModelsWhileSplitDecisionAndAck) {
     }
     EXPECT_TRUE(decision);
     EXPECT_TRUE(acknowledged);
+}
+
+TEST(GraphPassTest, ScheduleGraphHoistsProducedChildInputToControlQueue) {
+    auto root = GraphRegion::createRoot();
+    GraphScalar size = root->inputScalar(ScalarType::U64, "size");
+    IOTypeMap producerType;
+    producerType.outputs.push_back({"out", BufferType::I32});
+    IOMap producerIo;
+    GraphBuffer produced;
+    producerIo.bindOutput(
+        "out", BufferType::I32, produced, size, root->scopeId());
+    root->addKernel(
+        KernelDescriptor{"produce", DeviceType::FPGA,
+                         std::nullopt, producerType},
+        std::move(producerIo), "accel");
+
+    auto makeBranch = [&](const std::string& name) {
+        auto branch = root->createChild();
+        GraphBuffer local =
+            branch->inputBuffer(BufferType::I32, name, size);
+        branch->importFromParent({{produced, local}});
+        IOTypeMap consumerType;
+        consumerType.inputs.push_back({"in", BufferType::I32});
+        IOMap consumerIo;
+        consumerIo.bindInput("in", local);
+        branch->addKernel(
+            KernelDescriptor{name, DeviceType::CPU,
+                             std::nullopt, consumerType},
+            std::move(consumerIo), "cpu");
+        return branch;
+    };
+    ConditionalSpec conditional;
+    conditional.condition = Condition::alwaysTrue();
+    conditional.thenRegion = makeBranch("then");
+    conditional.elseRegion = makeBranch("else");
+    root->addConditional(std::move(conditional));
+
+    const AuthoredGraph authored = AuthoredGraph::snapshot(*root);
+    CompileResult<ResolvedGraph> resolved = resolveGraph(authored);
+    ASSERT_TRUE(resolved.ok());
+    auto host = std::make_shared<PlacementDevice>(
+        "cpu", DeviceType::CPU, hostCapabilities());
+    auto accelerator = std::make_shared<PlacementDevice>(
+        "accel", DeviceType::FPGA, acceleratorCapabilities());
+    std::map<std::string, std::shared_ptr<IDevice>> devices{
+        {"cpu", host}, {"accel", accelerator}};
+    CompileResult<PlacedGraph> placed = placeGraph(
+        *resolved.output,
+        DeviceCapabilityCatalog::fromDevices(devices));
+    ASSERT_TRUE(placed.ok());
+    std::map<std::pair<DeviceType, DeviceType>, BridgeFactory>
+        factories;
+    factories[{DeviceType::CPU, DeviceType::FPGA}] =
+        markerBridgeFactory();
+    factories[{DeviceType::FPGA, DeviceType::CPU}] =
+        markerBridgeFactory();
+    CompileResult<RoutedGraph> routed = routeGraph(
+        *placed.output,
+        TransferCapabilityCatalog::fromGraph(devices, factories));
+    ASSERT_TRUE(routed.ok());
+    CompileResult<ScheduledGraph> scheduled =
+        scheduleGraph(*routed.output);
+    ASSERT_TRUE(scheduled.ok());
+
+    bool sawHoistedAction = false;
+    for (const auto& [id, step] : scheduled.output->steps()) {
+        (void)id;
+        if (step.kind == ScheduledStepKind::TransferAction) {
+            sawHoistedAction = true;
+            EXPECT_EQ(step.region, authored.root().id);
+        }
+    }
+    EXPECT_TRUE(sawHoistedAction);
 }
 
 TEST(GraphPassTest, BackendResourceLeasesDoNotCollideAcrossLivePlans) {
