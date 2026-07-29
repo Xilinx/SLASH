@@ -1292,8 +1292,8 @@ TEST(RegionCompilerTest, GraphInputFanoutCopiesToSecondFpgaRegion) {
     }
 
     auto dgraphs = compileForInspection(graph);
-    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 0u)
-        << "root inputs are staged directly into each required region";
+    EXPECT_EQ(countDeviceCopyNodes(dgraphs), 1u)
+        << "one canonical staging route should feed a second-region copy";
 }
 
 TEST(RegionCompilerTest, NestedDeviceCopyIsRejected) {

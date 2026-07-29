@@ -395,10 +395,50 @@ class GraphRouter {
                         value->type.kind == ValueKind::Buffer
                             ? TransferPayloadKind::Buffer
                             : TransferPayloadKind::Scalar;
-                    const std::optional<RouteId> route =
-                        createRoute(
-                            sourceValue, payload, value->producer,
-                            node, *source, destination);
+                    MemoryPlacement routeSource = *source;
+                    std::optional<RouteId> prerequisite;
+                    const auto replicaKey =
+                        std::make_pair(sourceValue, destination.device);
+                    auto replica = graphInputReplicas_.find(replicaKey);
+                    if (value->type.kind == ValueKind::Buffer &&
+                        value->definition ==
+                            ValueDefinitionKind::GraphInput &&
+                        source->device != destination.device &&
+                        replica != graphInputReplicas_.end()) {
+                        if (replica->second.placement.device ==
+                                destination.device &&
+                            replica->second.placement.region ==
+                                destination.region) {
+                            dependencies_.push_back(
+                                {value->producer, node,
+                                 DependencyKind::Value, sourceValue,
+                                 replica->second.route});
+                            continue;
+                        }
+                        routeSource = replica->second.placement;
+                        prerequisite = replica->second.route;
+                    }
+                    const std::optional<RouteId> route = createRoute(
+                        sourceValue, payload, value->producer,
+                        node, routeSource, destination);
+                    if (route && prerequisite) {
+                        for (TransferRoute& planned : routes_) {
+                            if (planned.requirement.id == *route) {
+                                planned.requirement.prerequisite =
+                                    prerequisite;
+                                break;
+                            }
+                        }
+                    }
+                    if (route &&
+                        value->type.kind == ValueKind::Buffer &&
+                        value->definition ==
+                            ValueDefinitionKind::GraphInput &&
+                        source->device != destination.device &&
+                        replica == graphInputReplicas_.end()) {
+                        graphInputReplicas_[replicaKey] = {
+                            destination, *route};
+                    }
                     dependencies_.push_back(
                         {value->producer, node,
                          DependencyKind::Value, sourceValue, route});
@@ -601,6 +641,12 @@ class GraphRouter {
     std::map<NodeId, const AuthoredOperation*> authoredOperations_;
     std::map<RegionId, std::optional<NodeId>> parentControlByRegion_;
     std::map<ValueId, ValueId> aliases_;
+    struct GraphInputReplica {
+        MemoryPlacement placement;
+        RouteId         route;
+    };
+    std::map<std::pair<ValueId, DeviceId>, GraphInputReplica>
+        graphInputReplicas_;
     std::map<RouteKey, RouteId> routeIds_;
     std::vector<DependencyEdge> dependencies_;
     std::vector<TransferRoute> routes_;

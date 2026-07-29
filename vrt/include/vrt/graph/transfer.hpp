@@ -67,6 +67,7 @@ struct TransferRequirement {
     TransferPayloadKind           payload = TransferPayloadKind::Buffer;
     TransferEndpoint              source;
     TransferEndpoint              destination;
+    std::optional<RouteId>        prerequisite;
 };
 
 struct TransferLeg {

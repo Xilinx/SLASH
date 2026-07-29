@@ -409,6 +409,18 @@ class GraphScheduler {
             const bool preLaunch =
                 scope == RendezvousScope::PreLaunch;
             std::optional<ScheduleStepId> previous;
+            if (route.requirement.prerequisite) {
+                auto prerequisite = routeCompletion_.find(
+                    *route.requirement.prerequisite);
+                if (prerequisite == routeCompletion_.end()) {
+                    diagnostics_.error(
+                        DiagCode::InternalInvariant,
+                        "GraphCompiler: transfer prerequisite was not "
+                        "scheduled first");
+                    continue;
+                }
+                previous = prerequisite->second;
+            }
 
             for (const TransferLeg& leg : route.legs) {
                 const RegionId sourceRegion =
