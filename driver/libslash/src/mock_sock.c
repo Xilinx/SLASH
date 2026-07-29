@@ -32,6 +32,10 @@
 
 #define MOCK_SOCK_MAX_QPAIRS 256
 
+/**
+ * @brief State specific to mock sock servers implementing the
+ * /dev/slash_qdma_ctl endpoint.
+ */
 struct slash_mock_sock_qdma_endpoint_state {
     /** @brief Qpair state bitsets.
      *
@@ -39,11 +43,9 @@ struct slash_mock_sock_qdma_endpoint_state {
      * Bit 1 (0b10): Qpair started.
      */
     int qpairs[MOCK_SOCK_MAX_QPAIRS];
+    /** @brief The configured aperture of the qpair.
+     */
     int aperture_size[MOCK_SOCK_MAX_QPAIRS];
-};
-
-union slash_mock_sock_endpoint_state {
-    struct slash_mock_sock_qdma_endpoint_state qdma;
 };
 
 /**
@@ -61,7 +63,9 @@ struct slash_mock_sock_server_state {
     /**
      * @brief Required state to mock-up the endpoint.
      */
-    union slash_mock_sock_endpoint_state endpoint_state;
+    union {
+        struct slash_mock_sock_qdma_endpoint_state qdma;
+    } endpoint_state;
 };
 
 /**
@@ -96,7 +100,7 @@ struct slash_mock_sock_server_state {
  * failure.
  */
 __u32 checked_copy_from_user(void *dst, size_t dst_size, void *arg,
-                               size_t arg_size, size_t min_size) {
+                             size_t arg_size, size_t min_size) {
     __u32 user_size;
     __u32 common_size;
 
@@ -153,6 +157,18 @@ int slash_mock_sock_qdma_ioctl_info(void *arg, size_t arg_size) {
     return 0;
 }
 
+/**
+ * @brief Execute the SLASH_QDMA_IOCL_QPAIR_ADD operation.
+ *
+ * This operation looks for the first qpair that is not in use and allocates it
+ * for the user. It then returns the qid as an out-field of the argument struct.
+ *
+ * @param state Non-owning reference to the QDMA endpoint state
+ * @param arg Non-owning reference to the operation argument. Interpreted as an
+ * instance of @ref slash_qdma_qpair_add, following the ABI versioning rules.
+ * @param arg_size Apparent size of the argument struct.
+ * @return 0 on success, negative error number on failure.
+ */
 int slash_mock_sock_qdma_ioctl_qpair_add(
     struct slash_mock_sock_qdma_endpoint_state *state, void *arg,
     size_t arg_size) {
@@ -185,6 +201,18 @@ int slash_mock_sock_qdma_ioctl_qpair_add(
     return 0;
 }
 
+/**
+ * @brief Execute the SLASH_QDMA_IOCL_Q_OP operation.
+ *
+ * If the referenced qpair has been created before, it either starts, stops, or
+ * deletes the qpair.
+ *
+ * @param state Non-owning reference to the QDMA endpoint state
+ * @param arg Non-owning reference to the operation argument. Interpreted as an
+ * instance of @ref slash_qdma_qpair_op, following the ABI versioning rules.
+ * @param arg_size Apparent/maximal size of the argument struct.
+ * @return 0 on success, negative error number on failure.
+ */
 int slash_mock_sock_qdma_ioctl_qpair_op(
     struct slash_mock_sock_qdma_endpoint_state *state, void *arg,
     size_t arg_size) {
@@ -218,6 +246,14 @@ int slash_mock_sock_qdma_ioctl_qpair_op(
     /* No out fields, no need to write back*/
 }
 
+/**
+ * @brief Dispatch the IOCTL operation in the QDMA control file endpoint.
+ *
+ * @param state Non-owning reference to the QDMA endpoint state.
+ * @param op Op-code of the IOCTL to dispatch.
+ * @param arg Non-owning reference to the argument struct.
+ * @param arg_size Apparent/maximal size of the argument struct.
+ */
 int slash_mock_sock_dispatch_qdma_ioctl(
     struct slash_mock_sock_qdma_endpoint_state *state, int op, void *arg,
     size_t arg_size) {
