@@ -368,6 +368,26 @@ static int dispatch_qdma_ioctl(struct qdma_endpoint_state *state, int op,
     }
 }
 
+/**
+ * @brief Receive a message over a socket, potentially including file
+ * descriptors.
+ *
+ * If the message includes a list of file descriptors, this function will
+ * allocate a buffer for these file descriptors, assign it to *out_fds, and set
+ * *out_n_fds accordingly. Ownership is transferred to the caller. If the
+ * message include no file descriptors, *out_fds will be set to NULL and
+ * *out_n_fds to 0.
+ *
+ * @param fd The file descriptor of the UNIX domain socket.
+ * @param msg_buffer Non-owning reference to the message buffer.
+ * @param msg_buffer_size The size/capacity of the @ref msg_buffer in bytes.
+ * @param out_fds Non-owning reference to a pointer to store the file
+ * descriptors at.
+ * @param n_fds The number of file descriptors stored in *out_fds, or 0 if
+ * *out_fds is NULL.
+ * @return The number of bytes received if successfull, 0 if the other side has
+ * closed their socket, or -1 in an error case with errno set.
+ */
 static ssize_t recv_sock_message(int fd, void *msg_buffer,
                                  size_t msg_buffer_size, int **out_fds,
                                  size_t *out_n_fds) {
@@ -429,6 +449,17 @@ static ssize_t recv_sock_message(int fd, void *msg_buffer,
     return msg_size;
 }
 
+/**
+ * @brief Send a message over the socket, including some file descriptors.
+ *
+ * @param fd The file descriptor of the UNIX domain socket.
+ * @param msg_buffer Non-owning reference to the message to send.
+ * @param msg_buffer_size The size of the @ref msg_buffer in bytes.
+ * @param fds Non-owning reference to the file descriptors to send.
+ * @param n_fds The length of @ref fds, in number of file descriptors
+ * @return The number of bytes sent if successfull, 0 if the other side has
+ * closed their socket, or -1 in an error case with errno set.
+ */
 static ssize_t send_sock_message(int fd, void *msg_buffer,
                                  size_t msg_buffer_size, int *fds,
                                  size_t n_fds) {
