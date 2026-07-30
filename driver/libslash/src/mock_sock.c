@@ -42,7 +42,7 @@
  * @brief State specific to mock sock servers implementing the
  * /dev/slash_qdma_ctl endpoint.
  */
-struct slash_mock_sock_qdma_endpoint_state {
+struct qdma_endpoint_state {
     /** @brief Qpair state bitsets.
      *
      * Bit 0 (0b01): Qpair used.
@@ -57,7 +57,7 @@ struct slash_mock_sock_qdma_endpoint_state {
 /**
  * @brief The state of a mock sock server.
  */
-struct slash_mock_sock_server_state {
+struct server_state {
     /**
      * @brief The socket FD to communicate with a client.
      */
@@ -70,7 +70,7 @@ struct slash_mock_sock_server_state {
      * @brief Required state to mock-up the endpoint.
      */
     union {
-        struct slash_mock_sock_qdma_endpoint_state qdma;
+        struct qdma_endpoint_state qdma;
     } endpoint_state;
 };
 
@@ -105,8 +105,8 @@ struct slash_mock_sock_server_state {
  * @return The common size (i.e. min(user_size, server_size)) on success, -1 on
  * failure.
  */
-__u32 checked_copy_from_user(void *dst, size_t dst_size, void *arg,
-                             size_t arg_size, size_t min_size) {
+static __u32 checked_copy_from_user(void *dst, size_t dst_size, void *arg,
+                                    size_t arg_size, size_t min_size) {
     __u32 user_size;
     __u32 common_size;
 
@@ -142,7 +142,7 @@ __u32 checked_copy_from_user(void *dst, size_t dst_size, void *arg,
  * @param arg Non-owning reference to the argument buffer to read and write.
  * @param arg_size Size of the argument buffer in bytes.
  */
-int slash_mock_sock_qdma_ioctl_info(void *arg, size_t arg_size) {
+static int qdma_ioctl_info(void *arg, size_t arg_size) {
     struct slash_qdma_info info;
     __u32 out_size;
 
@@ -175,9 +175,8 @@ int slash_mock_sock_qdma_ioctl_info(void *arg, size_t arg_size) {
  * @param arg_size Apparent size of the argument struct.
  * @return 0 on success, negative error number on failure.
  */
-int slash_mock_sock_qdma_ioctl_qpair_add(
-    struct slash_mock_sock_qdma_endpoint_state *state, void *arg,
-    size_t arg_size) {
+static int qdma_ioctl_qpair_add(struct qdma_endpoint_state *state, void *arg,
+                                size_t arg_size) {
     struct slash_qdma_qpair_add qpair_add;
     __u32 out_size;
     __u32 qid;
@@ -219,9 +218,8 @@ int slash_mock_sock_qdma_ioctl_qpair_add(
  * @param arg_size Apparent/maximal size of the argument struct.
  * @return 0 on success, negative error number on failure.
  */
-int slash_mock_sock_qdma_ioctl_qpair_op(
-    struct slash_mock_sock_qdma_endpoint_state *state, void *arg,
-    size_t arg_size) {
+static int qdma_ioctl_qpair_op(struct qdma_endpoint_state *state, void *arg,
+                               size_t arg_size) {
     struct slash_qdma_qpair_op qpair_op;
     __u32 out_size;
 
@@ -267,9 +265,8 @@ int slash_mock_sock_qdma_ioctl_qpair_op(
  * function sets it to the number of emitted FDs.
  * @return 0 on success, negative error number on failure.
  */
-int slash_mock_sock_qdma_ioctl_buf_create(void *arg, size_t arg_size,
-                                          int *output_fds,
-                                          size_t *n_output_fds) {
+static int qdma_ioctl_buf_create(void *arg, size_t arg_size, int *output_fds,
+                                 size_t *n_output_fds) {
 
     struct slash_qdma_buf_create buf_create;
     __u32 out_size;
@@ -334,23 +331,22 @@ int slash_mock_sock_qdma_ioctl_buf_create(void *arg, size_t arg_size,
  * output_fds. The original value is the capacity of the array in number of FDs,
  * and this function sets it to the actual number of FDs emitted.
  */
-int slash_mock_sock_dispatch_qdma_ioctl(
-    struct slash_mock_sock_qdma_endpoint_state *state, int op, void *arg,
-    size_t arg_size, int *input_fds, size_t n_input_fds, int *output_fds,
-    size_t *n_output_fds) {
+static int dispatch_qdma_ioctl(struct qdma_endpoint_state *state, int op,
+                               void *arg, size_t arg_size, int *input_fds,
+                               size_t n_input_fds, int *output_fds,
+                               size_t *n_output_fds) {
     switch (op) {
     case SLASH_QDMA_IOCTL_INFO:
         *n_output_fds = 0;
-        return slash_mock_sock_qdma_ioctl_info(arg, arg_size);
+        return qdma_ioctl_info(arg, arg_size);
     case SLASH_QDMA_IOCTL_QPAIR_ADD:
         *n_output_fds = 0;
-        return slash_mock_sock_qdma_ioctl_qpair_add(state, arg, arg_size);
+        return qdma_ioctl_qpair_add(state, arg, arg_size);
     case SLASH_QDMA_IOCTL_Q_OP:
         *n_output_fds = 0;
-        return slash_mock_sock_qdma_ioctl_qpair_op(state, arg, arg_size);
+        return qdma_ioctl_qpair_op(state, arg, arg_size);
     case SLASH_QDMA_IOCTL_BUF_CREATE:
-        return slash_mock_sock_qdma_ioctl_buf_create(arg, arg_size, output_fds,
-                                                     n_output_fds);
+        return qdma_ioctl_buf_create(arg, arg_size, output_fds, n_output_fds);
     default:
         *n_output_fds = 0;
         return -ENOTTY;
@@ -368,8 +364,8 @@ int slash_mock_sock_dispatch_qdma_ioctl(
  * on shutdown
  * @return NULL
  */
-void *mock_sock_server_main(void *arg) {
-    struct slash_mock_sock_server_state *server_state;
+static void *mock_sock_server_main(void *arg) {
+    struct server_state *server_state;
 
     char message_buffer[RECV_BUFFER_SIZE];
     union {
@@ -391,7 +387,7 @@ void *mock_sock_server_main(void *arg) {
     size_t n_input_fds, n_output_fds, i_fd;
     int fds_closed_successfully;
 
-    server_state = (struct slash_mock_sock_server_state *)arg;
+    server_state = (struct server_state *)arg;
 
     while (1) {
         /*
@@ -474,7 +470,7 @@ void *mock_sock_server_main(void *arg) {
          * =====================================================================
          */
         if (server_state->endpoint == SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
-            message_header->return_value = slash_mock_sock_dispatch_qdma_ioctl(
+            message_header->return_value = dispatch_qdma_ioctl(
                 &(server_state->endpoint_state.qdma), ioctl_op, message_body,
                 message_body_size, input_fds, n_input_fds, output_fds,
                 &n_output_fds);
@@ -552,7 +548,7 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
     int rv;
     int sockets[2];
     pthread_t thread;
-    struct slash_mock_sock_server_state *state;
+    struct server_state *state;
 
     /* TODO: Implement other kinds of mock socks */
     if (endpoint != SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
@@ -560,7 +556,7 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
         return -1;
     }
 
-    state = calloc(1, sizeof(struct slash_mock_sock_server_state));
+    state = calloc(1, sizeof(struct server_state));
     if (state == NULL) {
         errno = ENOMEM;
         return -1;
