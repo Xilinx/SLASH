@@ -339,12 +339,20 @@ TEST_P(ParametrizedQdmaTest, QpairAddAcceptsKeyholeAperture) {
 
 TEST_P(ParametrizedQdmaTest, BufCreateViaCtlFD) {
     slash_qdma_buffer buf{};
-    ASSERT_EQ(slash_qdma_buffer_create(qdma_, 4096, &buf), 0);
+    ASSERT_EQ(slash_qdma_buffer_create(qdma_, 4096, &buf), 0)
+        << strerror(errno);
 
     EXPECT_GE(buf.fd, 0);
     EXPECT_NE(buf.addr, nullptr);
     EXPECT_EQ(buf.length, 4096u);
     EXPECT_EQ(buf.granule, 4096u);
+
+    // Test that the FD is still valid after some time, and that the length is
+    // correct.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    struct stat buf_stat{};
+    EXPECT_EQ(fstat(buf.fd, &buf_stat), 0) << strerror(errno);
+    EXPECT_EQ(buf_stat.st_size, 4096u);
 
     EXPECT_EQ(slash_qdma_buffer_destroy(&buf), 0);
 }

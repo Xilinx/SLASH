@@ -15,13 +15,19 @@
  * this program; if not, write to the Free Software Foundation, Inc., 51
  * Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
+
+#define _GNU_SOURCE
+
 #include "mock_sock.h"
 
 #include <slash/uapi/slash_sysemu.h>
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #define RECV_BUFFER_SIZE (sizeof(struct slash_sysemu_socket_header) + 65536)
 #define MAX_FDS 64
@@ -247,24 +253,106 @@ int slash_mock_sock_qdma_ioctl_qpair_op(
 }
 
 /**
+ * @brief Execute the SLASH_QDMA_IOCTL_BUF_CREATE operation.
+ *
+ * This creates a "host buffer", which in this case is only a memfd of the
+ * specified size.
+ *
+ * @param arg Non-owning reference to the operation argument. Interpreted as an
+ * instance of @ref slash_qdma_buf_create, following the ABI versioning rules.
+ * @param arg_size Apparent size of the argument struct.
+ * @param output_fds Non-owned array to write the buffer FD to.
+ * @param n_output_fds Non-owned reference to the capacity/size of the @ref
+ * output_fds array. The original value is the capacity of the array, and this
+ * function sets it to the number of emitted FDs.
+ * @return 0 on success, negative error number on failure.
+ */
+int slash_mock_sock_qdma_ioctl_buf_create(void *arg, size_t arg_size,
+                                          int *output_fds,
+                                          size_t *n_output_fds) {
+
+    struct slash_qdma_buf_create buf_create;
+    __u32 out_size;
+    int buf_fd, rv;
+    unsigned int memfd_flags = 0;
+    long page_size = sysconf(_SC_PAGESIZE);
+
+    if (page_size < 0) {
+        *n_output_fds = 0;
+        return -ENOMEM;
+    }
+
+    out_size = checked_copy_from_user(&buf_create, sizeof(buf_create), arg,
+                                      arg_size, SLASH_QDMA_BUF_CREATE_MIN_SIZE);
+    if (out_size == -1) {
+        *n_output_fds = 0;
+        return -EINVAL;
+    }
+
+    if ((buf_create.flags & O_CLOEXEC) != 0) {
+        memfd_flags = MFD_CLOEXEC;
+    }
+    buf_fd = memfd_create("slash_mock_sock_buf", memfd_flags);
+    if (buf_fd == -1) {
+        *n_output_fds = 0;
+        return -ENOMEM;
+    }
+
+    rv = ftruncate(buf_fd, buf_create.length);
+    if (rv == -1) {
+        close(buf_fd);
+        *n_output_fds = 0;
+        return -ENOMEM;
+    }
+
+    *output_fds = buf_fd;
+    *n_output_fds = 1;
+
+    buf_create.size = out_size;
+    buf_create.granule = page_size;
+    buf_create.transfer_hint = SLASH_QDMA_TRANSFER_HINT_SINGLE_QPAIR;
+
+    /* The kernel would return the FD here, but with the socket transport, we
+     * have to return the index of the FD in the list of output FDs.
+     * Coincidentally, we emit only one FD, so we still return 0. */
+    return 0;
+}
+
+/**
  * @brief Dispatch the IOCTL operation in the QDMA control file endpoint.
  *
  * @param state Non-owning reference to the QDMA endpoint state.
  * @param op Op-code of the IOCTL to dispatch.
  * @param arg Non-owning reference to the argument struct.
  * @param arg_size Apparent/maximal size of the argument struct.
+ * @param input_fds Non-owned array of fds sent by the user, to be used in the
+ * operation.
+ * @param n_input_fds Size of the @ref input_fds array, <= MAX_FDS
+ * @param output_fds Non-owned array to write output fds to, which are to be
+ * sent to the user
+ * @param n_output_fds Non-owned reference to the capacity/size of @ref
+ * output_fds. The original value is the capacity of the array in number of FDs,
+ * and this function sets it to the actual number of FDs emitted.
  */
 int slash_mock_sock_dispatch_qdma_ioctl(
     struct slash_mock_sock_qdma_endpoint_state *state, int op, void *arg,
-    size_t arg_size) {
+    size_t arg_size, int *input_fds, size_t n_input_fds, int *output_fds,
+    size_t *n_output_fds) {
     switch (op) {
     case SLASH_QDMA_IOCTL_INFO:
+        *n_output_fds = 0;
         return slash_mock_sock_qdma_ioctl_info(arg, arg_size);
     case SLASH_QDMA_IOCTL_QPAIR_ADD:
+        *n_output_fds = 0;
         return slash_mock_sock_qdma_ioctl_qpair_add(state, arg, arg_size);
     case SLASH_QDMA_IOCTL_Q_OP:
+        *n_output_fds = 0;
         return slash_mock_sock_qdma_ioctl_qpair_op(state, arg, arg_size);
+    case SLASH_QDMA_IOCTL_BUF_CREATE:
+        return slash_mock_sock_qdma_ioctl_buf_create(arg, arg_size, output_fds,
+                                                     n_output_fds);
     default:
+        *n_output_fds = 0;
         return -ENOTTY;
     }
 }
@@ -283,8 +371,11 @@ int slash_mock_sock_dispatch_qdma_ioctl(
 void *mock_sock_server_main(void *arg) {
     struct slash_mock_sock_server_state *server_state;
 
-    char recv_buffer[RECV_BUFFER_SIZE];
-    char cmsg_buffer[CMSG_SPACE(sizeof(int) * MAX_FDS)];
+    char message_buffer[RECV_BUFFER_SIZE];
+    union {
+        char buf[CMSG_SPACE(sizeof(int) * MAX_FDS)];
+        struct cmsghdr align;
+    } cmsg_buffer;
     struct iovec iov;
     struct msghdr msg;
     ssize_t n;
@@ -294,21 +385,37 @@ void *mock_sock_server_main(void *arg) {
     void *message_body;
     size_t message_body_size;
 
+    struct cmsghdr *cmsg_header;
+    int input_fds[MAX_FDS];
+    int output_fds[MAX_FDS];
+    size_t n_input_fds, n_output_fds, i_fd;
+    int fds_closed_successfully;
+
     server_state = (struct slash_mock_sock_server_state *)arg;
 
     while (1) {
+        /*
+         * ==========================================
+         * Preparing the buffers to receive a message
+         * ==========================================
+         */
+        memset(message_buffer, 0, sizeof(message_buffer));
+        memset(cmsg_buffer.buf, 0, sizeof(cmsg_buffer.buf));
         memset(&iov, 0, sizeof(iov));
-        memset(recv_buffer, 0, sizeof(recv_buffer));
-        iov.iov_base = recv_buffer;
-        iov.iov_len = sizeof(recv_buffer);
-
         memset(&msg, 0, sizeof(msg));
-        memset(cmsg_buffer, 0, sizeof(cmsg_buffer));
+
+        iov.iov_base = message_buffer;
+        iov.iov_len = sizeof(message_buffer);
         msg.msg_iov = &iov;
         msg.msg_iovlen = 1;
-        msg.msg_control = cmsg_buffer;
+        msg.msg_control = cmsg_buffer.buf;
         msg.msg_controllen = sizeof(cmsg_buffer);
 
+        /*
+         * ==============================================
+         * Receiving a message, plus early error handling
+         * ==============================================
+         */
         n = recvmsg(server_state->server_fd, &msg, 0);
 
         if (n <= 0) {
@@ -317,28 +424,120 @@ void *mock_sock_server_main(void *arg) {
         }
 
         if ((size_t)n < sizeof(struct slash_sysemu_socket_header)) {
-            /* Message too small, ignoring */
+            /* Message too small, ignoring the message */
             continue;
         }
 
-        message_header = (struct slash_sysemu_socket_header *)recv_buffer;
+        /*
+         * ====================================================
+         * Retrieving and preparing the message header and body
+         * ====================================================
+         */
+        message_header = (struct slash_sysemu_socket_header *)message_buffer;
         ioctl_op = message_header->ioctl_op;
-        message_body = recv_buffer + sizeof(struct slash_sysemu_socket_header);
+        message_body =
+            message_buffer + sizeof(struct slash_sysemu_socket_header);
         message_body_size =
             ((size_t)n) - sizeof(struct slash_sysemu_socket_header);
 
+        /*
+         * ==================
+         * Fetching input FDs
+         * ==================
+         */
+        memset(input_fds, 0, sizeof(input_fds));
+        memset(output_fds, 0, sizeof(output_fds));
+        n_input_fds = 0;
+        n_output_fds = MAX_FDS;
+        for (cmsg_header = CMSG_FIRSTHDR(&msg); cmsg_header != NULL;
+             cmsg_header = CMSG_NXTHDR(&msg, cmsg_header)) {
+            if (cmsg_header->cmsg_level != SOL_SOCKET ||
+                cmsg_header->cmsg_type != SCM_RIGHTS) {
+                continue;
+            }
+            n_input_fds = (cmsg_header->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+            /* Receiving more FDs than MAX_FDS shouldn't be possible since we
+             * haven't allocated enough space for that. However, we are still
+             * checking this to turn a potential buffer overflow into a more
+             * benign FD leak. */
+            if (n_input_fds > MAX_FDS) {
+                n_input_fds = MAX_FDS;
+            }
+            memcpy(input_fds, CMSG_DATA(cmsg_header),
+                   n_input_fds * sizeof(int));
+            break;
+        }
+
+        /*
+         * =====================================================================
+         * Dispatching the operation (Response is written to the message buffer)
+         * =====================================================================
+         */
         if (server_state->endpoint == SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
             message_header->return_value = slash_mock_sock_dispatch_qdma_ioctl(
                 &(server_state->endpoint_state.qdma), ioctl_op, message_body,
-                message_body_size);
+                message_body_size, input_fds, n_input_fds, output_fds,
+                &n_output_fds);
         } else {
             /* This endpoint is not implemented yet */
             message_header->return_value = -ENOSYS;
+            n_output_fds = 0;
         }
 
+        /*
+         * ======================================================
+         * Preparing the response, including potential output FDs
+         * ======================================================
+         */
+        memset(&iov, 0, sizeof(iov));
+        memset(&msg, 0, sizeof(msg));
+        iov.iov_base = message_buffer;
+        iov.iov_len = n;
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+
+        if (n_output_fds != 0 && n_output_fds <= MAX_FDS) {
+            memset(cmsg_buffer.buf, 0, sizeof(cmsg_buffer.buf));
+            msg.msg_control = cmsg_buffer.buf;
+            msg.msg_controllen = sizeof(cmsg_buffer);
+
+            cmsg_header = CMSG_FIRSTHDR(&msg);
+            cmsg_header->cmsg_level = SOL_SOCKET;
+            cmsg_header->cmsg_type = SCM_RIGHTS;
+            cmsg_header->cmsg_len = CMSG_LEN(sizeof(int) * n_output_fds);
+
+            memcpy(CMSG_DATA(cmsg_header), output_fds,
+                   sizeof(int) * n_output_fds);
+            msg.msg_controllen = cmsg_header->cmsg_len;
+        } else {
+            msg.msg_control = NULL;
+            msg.msg_controllen = 0;
+        }
+
+        /*
+         * ====================
+         * Sending the response
+         * ====================
+         */
         n = sendmsg(server_state->server_fd, &msg, MSG_CMSG_CLOEXEC);
         if (n <= 0) {
             /* Sending failed, halting */
+            break;
+        }
+
+        /* Closing previously handled FDs */
+        fds_closed_successfully = true;
+        for (i_fd = 0; i_fd < n_input_fds; i_fd++) {
+            if (close(input_fds[i_fd]) < 0) {
+                fds_closed_successfully = false;
+            }
+        }
+        for (i_fd = 0; i_fd < n_output_fds; i_fd++) {
+            if (close(output_fds[i_fd]) < 0) {
+                fds_closed_successfully = false;
+            }
+        }
+        if (!fds_closed_successfully) {
             break;
         }
     }
