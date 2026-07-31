@@ -169,14 +169,29 @@ local IP repository before building:
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for
 additional details.
 
-Then run the linker install script from the repository root:
+Then build the FPGA base shell from the repository root:
 
 .. code-block:: bash
 
-   bash scripts/root-design-build.sh
+   bash scripts/build-base-shell.sh
 
 **This step takes several hours** — it runs full Vivado synthesis and
-implementation to produce the static shell artifacts.
+implementation to produce the static shell artifacts. ``build-base-shell.sh``
+is the canonical entry point: it checks the Vivado/SMBus prerequisites and then
+runs the low-level ``scripts/root-design-build.sh``.
+
+The same script is invoked automatically, up-front, by ``scripts/package-deb.sh``
+and ``scripts/package-rpm.sh``. Because the base shell only needs Vivado (not the
+SLASHKit software dependencies), expert users can redirect **just** this step to a
+build farm while packaging runs on a local machine:
+
+* Set ``SLASH_BASE_SHELL_LAUNCHER`` to a **synchronous** job-launcher prefix, e.g.
+  ``export SLASH_BASE_SHELL_LAUNCHER="bsub -K -q fpgasynthesis -n 16 -M 120G"``.
+  The ``-K`` flag is required so the build blocks until the static shell exists
+  before packaging continues.
+* Or build the shell separately on the farm and run packaging with
+  ``SLASH_PKG_SKIP_ROOT_DESIGN_BUILD=1`` to reuse the existing
+  ``linker/slashkit/resources/static_shell/`` artifacts.
 
 Examples
 ========

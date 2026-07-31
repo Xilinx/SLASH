@@ -56,33 +56,16 @@ if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]] && [[ "${NONINTERACTIVE}" -eq 0 ]];
     esac
 fi
 
-# Check build prerequisites
-_prereq_ok=1
-
-if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
-    if ! command -v v++ >/dev/null 2>&1; then
-        echo "ERROR: v++ not found in PATH. Source Vitis 2025.1 before building:" >&2
-        echo "  source <path-to-vitis>/settings64.sh" >&2
-        echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
-        _prereq_ok=0
-    fi
-
-    if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' >/dev/null 2>&1; then
-        echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/iprepo/." >&2
-        echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
-        echo "directory into linker/slashkit/resources/base/iprepo/ before building." >&2
-        echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
-        _prereq_ok=0
-    fi
-fi
-
-if [[ "${_prereq_ok}" -eq 0 ]]; then
-    exit 1
-fi
-
 if [[ "${NONINTERACTIVE}" -eq 1 ]]; then
     export SLASH_NONINTERACTIVE=1
 fi
+
+# Build the FPGA base shell (Vivado synth/impl, ~5h) up-front, before anything else.
+# Prerequisite checks (v++, SMBus IP) live inside this script. Expert users can redirect
+# just this step to a build farm: either set SLASH_BASE_SHELL_LAUNCHER (see
+# scripts/build-base-shell.sh) or edit the line below to wrap it with your scheduler
+# (e.g. bsub/qsub). Everything after this builds on the local machine.
+"$(dirname "$0")/build-base-shell.sh"
 
 set -x
 

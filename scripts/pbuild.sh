@@ -27,10 +27,9 @@ cd "$(dirname "$0")/.."
 
 cmake --build pbuild/smi
 
-if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
-    bash scripts/root-design-clean.sh
-    bash scripts/root-design-build.sh
-fi
+# The FPGA base shell (static_shell/) is built up-front by scripts/build-base-shell.sh,
+# invoked from the packaging scripts before this runs. By now the artifacts are already
+# present under linker/slashkit/resources/ and get bundled into the wheel below.
 
 rm -rf linker/dist linker/build linker/slashkit.egg-info
 rm -rf .venv
