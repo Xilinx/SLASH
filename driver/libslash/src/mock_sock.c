@@ -482,12 +482,13 @@ static ssize_t send_sock_message(int fd, void *msg_buffer,
             errno = ENOMEM;
             return -1;
         }
-        msg.msg_control = cmsg_buffer;
-        msg.msg_controllen = CMSG_LEN(n_fds * sizeof(int));
         cmsg = CMSG_FIRSTHDR(&msg);
         cmsg->cmsg_level = SOL_SOCKET;
         cmsg->cmsg_type = SCM_RIGHTS;
+        cmsg->cmsg_len = CMSG_LEN(n_fds * sizeof(int));
         memcpy(CMSG_DATA(cmsg), fds, n_fds * sizeof(int));
+        msg.msg_control = cmsg_buffer;
+        msg.msg_controllen = cmsg->cmsg_len;
     } else {
         cmsg_buffer = NULL;
     }
