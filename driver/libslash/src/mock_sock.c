@@ -23,6 +23,7 @@
 #include <slash/uapi/slash_sysemu.h>
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -37,42 +38,6 @@
 #define MOCK_SOCK_SERVER_CTLDEV_BDF "0000:61:00.2"
 
 #define MOCK_SOCK_MAX_QPAIRS 256
-
-/**
- * @brief State specific to mock sock servers implementing the
- * /dev/slash_qdma_ctl endpoint.
- */
-struct qdma_endpoint_state {
-    /** @brief Qpair state bitsets.
-     *
-     * Bit 0 (0b01): Qpair used.
-     * Bit 1 (0b10): Qpair started.
-     */
-    int qpairs[MOCK_SOCK_MAX_QPAIRS];
-    /** @brief The configured aperture of the qpair.
-     */
-    int aperture_size[MOCK_SOCK_MAX_QPAIRS];
-};
-
-/**
- * @brief The state of a mock sock server.
- */
-struct server_state {
-    /**
-     * @brief The socket FD to communicate with a client.
-     */
-    int server_fd;
-    /**
-     * @brief The kind of endpoint to implement.
-     */
-    enum slash_mock_sock_endpoint endpoint;
-    /**
-     * @brief Required state to mock-up the endpoint.
-     */
-    union {
-        struct qdma_endpoint_state qdma;
-    } endpoint_state;
-};
 
 /**
  * @brief Copy the the user's data into the destination, following the ABI
@@ -131,6 +96,146 @@ static __u32 checked_copy_from_user(void *dst, size_t dst_size, void *arg,
 
     /* Return the derived common size */
     return common_size;
+}
+
+/**
+ * @brief State specific to mock sock servers implementing the
+ * /dev/slash_qdma_ctl endpoint.
+ */
+struct qdma_endpoint_state {
+    /**
+     * @brief Mutex guarding all following fields
+     */
+    pthread_mutex_t mutex;
+    /**
+     * @brief The number of active co-owned references to the state.
+     *
+     * Once @ref qdma_put_endpoint_state decreases this value to zero, the state
+     * will be torn down and freed.
+     */
+    int refcount;
+    /** @brief Qpair state bitsets.
+     *
+     * Bit 0 (0b01): Qpair used.
+     * Bit 1 (0b10): Qpair started.
+     */
+    int qpairs[MOCK_SOCK_MAX_QPAIRS];
+    /** @brief The configured aperture of the qpair.
+     */
+    int aperture_size[MOCK_SOCK_MAX_QPAIRS];
+};
+
+/**
+ * @brief Initialize the state of a QDMA endpoint.
+ *
+ * This will setup all internal fields. In particular, it will set up the mutex
+ * and set the reference counter to 1.
+ *
+ * @param state Non-owned pointer to the state struct to initialize
+ * @return Zero if successfull, otherwise a negative error number.
+ */
+static int qdma_init_endpoint_state(struct qdma_endpoint_state *state) {
+    int rv;
+    pthread_mutexattr_t attr;
+
+    if (state == NULL) {
+        return -EINVAL;
+    }
+
+    memset(state, 0, sizeof(*state));
+
+    rv = pthread_mutexattr_init(&attr);
+    if (rv != 0)
+        return -rv;
+    rv = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
+    if (rv != 0) {
+        pthread_mutexattr_destroy(&attr);
+        return -rv;
+    }
+    rv = pthread_mutex_init(&state->mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+    if (rv != 0) {
+        return -rv;
+    }
+
+    state->refcount = 1;
+    return 0;
+}
+
+/**
+ * @brief Increase the state reference counter
+ *
+ * This is needed to create a new co-owned reference to the state.
+ *
+ * @param state Non-owned pointer to the state to modify.
+ * @return Zero if successfull, otherwise a negative error number.
+ */
+static int qdma_get_endpoint_state(struct qdma_endpoint_state *state) {
+    int rv;
+
+    if (state == NULL) {
+        return -EINVAL;
+    }
+
+    rv = pthread_mutex_lock(&state->mutex);
+    if (rv != 0) {
+        return -rv;
+    }
+
+    /* Defensive check */
+    if (state->refcount <= 0) {
+        pthread_mutex_unlock(&state->mutex);
+        return -EINVAL;
+    }
+
+    state->refcount += 1;
+
+    rv = pthread_mutex_unlock(&state->mutex);
+    if (rv != 0) {
+        return -rv;
+    }
+    return 0;
+}
+
+/**
+ * @brief Decrease the state's reference counter, potentially freeing it.
+ *
+ * This function will look the state's mutex, decrease the reference counter,
+ * and free it if the reference counter has reached zero.
+ *
+ * @param state Co-owned reference to the state to modify.
+ * @return Zero if successful, otherwise a negative error number.
+ */
+static int qdma_put_endpoint_state(struct qdma_endpoint_state *state) {
+    int rv, do_free;
+
+    if (state == NULL) {
+        return -EINVAL;
+    }
+
+    rv = pthread_mutex_lock(&state->mutex);
+    if (rv != 0) {
+        return -rv;
+    }
+
+    if (state->refcount <= 0) {
+        pthread_mutex_unlock(&state->mutex);
+        return -EINVAL;
+    }
+
+    state->refcount -= 1;
+    do_free = state->refcount == 0;
+
+    rv = pthread_mutex_unlock(&state->mutex);
+    if (rv != 0) {
+        return -rv;
+    }
+
+    if (do_free) {
+        pthread_mutex_destroy(&state->mutex);
+        free(state);
+    }
+    return 0;
 }
 
 /**
@@ -196,6 +301,10 @@ static int qdma_ioctl_qpair_add(struct qdma_endpoint_state *state, void *arg,
         return -EINVAL;
     }
 
+    if ((rv = pthread_mutex_lock(&state->mutex)) != 0) {
+        return -rv;
+    }
+
     for (qid = 0; qid < MOCK_SOCK_MAX_QPAIRS; qid++) {
         if (!(state->qpairs[qid] & 0b01)) {
             state->qpairs[qid] = 0b01;
@@ -203,6 +312,11 @@ static int qdma_ioctl_qpair_add(struct qdma_endpoint_state *state, void *arg,
             break;
         }
     }
+
+    if ((rv = pthread_mutex_unlock(&state->mutex)) != 0) {
+        return -rv;
+    }
+
     if (qid == MOCK_SOCK_MAX_QPAIRS) {
         /* No qpair free, no need to write back data, thus exiting early */
         return -EBUSY;
@@ -230,6 +344,7 @@ static int qdma_ioctl_qpair_op(struct qdma_endpoint_state *state, void *arg,
                                size_t arg_size) {
     struct slash_qdma_qpair_op qpair_op;
     __u32 out_size;
+    int rv0, rv1;
 
     if (state == NULL || arg == NULL) {
         return -EINVAL;
@@ -241,23 +356,36 @@ static int qdma_ioctl_qpair_op(struct qdma_endpoint_state *state, void *arg,
         return -EINVAL;
     }
 
-    if (qpair_op.qid >= MOCK_SOCK_MAX_QPAIRS ||
-        !(state->qpairs[qpair_op.qid] & 0b01)) {
-        return -ENOENT;
+    if ((rv0 = pthread_mutex_lock(&state->mutex)) != 0) {
+        return -rv0;
     }
 
-    switch (qpair_op.op) {
-    case SLASH_QDMA_QUEUE_OP_START:
-        state->qpairs[qpair_op.qid] |= 0b10;
-        return 0;
-    case SLASH_QDMA_QUEUE_OP_STOP:
-        state->qpairs[qpair_op.qid] &= ~0b10;
-        return 0;
-    case SLASH_QDMA_QUEUE_OP_DEL:
-        state->qpairs[qpair_op.qid] = 0;
-        return 0;
-    default:
-        return -ENOTTY;
+    if (qpair_op.qid >= MOCK_SOCK_MAX_QPAIRS ||
+        !(state->qpairs[qpair_op.qid] & 0b01)) {
+        rv0 = -ENOENT;
+    } else {
+        switch (qpair_op.op) {
+        case SLASH_QDMA_QUEUE_OP_START:
+            state->qpairs[qpair_op.qid] |= 0b10;
+            rv0 = 0;
+            break;
+        case SLASH_QDMA_QUEUE_OP_STOP:
+            state->qpairs[qpair_op.qid] &= ~0b10;
+            rv0 = 0;
+            break;
+        case SLASH_QDMA_QUEUE_OP_DEL:
+            state->qpairs[qpair_op.qid] = 0;
+            rv0 = 0;
+            break;
+        default:
+            rv0 = -ENOTTY;
+        }
+    }
+
+    if ((rv1 = pthread_mutex_unlock(&state->mutex)) != 0) {
+        return -rv1;
+    } else {
+        return rv0;
     }
     /* No out fields, no need to write back*/
 }
@@ -482,13 +610,13 @@ static ssize_t send_sock_message(int fd, void *msg_buffer,
             errno = ENOMEM;
             return -1;
         }
+        msg.msg_control = cmsg_buffer;
+        msg.msg_controllen = CMSG_LEN(n_fds * sizeof(int));
         cmsg = CMSG_FIRSTHDR(&msg);
         cmsg->cmsg_level = SOL_SOCKET;
         cmsg->cmsg_type = SCM_RIGHTS;
-        cmsg->cmsg_len = CMSG_LEN(n_fds * sizeof(int));
+        cmsg->cmsg_len = msg.msg_controllen;
         memcpy(CMSG_DATA(cmsg), fds, n_fds * sizeof(int));
-        msg.msg_control = cmsg_buffer;
-        msg.msg_controllen = cmsg->cmsg_len;
     } else {
         cmsg_buffer = NULL;
     }
@@ -497,6 +625,24 @@ static ssize_t send_sock_message(int fd, void *msg_buffer,
     free(cmsg_buffer);
     return sent_size;
 }
+
+/**
+ * @brief The state of a mock sock server.
+ */
+struct server_state {
+    /**
+     * @brief The socket FD to communicate with a client.
+     */
+    int server_fd;
+    /**
+     * @brief The kind of endpoint to implement.
+     */
+    enum slash_mock_sock_endpoint endpoint;
+    /**
+     * @brief Required state to mock-up the endpoint.
+     */
+    void *endpoint_state;
+};
 
 /**
  * @brief Main function of the mock sock server
@@ -553,9 +699,8 @@ static void *mock_sock_server_main(void *arg) {
 
         if (state->endpoint == SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
             msg_hdr->return_value = dispatch_qdma_ioctl(
-                &(state->endpoint_state.qdma), msg_hdr->ioctl_op, msg_arg,
-                msg_arg_size, input_fds, n_input_fds, &output_fds,
-                &n_output_fds);
+                state->endpoint_state, msg_hdr->ioctl_op, msg_arg, msg_arg_size,
+                input_fds, n_input_fds, &output_fds, &n_output_fds);
         } else {
             /* This endpoint is not implemented yet */
             msg_hdr->return_value = -ENOSYS;
@@ -584,21 +729,21 @@ static void *mock_sock_server_main(void *arg) {
 
 cleanup:
     close(state->server_fd);
+    switch (state->endpoint) {
+    case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
+        qdma_put_endpoint_state(state->endpoint_state);
+        break;
+    default:
+    }
     free(state);
     return NULL;
 }
 
 int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
     int rv;
+    struct server_state *state;
     int sockets[2];
     pthread_t thread;
-    struct server_state *state;
-
-    /* TODO: Implement other kinds of mock socks */
-    if (endpoint != SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
-        errno = ENOTSUP;
-        return -1;
-    }
 
     state = calloc(1, sizeof(struct server_state));
     if (state == NULL) {
@@ -609,16 +754,43 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
     rv = socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets);
     if (rv == -1) {
         free(state);
+        /* Returning the error from socketpair */
         return -1;
     }
-
     state->server_fd = sockets[1];
+
     state->endpoint = endpoint;
+    switch (endpoint) {
+    case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
+        state->endpoint_state = malloc(sizeof(struct qdma_endpoint_state));
+        if (state->endpoint_state == NULL) {
+            close(sockets[0]);
+            close(sockets[1]);
+            free(state);
+            errno = ENOMEM;
+            return -1;
+        }
+        qdma_init_endpoint_state(state->endpoint_state);
+        break;
+    default:
+        /* TODO: Implement other kinds of mock socks */
+        close(sockets[0]);
+        close(sockets[1]);
+        free(state);
+        errno = ENOTSUP;
+        return -1;
+    }
 
     rv = pthread_create(&thread, NULL, &mock_sock_server_main, state);
     if (rv != 0) {
         close(sockets[0]);
         close(sockets[1]);
+        switch (endpoint) {
+        case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
+            qdma_put_endpoint_state(state->endpoint_state);
+            break;
+        default:
+        }
         free(state);
         errno = rv;
         return -1;
