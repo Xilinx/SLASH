@@ -37,6 +37,7 @@
 
 #include <vrtd/session.hpp>
 
+#include "shell_build_id.hpp"
 #include "utils.hpp"
 
 /// Root sysfs directory that contains one symlink per PCI device.
@@ -402,6 +403,9 @@ struct V80Board {
     /// Sensor readings (populated only when -s/--sensors is given and VRTD is reachable).
     std::vector<vrtd::SensorEntry> sensors;
 
+    /// Shell build ID read from hardware (populated only when longPrinting).
+    std::optional<BuildId> shellBuildId;
+
     /// True when all three PFs and VRTD are ready.
     bool ok() const { return pf0.ok && pf1.ok && pf2.ok && vrtd.ok; }
 };
@@ -445,6 +449,15 @@ static std::vector<V80Board> discoverBoards(bool longPrinting, bool sensors) {
             board.pf0Device = tryReadDevice(pf0Dev.bdf, true);
             board.pf1Device = tryReadDevice(pf1Bdf, true);
             board.pf2Device = tryReadDevice(pf2Bdf, true);
+
+            // Best-effort: read the shell build ID from hardware. Requires a
+            // usable BAR4 (via vrtd); swallow errors so list still works on
+            // boards without the register or with vrtd down.
+            try {
+                board.shellBuildId = readBuildId(base);
+            } catch (...) {
+                // Leave unset.
+            }
         }
 
         if (sensors && board.vrtd.ok) {
@@ -624,6 +637,15 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
             out << "NOT READY: " << board.vrtd.reason;
         }
         out << "\n";
+
+        out << INDENT1 << "Shell build: ";
+        if (board.shellBuildId) {
+            out << board.shellBuildId->commitHex()
+                << (board.shellBuildId->dirty ? " (dirty)" : "");
+        } else {
+            out << "unavailable";
+        }
+        out << "\n";
     }
 
     if (!board.sensors.empty()) {
@@ -686,6 +708,11 @@ Json::Value toJson(const V80Board& board) {
         vrtdJson["reason"] = board.vrtd.reason;
     }
     j["vrtd"] = vrtdJson;
+
+    if (board.shellBuildId) {
+        j["shell_build_commit"] = board.shellBuildId->commitHex();
+        j["shell_build_dirty"] = board.shellBuildId->dirty;
+    }
 
     if (!board.sensors.empty()) {
         Json::Value sensorsJson(Json::arrayValue);

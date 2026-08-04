@@ -155,13 +155,43 @@ TEST_F(qdma, query_info)
 
 	memset(&info, 0, sizeof(info));
 	info.size = sizeof(info);
-	EXPECT_GE(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info), 0);
+	ASSERT_EQ(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info), 0);
 
 	/* The QDMA PF BDF must be reported, NUL-terminated and non-empty. */
 	size_t bdf_len = strnlen(info.bdf, sizeof(info.bdf));
-
 	EXPECT_GT(bdf_len, 0);
 	EXPECT_LT(bdf_len, sizeof(info.bdf));
+	
+	EXPECT_TRUE(slash_looks_like_bdf(info.bdf))
+	TH_LOG("bad QDMA BDF '%s'", info.bdf);
+	EXPECT_EQ('1', info.bdf[11])
+	TH_LOG("QDMA INFO must report the full PF1 BDF, got '%s'", info.bdf);
+}
+
+TEST_F(qdma, device_node_identity_matches_sysfs_and_fd)
+{
+	struct slash_test_node_identity identity;
+	struct slash_qdma_info info;
+	char sysfs_name[64];
+	struct stat fd_stat;
+
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	ASSERT_EQ(0, ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info));
+
+	snprintf(sysfs_name, sizeof(sysfs_name),
+			 SLASH_TEST_QDMA_SYSFS_PREFIX "%s", info.bdf);
+	ASSERT_EQ(0, slash_test_read_node_identity(sysfs_name, &identity))
+	TH_LOG("sysfs dev/uevent or /dev node disagree for %s/%s",
+		   SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
+	EXPECT_TRUE(slash_test_validate_qdma_node(&identity))
+	TH_LOG("QDMA node %s has invalid minor/name (%u:%u)",
+		   identity.devpath, identity.major, identity.minor);
+
+	ASSERT_EQ(0, fstat(self->ctl_fd, &fd_stat));
+	EXPECT_EQ(identity.dev, fd_stat.st_rdev)
+	TH_LOG("opened fd %s does not match %s/%s",
+		   SLASH_TEST_QDMA_DEV, SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
 }
 
 TEST_F(qdma, qpair_lifecycle)

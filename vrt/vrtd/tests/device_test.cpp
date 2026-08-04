@@ -175,10 +175,23 @@ TEST(DeviceDiscoveryTest, DiscoverAndOpen) {
     EXPECT_EQ(ret, 0);
     EXPECT_GT(devices.len, 0u);
 
-    /* Each discovered device must have at least a control handle. */
+    /* Each discovered device must have at least a control handle.  When PF1
+     * is available, its QDMA INFO BDF must identify the same board. */
     for (size_t i = 0; i < devices.len; ++i) {
         EXPECT_NE(devices.d[i], nullptr);
         EXPECT_NE(devices.d[i]->ctl, nullptr);
+        if (devices.d[i]->qdma != nullptr) {
+            struct slash_qdma_info info{};
+            int info_ret = slash_qdma_info_read(devices.d[i]->qdma, &info);
+
+            EXPECT_EQ(info_ret, 0);
+            if (info_ret == 0) {
+                EXPECT_EQ(info.bdf[11], '1');
+                EXPECT_EQ(std::strncmp(info.bdf, devices.d[i]->pci_info.bdf,
+                                       std::strlen(devices.d[i]->pci_info.bdf)),
+                          0);
+            }
+        }
     }
 
     device_ptr_array_free(&devices);

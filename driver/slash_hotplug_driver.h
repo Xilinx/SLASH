@@ -22,7 +22,7 @@
  * and rescanning.  This is essential for FPGA reconfiguration workflows
  * where loading a new bitstream requires re-enumerating the device.
  *
- * A single misc device (/dev/slash_hotplug) handles ioctls.  All
+ * A single character device (/dev/slash_hotplug) handles ioctls.  All
  * operations that target a specific device require an explicit BDF.
  */
 
@@ -30,7 +30,7 @@
 #define SLASH_HOTPLUG_DRIVER_H
 
 /**
- * slash_hotplug_init() - Register the hotplug misc device.
+ * slash_hotplug_init() - Register the hotplug character device.
  *
  * Creates /dev/slash_hotplug.
  *
@@ -39,7 +39,7 @@
 int slash_hotplug_init(void);
 
 /**
- * slash_hotplug_exit() - Unregister the hotplug misc device.
+ * slash_hotplug_exit() - Unregister the hotplug character device.
  */
 void slash_hotplug_exit(void);
 

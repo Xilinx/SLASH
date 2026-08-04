@@ -38,6 +38,7 @@
 
 #include "bdf.hpp"
 
+#include "shell_build_id.hpp"
 #include "utils.hpp"
 
 //. BDF string corresponding to the all-ones sentinel value (0xFFFF).
@@ -289,6 +290,7 @@ struct VbinData {
     uint64_t clockFrequency{};                       ///< Design clock frequency in Hz.
     std::map<std::string, KernelData> kernels;       ///< Kernels keyed by name.
     std::optional<vrt::UtilizationReport> utilization; ///< Utilization report (if present).
+    std::optional<BuildId> shellBuildId;             ///< Shell build ID read from HW (device query only).
 
     /// Builds a VbinData from an already-parsed system-map XMLParser.
     static VbinData fromParser(vrt::XMLParser& parser, const std::string& name) {
@@ -388,6 +390,11 @@ std::ostream& operator<<(std::ostream& out, const VbinData& vbin) {
         << INDENT1 << "Platform: " << toString(vbin.platform) << "\n"
         << INDENT1 << "Clock frequency: " << vbin.clockFrequency << "\n";
 
+    if (vbin.shellBuildId) {
+        out << INDENT1 << "Shell build commit: " << vbin.shellBuildId->commitHex()
+            << (vbin.shellBuildId->dirty ? " (dirty)" : "") << "\n";
+    }
+
     if (vbin.utilization) {
         out << INDENT1 << "Utilization:\n" << *vbin.utilization;
     }
@@ -404,6 +411,11 @@ Json::Value toJson(const VbinData& vbin) {
     Json::Value j;
 
     j["clock_frequency"] = toHexString(vbin.clockFrequency);
+
+    if (vbin.shellBuildId) {
+        j["shell_build_commit"] = vbin.shellBuildId->commitHex();
+        j["shell_build_dirty"] = vbin.shellBuildId->dirty;
+    }
 
     if (vbin.utilization) {
         j["utilization"] = toJson(*vbin.utilization);
@@ -428,7 +440,16 @@ Json::Value toJson(const VbinData& vbin) {
 VbinData getVbinData(const Inspect::Options& options) {
     if (options.isBdfQuery) {
         std::string bdf = resolveBoardBdf(options.bdf, "query");
-        return VbinData::fromBdf(bdf);
+        auto data = VbinData::fromBdf(bdf);
+        // Read the shell build ID from hardware. Best-effort: an older shell
+        // without the register (or a transient access error) shouldn't fail the
+        // whole query.
+        try {
+            data.shellBuildId = readBuildId(bdf);
+        } catch (const std::exception& e) {
+            std::cerr << "warning: could not read shell build ID: " << e.what() << "\n";
+        }
+        return data;
     } else {
         return VbinData::fromPath(options.vbinPath);
     }

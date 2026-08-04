@@ -115,6 +115,7 @@ int slash_qdma_mock_info_read(struct slash_qdma *qdma, struct slash_qdma_info *i
 
     memset(info, 0, sizeof(*info));
     info->size      = sizeof(*info);
+    memcpy(info->bdf, "0000:00:00.1", sizeof("0000:00:00.1"));
     info->qsets_max = QDMA_MOCK_MAX_QUEUES;
     info->msix_qvecs = 1;
 

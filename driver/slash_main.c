@@ -29,18 +29,16 @@
  *
  * Initialization order matters:
  *
- *   1. **QDMA** — libqdma must be initialized and its PCI driver
- *      registered before any PCI probe runs, because PF1 and PF2
- *      may probe concurrently once drivers are registered.
+ *   1. **Character devices** — reserve the shared major/minor range and
+ *      create the slash class before any endpoint is exposed.
  *
- *   2. **Hotplug** — the /dev/slash_hotplug misc device must exist
- *      before PCI probe registers devices into the tracking list.
+ *   2. **Hotplug** — /dev/slash_hotplug must exist before either PCI
+ *      driver is registered.
  *
- *   3. **PCIe** — registering the PF2 PCI driver triggers probe for
- *      any devices already present on the bus.
+ *   3. **QDMA / PCIe** — register PF1, then PF2.  Registering either
+ *      driver may immediately probe devices already present on the bus.
  *
- * Teardown is the reverse: PCIe first (unbinds devices), then hotplug
- * (frees tracking list), then QDMA (shuts down libqdma).
+ * Teardown is the strict reverse order.
  */
 
 #include "slash.h"
@@ -51,6 +49,7 @@
 #include <linux/pci.h>
 #include <linux/printk.h>
 
+#include "slash_chrdev.h"
 #include "slash_pcie.h"
 #include "slash_hotplug_driver.h"
 #include "slash_qdma.h"
@@ -78,31 +77,44 @@ static int __init slash_init(void)
 
     pr_info("slash: module init\n");
 
-    /* 1. QDMA first — libqdma + PF1 PCI driver. */
-    err = slash_qdma_init(qdma_num_threads, NULL);
+    /* Reserve all stable minors and create the shared class first. */
+    err = slash_chrdev_init();
     if (err) {
-        pr_err("slash: libqdma init failed: %d\n", err);
+        pr_err("slash: character-device init failed: %d\n", err);
         return err;
     }
 
-    /* 2. Hotplug — /dev/slash_hotplug misc device. */
+    /* The hotplug endpoint must exist before either PCI probe can run. */
     err = slash_hotplug_init();
     if (err) {
         pr_err("slash: hotplug init failed: %d\n", err);
-        slash_qdma_exit();
-        return err;
+        goto err_chrdev;
     }
 
-    /* 3. PCIe — PF2 PCI driver (triggers probe for present devices). */
+    /* libqdma initialization precedes PF1 PCI-driver registration. */
+    err = slash_qdma_init(qdma_num_threads, NULL);
+    if (err) {
+        pr_err("slash: libqdma init failed: %d\n", err);
+        goto err_hotplug;
+    }
+
+    /* Register PF2 last; both PCI drivers can now create shared-class nodes. */
     err = slash_pcie_init();
     if (err) {
         pr_err("slash: PCIe init failed: %d\n", err);
-        slash_hotplug_exit();
-        return err;
+        goto err_qdma;
     }
 
     pr_info("slash: module init complete\n");
     return 0;
+
+err_qdma:
+    slash_qdma_exit();
+err_hotplug:
+    slash_hotplug_exit();
+err_chrdev:
+    slash_chrdev_exit();
+    return err;
 }
 
 /**
@@ -114,8 +126,9 @@ static void __exit slash_exit(void)
 {
     pr_info("slash: module exit\n");
     slash_pcie_exit();
-    slash_hotplug_exit();
     slash_qdma_exit();
+    slash_hotplug_exit();
+    slash_chrdev_exit();
     pr_info("slash: module exit complete\n");
 }
 

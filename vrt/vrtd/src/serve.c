@@ -426,26 +426,12 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
     }
 
     /*
-     * The /dev/slash_ctlN suffix is assigned by an incrementing kernel counter
-     * and changes after each hotplug remove+rescan.  d->path still holds the
-     * path from daemon startup (e.g. /dev/slash_ctl0); that node no longer
-     * exists.  Resolve the new path via the stable sysfs name
-     * /sys/class/misc/slash_ctl_<bdf>/uevent and update d->path in-place so
-     * that subsequent GET_BAR_FD and devices_discover_and_open deduplication
-     * both see the current path.
+     * The stable character-device path survives PF2 remove+rescan, but the
+     * existing handle still refers to the pre-PDI device. Close it and reopen
+     * the same path so subsequent BAR operations use the freshly-probed PF2.
      */
-    _cleanup_(cleanup_free) char *new_ctl_path = NULL;
-    if (find_slash_ctl_dev_path_by_bdf(pf2_bdf, &new_ctl_path) != 0 || new_ctl_path == NULL) {
-        LOG(LOG_ERR, "device_refresh_pf2: cannot find slash_ctl device for %s in sysfs", pf2_bdf);
-        return VRTD_RET_INTERNAL_ERROR;
-    }
-
-    LOG(LOG_INFO, "device_refresh_pf2: new slash_ctl path for %s is %s", pf2_bdf, new_ctl_path);
-
-    slash_ctldev_close(d->ctl);
-    free(d->path);
-    d->path = new_ctl_path;
-    new_ctl_path = NULL; /* ownership transferred — prevent cleanup_free from freeing */
+    (void) slash_ctldev_close(d->ctl);
+    d->ctl = NULL;
 
     /*
      * After a hotplug rescan the kernel creates the device node immediately
@@ -3167,7 +3153,7 @@ static uint16_t client_handle_request_clock_op(
  * device.
  *
  * Populates a vrtd_device_info structure containing:
- *   - name: the basename of the device's sysfs path (e.g. "0000:65:00.0").
+ *   - name: the basename of the device's /dev path (e.g. "slash_ctl0").
  *   - pci:  BDF string, vendor/device/subsystem IDs.
  *
  * Auth: auth_request_get_device_info.

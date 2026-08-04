@@ -21,6 +21,7 @@
 add_executable(
     v80-smi
     
+    shell_build_id.cpp
     debug/bar_poke.cpp
     debug/clockwiz.cpp
     debug/hotplug.cpp

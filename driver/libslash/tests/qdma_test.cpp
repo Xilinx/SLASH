@@ -23,6 +23,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>

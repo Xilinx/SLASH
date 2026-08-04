@@ -1,22 +1,30 @@
 #!/bin/bash
 
 set -euo pipefail
+shopt -s nullglob
 
 usage() {
     cat <<EOF
-Usage: ${0} --repo-url URL --branch BRANCH --scratch DIR --bdf BDF --smbus-ip ZIP [options]
+Usage: ${0} [options]
 
-Clone and test a SLASH branch on a V80 host using repo-built artifacts.
+Clone and test a SLASH branch on a V80 host using repo-built artifacts. Many
+options are mandatory.
 
-Options:
+Mandatory options:
   --repo-url URL        Git repository URL to clone (or REPO_URL)
   --branch BRANCH      Branch to test (or BRANCH)
   --scratch DIR        Clone destination / working directory (or SCRATCH)
   --bdf BDF            Board BDF prefix, e.g. 0000:65:00 (or BDF)
+  --xsdb-target-id XSDB_ID
+                       ID of the device in xsdb for jtag reprogramming
+                       (or XSDB_ID)
   --smbus-ip ZIP       SMBus IP zip file to extract into the root-design iprepo
                        before pbuild (or SMBUS_IP)
+
+Other options:
   --protected-user USER
-                       Unprivileged user that owns the checkout/build (or PROTECTED_USER)
+                       Unprivileged user that owns the checkout/build
+                       (or PROTECTED_USER; default: \$SUDO_USER)
   --scratch-vrtd DIR   Directory for direct-run vrtd config/socket/logs
                        (or SCRATCH_VRTD; default: SCRATCH/vrtd)
   --source FILE        Source an environment setup script before building;
@@ -39,6 +47,7 @@ REPO_URL="${REPO_URL:-}"
 BRANCH="${BRANCH:-}"
 SCRATCH="${SCRATCH:-}"
 BDF="${BDF:-}"
+XSDB_ID="${XSDB_ID:-}"
 SMBUS_IP="${SMBUS_IP:-}"
 PROTECTED_USER="${PROTECTED_USER:-${SUDO_USER:-}}"
 SCRATCH_VRTD="${SCRATCH_VRTD:-}"
@@ -63,6 +72,11 @@ while [[ ${#} -gt 0 ]]; do
         --bdf)
             [[ ${#} -ge 2 ]] || { echo "ERROR: --bdf requires a value" >&2; exit 1; }
             BDF="${2}"
+            shift 2
+            ;;
+        --xsdb-target-id)
+            [[ ${#} -ge 2 ]] || { echo "ERROR: --xsdb-target-id requires a value" >&2; exit 1; }
+            XSDB_ID="${2}"
             shift 2
             ;;
         --smbus-ip)
@@ -108,6 +122,7 @@ require_var REPO_URL "${REPO_URL}"
 require_var BRANCH "${BRANCH}"
 require_var SCRATCH "${SCRATCH}"
 require_var BDF "${BDF}"
+require_var XSDB_ID "${XSDB_ID}"
 require_var SMBUS_IP "${SMBUS_IP}"
 require_var PROTECTED_USER "${PROTECTED_USER}"
 
@@ -122,6 +137,19 @@ fi
 SMBUS_IP="$(realpath "${SMBUS_IP}")"
 
 set -x
+
+# Helpers
+function remove_bdf() {
+    if [[ -e "/sys/bus/pci/devices/${1}" ]]; then
+        echo 1 | tee "/sys/bus/pci/devices/${1}/remove"
+    fi
+}
+
+function remove_board() {
+    remove_bdf "${1}.0"
+    remove_bdf "${1}.1"
+    remove_bdf "${1}.2"
+}
 
 function protected() {
     sudo --user="${PROTECTED_USER}" --set-home --preserve-env \
@@ -141,20 +169,22 @@ function protected() {
 VRTD_PID=""
 RESTORE_SYSTEM_RUNTIME=0
 
-restore_system_runtime() {
+function restore_system_runtime() {
     local rc="${?}"
     trap - EXIT
     set +e
 
-    if [[ -n "${VRTD_PID}" ]]; then
+    if [[ -v OLD_PYTHONPATH ]]; then
+        export PYTHONPATH="${OLD_PYTHONPATH}"
+    fi
+
+    if [[ -v VRTD_PID ]]; then
         kill "${VRTD_PID}" 2>/dev/null
         wait "${VRTD_PID}" 2>/dev/null
     fi
 
     if [[ "${RESTORE_SYSTEM_RUNTIME}" -eq 1 ]]; then
-        echo 1 | tee "/sys/bus/pci/devices/${BDF}.0/remove"
-        echo 1 | tee "/sys/bus/pci/devices/${BDF}.1/remove"
-        echo 1 | tee "/sys/bus/pci/devices/${BDF}.2/remove"
+        remove_board "${BDF}"
 
         rmmod slash
         rmmod ami
@@ -162,12 +192,13 @@ restore_system_runtime() {
         modprobe ami
         modprobe slash
 
-        echo 1 | tee /sys/bus/pci/rescan
-        sleep 5
+        udevadm settle # Let udev create slash_hotplug
 
         systemctl restart vrtd.socket
         systemctl restart vrtd.service
         sleep 5
+
+        v80-smi write-static-shell --jtag --no-remove-device --xsdb-target-id "${XSDB_ID}"
 
         v80-smi reset -d "${BDF}"
     fi
@@ -177,10 +208,13 @@ restore_system_runtime() {
 
 trap restore_system_runtime EXIT
 
+
+
 protected git clone --depth 1 --branch "${BRANCH}" --single-branch "${REPO_URL}" "${SCRATCH}"
 pushd "${SCRATCH}"
 
 # Let repo-built tools resolve slashkit resources from this checkout.
+OLD_PYTHONPATH="${PYTHONPATH:-}"
 export PYTHONPATH="${PWD}/linker${PYTHONPATH:+:${PYTHONPATH}}"
 
 protected git submodule update --init --recursive
@@ -196,14 +230,12 @@ fi
 protected scripts/pconfigure.sh
 protected scripts/pbuild.sh
 
-pushd driver
-protected make
-protected make -C tests all # kernel-module kselftest binaries (userspace)
-popd
+# SLASH driver
+protected make -C driver
+protected make -C driver/tests all # kernel-module kselftest binaries (userspace)
 
-pushd submodules/AVED/sw/AMI/driver
-protected make
-popd
+# AMI driver
+protected make -C submodules/AVED/sw/AMI/driver
 
 # Run phase: serialize against other concurrent branch-test runs on this
 # shared host. The build above is CPU-only and may run in parallel, but
@@ -220,24 +252,14 @@ flock 200
 systemctl stop vrtd.socket vrtd.service || true
 RESTORE_SYSTEM_RUNTIME=1
 
-echo 1 | tee "/sys/bus/pci/devices/${BDF}.0/remove" || true
-echo 1 | tee "/sys/bus/pci/devices/${BDF}.1/remove" || true
-echo 1 | tee "/sys/bus/pci/devices/${BDF}.2/remove" || true
+remove_board "${BDF}"
 rmmod slash || true
 rmmod ami || true
 
 insmod submodules/AVED/sw/AMI/driver/ami.ko
 insmod driver/slash.ko
 
-echo 1 | tee /sys/bus/pci/rescan
-
-# Kselftest phase (non-destructive)
-#
-# Run the driver ABI suite before vrtd claims the device: kselftest drives the
-# driver directly and its hotplug tests remove/re-add PCIe functions, so it must
-# not race a live vrtd. SLASH_TEST_DESTRUCTIVE stays unset, so destructive tests SKIP.
-udevadm settle # let udev (re)create the misc device nodes after the rescan
-env -u SLASH_TEST_DESTRUCTIVE make -C driver/tests run
+udevadm settle # Let udev create slash_hotplug
 
 # Launch vrtd phase
 
@@ -256,23 +278,60 @@ VRTD_LOG="${SCRATCH_VRTD}/vrtd.log" \
 
 VRTD_PID="${!}"
 
+V80_SMI=(
+    protected
+
+    env
+    VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock"
+    SMI_VERSAL_FLASH_TCL="${PWD}/smi/resources/versal_flash_pdi.tcl"
+
+    pbuild/smi/src/v80-smi
+)
+
 # Wait for vrtd startup
 
 sleep 5
 
 # Static shell load phase
-#
-# Keep the direct-run vrtd instance alive while v80-smi removes the PCIe
-# functions, programs the static shell over JTAG, and rescans the device.
-protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" \
-    SMI_VERSAL_FLASH_TCL="${PWD}/smi/resources/versal_flash_pdi.tcl" \
-    pbuild/smi/src/v80-smi write-static-shell --jtag -d "${BDF}"
+
+# Flash the new image
+
+"${V80_SMI[@]}" write-static-shell --jtag --no-remove-device --xsdb-target-id "${XSDB_ID}"
 
 # Run tests phase
 
-protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" pbuild/smi/src/v80-smi list --sensors # Test ami/sensors
+# Tests board exists and sesnors exist
+JQ_READY='any(.boards[]; .bdf_base == $bdf and .status == "OK" and ((.sensors? // []) | length > 0))'
+"${V80_SMI[@]}" list --json --sensors |
+    jq --exit-status --arg bdf "${BDF}" "${JQ_READY}" >/dev/null
 
+# Test examples
 protected scripts/test-examples.sh --use-repo emu "${BDF}"
 protected scripts/test-examples.sh --use-repo sim "${BDF}"
 protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" scripts/test-examples.sh --use-repo hw "${BDF}"
 protected env VRTD_SOCKET="${SCRATCH_VRTD}/vrtd.sock" scripts/stress-test.sh "${BDF}" --use-pbuild --no-reset
+
+# kselftest
+
+# For jtag, restart is reflash
+"${V80_SMI[@]}" write-static-shell --jtag --xsdb-target-id "${XSDB_ID}" --device "${BDF}"
+
+# Test again for existence
+"${V80_SMI[@]}" list --json --sensors |
+    jq --exit-status --arg bdf "${BDF}" "${JQ_READY}" >/dev/null
+
+kill "${VRTD_PID}"
+wait "${VRTD_PID}"
+unset VRTD_PID
+
+# kselftest tests are currently built around only one device existing in the system
+
+SLASH_CTL_DEVICES=(/dev/slash_ctl*)
+SLASH_QDMA_CTL_DEVICES=(/dev/slash_qdma_ctl*)
+
+if [[ "${#SLASH_CTL_DEVICES[@]}" -ne 1 || "${#SLASH_QDMA_CTL_DEVICES[@]}" -ne 1 ]]; then
+    echo "WARN: not one SLASH device, skipping kselftest"
+else
+    # Cannot run destructive tests as those include SBR reset, which will reset to flash.
+    env -u SLASH_TEST_DESTRUCTIVE make -C driver/tests run
+fi

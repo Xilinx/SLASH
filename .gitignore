@@ -88,3 +88,9 @@ driver/kcompat/.scratch/
 
 # Project-local scratch space
 /tmp/
+tmp/
+**/build-host/
+
+# Claude Code files
+/CLAUDE.md
+/.claude/

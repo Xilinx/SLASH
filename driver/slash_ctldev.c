@@ -17,7 +17,7 @@
  *
  * Control device implementation for the SLASH kernel module.
  *
- * Creates a per-device misc character device (/dev/slash_ctl<N>) that
+ * Creates a per-device character device (/dev/slash_ctl<N>) that
  * exposes device identity, BAR properties, and dma-buf-backed BAR
  * mappings to userspace via ioctl.  This is an ioctl-only interface —
  * no read/write/mmap file operations are provided on the control
@@ -34,7 +34,7 @@
 
 #include "slash_ctldev.h"
 
-#include <linux/atomic.h>
+#include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 #include <linux/printk.h>
@@ -43,6 +43,7 @@
 #include <linux/uaccess.h>
 
 #include "slash.h"
+#include "slash_chrdev.h"
 #include "slash_dmabuf.h"
 
 /** Compute the size of a struct member without needing an instance. */
@@ -78,42 +79,21 @@
 
 static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *ctldev);
 static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev);
-static int slash_ctldev_create_misc(struct slash_ctldev *ctldev);
+static int slash_ctldev_create_chrdev(struct slash_ctldev *ctldev);
 
-static void slash_ctldev_destroy_misc(struct slash_ctldev *ctldev);
 static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev);
+static void slash_ctldev_release(struct kref *ref);
 
+static int slash_ctldev_fop_open(struct inode *, struct file *);
+static int slash_ctldev_fop_release(struct inode *, struct file *);
 static long slash_ctldev_fop_ioctl(struct file *, unsigned int, unsigned long);
-
-/**
- * struct slash_ctldev_id_entry - Stable BDF-to-number mapping entry.
- * @node:    Intrusive list linkage for @slash_ctldev_id_map.
- * @bdf:     Full PCI BDF string including function (e.g. "0000:61:00.2").
- * @number:  The /dev/slash_ctl<N> suffix permanently assigned to this BDF.
- * @in_use:  True while the device is bound to the driver.  Cleared on remove,
- *           set on probe.  A probe that finds @in_use already true indicates
- *           the kernel handed us a device that was never properly unbound —
- *           this should never happen under normal operation.
- *
- * Entries are allocated in probe and intentionally never freed.  They survive
- * hotplug remove+rescan cycles so that a device always gets back the same N.
- */
-struct slash_ctldev_id_entry {
-    struct list_head node;
-    char bdf[32]; /* "DDDD:BB:SS.F\0" fits comfortably in 32 bytes */
-    int  number;
-    bool in_use;
-};
-
-/** Persistent BDF-to-number map; entries live for the module's lifetime. */
-static LIST_HEAD(slash_ctldev_id_map);
-/** Serialises all accesses to @slash_ctldev_id_map and @in_use fields. */
-static DEFINE_MUTEX(slash_ctldev_id_map_lock);
-/** Source of new numbers; only incremented when a BDF is seen for the first time. */
-static atomic_t slash_ctldev_devcount = ATOMIC_INIT(0);
+static long slash_ctldev_ioctl(struct slash_ctldev *, unsigned int,
+                               unsigned long);
 
 static struct file_operations slash_ctldev_fops = {
     .owner = THIS_MODULE,
+    .open = slash_ctldev_fop_open,
+    .release = slash_ctldev_fop_release,
     .unlocked_ioctl = slash_ctldev_fop_ioctl,
 };
 
@@ -122,26 +102,28 @@ static struct file_operations slash_ctldev_fops = {
  * @pdev: PCI device to create the control device for.
  *
  * Allocates the control device state, probes all PCI BARs, creates
- * dma-buf exporters for MMIO BARs, and registers a misc device.
+ * dma-buf exporters for MMIO BARs, and registers a character device.
  * The state is stored as PCI driver data on @pdev.
  *
  * Return: 0 on success, negative errno on failure.
  */
 int slash_ctldev_create(struct pci_dev *pdev)
 {
+    struct slash_ctldev *ctldev;
     int err;
 
-    struct slash_ctldev *ctldev = kzalloc(sizeof(*ctldev), GFP_KERNEL);
+    pci_set_drvdata(pdev, NULL);
+    ctldev = kzalloc(sizeof(*ctldev), GFP_KERNEL);
     if (!ctldev) {
         dev_err(&pdev->dev, "ctldev: kzalloc failed\n");
         return -ENOMEM;
     }
     ctldev->pdev = pdev;
+    ctldev->slot = -1;
+    kref_init(&ctldev->ref);
+    mutex_init(&ctldev->lock);
 
     dev_info(&pdev->dev, "ctldev: creating control device\n");
-
-    /* Store early so that the ioctl handler can find us via pci_get_drvdata(). */
-    pci_set_drvdata(pdev, ctldev);
 
     err = slash_ctldev_set_bar_info(pdev, ctldev);
     if (err) {
@@ -159,12 +141,14 @@ int slash_ctldev_create(struct pci_dev *pdev)
         goto err_destroy_dmabufs;
     }
 
-    err = slash_ctldev_create_misc(ctldev);
+    err = slash_ctldev_create_chrdev(ctldev);
     if (err) {
-        dev_err(&pdev->dev, "ctldev: creating misc ctldev failed: %d\n", err);
+        dev_err(&pdev->dev, "ctldev: creating character device failed: %d\n",
+                err);
         goto err_destroy_dmabufs;
     }
 
+    pci_set_drvdata(pdev, ctldev);
     dev_info(&pdev->dev, "ctldev: device created successfully\n");
 
     return 0;
@@ -173,7 +157,8 @@ err_destroy_dmabufs:
     slash_ctldev_destroy_dmabufs(ctldev);
 
 err_free_ctldev:
-    kfree(ctldev);
+    pci_set_drvdata(pdev, NULL);
+    kref_put(&ctldev->ref, slash_ctldev_release);
 
     return err;
 }
@@ -255,188 +240,67 @@ static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev)
 }
 
 /**
- * slash_ctldev_id_get() - Look up or allocate a stable number for a BDF.
- * @bdf: Full PCI BDF string (e.g. "0000:61:00.2") from pci_name().
- *
- * Called from probe.  Returns the number permanently associated with @bdf,
- * allocating a new one if this BDF is seen for the first time.  Also marks
- * the entry as in_use = true.
- *
- * If an existing entry is found with in_use already set, the device was
- * never properly unbound before probe was called again — this indicates a
- * kernel PCI driver bug.  The function logs a loud error and returns
- * -EBUSY so that probe aborts without touching the device.
- *
- * Return: non-negative stable device number on success, negative errno on
- *         failure (-ENOMEM if allocation fails, -EBUSY if already in use).
- */
-static int slash_ctldev_id_get(const char *bdf)
-{
-    struct slash_ctldev_id_entry *entry;
-    int number;
-
-    mutex_lock(&slash_ctldev_id_map_lock);
-
-    list_for_each_entry(entry, &slash_ctldev_id_map, node) {
-        if (strcmp(entry->bdf, bdf) != 0)
-            continue;
-
-        if (entry->in_use) {
-            /*
-             * This BDF is already marked in_use.  The kernel should
-             * never call probe for a device that is still bound —
-             * if this fires, something has gone badly wrong in the
-             * PCI driver infrastructure.
-             */
-            pr_err("slash_ctldev: BUG: probe called for %s but entry is already in_use "
-                   "(number=%d); refusing to bind\n", bdf, entry->number);
-            mutex_unlock(&slash_ctldev_id_map_lock);
-            return -EBUSY;
-        }
-
-        entry->in_use = true;
-        number = entry->number;
-        mutex_unlock(&slash_ctldev_id_map_lock);
-        pr_info("slash_ctldev: reusing number %d for %s\n", number, bdf);
-        return number;
-    }
-
-    /* First time we've seen this BDF — allocate a fresh entry. */
-    entry = kzalloc(sizeof(*entry), GFP_KERNEL);
-    if (!entry) {
-        mutex_unlock(&slash_ctldev_id_map_lock);
-        return -ENOMEM;
-    }
-
-    strscpy(entry->bdf, bdf, sizeof(entry->bdf));
-    entry->number = atomic_inc_return(&slash_ctldev_devcount) - 1;
-    entry->in_use = true;
-    list_add_tail(&entry->node, &slash_ctldev_id_map);
-
-    number = entry->number;
-    mutex_unlock(&slash_ctldev_id_map_lock);
-
-    pr_info("slash_ctldev: assigned number %d to %s\n", number, bdf);
-    return number;
-}
-
-/**
- * slash_ctldev_id_release() - Mark a BDF's entry as no longer in use.
- * @bdf: Full PCI BDF string passed to the matching slash_ctldev_id_get() call.
- *
- * Called from remove.  Clears in_use so that the next probe for the same
- * BDF can reuse the stored number.  The entry itself is not freed — it must
- * persist so the number remains stable across hotplug cycles.
- *
- * If no entry exists for @bdf (should never happen after a successful probe),
- * the call is a no-op and a warning is logged.
- */
-static void slash_ctldev_id_release(const char *bdf)
-{
-    struct slash_ctldev_id_entry *entry;
-
-    mutex_lock(&slash_ctldev_id_map_lock);
-
-    list_for_each_entry(entry, &slash_ctldev_id_map, node) {
-        if (strcmp(entry->bdf, bdf) != 0)
-            continue;
-
-        entry->in_use = false;
-        mutex_unlock(&slash_ctldev_id_map_lock);
-        pr_info("slash_ctldev: released number %d for %s\n", entry->number, bdf);
-        return;
-    }
-
-    /* Should be unreachable: remove without a prior successful probe. */
-    pr_warn("slash_ctldev: WARNING: release called for %s but no entry found\n", bdf);
-    mutex_unlock(&slash_ctldev_id_map_lock);
-}
-
-/**
- * slash_ctldev_create_misc() - Register the misc character device.
+ * slash_ctldev_create_chrdev() - Register the control character device.
  * @ctldev: Control device to register.
  *
- * Creates /dev/slash_ctl<N> with a stable index derived from the BDF-to-number
- * map.  The sysfs name includes the PCI BDF for identification; the /dev node
- * uses a numeric suffix that is stable across hotplug remove+rescan cycles.
+ * The shared board allocator gives matching PF1/PF2 endpoints the same stable
+ * card number.  Sysfs keeps the full PF2 BDF while the class devnode callback
+ * names the node /dev/slash_ctl<N>.
  *
  * Return: 0 on success, negative errno on failure.
  */
-static int slash_ctldev_create_misc(struct slash_ctldev *ctldev)
+static int slash_ctldev_create_chrdev(struct slash_ctldev *ctldev)
 {
-    int err, id;
-    const char *name, *nodename;
+    char name[64];
 
-    /* sysfs name: includes PCI BDF (e.g. "slash_ctl_0000:03:00.2"). */
-    name = kasprintf(GFP_KERNEL, SLASH_CTLDEV_NAME_FMT, pci_name(ctldev->pdev));
-    if (!name) {
-        dev_err(&ctldev->pdev->dev, "ctldev: kasprintf(name) failed\n");
-        return -ENOMEM;
-    }
+    ctldev->slot = slash_chrdev_board_get(ctldev->pdev);
+    if (ctldev->slot < 0)
+        return ctldev->slot;
 
-    /* /dev node name: stable numeric index from BDF-to-number map. */
-    id = slash_ctldev_id_get(pci_name(ctldev->pdev));
-    if (id < 0) {
-        dev_err(&ctldev->pdev->dev, "ctldev: id_get failed: %d\n", id);
-        err = id;
-        goto err_free_name;
-    }
+    snprintf(name, sizeof(name), SLASH_CTLDEV_NAME_FMT,
+             pci_name(ctldev->pdev));
+    ctldev->device =
+        slash_chrdev_add(&ctldev->cdev, &slash_ctldev_fops,
+                         SLASH_CTLDEV_MINOR(ctldev->slot),
+                         &ctldev->pdev->dev, ctldev, name);
+    if (!IS_ERR(ctldev->device))
+        return 0;
 
-    nodename = kasprintf(GFP_KERNEL, SLASH_CTLDEV_NODENAME_FMT, id);
-    if (!nodename) {
-        dev_err(&ctldev->pdev->dev, "ctldev: kasprintf(nodename) failed\n");
-        err = -ENOMEM;
-        goto err_release_id;
-    }
-
-    ctldev->misc.minor = MISC_DYNAMIC_MINOR;
-    ctldev->misc.name = name;
-    ctldev->misc.fops = &slash_ctldev_fops;
-    ctldev->misc.parent = &ctldev->pdev->dev;
-    ctldev->misc.nodename = nodename;
-    ctldev->misc.mode = SLASH_CTLDEV_MODE;
-
-    err = misc_register(&ctldev->misc);
-    if (err) {
-        dev_err(&ctldev->pdev->dev, "ctldev: misc_register failed: %d\n", err);
-        goto err_free_nodename;
-    }
-
-    return 0;
-
-err_free_nodename:
-    kfree(nodename);
-
-err_release_id:
-    /* id_get succeeded and set in_use; undo that. */
-    slash_ctldev_id_release(pci_name(ctldev->pdev));
-
-err_free_name:
-    kfree(name);
-
-    return err;
+    slash_chrdev_board_put(ctldev->pdev);
+    ctldev->slot = -1;
+    return PTR_ERR(ctldev->device);
 }
 
 void slash_ctldev_destroy(struct pci_dev *pdev)
 {
     struct slash_ctldev *ctldev = pci_get_drvdata(pdev);
 
+    if (!ctldev)
+        return;
+
     dev_info(&pdev->dev, "ctldev: destroying control device\n");
-    slash_ctldev_destroy_misc(ctldev);
+    pci_set_drvdata(pdev, NULL);
+
+    mutex_lock(&ctldev->lock);
+    ctldev->dead = true;
+    mutex_unlock(&ctldev->lock);
+
+    slash_chrdev_del(&ctldev->cdev, ctldev->device);
+    ctldev->device = NULL;
+    slash_chrdev_board_put(ctldev->pdev);
+    ctldev->slot = -1;
     slash_ctldev_destroy_dmabufs(ctldev);
 
-    kfree(ctldev);
+    kref_put(&ctldev->ref, slash_ctldev_release);
 }
 
-static void slash_ctldev_destroy_misc(struct slash_ctldev *ctldev)
+static void slash_ctldev_release(struct kref *ref)
 {
-    dev_dbg(&ctldev->pdev->dev, "ctldev: deregistering misc device\n");
-    misc_deregister(&ctldev->misc);
-    slash_ctldev_id_release(pci_name(ctldev->pdev));
-    kfree(ctldev->misc.name);
-    kfree(ctldev->misc.nodename);
-    ctldev->misc.name = NULL;
-    ctldev->misc.nodename = NULL;
+    struct slash_ctldev *ctldev =
+        container_of(ref, struct slash_ctldev, ref);
+
+    mutex_destroy(&ctldev->lock);
+    kfree(ctldev);
 }
 
 static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev)
@@ -451,9 +315,57 @@ static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev)
     }
 }
 
+static int slash_ctldev_fop_open(struct inode *inode, struct file *file)
+{
+    struct slash_ctldev *ctldev =
+        container_of(inode->i_cdev, struct slash_ctldev, cdev);
+
+    mutex_lock(&ctldev->lock);
+    if (ctldev->dead) {
+        mutex_unlock(&ctldev->lock);
+        return -ENODEV;
+    }
+    kref_get(&ctldev->ref);
+    mutex_unlock(&ctldev->lock);
+
+    file->private_data = ctldev;
+    return 0;
+}
+
+static int slash_ctldev_fop_release(struct inode *inode, struct file *file)
+{
+    struct slash_ctldev *ctldev = file->private_data;
+
+    (void)inode;
+
+    if (ctldev)
+        kref_put(&ctldev->ref, slash_ctldev_release);
+    file->private_data = NULL;
+    return 0;
+}
+
+static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op,
+                                   unsigned long arg)
+{
+    struct slash_ctldev *ctldev = file->private_data;
+    long ret;
+
+    if (!ctldev)
+        return -ENODEV;
+
+    mutex_lock(&ctldev->lock);
+    if (ctldev->dead) {
+        mutex_unlock(&ctldev->lock);
+        return -ENODEV;
+    }
+    ret = slash_ctldev_ioctl(ctldev, op, arg);
+    mutex_unlock(&ctldev->lock);
+    return ret;
+}
+
 /**
- * slash_ctldev_fop_ioctl() - Handle control device ioctls.
- * @file: Open file for the misc device.
+ * slash_ctldev_ioctl() - Handle control device ioctls.
+ * @ctldev: Control device for the open file.
  * @op:   ioctl command number.
  * @arg:  Pointer to the user-space ioctl struct.
  *
@@ -467,11 +379,10 @@ static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev)
  *
  * Return: 0 (or positive fd for GET_BAR_FD) on success, negative errno on failure.
  */
-static long slash_ctldev_fop_ioctl(struct file *file, unsigned int op, unsigned long arg)
+static long slash_ctldev_ioctl(struct slash_ctldev *ctldev, unsigned int op,
+                               unsigned long arg)
 {
-    struct miscdevice *misc = file->private_data;
-    struct pci_dev *pdev = to_pci_dev(misc->parent);
-    struct slash_ctldev *ctldev = pci_get_drvdata(pdev);
+    struct pci_dev *pdev = ctldev->pdev;
 
     dev_dbg(&pdev->dev, "ctldev: ioctl op=0x%x\n", op);
     switch(op) {

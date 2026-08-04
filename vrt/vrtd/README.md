@@ -22,7 +22,7 @@ AMD Alveo V80 hardware
 
 Key responsibilities:
 
-- Sysfs-based automatic device discovery at startup
+- Character-device discovery with stable CTL/QDMA number pairing
 - Per-client DMA buffer management (HBM and DDR) with automatic
   cleanup on disconnect
 - FPGA bitstream programming via the design writer subsystem
