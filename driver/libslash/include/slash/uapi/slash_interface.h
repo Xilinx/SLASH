@@ -85,6 +85,10 @@ struct slash_ioctl_bar_info {
     __u64 start_address; /**< [out] Physical / bus start address of the BAR. */
     __u64 length;        /**< [out] Size of the BAR region in bytes. */
 };
+#define SLASH_IOCTL_BAR_INFO_MIN_SIZE \
+    offsetof(struct slash_ioctl_bar_info, usable)
+#define SLASH_IOCTL_BAR_INFO_RESPONSE_SIZE \
+    sizeof(slash_ioctl_bar_info)
 
 /**
  * @brief Obtain a file descriptor for a BAR.
@@ -107,6 +111,10 @@ struct slash_ioctl_bar_fd_request {
     /* Kernel to userspace */
     __u64 length;        /**< [out] Size of the BAR region backing the returned fd. */
 };
+#define SLASH_IOCTL_BAR_FD_MIN_SIZE \
+    offsetof(struct slash_ioctl_bar_fd_request, length)
+#define SLASH_IOCTL_BAR_FD_RESPONSE_SIZE \
+    sizeof(struct slash_ioctl_bar_fd_request)
 
 /** Maximum length (including NUL) of a PCI BDF string ("DDDD:BB:DD.F"). */
 #define SLASH_PCI_BDF_LEN 32
@@ -124,6 +132,17 @@ struct slash_ioctl_device_info {
     __u16 subsystem_vendor_id;        /**< [out] PCI subsystem vendor ID. */
     __u16 subsystem_device_id;        /**< [out] PCI subsystem device ID. */
 };
+
+/*
+ * GET_DEVICE_INFO is pure output: there are no input fields beyond `size`
+ * itself, so the smallest meaningful user_size is the size field on its
+ * own. A caller passing size==0 has either forgotten to initialise the
+ * struct or claimed an incoherent "my struct has zero bytes" — either way
+ * the kernel rejects with -EINVAL rather than silently writing 0 bytes
+ * back.
+ */
+#define SLASH_IOCTL_DEVICE_INFO_MIN_SIZE \
+    offsetof(struct slash_ioctl_device_info, bdf)
 
 /** Query BAR properties.  Fills the kernel-to-userspace fields of slash_ioctl_bar_info. */
 #define SLASH_CTLDEV_IOCTL_GET_BAR_INFO _IOWR('v', 0x30, struct slash_ioctl_bar_info)

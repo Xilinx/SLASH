@@ -20,6 +20,7 @@
 
 #include "mock_sock.h"
 #include "mock_sock_qdma.h"
+#include "mock_sock_ctldev.h"
 
 #include <slash/uapi/slash_sysemu.h>
 
@@ -322,7 +323,23 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
             errno = ENOMEM;
             return -1;
         }
-        slash_mock_sock_qdma_init_state(state);
+        if ((rv = slash_mock_sock_qdma_init_state(state)) != 0) {
+            free(state);
+            errno = -rv;
+            return -1;
+        }
+        break;
+    case SLASH_MOCK_SOCK_ENDPOINT_CTLDEV:
+        state = malloc(sizeof(struct slash_mock_sock_ctldev_state));
+        if (state == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+        if ((rv = slash_mock_sock_ctldev_init_state(state)) != 0) {
+            free(state);
+            errno = -rv;
+            return -1;
+        }
         break;
     default:
         /* TODO: Implement other kinds of mock socks */
@@ -340,12 +357,15 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
     switch (endpoint) {
     case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
         slash_mock_sock_qdma_put_state(state);
-        errno = creation_errno;
-        return -1;
+        break;
+    case SLASH_MOCK_SOCK_ENDPOINT_CTLDEV:
+        slash_mock_sock_ctldev_release_state(state);
+        break;
     default:
-        errno = ENOTSUP;
-        return -1;
+        break;
     }
+    errno = creation_errno;
+    return -1;
 }
 
 int slash_mock_sock_create_with_state(enum slash_mock_sock_endpoint endpoint,

@@ -89,6 +89,7 @@ struct slash_qdma *slash_qdma_open(const char *path) {
             return NULL;
         }
         qdma->transport = SLASH_TRANSPORT_SOCKET;
+        qdma->seq       = 0;
     } else if (is_sock) {
         qdma->fd = slash_sock_connect(path);
         if (qdma->fd < 0) {
@@ -96,6 +97,7 @@ struct slash_qdma *slash_qdma_open(const char *path) {
             return NULL;
         }
         qdma->transport = SLASH_TRANSPORT_SOCKET;
+        qdma->seq       = 0;
     } else {
         qdma->fd = open(path, O_RDWR);
         if (qdma->fd < 0) {
@@ -103,6 +105,7 @@ struct slash_qdma *slash_qdma_open(const char *path) {
             return NULL;
         }
         qdma->transport = SLASH_TRANSPORT_IOCTL;
+        qdma->seq       = 0;
     }
 
     return qdma;

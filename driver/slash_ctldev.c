@@ -46,37 +46,6 @@
 #include "slash_chrdev.h"
 #include "slash_dmabuf.h"
 
-/** Compute the size of a struct member without needing an instance. */
-#define SLASH_FIELD_SIZE(_type, _member) (sizeof(((_type *)0)->_member))
-
-/*
- * Minimum struct sizes needed to read the input fields, and minimum
- * sizes needed to write back the output fields, for each ioctl.
- * These define the ABI backward-compatibility boundary: any userspace
- * that provides at least MIN_SIZE bytes is accepted.
- */
-
-#define SLASH_IOCTL_BAR_INFO_MIN_SIZE \
-    (offsetof(struct slash_ioctl_bar_info, bar_number) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_info, bar_number))
-#define SLASH_IOCTL_BAR_INFO_RESPONSE_SIZE \
-    (offsetof(struct slash_ioctl_bar_info, length) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_info, length))
-
-#define SLASH_IOCTL_BAR_FD_MIN_SIZE \
-    (offsetof(struct slash_ioctl_bar_fd_request, flags) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_fd_request, flags))
-#define SLASH_IOCTL_BAR_FD_RESPONSE_SIZE \
-    (offsetof(struct slash_ioctl_bar_fd_request, length) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_fd_request, length))
-
-/*
- * GET_DEVICE_INFO is pure output: there are no input fields beyond `size`
- * itself, so the smallest meaningful user_size is the size field on its
- * own. A caller passing size==0 has either forgotten to initialise the
- * struct or claimed an incoherent "my struct has zero bytes" — either way
- * the kernel rejects with -EINVAL rather than silently writing 0 bytes
- * back.
- */
-#define SLASH_IOCTL_DEVICE_INFO_MIN_SIZE \
-    SLASH_FIELD_SIZE(struct slash_ioctl_device_info, size)
-
 static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *ctldev);
 static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev);
 static int slash_ctldev_create_chrdev(struct slash_ctldev *ctldev);
