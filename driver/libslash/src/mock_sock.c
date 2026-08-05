@@ -243,19 +243,11 @@ static void *mock_sock_server_main(void *arg) {
 
         if (msg_size <= 0) {
             /* Normal connection shutdown or receiving failure, shutting down */
-            for (i_fd = 0; i_fd < n_input_fds; i_fd++) {
-                close(input_fds[i_fd]);
-            }
-            free(input_fds);
             break;
         }
 
         if ((size_t)msg_size < sizeof(struct slash_sysemu_socket_header)) {
             /* Message too small, ignoring the message */
-            for (i_fd = 0; i_fd < n_input_fds; i_fd++) {
-                close(input_fds[i_fd]);
-            }
-            free(input_fds);
             continue;
         }
 
