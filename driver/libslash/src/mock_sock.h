@@ -18,10 +18,11 @@
 #ifndef LIBSLASH_MOCK_SOCK_H
 #define LIBSLASH_MOCK_SOCK_H
 
-#include <pthread.h>
-
-#include <slash/qdma.h>
 #include <slash/uapi/slash_interface.h>
+
+#define LIBSLASH_MOCK_SOCK_BOARD_BDF "0000:61:00"
+#define LIBSLASH_MOCK_SOCK_QDMA_BDF "0000:61:00.1"
+#define LIBSLASH_MOCK_SOCK_CTLDEV_BDF "0000:61:00.2"
 
 enum slash_mock_sock_endpoint {
     SLASH_MOCK_SOCK_ENDPOINT_QDMA,
@@ -47,5 +48,39 @@ enum slash_mock_sock_endpoint {
  * @returns 0 on success, -1 on failure with errno set.
  */
 int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint);
+
+/**
+ * @brief Copy the the user's data into the destination, following the ABI
+ * versioning protocol.
+ *
+ * The ABI versioning protocol demands that first of all, the user must provide
+ * the size of the argument struct *as they know it* in the first field of the
+ * IOCTL argument. If this size is equal to or above a certain minimally
+ * supported size, the kernel/server must assume that fields that are not
+ * included in this size are not known to the client and thus ignore them.
+ *
+ * In the case of the mock sock server, we get an additional hint in the form of
+ * the received datagram size. This function therefore checks that:
+ *
+ * 1. The received message body is big enough to contain at least the size field
+ * 2. The user's size is at least as big as the minimum argument size.
+ * 3. The received message body is big enough to contain the alleged struct
+ * size.
+ *
+ * If this is all the case, it computes the minimum of the struct size known to
+ * the server and the user's struct size, zeroes the entire destination buffer,
+ * and copies the corresponding number of bytes to the destination.
+ *
+ * @param dst The destination buffer to write to.
+ * @param dst_size The size of the argument struct as it is known to the
+ * server.
+ * @param arg The argument buffer provided by the user.
+ * @param arg_size The size of the argument buffer, in bytes.
+ * @param min_size The minimum allowed argument struct size.
+ * @return The common size (i.e. min(user_size, server_size)) on success, -1 on
+ * failure.
+ */
+__u32 slash_checked_copy_from_user(void *dst, size_t dst_size, void *arg,
+                                   size_t arg_size, size_t min_size);
 
 #endif /* LIBSLASH_MOCK_SOCK_H */

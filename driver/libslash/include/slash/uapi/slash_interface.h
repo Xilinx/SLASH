@@ -42,6 +42,7 @@
 #include <linux/ioctl.h>
 #else
 #include <sys/ioctl.h>
+#include <stddef.h>
 #endif /* __KERNEL__ */
 
 /**
