@@ -48,6 +48,12 @@ struct slash_mock_sock_qdma_state {
     /** @brief The configured aperture of the qpair.
      */
     int aperture_size[LIBSLASH_MOCK_SOCK_MAX_QPAIRS];
+    /** @brief Owned memory arry, simulating the HBM of the card. Exactly 32 GiB
+     * in size. */
+    char *hbm_memory;
+    /** @brief Owned memory arry, simulating the DDR of the card. Exactly 32 GiB
+     * in size. */
+    char *ddr_memory;
 };
 
 /**
