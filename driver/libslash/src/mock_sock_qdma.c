@@ -281,9 +281,8 @@ static int qdma_ioctl_qpair_op(struct slash_mock_sock_qdma_state *state,
  * instance of @ref slash_qdma_buf_create, following the ABI versioning rules.
  * @param arg_size Apparent size of the argument struct.
  * @param output_fds Non-owned array to write the buffer FD to.
- * @param n_output_fds Non-owned reference to the capacity/size of the @ref
- * output_fds array. The original value is the capacity of the array, and this
- * function sets it to the number of emitted FDs.
+ * @param n_output_fds Non-owned reference to the size of the @ref output_fds
+ * array.
  * @return 0 on success, negative error number on failure.
  */
 static int qdma_ioctl_buf_create(void *arg, size_t arg_size, int **output_fds,
@@ -342,6 +341,100 @@ static int qdma_ioctl_buf_create(void *arg, size_t arg_size, int **output_fds,
     return 0;
 }
 
+/**
+ * @brief Execute the SLASH_QDMA_IOCTL_QPAIR_GET_FD operation.
+ *
+ * This creates a new endpoint plus background thread, which "uses" the
+ * referenced qpairs to offer memory transfer operations.
+ *
+ * @param state Non-owning reference to the QDMA endpoint state. However, the
+ * caller must be a co-owner of the QDMA endpoint state, since the function will
+ * `get` the state to make the new worker thread a co-owner.
+ * @param arg Non-owning reference to the operation argument. Interpreted as an
+ * instance of @ref slash_qdma_qpair_fd_request, following the ABI versioning
+ * rules.
+ * @param arg_size Apparent size of the argument struct.
+ * @param output_fds Non-owned array to write the socket FD to.
+ * @param n_output_fds Non-owned reference to the size of the @ref
+ * output_fds array.
+ * @return 0 on success, negative error number on failure.
+ */
+static int qdma_ioctl_qpair_fd_request(struct slash_mock_sock_qdma_state *state,
+                                       void *arg, size_t arg_size,
+                                       int **output_fds, size_t *n_output_fds) {
+    struct slash_qdma_qpair_fd_request request;
+    struct slash_mock_sock_qpair_state *qpair_state = NULL;
+    __u32 out_size = 0;
+    size_t i_qpair = 0;
+    int rv = 0;
+
+    if (arg == NULL || output_fds == NULL || n_output_fds == NULL) {
+        return -EINVAL;
+    }
+
+    *output_fds = malloc(sizeof(int));
+    if (*output_fds == NULL) {
+        return -ENOMEM;
+    }
+
+    out_size =
+        slash_checked_copy_from_user(&request, sizeof(request), arg, arg_size,
+                                     SLASH_QDMA_QPAIR_FD_REQUEST_MIN_SIZE);
+    if (out_size == -1) {
+        rv = -EINVAL;
+        goto cleanup;
+    }
+
+    qpair_state = calloc(1, sizeof(*qpair_state));
+    if (qpair_state == NULL) {
+        rv = -ENOMEM;
+        goto cleanup;
+    }
+
+    if ((rv = slash_mock_sock_qdma_get_state(state)) != 0) {
+        goto cleanup;
+    }
+    qpair_state->main_state = state;
+
+    if (request.qpair_count == 0) {
+        qpair_state->qpair_ids[0] = request.qid;
+        qpair_state->n_qpairs = 1;
+    } else if (request.qpair_count <= SLASH_QDMA_FD_MAX_QPAIRS) {
+        qpair_state->n_qpairs = request.qpair_count;
+        for (i_qpair = 0; i_qpair < qpair_state->n_qpairs; i_qpair++) {
+            qpair_state->qpair_ids[i_qpair] = request.qpair_ids[i_qpair];
+        }
+    } else {
+        rv = -EINVAL;
+        goto cleanup;
+    }
+
+    /* Not checking whether the qpairs are existing and running. This would be
+     * pointless anyways, since the state mutex needs to be released in order to
+     * create a new co-owned reference to the qdma state. It could therefore be
+     * possible that we check the qpair state, and then another IOCTL stops the
+     * qpair before we can create the new endpoint. Instead, the qpair FD
+     * endpoint checks the qpair state before every actual user operation.*/
+
+    if ((rv = slash_mock_sock_create_with_state(SLASH_MOCK_SOCK_ENDPOINT_QPAIR,
+                                                qpair_state)) < 0) {
+        goto cleanup;
+    }
+
+    **output_fds = rv;
+    *n_output_fds = 1;
+    return 0;
+
+cleanup:
+    if (qpair_state != NULL && qpair_state->main_state != NULL) {
+        slash_mock_sock_qdma_put_state(qpair_state->main_state);
+    }
+    free(qpair_state);
+    free(*output_fds);
+    *n_output_fds = 0;
+    return rv;
+}
+
 int slash_mock_sock_qdma_dispatch(struct slash_mock_sock_qdma_state *state,
                                   int op, void *arg, size_t arg_size,
                                   int *input_fds, size_t n_input_fds,
@@ -355,6 +448,28 @@ int slash_mock_sock_qdma_dispatch(struct slash_mock_sock_qdma_state *state,
         return qdma_ioctl_qpair_add(state, arg, arg_size);
     case SLASH_QDMA_IOCTL_Q_OP:
         return qdma_ioctl_qpair_op(state, arg, arg_size);
+    case SLASH_QDMA_IOCTL_BUF_CREATE:
+        return qdma_ioctl_buf_create(arg, arg_size, output_fds, n_output_fds);
+    case SLASH_QDMA_IOCTL_QPAIR_GET_FD:
+        return qdma_ioctl_qpair_fd_request(state, arg, arg_size, output_fds,
+                                           n_output_fds);
+    default:
+        return -ENOTTY;
+    }
+}
+
+int slash_mock_sock_qpair_release_state(
+    struct slash_mock_sock_qpair_state *qpair_state) {
+    return slash_mock_sock_qdma_put_state(qpair_state->main_state);
+}
+
+int slash_mock_sock_qpair_dispatch(struct slash_mock_sock_qpair_state *state,
+                                   int op, void *arg, size_t arg_size,
+                                   int *input_fds, size_t n_input_fds,
+                                   int **output_fds, size_t *n_output_fds) {
+    *output_fds = NULL;
+    *n_output_fds = 0;
+    switch (op) {
     case SLASH_QDMA_IOCTL_BUF_CREATE:
         return qdma_ioctl_buf_create(arg, arg_size, output_fds, n_output_fds);
     default:

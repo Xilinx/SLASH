@@ -264,15 +264,25 @@ static void *mock_sock_server_main(void *arg) {
         msg_arg_size =
             ((size_t)msg_size) - sizeof(struct slash_sysemu_socket_header);
 
-        if (state->endpoint == SLASH_MOCK_SOCK_ENDPOINT_QDMA) {
+        switch (state->endpoint) {
+        case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
             msg_hdr->return_value = slash_mock_sock_qdma_dispatch(
                 state->endpoint_state, msg_hdr->ioctl_op, msg_arg, msg_arg_size,
                 input_fds, n_input_fds, &output_fds, &n_output_fds);
-        } else {
+            break;
+
+        case SLASH_MOCK_SOCK_ENDPOINT_QPAIR:
+            msg_hdr->return_value = slash_mock_sock_qpair_dispatch(
+                state->endpoint_state, msg_hdr->ioctl_op, msg_arg, msg_arg_size,
+                input_fds, n_input_fds, &output_fds, &n_output_fds);
+            break;
+
+        default:
             /* This endpoint is not implemented yet */
             msg_hdr->return_value = -ENOSYS;
             output_fds = NULL;
             n_output_fds = 0;
+            break;
         }
 
         msg_size = send_sock_message(state->server_fd, msg_buf, msg_size,
@@ -300,6 +310,9 @@ cleanup:
     case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
         slash_mock_sock_qdma_put_state(state->endpoint_state);
         break;
+    case SLASH_MOCK_SOCK_ENDPOINT_QPAIR:
+        slash_mock_sock_qpair_release_state(state->endpoint_state);
+        free(state->endpoint_state);
     default:
     }
     free(state);
@@ -307,6 +320,44 @@ cleanup:
 }
 
 int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
+    int rv, creation_errno;
+    void *state;
+
+    switch (endpoint) {
+    case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
+        state = malloc(sizeof(struct slash_mock_sock_qdma_state));
+        if (state == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+        slash_mock_sock_qdma_init_state(state);
+        break;
+    default:
+        /* TODO: Implement other kinds of mock socks */
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    rv = slash_mock_sock_create_with_state(endpoint, state);
+    if (rv >= 0) {
+        return rv;
+    }
+    creation_errno = errno;
+
+    /* Endpoint creation failed, clean up the state. */
+    switch (endpoint) {
+    case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
+        slash_mock_sock_qdma_put_state(state);
+        errno = creation_errno;
+        return -1;
+    default:
+        errno = ENOTSUP;
+        return -1;
+    }
+}
+
+int slash_mock_sock_create_with_state(enum slash_mock_sock_endpoint endpoint,
+                                      void *endpoint_state) {
     int rv;
     struct server_state *state;
     int sockets[2];
@@ -325,40 +376,13 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
         return -1;
     }
     state->server_fd = sockets[1];
-
     state->endpoint = endpoint;
-    switch (endpoint) {
-    case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
-        state->endpoint_state =
-            malloc(sizeof(struct slash_mock_sock_qdma_state));
-        if (state->endpoint_state == NULL) {
-            close(sockets[0]);
-            close(sockets[1]);
-            free(state);
-            errno = ENOMEM;
-            return -1;
-        }
-        slash_mock_sock_qdma_init_state(state->endpoint_state);
-        break;
-    default:
-        /* TODO: Implement other kinds of mock socks */
-        close(sockets[0]);
-        close(sockets[1]);
-        free(state);
-        errno = ENOTSUP;
-        return -1;
-    }
+    state->endpoint_state = endpoint_state;
 
     rv = pthread_create(&thread, NULL, &mock_sock_server_main, state);
     if (rv != 0) {
         close(sockets[0]);
         close(sockets[1]);
-        switch (endpoint) {
-        case SLASH_MOCK_SOCK_ENDPOINT_QDMA:
-            slash_mock_sock_qdma_put_state(state->endpoint_state);
-            break;
-        default:
-        }
         free(state);
         errno = rv;
         return -1;

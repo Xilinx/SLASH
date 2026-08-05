@@ -641,9 +641,10 @@ TEST(QdmaNullTest, TransferBatchInvalid) {
 }
 
 TEST_P(ParametrizedQdmaTest, QueueFdReadWriteRejectedOnHardware) {
-    if (backend == LibSlashBackend::SYSEMU) {
-        GTEST_SKIP() << "qpair fds returned by sysemu are unix domain sockets "
-                        "and thus support read/write for socket messages";
+    if (backend != LibSlashBackend::DRIVER) {
+        GTEST_SKIP()
+            << "qpair fds returned by sysemu/mock are unix domain sockets "
+               "and thus support read/write for socket messages";
     }
 
     struct slash_qdma_qpair_add req{};

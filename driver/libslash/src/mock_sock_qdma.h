@@ -21,6 +21,7 @@
 #define LIBSLASH_MOCK_SOCK_MAX_QPAIRS 256
 
 #include <pthread.h>
+#include <slash/uapi/slash_interface.h>
 
 /**
  * @brief State specific to mock sock servers implementing the
@@ -96,10 +97,57 @@ int slash_mock_sock_qdma_put_state(struct slash_mock_sock_qdma_state *state);
  * @param n_output_fds Non-owned reference to the capacity/size of @ref
  * output_fds. The original value is the capacity of the array in number of FDs,
  * and this function sets it to the actual number of FDs emitted.
+ * @return 0 on success, a negative errno on failure.
  */
 int slash_mock_sock_qdma_dispatch(struct slash_mock_sock_qdma_state *state,
                                   int op, void *arg, size_t arg_size,
                                   int *input_fds, size_t n_input_fds,
                                   int **output_fds, size_t *n_output_fds);
+
+/** @brief The state of a Qpair endpoint worker. */
+struct slash_mock_sock_qpair_state {
+    /** Co-owned reference to the main QDMA endpoint state. */
+    struct slash_mock_sock_qdma_state *main_state;
+    /** Array of qpair IDs which are used with this endpoint */
+    size_t qpair_ids[SLASH_QDMA_FD_MAX_QPAIRS];
+    /** The number of elements in @ref qpair_ids, <= @ref
+     * SLASH_QDMA_FD_MAX_QPAIRS */
+    size_t n_qpairs;
+};
+
+/**
+ * @brief Cleanup/release the state of a Qpair endpoint.
+ *
+ * In particular, this will release the co-ownership of the main QDMA state by
+ * calling @ref slash_mock_sock_qdma_put_state. However, it does not stop or
+ * remove the qpairs handled by the endpoint, nor does it `free` the memory.
+ *
+ * @param qpair_state Non-owning reference to the state.
+ * @return 0 on success, a negative errno on failure.
+ */
+int slash_mock_sock_qpair_release_state(
+    struct slash_mock_sock_qpair_state *qpair_state);
+
+/**
+ * @brief Dispatch the IOCTL operation in the Qpair control file endpoint.
+ *
+ * @param state Non-owning reference to the Qpair endpoint state.
+ * @param op Op-code of the IOCTL to dispatch.
+ * @param arg Non-owning reference to the argument struct.
+ * @param arg_size Apparent/maximal size of the argument struct.
+ * @param input_fds Non-owned array of fds sent by the user, to be used in the
+ * operation.
+ * @param n_input_fds Size of the @ref input_fds array, <= MAX_FDS
+ * @param output_fds Non-owned array to write output fds to, which are to be
+ * sent to the user
+ * @param n_output_fds Non-owned reference to the capacity/size of @ref
+ * output_fds. The original value is the capacity of the array in number of FDs,
+ * and this function sets it to the actual number of FDs emitted.
+ * @return 0 on success, a negative errno on failure.
+ */
+int slash_mock_sock_qpair_dispatch(struct slash_mock_sock_qpair_state *state,
+                                   int op, void *arg, size_t arg_size,
+                                   int *input_fds, size_t n_input_fds,
+                                   int **output_fds, size_t *n_output_fds);
 
 #endif

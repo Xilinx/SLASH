@@ -29,6 +29,7 @@ enum slash_mock_sock_endpoint {
     SLASH_MOCK_SOCK_ENDPOINT_CTLDEV,
     SLASH_MOCK_SOCK_ENDPOINT_HOTPLUG,
     /* Endpoints that can not be directly created by users */
+    SLASH_MOCK_SOCK_ENDPOINT_BAR,
     SLASH_MOCK_SOCK_ENDPOINT_QPAIR,
 };
 
@@ -36,18 +37,68 @@ enum slash_mock_sock_endpoint {
  * @brief Create a mock-up for a SLASH endpoint, using the socket transport.
  *
  * This function launches a background thread that supports most of the
- * functionality needed to test libSLASH users. TODO: Describe which
- * functionality is mocked and which is not.
+ * functionality needed to test libSLASH users. User can thus mock-up a
+ * connection to the QDMA, ctldev (BAR), and hotplugging subsystems, without
+ * needing a running slash kernel module or the sysemu daemon.
+ *
+ * The only argument to this function is the endpoint type. However, out of the
+ * offered endpoints, only @ref SLASH_MOCK_SOCK_ENDPOINT_QDMA, @ref
+ * SLASH_MOCK_SOCK_ENDPOINT_CTLDEV, and @ref SLASH_MOCK_SOCK_ENDPOINT_HOTPLUG
+ * are supported, since the other endpoint types are sub-endpoints that depend
+ * on one of the previous endpoints.
+ *
+ * If successful, the return value of this function is a file descriptor to a
+ * UNIX domain socket. Requests sent to this socket are serviced by a background
+ * thread. This background thread stays alive until either an error occurrs or
+ * the returned file descriptor is closed. Closing the returned file descriptor
+ * is therefore enough to clean up the mock sock endpoint.
  *
  * Possible errors:
- * * ENOTSUP: Unsupported endpoint endpoint
- * * ENOMEM: No memory available
- * As well as all errors from @ref socketpair and @ref pthread_create.
+ * * ENOMEM: Not enough memory.
+ * * ENOTSUP: The requested endpoint is not supported by this function.
+ * * All errors from `socketpair` and `pthread_create`.
  *
  * @param endpoint The kind of endpoint to mock-up
- * @returns 0 on success, -1 on failure with errno set.
+ * @returns A file descriptor (>=0) on success, -1 on failure with errno set.
  */
 int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint);
+
+/**
+ * @brief Create a mock-up for a SLASH endpoint, using the socket transport and
+ * the referenced state object.
+ *
+ * Most users of the mock-sock system should use @ref slash_mock_sock_create,
+ * which also creates the runtime state for the endpoint in question. However,
+ * since this function does not need to create the state object itself, it can
+ * launch all endpoint types defined in @ref slash_mock_sock_endpoint.
+ *
+ * If successful, the return value of this function is a file descriptor to a
+ * UNIX domain socket. Requests sent to this socket are serviced by a background
+ * thread. This background thread stays alive until either an error occurrs or
+ * the returned file descriptor is closed. Closing the returned file descriptor
+ * is therefore enough to clean up the mock sock endpoint.
+ *
+ * The background thread will take (co-)ownership of the state struct if it is
+ * launched successfully. Please take the required types and ownership models
+ * from the following table. However, if this function fails, the (co-)ownership
+ * remains with the caller, who then has to clean up the state struct themselves.
+ *
+ * | Endpoint                       | State type                  | Ownership |
+ * |--------------------------------|-----------------------------|-----------|
+ * | SLASH_MOCK_SOCK_ENDPOINT_QDMA  | slash_mock_sock_qdma_state  | Co-owned  |
+ * | SLASH_MOCK_SOCK_ENDPOINT_QPAIR | slash_mock_sock_qpair_state | Owned     |
+ *
+ * Possible errors:
+ * * ENOMEM: Not enough memory available.
+ * * All errors from `socketpair` and `pthread_create`
+ *
+ * @param endpoint The kind of endpoint to mock-up
+ * @param endpoint_state Owned pointer to the necessary context for BAR and
+ * QPAIR endpoints, or NULL for the QDMA, CTLDEV, and HOTPLUG endpoints.
+ * @returns 0 on success, -1 on failure with errno set.
+ */
+int slash_mock_sock_create_with_state(enum slash_mock_sock_endpoint endpoint,
+                                      void *endpoint_state);
 
 /**
  * @brief Copy the the user's data into the destination, following the ABI
