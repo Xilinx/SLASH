@@ -23,6 +23,9 @@
 
 #include <systemd/sd-event.h>
 
+struct vrtd;
+
 int on_event_signal(sd_event_source *s, const struct signalfd_siginfo *si, void *userdata);
+int reload_config(struct vrtd *state);
 
 #endif // VRTD_SIGNALS_H

@@ -51,8 +51,6 @@
 #include "config.h"
 #include "utils.h"
 
-int reload_config(struct vrtd *state);
-
 /**
  * sd_event signal callback dispatched when SIGINT, SIGTERM, SIGHUP, or
  * SIGQUIT is received via the signalfd.
@@ -106,14 +104,15 @@ int on_event_signal(sd_event_source *s, const struct signalfd_siginfo *si, void 
  * client's role is re-resolved from the new configuration on its next request.
  * This avoids disconnecting clients simply because the config file changed.
  *
- * If loading the new configuration fails, the old config has already been
- * freed -- the daemon continues to run but all role lookups will fail until
- * a subsequent successful reload or restart.
+ * Failed reloads leave the active configuration and resolved client roles
+ * unchanged.
  */
 int reload_config(struct vrtd *state)
 {
-    /* Invalidate cached roles for every connected client so they are
-     * re-evaluated against the incoming configuration. */
+    struct config *new_config = NULL;
+    int ret = config_load(&new_config);
+    PROPAGATE_ERROR(ret);
+
     for (size_t i = 0; i < state->clients.len; i++) {
         struct client *client = state->clients.d[i];
         assert(client != NULL);
@@ -121,10 +120,9 @@ int reload_config(struct vrtd *state)
         cleanup_rolep(&client->role);
     }
 
-    cleanup_configp(&state->config);
-
-    int ret = config_load(&state->config);
-    PROPAGATE_ERROR(ret);
+    struct config *old_config = state->config;
+    state->config = new_config;
+    cleanup_config(old_config);
 
     LOG(LOG_INFO, "Configuration reloaded successfully");
 
