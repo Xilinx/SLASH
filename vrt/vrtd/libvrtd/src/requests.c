@@ -145,22 +145,6 @@ static enum vrtd_ret vrtd_recv_response_fds(
     return (enum vrtd_ret) rh.ret;
 }
 
-static enum vrtd_ret vrtd_recv_response(
-    int fd,
-    void *resp_body_buf,
-    size_t resp_bufsz,
-    int *resp_fd
-)
-{
-    uint32_t count = 0;
-    enum vrtd_ret ret = vrtd_recv_response_fds(
-        fd, resp_body_buf, resp_bufsz, resp_fd, resp_fd ? 1u : 0u, &count);
-    if (resp_fd && count == 0) {
-        *resp_fd = -1;
-    }
-    return ret;
-}
-
 int vrtd_connect(const char *path)
 {
     if (path == NULL) {
@@ -192,77 +176,25 @@ int vrtd_connect(const char *path)
 }
 
 /**
- * vrtd_raw_request() - Send a request and receive the response.
+ * vrtd_raw_request_fds() - Send a request and receive the response.
  * @fd:            Connection socket (from vrtd_connect()).
  * @opcode:        Wire protocol opcode (VRTD_REQ_*).
  * @req_body:      Request body payload (may be NULL if @req_size is 0).
  * @req_size:      Size of @req_body in bytes.
  * @resp_body_buf: Buffer for the response body.
  * @resp_bufsz:    Size of @resp_body_buf.
- * @resp_fd:       If non-NULL, receives an out-of-band fd from the daemon.
+ * @resp_fds:      Optional array receiving out-of-band file descriptors.
+ * @max_resp_fds:  Capacity of @resp_fds.
+ * @resp_fd_count: Optional output count of received fds.
  * @req_fd:        If non-NULL and *req_fd >= 0, sends this fd to the daemon
  *                 via SCM_RIGHTS (e.g. a bitstream fd for design_write).
  *
  * Builds a request message (header + body), optionally attaches an fd
  * via SCM_RIGHTS ancillary data, sends it with sendmsg(), then waits
- * for the response via vrtd_recv_response().
+ * for the response via vrtd_recv_response_fds().
  *
  * Return: VRTD_RET_OK on success, or an error code.
  */
-enum vrtd_ret vrtd_raw_request(
-    int fd,
-    uint16_t opcode,
-    const void *req_body, uint16_t req_size,
-    void *resp_body_buf, size_t resp_bufsz,
-    int *resp_fd,
-    const int *req_fd
-)
-{
-    if (req_size > VRTD_MSG_MAX_SIZE - sizeof(struct vrtd_req_header)) { errno = EMSGSIZE; return -1; }
-
-    /* ---- Send ---- */
-    struct vrtd_req_header h = {
-        .size  = req_size,
-        .opcode= opcode,
-        .seqno = 1,
-    };
-
-    struct iovec siov[2];
-    siov[0].iov_base = &h;
-    siov[0].iov_len  = sizeof(h);
-    siov[1].iov_base = (void*) req_body;
-    siov[1].iov_len  = req_size;
-
-    char cbuf[CMSG_SPACE(sizeof(int))];
-    struct msghdr smsg = {
-        .msg_iov        = siov,
-        .msg_iovlen     = req_size ? 2 : 1,
-        .msg_control    = NULL,
-        .msg_controllen = 0,
-    };
-
-    if (req_fd && *req_fd >= 0) {
-        smsg.msg_control = cbuf;
-        smsg.msg_controllen = sizeof(cbuf);
-
-        struct cmsghdr *cmsg = CMSG_FIRSTHDR(&smsg);
-        cmsg->cmsg_level = SOL_SOCKET;
-        cmsg->cmsg_type  = SCM_RIGHTS;
-        cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
-        memcpy(CMSG_DATA(cmsg), req_fd, sizeof(int));
-    }
-
-    ssize_t sn = sendmsg(fd, &smsg, MSG_NOSIGNAL);
-    if (sn == -1) {
-        return VRTD_RET_BAD_CONN;
-    }
-    if ((size_t) sn != sizeof(h) + req_size) {
-        return VRTD_RET_BAD_CONN;
-    }
-
-    return vrtd_recv_response(fd, resp_body_buf, resp_bufsz, resp_fd);
-}
-
 static enum vrtd_ret vrtd_raw_request_fds(
     int fd,
     uint16_t opcode,
@@ -313,10 +245,28 @@ static enum vrtd_ret vrtd_raw_request_fds(
         return VRTD_RET_BAD_CONN;
     }
 
-    return vrtd_recv_response_fds(fd, resp_body_buf, resp_bufsz,
-                                  resp_fds, max_resp_fds, resp_fd_count);
+    return vrtd_recv_response_fds(fd, resp_body_buf, resp_bufsz, resp_fds,
+                                  max_resp_fds, resp_fd_count);
 }
 
+enum vrtd_ret vrtd_raw_request(
+    int fd,
+    uint16_t opcode,
+    const void *req_body, uint16_t req_size,
+    void *resp_body_buf, size_t resp_bufsz,
+    int *resp_fd,
+    const int *req_fd
+)
+{
+    uint32_t count = 0;
+    enum vrtd_ret ret = vrtd_raw_request_fds(
+        fd, opcode, req_body, req_size, resp_body_buf, resp_bufsz,
+        resp_fd, resp_fd ? 1u : 0u, &count, req_fd);
+    if (resp_fd && count == 0) {
+        *resp_fd = -1;
+    }
+    return ret;
+}
 
 enum vrtd_ret vrtd_get_num_devices(int fd, uint32_t *out)
 {
