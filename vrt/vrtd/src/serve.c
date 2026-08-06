@@ -603,6 +603,32 @@ static void client_release_owned_out_fds(struct client *client)
 }
 
 /**
+ * Drops a client the daemon can no longer answer.
+ *
+ * A failure in the request path leaves no response to send and the request
+ * slot already consumed, so the connection cannot make progress.  Returning
+ * the error out of an sd-event callback instead would stop the event loop and
+ * take every other client's session down with it, which is why every such
+ * failure ends here.
+ *
+ * Callers iterating @c state->clients must not advance their index afterwards,
+ * because removal closes the gap.
+ *
+ * @param state  Daemon state owning the client list.
+ * @param client The client to disconnect.  Freed before this returns.
+ * @param reason What failed, named for the log line.
+ */
+static void client_disconnect(struct vrtd *state, struct client *client,
+                              const char *reason)
+{
+    LOG(LOG_WARNING,
+        "Disconnecting client after %s uid=%u conn_id=%llu fd=%d",
+        reason, (unsigned int)client->uid,
+        (unsigned long long)client->conn_id, client->fd);
+    client_ptr_array_rm_by_reference(&state->clients, client);
+}
+
+/**
  * Tears down a client: releases buffers, closes fds, unregisters the event
  * source, and frees memory.
  *
@@ -688,7 +714,10 @@ int on_client_io(sd_event_source *s, int fd, uint32_t revents, void *user)
     /* Step 1: Receive a new request if the slot is free. */
     if (!client->have_request && (revents & EPOLLIN)) {
         ret = client_handle_in(client);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to handle client input");
+        if (ret == -1) {
+            client_disconnect(client->state, client, "invalid input");
+            return 0;
+        }
     }
 
     /*
@@ -704,7 +733,10 @@ int on_client_io(sd_event_source *s, int fd, uint32_t revents, void *user)
         (!client->state->async_device_op_in_progress ||
          client_request_is_cfgmem_status(client))) {
         ret = client_handle_request(client);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to handle client request");
+        if (ret == -1) {
+            client_disconnect(client->state, client, "request failure");
+            return 0;
+        }
     }
 
     /*
@@ -718,12 +750,17 @@ int on_client_io(sd_event_source *s, int fd, uint32_t revents, void *user)
         client->have_new_response = false;
 
         ret = client_handle_out(client);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to handle client output");
+        if (ret == -1) {
+            client_disconnect(client->state, client, "output failure");
+            return 0;
+        }
     }
 
     /* Step 4: Adjust EPOLLIN/EPOLLOUT based on current state. */
     ret = client_update_wanted_epoll_events(client, s);
-    PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to update epoll events");
+    if (ret == -1) {
+        client_disconnect(client->state, client, "event update failure");
+    }
 
     return 0;
 }
@@ -784,9 +821,10 @@ int on_event_deferred_work(sd_event_source *s, uint64_t usec, void *user)
     }
 
     /* Check each client for a completed async design write. */
-    for (size_t i = 0; i < state->clients.len; i++) {
+    for (size_t i = 0; i < state->clients.len;) {
         struct client *client = state->clients.d[i];
         if (client == NULL) {
+            i++;
             continue;
         }
 
@@ -800,8 +838,13 @@ int on_event_deferred_work(sd_event_source *s, uint64_t usec, void *user)
          */
         if (ret == 1) {
             ret = client_update_wanted_epoll_events(client, client->event_source);
-            PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to update epoll events for deferred response");
+            if (ret == -1) {
+                client_disconnect(state, client,
+                                  "deferred event update failure");
+                continue;
+            }
         }
+        i++;
     }
 
     return 0;
@@ -1607,16 +1650,21 @@ static int process_async_device_op_completion(struct vrtd *state)
     state->async_device_op_in_progress = false;
     drain_deferred_buffer_cleanups(state);
 
-    for (size_t i = 0; i < state->clients.len; i++) {
+    for (size_t i = 0; i < state->clients.len;) {
         struct client *client = state->clients.d[i];
         if (client == NULL || !client->pending_async_device_op) {
+            i++;
             continue;
         }
 
         client_deliver_async_device_op_result(client, result);
 
         ret = client_update_wanted_epoll_events(client, client->event_source);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to update epoll after async device op completion");
+        if (ret == -1) {
+            client_disconnect(state, client, "async event update failure");
+            continue;
+        }
+        i++;
     }
 
     return 0;
@@ -1637,27 +1685,37 @@ static int process_async_device_op_completion(struct vrtd *state)
  */
 static int drain_deferred_requests(struct vrtd *state)
 {
-    for (size_t i = 0; i < state->clients.len; i++) {
+    for (size_t i = 0; i < state->clients.len;) {
         struct client *client = state->clients.d[i];
         if (client == NULL) {
+            i++;
             continue;
         }
         if (!client->have_request || client->have_response) {
+            i++;
             continue;
         }
         if (client->pending_design_write || client->pending_async_device_op) {
+            i++;
             continue;
         }
 
         int ret = client_handle_request(client);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to dispatch deferred request");
+        if (ret == -1) {
+            client_disconnect(state, client, "deferred request failure");
+            continue;
+        }
 
         ret = client_update_wanted_epoll_events(client, client->event_source);
-        PROPAGATE_ERROR_LOG(ret, LOG_ERR, "Failed to update epoll for deferred dispatch");
+        if (ret == -1) {
+            client_disconnect(state, client, "deferred event update failure");
+            continue;
+        }
 
         if (state->async_device_op_in_progress) {
             break;
         }
+        i++;
     }
 
     return 0;
