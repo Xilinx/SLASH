@@ -41,7 +41,7 @@
 //     on a scalar written by a CPU kernel.
 //
 // Algorithm (applied per element i):
-//   x = i
+//   x = i + input_offset
 //   x = x + 10                          # cpu_preprocess
 //   repeat `iterations`:                # loop, carrying x
 //       x = x + 1                       # cpu_stage
@@ -60,8 +60,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -96,6 +98,7 @@ struct Cli {
     std::string vbinB;
     uint32_t iterations = 2;
     uint32_t elementCount = 16;
+    int32_t inputOffset = 0;
 };
 
 std::filesystem::path executableDir(const char* argv0) {
@@ -114,7 +117,38 @@ void usage(const char* argv0) {
         << "  --vbin-b PATH       image B vbin (default: next to executable)\n"
         << "  --iterations N      loop iterations (default: 2)\n"
         << "  --elements N        int32 elements (default: 16)\n"
+        << "  --input-offset N    add N to each generated input (default: 0)\n"
         << "  --help, -h          show this help\n";
+}
+
+uint32_t parseUint32(const std::string& text, const char* flag) {
+    try {
+        size_t consumed = 0;
+        if (text.empty() || text.front() == '-') throw std::invalid_argument("negative");
+        const auto value = std::stoull(text, &consumed, 10);
+        if (consumed != text.size() ||
+            value > std::numeric_limits<uint32_t>::max()) {
+            throw std::out_of_range("uint32");
+        }
+        return static_cast<uint32_t>(value);
+    } catch (const std::exception&) {
+        throw std::runtime_error(std::string("invalid value for ") + flag + ": " + text);
+    }
+}
+
+int32_t parseInt32(const std::string& text, const char* flag) {
+    try {
+        size_t consumed = 0;
+        const auto value = std::stoll(text, &consumed, 10);
+        if (consumed != text.size() ||
+            value < std::numeric_limits<int32_t>::min() ||
+            value > std::numeric_limits<int32_t>::max()) {
+            throw std::out_of_range("int32");
+        }
+        return static_cast<int32_t>(value);
+    } catch (const std::exception&) {
+        throw std::runtime_error(std::string("invalid value for ") + flag + ": " + text);
+    }
 }
 
 Cli parseArgs(int argc, char** argv) {
@@ -133,11 +167,13 @@ Cli parseArgs(int argc, char** argv) {
         else if (arg == "--bdf") cli.bdf = need("--bdf");
         else if (arg == "--vbin-a") cli.vbinA = need("--vbin-a");
         else if (arg == "--vbin-b") cli.vbinB = need("--vbin-b");
-        else if (arg == "--iterations") cli.iterations = static_cast<uint32_t>(
-            std::stoul(need("--iterations")));
-        else if (arg == "--elements") cli.elementCount = static_cast<uint32_t>(
-            std::stoul(need("--elements")));
-        else if (arg == "--help" || arg == "-h") {
+        else if (arg == "--iterations") {
+            cli.iterations = parseUint32(need("--iterations"), "--iterations");
+        } else if (arg == "--elements") {
+            cli.elementCount = parseUint32(need("--elements"), "--elements");
+        } else if (arg == "--input-offset") {
+            cli.inputOffset = parseInt32(need("--input-offset"), "--input-offset");
+        } else if (arg == "--help" || arg == "-h") {
             usage(argv[0]);
             std::exit(0);
         } else {
@@ -152,14 +188,30 @@ Cli parseArgs(int argc, char** argv) {
     if (cli.iterations == 0 || cli.elementCount == 0) {
         throw std::runtime_error("--iterations and --elements must be non-zero");
     }
+    const int64_t lastInput = static_cast<int64_t>(cli.inputOffset) +
+                              static_cast<int64_t>(cli.elementCount) - 1;
+    if (lastInput > std::numeric_limits<int32_t>::max()) {
+        throw std::runtime_error("--input-offset + --elements exceeds int32 range");
+    }
     return cli;
 }
 
-// Host-side reference for the same pipeline the graph runs.
-std::vector<int32_t> expectedOutput(uint32_t elementCount, uint32_t iterations) {
-    std::vector<int32_t> post(elementCount);
+std::vector<int32_t> generateInput(uint32_t elementCount, int32_t inputOffset) {
+    std::vector<int32_t> input(elementCount);
     for (uint32_t i = 0; i < elementCount; ++i) {
-        int32_t v = static_cast<int32_t>(i);
+        input[i] = static_cast<int32_t>(
+            static_cast<int64_t>(inputOffset) + static_cast<int64_t>(i));
+    }
+    return input;
+}
+
+// Host-side reference for the same pipeline the graph runs.
+std::vector<int32_t> expectedOutput(const std::vector<int32_t>& input,
+                                    uint32_t iterations) {
+    const size_t elementCount = input.size();
+    std::vector<int32_t> post(elementCount);
+    for (size_t i = 0; i < elementCount; ++i) {
+        int32_t v = input[i];
         v = v + 10;  // cpu_preprocess
         for (uint32_t iter = 0; iter < iterations; ++iter) {
             v = v + 1;                       // cpu_stage
@@ -304,6 +356,7 @@ class CpuReportOdd : public CpuKernel {
 
 }  // namespace
 
+#ifndef MULTI_IMAGE_PIPELINE_TESTING
 int main(int argc, char** argv) try {
     const Cli cli = parseArgs(argc, argv);
 
@@ -446,14 +499,13 @@ int main(int argc, char** argv) try {
     }
 
     // 4. Compile, bind dispatch inputs, run, read back -- all keyed by token.
-    std::vector<int32_t> input(cli.elementCount);
-    for (uint32_t i = 0; i < cli.elementCount; ++i) {
-        input[i] = static_cast<int32_t>(i);
-    }
+    const std::vector<int32_t> input =
+        generateInput(cli.elementCount, cli.inputOffset);
 
     std::cout << "[multi_image_pipeline] compiling graph with "
               << cli.iterations << " loop iteration(s), "
-              << cli.elementCount << " element(s)" << std::endl;
+              << cli.elementCount << " element(s), input offset "
+              << cli.inputOffset << std::endl;
     auto exec = graph.compile();
     exec.writeScalar(elements, static_cast<uint64_t>(cli.elementCount));
     exec.writeScalar(elementCount, static_cast<uint64_t>(cli.elementCount));
@@ -466,7 +518,7 @@ int main(int argc, char** argv) try {
 
     std::vector<int32_t> output(cli.elementCount, 0);
     exec.read(out, output);
-    const auto expected = expectedOutput(cli.elementCount, cli.iterations);
+    const auto expected = expectedOutput(input, cli.iterations);
 
     std::cout << "[multi_image_pipeline] output:";
     for (size_t i = 0; i < std::min<size_t>(output.size(), 8); ++i) {
@@ -492,3 +544,4 @@ int main(int argc, char** argv) try {
     std::cerr << "multi_image_pipeline: " << e.what() << std::endl;
     return 1;
 }
+#endif

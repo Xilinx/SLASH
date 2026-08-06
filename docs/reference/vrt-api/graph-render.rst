@@ -6,31 +6,30 @@
 Graph DOT Rendering
 ######################
 
-The ``vrt::graph::render`` helpers export both authored graphs and compiled
-per-device graphs as Graphviz DOT text. Use them to inspect inferred dataflow,
-explicit ``after`` dependencies, nested control regions, and bridge-injected
-device plans.
+The ``vrt::graph::render`` helpers project compiler stage IR as Graphviz DOT
+text. They are compiler-development tools; opaque public executions do not
+expose these stages.
 
-renderToDot(Graph)
-==================
+Resolved Graph
+==============
 
-.. doxygenfunction:: vrt::graph::render::renderToDot(const Graph& graph)
+.. doxygenfunction:: vrt::graph::render::renderToDot(const ResolvedGraph& graph)
    :project: VRT
 
-renderToDot(DGraph)
-===================
+Placed Graph
+============
 
-.. doxygenfunction:: vrt::graph::render::renderToDot(const DGraph& dgraph)
+.. doxygenfunction:: vrt::graph::render::renderToDot(const PlacedGraph& graph)
    :project: VRT
 
-writeToDotFile(Graph)
-=====================
+Routed Graph
+============
 
-.. doxygenfunction:: vrt::graph::render::writeToDotFile(const Graph& graph, const std::string& path)
+.. doxygenfunction:: vrt::graph::render::renderToDot(const RoutedGraph& graph)
    :project: VRT
 
-writeToDotFile(DGraph)
-======================
+Scheduled Graph
+===============
 
-.. doxygenfunction:: vrt::graph::render::writeToDotFile(const DGraph& dgraph, const std::string& path)
+.. doxygenfunction:: vrt::graph::render::renderToDot(const ScheduledGraph& graph)
    :project: VRT

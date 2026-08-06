@@ -38,6 +38,16 @@ from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_co
 logger = logging.getLogger(__name__)
 
 AVED_DESIGN_NAME = "amd_v80_gen5x8_25.1"
+_RP1_RESOURCE_PACKAGE = "slashkit.resources.aved"
+_RP1_RESOURCE_DIRECTORY = "rp1"
+_RP1_REQUIRED_RESOURCES = (
+    "CMakeLists.txt",
+    "build-rp1.sh",
+    "config/rp1_platform_config.h.in",
+    "include/slash/uapi/rp1_protocol.h",
+    "tools/generate_platform_config.py",
+    "tools/generate_r5_bsp.tcl",
+)
 
 
 # Host toolchain flags injected by dpkg-buildpackage (e.g. -mno-omit-leaf-frame-pointer,
@@ -148,26 +158,58 @@ def _first_existing(candidates: List[str]) -> Optional[str]:
     return None
 
 
-def _rp1_source_dir() -> Path:
-    # The RP1 firmware source lives next to the slashkit package, not as
-    # package data.  Locate it relative to this module so editable/source-tree
-    # installs work both locally and inside package builds.
-    pkg_root = Path(__file__).resolve()
-    while pkg_root.name != "slashkit" and pkg_root != pkg_root.parent:
-        pkg_root = pkg_root.parent
-    return pkg_root.parent / "resources" / "aved" / "rp1"
+def _rp1_resource_root():
+    try:
+        root = resources.files(_RP1_RESOURCE_PACKAGE)
+    except ModuleNotFoundError as error:
+        raise FileNotFoundError(
+            "Required packaged RP1 firmware resources are unavailable; "
+            "reinstall slashkit from a complete wheel or source archive"
+        ) from error
+
+    root = root.joinpath(_RP1_RESOURCE_DIRECTORY)
+    if not root.is_dir():
+        raise FileNotFoundError(
+            "Required packaged RP1 firmware resource tree is missing: "
+            f"{_RP1_RESOURCE_DIRECTORY}"
+        )
+
+    missing = [
+        name for name in _RP1_REQUIRED_RESOURCES
+        if not root.joinpath(*name.split("/")).is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Required packaged RP1 firmware resources are missing: "
+            + ", ".join(missing)
+        )
+    return root
+
+
+def _copy_rp1_resource_tree(source, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for entry in source.iterdir():
+        if entry.is_dir() and (
+            entry.name == "build"
+            or entry.name.startswith("build-")
+            or entry.name == "__pycache__"
+        ):
+            continue
+
+        target = destination / entry.name
+        if entry.is_dir():
+            _copy_rp1_resource_tree(entry, target)
+        elif entry.is_file():
+            with resources.as_file(entry) as source_path:
+                shutil.copy2(source_path, target)
 
 
 def _copy_rp1_sources_to_aved(aved_dir: Path) -> None:
-    rp1_src_dir = _rp1_source_dir()
+    rp1_resources = _rp1_resource_root()
     rp1_dest_dir = aved_dir / "fw" / "RP1"
-    if rp1_src_dir.is_dir():
-        if rp1_dest_dir.exists():
-            shutil.rmtree(rp1_dest_dir)
-        shutil.copytree(rp1_src_dir, rp1_dest_dir, dirs_exist_ok=True)
-    else:
-        logger.warning("RP1 firmware source dir not found at %s; "
-                       "shell will use the prebuilt RP1 image", rp1_src_dir)
+    if rp1_dest_dir.exists():
+        shutil.rmtree(rp1_dest_dir)
+    _copy_rp1_resource_tree(rp1_resources, rp1_dest_dir)
 
 
 def _add_init_files(path: Path):
@@ -218,6 +260,8 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
     aved_fw_profile_dir = aved_dir / "fw" / "AMC" / \
         "src" / "profiles" / "v80"
 
+    _copy_rp1_sources_to_aved(aved_dir)
+
     logger.info("Starting AVED base build for %s", config.project_name)
     aved_build_dir.mkdir(parents=True, exist_ok=True)
 
@@ -233,8 +277,6 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
     for (file_name, target_dir) in files_to_copy:
         with resources.path("slashkit.resources.aved", file_name) as in_path:
             _copy_checked(in_path, target_dir / file_name)
-
-    _copy_rp1_sources_to_aved(aved_dir)
 
     logger.info("Running AVED build script in %s", aved_hw_dir)
     subprocess.run(
@@ -253,7 +295,7 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
         raise FileNotFoundError(
             f"Expected AVED nofpt PDI not found: {aved_nofpt_pdi}")
 
-    logger.info("AVED fallback complete. Generated %s", aved_pdi)
+    logger.info("AVED firmware build complete. Generated %s", aved_pdi)
     return aved_pdi, aved_nofpt_pdi
 
 
@@ -475,25 +517,30 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
     aved_fpt_dir = aved_hw_dir / "fpt"
     aved_fw_dir = aved_dir / "fw"
 
+    _copy_rp1_sources_to_aved(aved_dir)
+
     required = (
         aved_build_dir / "top_wrapper.pdi",
+        aved_build_dir / f"{AVED_DESIGN_NAME}.xsa",
         aved_build_dir / "amc.elf",
         aved_build_dir / "fpt.bin",
         aved_fpt_dir / "pdi_combine.bif",
+        aved_fpt_dir / "fpt_pdi_gen.py",
     )
     for path in required:
         if not path.exists():
             raise FileNotFoundError(
                 f"RP1-only firmware repack requires existing artifact: {path}")
 
-    _copy_rp1_sources_to_aved(aved_dir)
-
     rp1_dir = aved_fw_dir / "RP1"
     logger.info("Rebuilding RP1 firmware in %s", rp1_dir)
+    rp1_env = _clean_cross_build_env()
+    rp1_env["XSA"] = str(
+        aved_build_dir / f"{AVED_DESIGN_NAME}.xsa")
     subprocess.run(
-        ["bash", "build_rp1.sh"],
+        ["bash", "build-rp1.sh"],
         cwd=str(rp1_dir),
-        env=_clean_cross_build_env(),
+        env=rp1_env,
         check=True,
     )
     _copy_checked(rp1_dir / "build" / "rp1.elf", aved_build_dir / "rp1.elf")
@@ -532,9 +579,11 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
         env=_clean_cross_build_env(),
         check=True,
     )
-    if not aved_pdi.exists():
-        raise FileNotFoundError(f"Expected AVED PDI not found: {aved_pdi}")
-    _copy_files([aved_pdi], static_shell_dir)
+    for pdi_path in (aved_pdi, nofpt_pdi):
+        if not pdi_path.is_file():
+            raise FileNotFoundError(
+                f"Expected RP1 repack output not found: {pdi_path}")
+    _copy_files([aved_pdi, nofpt_pdi], static_shell_dir)
     _add_init_files(static_shell_dir)
 
 

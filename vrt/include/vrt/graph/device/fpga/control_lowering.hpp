@@ -125,6 +125,11 @@ class SignalSlotAllocator {
         }
     }
 
+    /// True when @p slot is already allocated or reserved.
+    bool isReserved(std::uint32_t slot) const {
+        return slot >= reservations_.size() || reservations_[slot] != 0;
+    }
+
     /// Return the lowest free slot and mark it used.
     /// @throws std::runtime_error when the signal array is exhausted.
     std::uint32_t alloc();

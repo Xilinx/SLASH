@@ -20,7 +20,7 @@
 
 /**
  * @file authored_graph.hpp
- * @brief Detached, immutable snapshot of an authored GraphRegion tree.
+ * @brief Detached, immutable snapshot of an authored detail::AuthoringRegion tree.
  */
 
 #ifndef VRT_GRAPH_IR_AUTHORED_GRAPH_HPP
@@ -34,7 +34,7 @@
 #include <variant>
 #include <vector>
 
-#include <vrt/graph/control/graph_region.hpp>
+#include <vrt/graph/detail/authoring_region.hpp>
 #include <vrt/graph/ids.hpp>
 
 namespace vrt::graph {
@@ -47,8 +47,8 @@ struct AuthoredDependency {
 };
 
 struct AuthoredPlacementHints {
-    std::map<std::string, DeviceId> buffers;
-    std::map<std::string, DeviceId> scalars;
+    std::map<PortName, DeviceId> buffers;
+    std::map<PortName, DeviceId> scalars;
 };
 
 struct AuthoredKernel {
@@ -56,7 +56,7 @@ struct AuthoredKernel {
     std::string                     authoredId;
     KernelDescriptor                kernel;
     DeviceId                        device;
-    IOMap                           ioMap;
+    detail::PortBindings                           ioMap;
     std::vector<AuthoredDependency> after;
 };
 
@@ -74,8 +74,8 @@ struct AuthoredBoundary {
     NodeId                            id;
     std::string                       authoredId;
     BoundarySide                      side = BoundarySide::Start;
-    std::uint64_t                     sourceParentScopeId = 0;
-    std::uint64_t                     sourceLocalScopeId = 0;
+    AuthoredScopeId                   sourceParentScope;
+    AuthoredScopeId                   sourceLocalScope;
     std::vector<ScalarBoundaryMapping> scalarMappings;
     std::vector<BufferBoundaryMapping> bufferMappings;
     std::vector<AuthoredDependency>    after;
@@ -85,13 +85,13 @@ struct AuthoredLoop {
     NodeId                                id;
     std::string                           authoredId;
     IOTypeMap                             ioType;
-    IOMap                                 ioMap;
+    detail::PortBindings                                 ioMap;
     LoopKind                              kind = LoopKind::FixedCount;
     std::optional<LoopTripCount>          tripCount;
     std::optional<Condition>              condition;
     std::shared_ptr<const AuthoredRegion> body;
     AuthoredPlacementHints                outputPlacement;
-    std::map<std::string, GraphBuffer>    namedOutputBuffers;
+    std::map<PortName, GraphBuffer>       namedOutputBuffers;
     std::vector<AuthoredDependency>       after;
 };
 
@@ -99,12 +99,12 @@ struct AuthoredConditional {
     NodeId                                id;
     std::string                           authoredId;
     IOTypeMap                             ioType;
-    IOMap                                 ioMap;
+    detail::PortBindings                                 ioMap;
     Condition                             condition = Condition::alwaysFalse();
     std::shared_ptr<const AuthoredRegion> thenRegion;
     std::shared_ptr<const AuthoredRegion> elseRegion;
     AuthoredPlacementHints                outputPlacement;
-    std::map<std::string, GraphBuffer>    namedOutputBuffers;
+    std::map<PortName, GraphBuffer>       namedOutputBuffers;
     std::vector<AuthoredDependency>       after;
 };
 
@@ -126,32 +126,92 @@ inline const std::string& authoredSourceId(
 }
 
 struct AuthoredRegion {
-    RegionId                         id;
-    std::optional<RegionId>          parent;
-    std::uint64_t                    sourceScopeId = 0;
-    std::uint64_t                    sourceParentScopeId = 0;
+    RegionId                           id;
+    std::optional<RegionId>            parent;
+    std::uint64_t                      sourceGraph = 0;
+    AuthoredScopeId                    sourceScope;
+    AuthoredScopeId                    sourceParentScope;
     std::map<std::string, GraphBuffer> declaredInputBuffers;
     std::map<std::string, GraphBuffer> declaredOutputBuffers;
-    std::map<std::string, ScalarType> declaredScalars;
-    std::map<std::string, ScalarType> declaredInputScalars;
-    std::map<std::string, ScalarType> declaredOutputScalars;
-    std::vector<AuthoredOperation>   operations;
+    std::map<std::string, ScalarType>   declaredScalars;
+    std::map<std::string, ScalarType>   declaredInputScalars;
+    std::map<std::string, ScalarType>   declaredOutputScalars;
+    std::vector<AuthoredOperation>      operations;
+};
+
+enum class AuthoredChildRole {
+    LoopBody,
+    ConditionalThen,
+    ConditionalElse,
+};
+
+struct AuthoredChildRegion {
+    RegionId          region;
+    NodeId            control;
+    AuthoredChildRole role = AuthoredChildRole::LoopBody;
+};
+
+/**
+ * @brief Immutable lookup index for one detached authored region tree.
+ *
+ * Every compiler pass shares this index instead of recursively rebuilding
+ * node, region, parent-control, and source-scope maps. Pointers returned by
+ * the index remain valid for the lifetime of the owning AuthoredGraph.
+ */
+class RegionTreeIndex {
+   public:
+    const AuthoredRegion* findRegion(RegionId id) const;
+    const AuthoredOperation* findOperation(NodeId id) const;
+    std::optional<RegionId> regionForScope(AuthoredScopeId scope) const;
+    std::optional<RegionId> regionForOperation(NodeId operation) const;
+    std::optional<NodeId> parentControl(RegionId region) const;
+    const std::vector<AuthoredChildRegion>& children(RegionId region) const;
+
+    const std::map<RegionId, const AuthoredRegion*>& regions() const {
+        return regions_;
+    }
+    const std::map<NodeId, const AuthoredOperation*>& operations() const {
+        return operations_;
+    }
+
+   private:
+    friend class AuthoredGraph;
+    explicit RegionTreeIndex(const AuthoredRegion& root);
+
+    void indexRegion(const AuthoredRegion& region,
+                     std::optional<NodeId> parentControl);
+
+    std::map<RegionId, const AuthoredRegion*> regions_;
+    std::map<NodeId, const AuthoredOperation*> operations_;
+    std::map<AuthoredScopeId, RegionId> regionsByScope_;
+    std::map<NodeId, RegionId> operationRegions_;
+    std::map<RegionId, std::optional<NodeId>> parentControls_;
+    std::map<RegionId, std::vector<AuthoredChildRegion>> children_;
 };
 
 class AuthoredGraph {
    public:
-    static AuthoredGraph snapshot(const GraphRegion& root);
+    static AuthoredGraph snapshot(const detail::AuthoringRegion& root);
 
-    const AuthoredRegion& root() const { return *root_; }
+    const AuthoredRegion& root() const { return *data_->root; }
     const std::shared_ptr<const AuthoredRegion>& rootPtr() const {
-        return root_;
+        return data_->root;
     }
+    const RegionTreeIndex& index() const { return data_->index; }
 
    private:
     explicit AuthoredGraph(std::shared_ptr<const AuthoredRegion> root)
-        : root_(std::move(root)) {}
+        : data_(std::make_shared<Data>(std::move(root))) {}
 
-    std::shared_ptr<const AuthoredRegion> root_;
+    struct Data {
+        explicit Data(std::shared_ptr<const AuthoredRegion> rootValue)
+            : root(std::move(rootValue)), index(*root) {}
+
+        std::shared_ptr<const AuthoredRegion> root;
+        RegionTreeIndex                       index;
+    };
+
+    std::shared_ptr<const Data> data_;
 };
 
 }  // namespace vrt::graph

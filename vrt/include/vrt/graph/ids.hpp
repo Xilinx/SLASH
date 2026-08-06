@@ -105,26 +105,42 @@ std::ostream& operator<<(std::ostream& out, const NamedId<Tag>& id) {
 }
 
 struct RegionIdTag;
+struct AuthoredScopeIdTag;
 struct NodeIdTag;
 struct ValueIdTag;
 struct StorageIdTag;
+struct ReplicaIdTag;
 struct RouteIdTag;
+struct TransferLegIdTag;
 struct QueueIdTag;
 struct ScheduleStepIdTag;
 struct RendezvousIdTag;
+struct ScalarResourceIdTag;
+struct BackendResourceIdTag;
+struct BackendScalarIdTag;
+struct HostActionIdTag;
 struct DeviceIdTag;
 struct MemoryRegionIdTag;
+struct PortNameTag;
 
 using RegionId = NumericId<RegionIdTag>;
+using AuthoredScopeId = NumericId<AuthoredScopeIdTag>;
 using NodeId = NumericId<NodeIdTag>;
 using ValueId = NumericId<ValueIdTag>;
 using StorageId = NumericId<StorageIdTag>;
+using ReplicaId = NumericId<ReplicaIdTag>;
 using RouteId = NumericId<RouteIdTag>;
+using TransferLegId = NumericId<TransferLegIdTag>;
 using QueueId = NumericId<QueueIdTag>;
 using ScheduleStepId = NumericId<ScheduleStepIdTag>;
 using RendezvousId = NumericId<RendezvousIdTag>;
+using ScalarResourceId = NumericId<ScalarResourceIdTag>;
+using BackendResourceId = NumericId<BackendResourceIdTag>;
+using BackendScalarId = NumericId<BackendScalarIdTag>;
+using HostActionId = NumericId<HostActionIdTag>;
 using DeviceId = NamedId<DeviceIdTag>;
 using MemoryRegionId = NamedId<MemoryRegionIdTag>;
+using PortName = NamedId<PortNameTag>;
 
 }  // namespace vrt::graph
 

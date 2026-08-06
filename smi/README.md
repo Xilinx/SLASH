@@ -513,11 +513,18 @@ v80-smi debug rp1-dump -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
 | `--ctrl-offset`   | Host BAR offset of the RP1 control block (default `0x4000000`; `0x...` for hex) |
 
 Prints `magic`, `version`, `node_count`, `cq_size`, the node/CQ/arg-buffer/
-signal-array base addresses, `graph_seq`/`graph_done_seq`, `cq_write_idx`,
-`rp1_state`, `rp1_error_code`, `rp1_current_node`, and `heartbeat`, then the
-liveness verdict (`running` if heartbeat advanced, `stuck or not loaded`
-otherwise). Fails with a diagnostic if `magic` isn't `RP1_CTRL_MAGIC`
-("SQR1") — RP1 firmware not loaded.
+signal-array base addresses, trace configuration, the protocol-v4 capability
+mask and each named capability, required/missing capabilities, the generated
+platform/IPI identity, `graph_seq`/`graph_done_seq`, both CQ cursors,
+`rp1_state`, `rp1_error_code`, `rp1_current_node`, all latched terminal-error
+fields, and `heartbeat`, then the protocol-compatibility and liveness verdicts.
+It exits non-zero if `magic` isn't `RP1_CTRL_MAGIC` ("SQR1"), the protocol
+version/capability contract is incompatible, or the generated platform/IPI
+identity is zero.
+
+`rp1-dump` is read-only: it does not submit a graph, alter CQ cursors, or issue
+a PDI load. This makes it safe for before/after snapshots around the no-reset
+graph hardware acceptance sequence.
 
 Example:
 
@@ -553,7 +560,7 @@ PASS: slot[0] = 0xdeadbeef, cq_write_idx=1, state=1
 
 Both `rp1-*` commands require RP1 firmware to be loaded onto R5-1 and
 reporting `RP1_STATE_READY`; see
-[`linker/resources/aved/rp1/ARCHITECTURE.md`](../linker/resources/aved/rp1/ARCHITECTURE.md)
+[`linker/slashkit/resources/aved/rp1/ARCHITECTURE.md`](../linker/slashkit/resources/aved/rp1/ARCHITECTURE.md)
 for the on-wire protocol they probe.
 
 ## Device addressing

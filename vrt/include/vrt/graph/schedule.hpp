@@ -27,52 +27,76 @@
 #define VRT_GRAPH_SCHEDULE_HPP
 
 #include <optional>
+#include <string>
+#include <variant>
 #include <vector>
 
 #include <vrt/graph/ids.hpp>
+#include <vrt/graph/transfer.hpp>
 
 namespace vrt::graph {
 
-enum class ScheduledStepKind {
-    Operation,
-    TransferProduce,
-    TransferConsume,
-    TransferAction,
-    EventPublish,
-    EventWait,
+struct ScheduledOperation {
+    NodeId operation;
 };
 
-enum class ControlReplicaRole {
-    None,
-    Authority,
-    Follower,
+struct ScheduledTransferProduce {
+    RouteId       route;
+    TransferLegId leg;
 };
 
-enum class RendezvousPurpose {
-    DataReady,
-    DataConsumed,
-    ControlValue,
-    ControlDecision,
-    ControlAcknowledged,
+struct ScheduledTransferConsume {
+    RouteId       route;
+    TransferLegId leg;
 };
 
-enum class RendezvousScope {
-    Once,
-    PreLaunch,
-    PerIteration,
+struct ScheduledTransferAction {
+    RouteId       route;
+    TransferLegId leg;
 };
+
+struct ScheduledEventPublish {
+    RendezvousId rendezvous;
+};
+
+struct ScheduledEventWait {
+    RendezvousId rendezvous;
+};
+
+struct ScheduledGraphInput {
+    RegionId             graph;
+    std::vector<ValueId> values;
+};
+
+struct ScheduledGraphOutput {
+    RegionId             graph;
+    std::vector<ValueId> values;
+};
+
+struct ScheduledBoundaryMapping {
+    PortName  port;
+    ReplicaId source;
+    ReplicaId target;
+};
+
+struct ScheduledBoundaryMaterialization {
+    NodeId                                boundary;
+    std::vector<ScheduledBoundaryMapping> mappings;
+};
+
+using ScheduledStepPayload =
+    std::variant<ScheduledOperation, ScheduledTransferProduce,
+                 ScheduledTransferConsume, ScheduledTransferAction,
+                 ScheduledEventPublish, ScheduledEventWait,
+                 ScheduledGraphInput, ScheduledGraphOutput,
+                 ScheduledBoundaryMaterialization>;
 
 struct ScheduledStep {
-    ScheduleStepId                 id;
-    ScheduledStepKind              kind = ScheduledStepKind::Operation;
-    QueueId                        queue;
-    RegionId                       region;
-    std::optional<NodeId>          operation;
-    std::optional<RouteId>         route;
-    std::optional<RendezvousId>    rendezvous;
-    ControlReplicaRole             controlRole = ControlReplicaRole::None;
-    bool                           preLaunch = false;
-    std::vector<ScheduleStepId>    dependencies;
+    ScheduleStepId              id;
+    QueueId                     queue;
+    RegionId                    region;
+    ScheduledStepPayload        payload;
+    std::vector<ScheduleStepId> dependencies;
 };
 
 struct QueueProgram {
@@ -83,19 +107,68 @@ struct QueueProgram {
     std::vector<ScheduleStepId>   steps;
 };
 
+struct DataReadyRendezvous {
+    RouteId               route;
+    TransferPhase         phase = TransferPhase::Once;
+    TransferControlScope  scope = GraphTransferScope{};
+};
+
+struct DataConsumedRendezvous {
+    RouteId               route;
+    TransferPhase         phase = TransferPhase::Once;
+    TransferControlScope  scope = GraphTransferScope{};
+};
+
+struct ControlValueRendezvous {
+    NodeId control;
+};
+
+struct ControlDecisionRendezvous {
+    NodeId control;
+};
+
+struct ControlAcknowledgedRendezvous {
+    NodeId control;
+};
+
+using LogicalRendezvousPayload =
+    std::variant<DataReadyRendezvous, DataConsumedRendezvous,
+                 ControlValueRendezvous, ControlDecisionRendezvous,
+                 ControlAcknowledgedRendezvous>;
+
 struct LogicalRendezvous {
-    RendezvousId             id;
-    RendezvousPurpose        purpose = RendezvousPurpose::DataReady;
-    RendezvousScope          scope = RendezvousScope::Once;
-    QueueId                  publisher;
-    QueueId                  waiter;
-    std::optional<RouteId>   route;
-    std::optional<NodeId>    control;
+    RendezvousId              id;
+    QueueId                   publisher;
+    QueueId                   waiter;
+    LogicalRendezvousPayload  payload;
+};
+
+struct SplitControlFollowerProtocol {
+    QueueId       queue;
+    ScheduleStepId operationStep;
+    RendezvousId  value;
+    RendezvousId  decision;
+    RendezvousId  acknowledgement;
+};
+
+struct SplitControlProtocol {
+    NodeId                                    control;
+    QueueId                                   authorityQueue;
+    ScheduleStepId                            authorityStep;
+    std::vector<SplitControlFollowerProtocol> followers;
+    QueueId                                   primaryQueue;
 };
 
 struct LogicalResourceRequirement {
     RendezvousId         rendezvous;
     std::vector<DeviceId> participants;
+};
+
+struct LogicalScalarRequirement {
+    ScalarResourceId scalar;
+    ValueId          value;
+    DeviceId         owner;
+    std::string      key;
 };
 
 }  // namespace vrt::graph

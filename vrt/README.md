@@ -160,7 +160,6 @@ Cortex-R5 command processor) with no host round-trip once the graph is
 submitted.
 
 ```cpp
-#include <vrt/graph/device/cpu_device.hpp>
 #include <vrt/graph/graph.hpp>
 
 using namespace vrt::graph;
@@ -171,28 +170,30 @@ auto image = fpga.image("image");
 auto myKernel = image.kernel("my_kernel_0")
                     .scalarIn<uint64_t>("n").in<int32_t>("in").out<int32_t>("out");
 
-GraphScalar n      = graph.scalarInput<uint64_t>("n");
-GraphBuffer input  = graph.input<int32_t>("input", n);
+GraphScalar n = graph.scalarInput<uint64_t>("n");
+GraphBuffer input = graph.input<int32_t>("input", n);
 GraphBuffer output = graph.output<int32_t>("output", n);
+GraphNode load = graph.addReprogram({.image = image});
+graph.addKernelCall({
+    .kernel = myKernel,
+    .inputScalars = {{"n", n}},
+    .inputs = {{"in", input}},
+    .outputs = {{"out", output}},
+    .after = {load},
+});
 
-graph.addReprogram({.image = image});          // RP1_OP_PDI_LOAD
-graph.addKernelCall({.kernel = myKernel,
-                     .inputScalars = {{"n", n}},
-                     .inputs = {{"in", input}},
-                     .outputs = {{"out", output}}});
-
-auto exec = graph.compile();
+Execution exec = graph.compile();
 exec.writeScalar(n, static_cast<uint64_t>(elementCount));
 exec.write(input, inputData);
-exec.launch();
-exec.wait();
+exec.run();
 exec.read(output, outputData);
 ```
 
 See [`examples/graph/`](../examples/graph/) for complete, runnable examples
 (CPU+FPGA graphs, loops, conditionals, multi-image reprogramming) and the
-published "Graph API" tutorial and architecture pages for the full authoring
-model, compilation pipeline, and FPGA/RP1 backend design.
+published "Graph API" tutorial and architecture pages. Compiler developers
+should start with the
+[`VRT Graph Compiler Developer Handbook`](src/graph/COMPILER_HANDBOOK.md).
 
 ## Platform support
 
@@ -248,16 +249,16 @@ vrt/
       platform.hpp            Platform enum
       zmq_server.hpp          ZeroMQ IPC server
     graph/
-      graph.hpp                Graph authoring API (Graph, GraphBuffer, GraphScalar, GraphRegion)
-      compiled_graph.hpp       Compiled graph handle (write/launch/wait/read)
-      authoring/               addFpga()/FpgaSpec bring-up helpers, loop/conditional authoring
-      control/                 Loop/conditional/reprogram authoring primitives
-      core/                    Compiler internals (DGraph lowering, validation)
+      graph.hpp                Opaque typed graph authoring API
+      execution.hpp            Direct executable handle (write/launch/wait/read)
+      authoring/               Typed values, regions, FPGA/image handles
+      core/                    Compiler value internals and validation
       crossdevice/             Cross-device bridge routing (BridgeRouter, CpuFpgaBridge)
-      device/                  IDevice implementations: CpuDevice, FpgaDevice, GpuDevice
-        fpga/                  RP1 backend: Rp1BarWindow, Rp1Submitter, FpgaVbinSpec, control_lowering
-      node/                    Compiled node types (kernel, loop, conditional, signal, wait, ...)
-      render/                  Graph visualisation (DOT export)
+      detail/                  Private authoring and executable assembly contracts
+      device/                  Direct queue backends: CpuDevice, FpgaDevice, GpuDevice
+        fpga/                  RP1 programs, packet lowering, BAR access, submission
+      ir/                      Authored, resolved, placed, routed, scheduled IR
+      render/                  Compiler-stage Graphviz projections
   src/
     device.cpp                Device implementation
     kernel.cpp                Kernel implementation

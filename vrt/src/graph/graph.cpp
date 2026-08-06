@@ -61,16 +61,6 @@ Graph Graph::withDefaults() {
     return graph;
 }
 
-std::shared_ptr<CpuDevice> Graph::cpuDevice() const {
-    for (const auto& [id, device] : devices_) {
-        (void)id;
-        if (device->type() == DeviceType::CPU) {
-            return std::dynamic_pointer_cast<CpuDevice>(device);
-        }
-    }
-    return nullptr;
-}
-
 FpgaHandle Graph::addFpga(const FpgaSpec& spec) {
     if (spec.images.empty()) {
         throw std::invalid_argument("Graph::addFpga: at least one image is required");
@@ -117,8 +107,9 @@ FpgaHandle Graph::addFpga(const FpgaSpec& spec) {
     handle.keepAlive_.push_back(window);
     for (const auto& image : spec.images) {
         const auto& imageSpec = vbinSpec->image(image.name);
-        handle.images_[image.name] =
-            FpgaImageHandle(image.name, imageSpec.pdiPath, spec.deviceId);
+        handle.images_.emplace(
+            image.name,
+            FpgaImageHandle(image.name, imageSpec.pdiPath, spec.deviceId));
     }
     return handle;
 }

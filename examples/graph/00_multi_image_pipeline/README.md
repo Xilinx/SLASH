@@ -22,7 +22,7 @@ requires a V80 with RP1 firmware and both hardware vbins.
 For each element `i`:
 
 ```text
-x = i
+x = i + input_offset
 x = x + 10                          # cpu_preprocess
 repeat `iterations` (loop-carried x):
     x = x + 1                       # cpu_stage
@@ -82,6 +82,7 @@ Host-only build without Vivado:
 cd examples/graph/00_multi_image_pipeline
 cmake -B build -S . -DVRT_USE_REPO=ON -DBUILD_KERNELS=OFF
 cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 With `BUILD_KERNELS=OFF`, pass vbins built elsewhere with `--vbin-a` and
@@ -99,7 +100,11 @@ Prerequisites:
 Run from the build directory:
 
 ```bash
-./multi_image_pipeline --bdf 0000:65:00.0 --iterations 2 --elements 16
+./multi_image_pipeline \
+  --bdf 0000:65:00.0 \
+  --iterations 2 \
+  --elements 16 \
+  --input-offset 0
 ```
 
 Or provide explicit vbin paths:
@@ -110,8 +115,15 @@ Or provide explicit vbin paths:
   --vbin-a /path/to/multi_image_pipeline_a_hw.vbin \
   --vbin-b /path/to/multi_image_pipeline_b_hw.vbin \
   --iterations 2 \
-  --elements 16
+  --elements 16 \
+  --input-offset 0
 ```
+
+`--input-offset N` deterministically generates input element `i` as `i + N`
+and applies the same input to the host reference. Its default is `0`, preserving
+the original input and output. Hardware acceptance runs this application twice
+without a reset, changing both `--iterations` and `--input-offset` so output
+left over from the first run cannot satisfy the second run's reference.
 
 Pass iff the final CPU buffer matches the host-computed reference. The program
 prints the first few output values and returns non-zero on mismatch or runtime

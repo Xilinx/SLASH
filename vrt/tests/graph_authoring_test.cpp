@@ -20,93 +20,28 @@
 
 /**
  * @file graph_authoring_test.cpp
- * @brief Exercises the RFC struct-literal authoring API end to end on the CPU
- *        backend: typed tokens, kernel handles, addKernelCall, addLoop (with a
- *        carried buffer), addConditional, in-place (inout) kernels, scalar
- *        outputs, and Graph::write/read. The FPGA reprogram / image-safety
- *        paths are validated on hardware via examples/graph/00_multi_image_pipeline.
+ * @brief Exercises both hardware-style public authoring surfaces end to end.
  */
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <type_traits>
 #include <vector>
 
+#include <vrt/graph/backend_resource_binding.hpp>
+#include <vrt/graph/detail/executable_assembler.hpp>
 #include <vrt/graph/device/cpu_device.hpp>
 #include <vrt/graph/device/device.hpp>
 #include <vrt/graph/crossdevice/bridge.hpp>
+#include <vrt/graph/execution_plan.hpp>
 #include <vrt/graph/graph.hpp>
 
 using namespace vrt::graph;
 
 namespace {
-
-// Minimal FPGA-typed device for exercising compile-time image-safety checks
-// without real hardware. compilePlan() is never reached because compilation
-// fails earlier on the image-safety violation under test.
-class NoopPlan : public IDevicePlan {
-   public:
-    void launch() override {}
-    void wait() override {}
-};
-
-class StubFpgaDevice : public IDevice {
-   public:
-    explicit StubFpgaDevice(std::string id) : id_(std::move(id)) {}
-    DeviceType type() const override { return DeviceType::FPGA; }
-    std::string id() const override { return id_; }
-    std::unique_ptr<IDevicePlan> compilePlan(const DGraph&) override {
-        return std::make_unique<NoopPlan>();
-    }
-
-   private:
-    std::string id_;
-};
-
-struct NoopBridgeOp : IBridgeOp {
-    std::string label() const override { return "noop"; }
-};
-
-class NoopBridge : public IBridge {
-   public:
-    BridgeStepPair makeTransfer(IDevice&, IDevice&, const GraphBuffer&, uint64_t,
-                                const std::string&, const std::string&) override {
-        return step();
-    }
-    BridgeStepPair makeScalarTransfer(IDevice&, IDevice&, const std::string&,
-                                      const std::string&, const std::string&) override {
-        return step();
-    }
-    BridgeStepPair makeBarrier(IDevice&, IDevice&, const std::string&,
-                               const std::string&) override {
-        return step();
-    }
-
-   private:
-    static BridgeStepPair step() {
-        return BridgeStepPair{
-            std::make_shared<NoopBridgeOp>(),
-            []() {},
-            []() { return true; },
-            []() {}};
-    }
-};
-
-Graph stubFpgaGraph() {
-    Graph graph;
-    graph.registerDevice(std::make_shared<CpuDevice>("cpu"));
-    graph.registerDevice(std::make_shared<StubFpgaDevice>("fpga:0"));
-    auto factory = [](IDevice& src, IDevice& dst) -> std::shared_ptr<IBridge> {
-        (void)src;
-        (void)dst;
-        return std::make_shared<NoopBridge>();
-    };
-    graph.registerBridgeFactory(DeviceType::CPU, DeviceType::FPGA, factory);
-    graph.registerBridgeFactory(DeviceType::FPGA, DeviceType::CPU, factory);
-    return graph;
-}
-
 class CpuPreprocess : public CpuKernel {
    public:
     CpuPreprocess() : CpuKernel("cpu_preprocess") {}
@@ -213,62 +148,162 @@ std::vector<int32_t> reference(std::uint32_t n, std::uint32_t iters) {
     return out;
 }
 
+
 }  // namespace
 
+static_assert(std::is_move_constructible_v<Execution>);
+static_assert(!std::is_move_assignable_v<Execution>);
+static_assert(std::is_move_constructible_v<BackendResourceBindings>);
+static_assert(!std::is_move_assignable_v<BackendResourceBindings>);
+static_assert(std::is_move_constructible_v<ExecutionPlan>);
+static_assert(!std::is_move_assignable_v<ExecutionPlan>);
+static_assert(
+    std::is_move_constructible_v<detail::AssembledExecutables>);
+static_assert(
+    !std::is_move_assignable_v<detail::AssembledExecutables>);
+static_assert(
+    !std::is_move_assignable_v<CompileResult<ExecutionPlan>>);
+static_assert(
+    !std::is_move_assignable_v<
+        CompileResult<detail::AssembledExecutables>>);
+static_assert(
+    std::is_move_constructible_v<
+        std::unique_ptr<IDeviceExecutionLease>>);
+static_assert(
+    !std::is_copy_constructible_v<
+        std::unique_ptr<IDeviceExecutionLease>>);
+
 TEST(GraphAuthoringTest, ElementwiseShorthandRoundTrips) {
-    constexpr std::size_t n = 8;
+    constexpr std::size_t count = 8;
     Graph graph = Graph::withDefaults();
+    auto addOne = graph.cpu().elementwise<std::int32_t>(
+        "add_one", [](std::int32_t value) { return value + 1; });
+    GraphScalar size = graph.scalarInput<std::uint64_t>("size");
+    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphBuffer output = graph.output<std::int32_t>("output", size);
+    graph.addKernelCall({
+        .kernel = addOne,
+        .inputs = {{"in", input}},
+        .outputs = {{"out", output}},
+    });
 
-    auto addOne = graph.cpu().elementwise<int32_t>("add_one", [](int32_t v) { return v + 1; });
+    std::vector<std::int32_t> values(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        values[i] = static_cast<std::int32_t>(i);
+    }
+    Execution execution = graph.compile();
+    execution.writeScalar(size, static_cast<std::uint64_t>(count));
+    execution.write(input, values);
+    execution.run();
 
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
-    GraphBuffer raw = graph.input<int32_t>("raw", size);
-    GraphBuffer out = graph.output<int32_t>("out", size);
-    graph.addKernelCall({.kernel = addOne, .inputs = {{"in", raw}}, .outputs = {{"out", out}}});
-
-    std::vector<int32_t> input(n);
-    for (std::size_t i = 0; i < n; ++i) input[i] = static_cast<int32_t>(i);
-    auto exec = graph.compile();
-    exec.writeScalar(size, static_cast<std::uint64_t>(n));
-    exec.write(raw, input);
-
-    exec.run();
-
-    std::vector<int32_t> output(n, 0);
-    exec.read(out, output);
-    for (std::size_t i = 0; i < n; ++i) EXPECT_EQ(output[i], static_cast<int32_t>(i) + 1);
-}
-
-TEST(GraphAuthoringTest, InoutKernelMutatesInPlace) {
-    constexpr std::size_t n = 25;
-    Graph graph = Graph::withDefaults();
-
-    auto sparse = graph.cpu().add<CpuSparse>();
-
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
-    GraphBuffer raw = graph.input<int32_t>("raw", size);
-    GraphBuffer bumped = graph.output<int32_t>("bumped", size);
-    graph.addKernelCall({.kernel = sparse, .inouts = {{"data", raw, bumped}}});
-
-    std::vector<int32_t> input(n, 0);
-    auto exec = graph.compile();
-    exec.writeScalar(size, static_cast<std::uint64_t>(n));
-    exec.write(raw, input);
-
-    exec.run();
-
-    std::vector<int32_t> output(n, -1);
-    exec.read(bumped, output);
-    for (std::size_t i = 0; i < n; ++i) {
-        EXPECT_EQ(output[i], (i % 10 == 0) ? 1 : 0) << "index " << i;
+    std::vector<std::int32_t> result(count);
+    execution.read(output, result);
+    for (std::size_t i = 0; i < count; ++i) {
+        EXPECT_EQ(result[i], static_cast<std::int32_t>(i + 1));
     }
 }
 
-TEST(GraphAuthoringTest, LoopConditionalInplaceFullPipeline) {
-    constexpr std::uint32_t n = 16;
-    constexpr std::uint32_t iters = 2;
+TEST(GraphAuthoringTest, CpuRejectsSecondLiveExecutionAndReleasesLease) {
     Graph graph = Graph::withDefaults();
+    auto identity = graph.cpu().elementwise<std::int32_t>(
+        "lease_identity", [](std::int32_t value) { return value; });
+    GraphScalar size = graph.scalarInput<std::uint64_t>("size");
+    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphBuffer output = graph.output<std::int32_t>("output", size);
+    graph.addKernelCall({
+        .kernel = identity,
+        .inputs = {{"in", input}},
+        .outputs = {{"out", output}},
+    });
 
+    {
+        Execution first = graph.compile();
+        try {
+            (void)graph.compile();
+            FAIL() << "a second live CPU execution must be rejected";
+        } catch (const GraphCompileError& error) {
+            const Diagnostic* diagnostic =
+                error.diagnostics().firstError();
+            ASSERT_NE(diagnostic, nullptr);
+            EXPECT_EQ(diagnostic->code, DiagCode::ResourceExhausted);
+        }
+    }
+
+    EXPECT_NO_THROW({
+        Execution afterRelease = graph.compile();
+        (void)afterRelease;
+    });
+}
+
+TEST(GraphAuthoringTest, RawIoMapInoutMintsReadableOutput) {
+    constexpr std::size_t count = 25;
+    Graph graph = Graph::withDefaults();
+    KernelHandle sparse = graph.cpu().add<CpuSparse>();
+    GraphScalar size = graph.scalarInput<std::uint64_t>("size");
+    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphBuffer output;
+    IOMap io;
+    io.bindInout(
+        "data", "data", input, output, graph.rootRegion().scopeId());
+    graph.addNode(
+        KernelDescriptor{
+            sparse.name, sparse.type, sparse.image, sparse.ioType},
+        std::move(io), sparse.device);
+
+    Execution execution = graph.compile();
+    execution.writeScalar(size, static_cast<std::uint64_t>(count));
+    execution.write(input, std::vector<std::int32_t>(count, 0));
+    execution.run();
+    std::vector<std::int32_t> result(count);
+    execution.read(output, result);
+    for (std::size_t i = 0; i < count; ++i) {
+        EXPECT_EQ(result[i], i % 10 == 0 ? 1 : 0);
+    }
+}
+
+TEST(GraphAuthoringTest, PublicSurfacesExecuteEquivalentCpuGraphs) {
+    constexpr std::size_t count = 8;
+    Graph graph = Graph::withDefaults();
+    KernelHandle addOne =
+        graph.cpu().elementwise<std::int32_t>(
+            "raw_add_one",
+            [](std::int32_t value) { return value + 1; });
+    GraphScalar size = graph.scalarInput<std::uint64_t>("size");
+    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphBuffer output;
+    IOMap io;
+    io.bindInput("in", input)
+        .bindOutput(
+            "out", BufferType::I32, output, size,
+            graph.rootRegion().scopeId());
+    graph.addNode(
+        KernelDescriptor{
+            addOne.name, addOne.type, addOne.image, addOne.ioType},
+        std::move(io), addOne.device);
+
+    std::vector<std::int32_t> values(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        values[i] = static_cast<std::int32_t>(i);
+    }
+    Execution execution = graph.compile();
+    execution.writeScalar(
+        size, static_cast<std::uint64_t>(count));
+    execution.write(input, values);
+    execution.run();
+    std::vector<std::int32_t> result(count);
+    execution.read(output, result);
+    for (std::size_t i = 0; i < count; ++i) {
+        EXPECT_EQ(result[i], static_cast<std::int32_t>(i + 1));
+    }
+}
+
+TEST(GraphAuthoringTest, NamedPortsCrossControlAndRepeatRuns) {
+    static_assert(std::is_default_constructible_v<Graph>);
+    static_assert(!std::is_copy_constructible_v<Execution>);
+
+    constexpr std::uint32_t count = 16;
+    constexpr std::uint32_t iterations = 2;
+    Graph graph = Graph::withDefaults();
     auto preprocess = graph.cpu().add<CpuPreprocess>();
     auto stage = graph.cpu().add<CpuStage>();
     auto sparse = graph.cpu().add<CpuSparse>();
@@ -277,165 +312,120 @@ TEST(GraphAuthoringTest, LoopConditionalInplaceFullPipeline) {
     auto report = graph.cpu().add<CpuReport>();
     auto reportOdd = graph.cpu().add<CpuReportOdd>();
 
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
-    GraphBuffer raw = graph.input<int32_t>("raw", size);
-    GraphBuffer pre = graph.buffer<int32_t>("pre", size);
-    graph.addKernelCall({.kernel = preprocess, .inputs = {{"in", raw}}, .outputs = {{"out", pre}}});
-
-    GraphBuffer post = graph.buffer<int32_t>("post", size);
-    GraphScalar loopCount = graph.scalarInput<std::uint32_t>("loop_count");
-    {
-        auto loop = graph.addLoop({.count = loopCount,
-                                   .inputs = {{"state", pre}},
-                                   .outputs = {{"state", post}}});
-        GraphBuffer s = loop.input("state");
-
-        GraphBuffer staged = loop.buffer<int32_t>("staged", size);
-        loop.addKernelCall({.kernel = stage, .inputs = {{"in", s}}, .outputs = {{"out", staged}}});
-
-        GraphBuffer bumped = loop.buffer<int32_t>("bumped", size);
-        loop.addKernelCall({.kernel = sparse, .inouts = {{"data", staged, bumped}}});
-
-        loop.addKernelCall({.kernel = finalize,
-                            .inputs = {{"in", bumped}},
-                            .outputs = {{"out", loop.output("state")}}});
-    }
-
-    GraphScalar parity = graph.scalar<uint64_t>("parity");
-    graph.addKernelCall({.kernel = parityKernel,
-                         .inputs = {{"in", post}},
-                         .outputScalars = {{"parity", parity}}});
-
-    GraphBuffer out = graph.output<int32_t>("out", size);
-    {
-        auto [thenBranch, elseBranch] = graph.addConditional({
-            .condition = (parity == 0), .inputs = {{"x", post}}, .outputs = {{"y", out}}});
-        thenBranch.addKernelCall({.kernel = report,
-                                  .inputs = {{"in", thenBranch.input("x")}},
-                                  .outputs = {{"out", thenBranch.output("y")}}});
-        elseBranch.addKernelCall({.kernel = reportOdd,
-                                  .inputs = {{"in", elseBranch.input("x")}},
-                                  .outputs = {{"out", elseBranch.output("y")}}});
-    }
-
-    std::vector<int32_t> input(n);
-    for (std::uint32_t i = 0; i < n; ++i) input[i] = static_cast<int32_t>(i);
-    auto exec = graph.compile();
-    exec.writeScalar(size, static_cast<std::uint64_t>(n));
-    exec.writeScalar(loopCount, iters);
-    exec.write(raw, input);
-
-    exec.run();
-
-    std::vector<int32_t> output(n, 0);
-    exec.read(out, output);
-    EXPECT_EQ(output, reference(n, iters));
-}
-
-TEST(GraphAuthoringTest, UngatedFpgaDispatchIsRejected) {
-    Graph graph = stubFpgaGraph();
-
-    // FPGA kernel that names an image but is not gated behind any reprogram.
-    KernelHandle fpgaK{"graph_kernel_0", DeviceType::FPGA, "imageA",
-                       IOTypeMap{}.scalarIn<uint64_t>("n").out<int32_t>("out"), "fpga:0"};
-    GraphScalar n = graph.scalarInput<uint64_t>("n");
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n_elements");
-    GraphBuffer out = graph.buffer<int32_t>("out", size);
-    graph.addKernelCall({.kernel = fpgaK, .inputScalars = {{"n", n}}, .outputs = {{"out", out}}});
-
-    EXPECT_THROW(graph.compile(), std::runtime_error);
-}
-
-TEST(GraphAuthoringTest, GatedFpgaDispatchCompiles) {
-    Graph graph = stubFpgaGraph();
-
-    KernelHandle fpgaK{"graph_kernel_0", DeviceType::FPGA, "imageA",
-                       IOTypeMap{}.scalarIn<uint64_t>("n").out<int32_t>("out"), "fpga:0"};
-    GraphScalar n = graph.scalarInput<uint64_t>("n");
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n_elements");
-    GraphBuffer out = graph.buffer<int32_t>("out", size);
-
-    auto r = graph.addReprogram({.image = {"imageA", "imageA.pdi", "fpga:0"}});
-    graph.addKernelCall({.kernel = fpgaK,
-                         .inputScalars = {{"n", n}},
-                         .outputs = {{"out", out}},
-                         .after = {r}});
-
-    EXPECT_NO_THROW((void)graph.compile());
-}
-
-TEST(GraphAuthoringTest, StructLiteralWhileLoopCarriesPlacementHints) {
-    Graph graph = Graph::withDefaults();
-    auto stage = graph.cpu().add<CpuStage>();
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
-    GraphScalar keepGoing = graph.scalarInput<std::uint32_t>("keep_going");
+    GraphScalar size = graph.scalarInput<std::uint64_t>("size");
     GraphBuffer input = graph.input<std::int32_t>("input", size);
-    GraphBuffer output = graph.output<std::int32_t>("output", size);
-
-    auto loop = graph.addLoop({
-        .condition = (keepGoing != 0),
-        .inputs = {{"state", input}},
-        .outputs = {{"state", output}},
-        .outputPlacement = {.buffers = {{"state", "cpu"}}},
+    GraphBuffer preprocessed =
+        graph.buffer<std::int32_t>("preprocessed", size);
+    graph.addKernelCall({
+        .kernel = preprocess,
+        .inputs = {{"in", input}},
+        .outputs = {{"out", preprocessed}},
     });
+
+    GraphScalar loopCount =
+        graph.scalarInput<std::uint32_t>("iterations");
+    GraphBuffer loopOutput =
+        graph.buffer<std::int32_t>("loop_output", size);
+    RegionBuilder loop = graph.addLoop({
+        .count = loopCount,
+        .inputs = {{"state", preprocessed}},
+        .outputs = {{"state", loopOutput}},
+    });
+    GraphBuffer staged = loop.buffer<std::int32_t>("staged", size);
+    GraphBuffer bumped = loop.buffer<std::int32_t>("bumped", size);
     loop.addKernelCall({
         .kernel = stage,
         .inputs = {{"in", loop.input("state")}},
+        .outputs = {{"out", staged}},
+    });
+    loop.addKernelCall({
+        .kernel = sparse,
+        .inouts = {{"data", staged, bumped}},
+    });
+    loop.addKernelCall({
+        .kernel = finalize,
+        .inputs = {{"in", bumped}},
         .outputs = {{"out", loop.output("state")}},
     });
 
-    const auto* authored =
-        std::get_if<LoopOp>(&graph.rootRegion().ops().front());
-    ASSERT_NE(authored, nullptr);
-    EXPECT_EQ(authored->kind, LoopKind::WhileCondition);
-    EXPECT_FALSE(authored->tripCount.has_value());
-    EXPECT_TRUE(authored->condition.has_value());
-    EXPECT_EQ(authored->outputPlacement.buffers.at("state"), "cpu");
-    EXPECT_NO_THROW((void)graph.compile());
-}
-
-TEST(GraphAuthoringTest, StructLiteralControlRequiresOneLoopMode) {
-    Graph graph = Graph::withDefaults();
-    GraphScalar count = graph.scalarInput<std::uint32_t>("count");
-    GraphScalar condition = graph.scalarInput<std::uint32_t>("condition");
-
-    EXPECT_THROW(
-        graph.addLoop({
-            .count = count,
-            .condition = (condition != 0),
-        }),
-        std::invalid_argument);
-    EXPECT_THROW(graph.addLoop(LoopBuildSpec{}), std::invalid_argument);
-}
-
-TEST(GraphAuthoringTest, StructLiteralConditionalCarriesPlacementHints) {
-    Graph graph = Graph::withDefaults();
-    auto stage = graph.cpu().add<CpuStage>();
-    GraphScalar size = graph.scalarInput<std::uint64_t>("n");
-    GraphScalar flag = graph.scalarInput<std::uint32_t>("flag");
-    GraphBuffer input = graph.input<std::int32_t>("input", size);
+    GraphScalar parity = graph.scalar<std::uint64_t>("parity");
+    graph.addKernelCall({
+        .kernel = parityKernel,
+        .inputs = {{"in", loopOutput}},
+        .outputScalars = {{"parity", parity}},
+    });
     GraphBuffer output = graph.output<std::int32_t>("output", size);
-
-    auto [thenBranch, elseBranch] = graph.addConditional({
-        .condition = (flag != 0),
-        .inputs = {{"value", input}},
-        .outputs = {{"result", output}},
-        .outputPlacement = {.buffers = {{"result", "cpu"}}},
+    auto [even, odd] = graph.addConditional({
+        .condition = parity == 0,
+        .inputs = {{"value", loopOutput}},
+        .outputs = {{"value", output}},
     });
-    thenBranch.addKernelCall({
-        .kernel = stage,
-        .inputs = {{"in", thenBranch.input("value")}},
-        .outputs = {{"out", thenBranch.output("result")}},
+    even.addKernelCall({
+        .kernel = report,
+        .inputs = {{"in", even.input("value")}},
+        .outputs = {{"out", even.output("value")}},
     });
-    elseBranch.addKernelCall({
-        .kernel = stage,
-        .inputs = {{"in", elseBranch.input("value")}},
-        .outputs = {{"out", elseBranch.output("result")}},
+    odd.addKernelCall({
+        .kernel = reportOdd,
+        .inputs = {{"in", odd.input("value")}},
+        .outputs = {{"out", odd.output("value")}},
     });
 
-    const auto* authored =
-        std::get_if<ConditionalOp>(&graph.rootRegion().ops().front());
-    ASSERT_NE(authored, nullptr);
-    EXPECT_EQ(authored->outputPlacement.buffers.at("result"), "cpu");
-    EXPECT_NO_THROW((void)graph.compile());
+    std::vector<std::int32_t> values(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        values[i] = static_cast<std::int32_t>(i);
+    }
+    Execution execution = graph.compile();
+    execution.writeScalar(size, static_cast<std::uint64_t>(count));
+    execution.writeScalar(loopCount, iterations);
+    for (int run = 0; run < 2; ++run) {
+        execution.write(input, values);
+        execution.run();
+        std::vector<std::int32_t> result(count);
+        execution.read(output, result);
+        EXPECT_EQ(result, reference(count, iterations));
+    }
+}
+
+TEST(GraphAuthoringTest,
+     ZeroCountAndFalseWhilePublishInitialCpuValue) {
+    for (bool whileLoop : {false, true}) {
+        SCOPED_TRACE(whileLoop ? "while" : "fixed");
+        Graph graph = Graph::withDefaults();
+        auto stage = graph.cpu().add<CpuStage>();
+        GraphScalar size =
+            graph.scalarInput<std::uint64_t>("size");
+        GraphScalar control =
+            graph.scalarInput<std::uint32_t>("control");
+        GraphBuffer input =
+            graph.input<std::int32_t>("input", size);
+        GraphBuffer output =
+            graph.output<std::int32_t>("output", size);
+
+        LoopBuildSpec spec;
+        if (whileLoop) {
+            spec.condition = control != 0u;
+        } else {
+            spec.count = TripCount(control);
+        }
+        spec.inputs = {{"state", input}};
+        spec.outputs = {{"state", output}};
+        RegionBuilder body = graph.addLoop(spec);
+        body.addKernelCall({
+            .kernel = stage,
+            .inputs = {{"in", body.input("state")}},
+            .outputs = {{"out", body.output("state")}},
+        });
+
+        Execution execution = graph.compile();
+        const std::vector<std::int32_t> initial{3, 5, 8};
+        execution.writeScalar(
+            size, static_cast<std::uint64_t>(initial.size()));
+        execution.writeScalar(control, 0u);
+        execution.write(input, initial);
+        ASSERT_NO_THROW(execution.run());
+        std::vector<std::int32_t> result(initial.size());
+        execution.read(output, result);
+        EXPECT_EQ(result, initial);
+    }
 }

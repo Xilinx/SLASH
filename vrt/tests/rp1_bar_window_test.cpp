@@ -71,6 +71,16 @@ TEST(Rp1BarWindowProtocol, WireSizesMatchHeader) {
     EXPECT_EQ(sizeof(rp1_signal_slot_t), std::size_t{16});
     EXPECT_EQ(sizeof(rp1_cq_entry_t),    std::size_t{16});
     EXPECT_EQ(sizeof(rp1_trace_entry_t), std::size_t{16});
+    EXPECT_EQ(RP1_PROTOCOL_VERSION, 4u);
+    EXPECT_EQ(offsetof(rp1_ctrl_t, capabilities), std::size_t{0x64});
+    EXPECT_EQ(offsetof(rp1_ctrl_t, pdi_ipi_platform_id),
+              std::size_t{0x68});
+    EXPECT_EQ(offsetof(rp1_ctrl_t, terminal_error_node),
+              std::size_t{0x6C});
+    EXPECT_EQ(offsetof(rp1_ctrl_t, terminal_error_detail),
+              std::size_t{0x70});
+    EXPECT_EQ(offsetof(rp1_ctrl_t, terminal_error_aux),
+              std::size_t{0x74});
 }
 
 TEST_F(WindowFixture, MappedLengthAndWindowOffsetExposed) {
@@ -99,6 +109,9 @@ TEST_F(WindowFixture, ControlBlockReadWriteRoundTrip) {
     out.graph_seq        = 1;
     out.graph_done_seq   = 1;
     out.rp1_state        = RP1_STATE_READY;
+    out.capabilities     = RP1_REQUIRED_CAPABILITIES;
+    out.pdi_ipi_platform_id = RP1_PDI_IPI_PLATFORM_UNKNOWN;
+    out.terminal_error_node = RP1_TERMINAL_ERROR_NODE_NONE;
 
     window_->writeCtrl(out);
 
@@ -114,6 +127,9 @@ TEST_F(WindowFixture, ControlBlockReadWriteRoundTrip) {
     EXPECT_EQ(roundtrip.magic, RP1_CTRL_MAGIC);
     EXPECT_EQ(roundtrip.cq_size, 64u);
     EXPECT_EQ(roundtrip.sig_array_base_lo, 0x30151000u);
+    EXPECT_EQ(roundtrip.capabilities, RP1_REQUIRED_CAPABILITIES);
+    EXPECT_EQ(roundtrip.terminal_error_node,
+              RP1_TERMINAL_ERROR_NODE_NONE);
 }
 
 TEST_F(WindowFixture, SingleWordHotPathAccessors) {

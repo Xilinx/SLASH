@@ -16,7 +16,7 @@
 #   - QEMU build deps: libglib2.0-dev libgcrypt20-dev zlib1g-dev libpixman-1-dev
 #                       libfdt-dev device-tree-compiler ninja-build meson python3
 #
-# Usage: ./scripts/build_and_test_rp1_qemu.sh [--rebuild-qemu]
+# Usage: ./scripts/build-and-test-rp1-qemu.sh [--rebuild-qemu]
 set -Eeuo pipefail
 
 REPO_ROOT=$(realpath "$(dirname "$0")/..")
@@ -25,8 +25,8 @@ QEMU_BUILD="${QEMU_SRC}/build"
 QEMU_BIN="${QEMU_BUILD}/qemu-system-aarch64"
 DT_SRC="${REPO_ROOT}/submodules/qemu-devicetrees"
 DT_FILE="${DT_SRC}/LATEST/SINGLE_ARCH/board-zynqmp-zcu102.dtb"
-RP1_DIR="${REPO_ROOT}/linker/resources/aved/rp1"
-RP1_BUILD="${RP1_DIR}/build-qemu"
+RP1_DIR="${REPO_ROOT}/linker/slashkit/resources/aved/rp1"
+RP1_BUILD="${REPO_ROOT}/linker/build/rp1-qemu"
 EXPECTED_PASS_LINE="ALL TESTS PASSED"
 REBUILD_QEMU=false
 

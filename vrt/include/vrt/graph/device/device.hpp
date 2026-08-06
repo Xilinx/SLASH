@@ -22,51 +22,77 @@
  * @file device.hpp
  * @brief IDevice — abstract execution interface for a single device instance.
  *
- * Cross-device synchronisation and data movement are realised as
- * CompiledBridgeOpNode entries in `DGraph::nodes` (synthesised by the compiler from
- * each registered IBridge). Devices compile those DGraphs into explicit
- * IDevicePlan objects so multiple plans can coexist for one device.
+ * Devices lower scheduled queue slices directly into executable backend
+ * programs. Cross-device actions are supplied through plan-owned action ids.
  */
 
 #ifndef VRT_GRAPH_DEVICE_DEVICE_HPP
 #define VRT_GRAPH_DEVICE_DEVICE_HPP
 
-#include <functional>
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include <vrt/graph/backend_executable.hpp>
 #include <vrt/graph/capabilities.hpp>
 #include <vrt/graph/core/types.hpp>
+#include <vrt/graph/ids.hpp>
 
 namespace vrt::graph {
 
-struct DGraph;
 class GraphBuffer;
 struct KernelDescriptor;
 
+/*
+ * Resource access is a non-owning view of physical slots. It is valid only
+ * while the matching resource lease and device pin remain alive; retaining
+ * the access object alone must not make a released slot usable.
+ */
+class IDeviceResourceAccess {
+   public:
+    virtual ~IDeviceResourceAccess() = default;
+    virtual std::uint32_t readRendezvous(
+        BackendResourceId resource) const = 0;
+    virtual void writeRendezvous(
+        BackendResourceId resource, std::uint32_t value) const = 0;
+    virtual std::uint64_t readScalar(
+        BackendScalarId scalar) const = 0;
+    virtual void writeScalar(
+        BackendScalarId scalar, std::uint64_t value) const = 0;
+};
+
+/*
+ * An execution lease covers backend-wide mutable state, not one launch.
+ * Exclusive backends keep it from lowering through final teardown so a
+ * second live plan cannot alias queues, firmware state, or local buffers.
+ */
+class IDeviceExecutionLease {
+   public:
+    IDeviceExecutionLease() = default;
+    IDeviceExecutionLease(const IDeviceExecutionLease&) = delete;
+    IDeviceExecutionLease& operator=(const IDeviceExecutionLease&) = delete;
+    IDeviceExecutionLease(IDeviceExecutionLease&&) noexcept = default;
+    IDeviceExecutionLease& operator=(IDeviceExecutionLease&&) = delete;
+    virtual ~IDeviceExecutionLease() = default;
+};
+
+/*
+ * A resource lease owns the physical ids returned for one logical batch.
+ * Rendezvous and scalar ids may share a backend namespace, so allocation and
+ * release happen as one lease while the execution lease is still held.
+ */
 class IDeviceResourceLease {
    public:
     virtual ~IDeviceResourceLease() = default;
-    virtual std::uint32_t physicalIndex(
+    virtual BackendResourceId rendezvousResource(
         RendezvousId logical) const = 0;
-};
-
-class IDevicePlan {
-   public:
-    virtual ~IDevicePlan() = default;
-
-    /** @brief Optional synchronous pre-launch preparation before any device starts. */
-    virtual void prepareLaunch() {}
-
-    /** @brief Start asynchronous execution of the compiled plan. */
-    virtual void launch() = 0;
-
-    /** @brief Block until the plan has completed. */
-    virtual void wait() = 0;
+    virtual BackendScalarId scalarResource(
+        ScalarResourceId logical) const = 0;
 };
 
 class IDevice {
@@ -95,11 +121,34 @@ class IDevice {
         const ControlCapabilityRequest& request) const;
 
     /**
-     * @brief Lease backend-owned physical resources for logical rendezvous.
+     * @brief Try to reserve this device for one live execution.
+     *
+     * The default is a no-op lease for simple and test devices. Backends with
+     * execution-wide mutable state override this and return nullptr when an
+     * execution is already live; implementations must not wait for release.
+     */
+    virtual std::unique_ptr<IDeviceExecutionLease> leaseExecution();
+
+    /**
+     * @brief Lease backend-owned physical rendezvous and scalar resources.
+     *
+     * The whole batch succeeds or fails together; callers retain the lease
+     * for as long as any lowered command can address a returned physical id.
      */
     virtual std::unique_ptr<IDeviceResourceLease>
-    leaseRendezvousResources(
-        const std::vector<RendezvousId>& logical);
+    leaseResources(
+        const std::vector<RendezvousId>& rendezvous,
+        const std::vector<ScalarResourceId>& scalars);
+
+    std::unique_ptr<IDeviceResourceLease> leaseRendezvousResources(
+        const std::vector<RendezvousId>& logical) {
+        return leaseResources(logical, {});
+    }
+
+    /**
+     * @brief Return plan-bindable host access to backend resources.
+     */
+    virtual std::shared_ptr<IDeviceResourceAccess> resourceAccess() const;
 
     /**
      * @brief Optional memory-region identity for a kernel buffer port.
@@ -124,12 +173,23 @@ class IDevice {
     }
 
     /**
-     * @brief Compile the per-device subgraph into an executable plan.
+     * @brief Lower one complete scheduled queue into a direct executable.
      *
-     * `dg.nodes` is an ordered list of `CompiledNode` variants. The returned
-     * plan owns the device-specific compiled execution state.
+     * Production devices must return a queue-local executable.
      */
-    virtual std::unique_ptr<IDevicePlan> compilePlan(const DGraph& dg) = 0;
+    virtual std::unique_ptr<IBackendExecutable> lowerQueue(
+        const BackendLoweringContext&) {
+        return nullptr;
+    }
+
+   protected:
+    /*
+     * Exclusive backends use a non-blocking compare/exchange: compilation
+     * must report contention instead of waiting on an Execution whose
+     * lifetime may itself depend on the caller.
+     */
+    static std::unique_ptr<IDeviceExecutionLease>
+    tryAcquireExclusiveExecutionLease(std::atomic_bool& leased);
 };
 
 }  // namespace vrt::graph

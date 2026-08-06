@@ -21,7 +21,7 @@
 /**
  * @file control_specs.hpp
  * @brief Shared test helpers for building KernelDescriptors and control-flow
- *        Specs (LoopSpec / ConditionalSpec) without repeating the same
+ *        Specs (::vrt::graph::detail::LoopRecord / ::vrt::graph::detail::ConditionalRecord) without repeating the same
  *        boilerplate in every test file. Header-only; intended for use only
  *        from inside `vrt/tests/`.
  */
@@ -39,9 +39,9 @@
 
 #include <vrt/graph/control/condition.hpp>
 #include <vrt/graph/control/control_node.hpp>
-#include <vrt/graph/control/graph_region.hpp>
+#include <vrt/graph/detail/authoring_region.hpp>
 #include <vrt/graph/core/types.hpp>
-#include <vrt/graph/node/io_map.hpp>
+#include <vrt/graph/detail/port_bindings.hpp>
 #include <vrt/graph/node/io_type_map.hpp>
 #include <vrt/graph/node/kernel_descriptor.hpp>
 
@@ -54,7 +54,7 @@ inline std::string nextTripCountName() {
 }
 }  // namespace detail
 
-inline GraphScalar tripCountScalar(GraphRegion& region,
+inline GraphScalar tripCountScalar(::vrt::graph::detail::AuthoringRegion& region,
                                    ScalarType type = ScalarType::I32,
                                    std::string name = {}) {
     if (name.empty()) name = detail::nextTripCountName();
@@ -75,21 +75,21 @@ inline KernelDescriptor mockCpuKernel(std::string name, IOTypeMap ioType = {}) {
                             std::move(ioType)};
 }
 
-inline LoopSpec fixedLoopSpec(LoopTripCount tripCount,
-                              std::shared_ptr<GraphRegion> body,
+inline ::vrt::graph::detail::LoopRecord fixedLoopRecord(LoopTripCount tripCount,
+                              std::shared_ptr<::vrt::graph::detail::AuthoringRegion> body,
                               std::vector<std::string> afterOps = {}) {
-    LoopSpec spec;
+    ::vrt::graph::detail::LoopRecord spec;
     spec.tripCount = std::move(tripCount);
     spec.body = std::move(body);
     spec.afterOps = std::move(afterOps);
     return spec;
 }
 
-inline LoopSpec fixedLoopSpec(IOTypeMap ioType, IOMap ioMap,
+inline ::vrt::graph::detail::LoopRecord fixedLoopRecord(IOTypeMap ioType, ::vrt::graph::detail::PortBindings ioMap,
                               LoopTripCount tripCount,
-                              std::shared_ptr<GraphRegion> body,
+                              std::shared_ptr<::vrt::graph::detail::AuthoringRegion> body,
                               std::vector<std::string> afterOps = {}) {
-    LoopSpec spec;
+    ::vrt::graph::detail::LoopRecord spec;
     spec.ioType = std::move(ioType);
     spec.ioMap = std::move(ioMap);
     spec.tripCount = std::move(tripCount);
@@ -98,10 +98,10 @@ inline LoopSpec fixedLoopSpec(IOTypeMap ioType, IOMap ioMap,
     return spec;
 }
 
-inline LoopSpec whileLoopSpec(Condition condition,
-                              std::shared_ptr<GraphRegion> body,
+inline ::vrt::graph::detail::LoopRecord whileLoopRecord(Condition condition,
+                              std::shared_ptr<::vrt::graph::detail::AuthoringRegion> body,
                               std::vector<std::string> afterOps = {}) {
-    LoopSpec spec;
+    ::vrt::graph::detail::LoopRecord spec;
     spec.kind = LoopKind::WhileCondition;
     spec.condition = std::move(condition);
     spec.body = std::move(body);
@@ -109,10 +109,10 @@ inline LoopSpec whileLoopSpec(Condition condition,
     return spec;
 }
 
-inline LoopSpec whileLoopSpec(IOTypeMap ioType, IOMap ioMap, Condition condition,
-                              std::shared_ptr<GraphRegion> body,
+inline ::vrt::graph::detail::LoopRecord whileLoopRecord(IOTypeMap ioType, ::vrt::graph::detail::PortBindings ioMap, Condition condition,
+                              std::shared_ptr<::vrt::graph::detail::AuthoringRegion> body,
                               std::vector<std::string> afterOps = {}) {
-    LoopSpec spec;
+    ::vrt::graph::detail::LoopRecord spec;
     spec.kind = LoopKind::WhileCondition;
     spec.ioType = std::move(ioType);
     spec.ioMap = std::move(ioMap);
@@ -122,11 +122,11 @@ inline LoopSpec whileLoopSpec(IOTypeMap ioType, IOMap ioMap, Condition condition
     return spec;
 }
 
-inline ConditionalSpec ifElseSpec(Condition condition,
-                                  std::shared_ptr<GraphRegion> thenRegion,
-                                  std::shared_ptr<GraphRegion> elseRegion,
+inline ::vrt::graph::detail::ConditionalRecord ifElseSpec(Condition condition,
+                                  std::shared_ptr<::vrt::graph::detail::AuthoringRegion> thenRegion,
+                                  std::shared_ptr<::vrt::graph::detail::AuthoringRegion> elseRegion,
                                   std::vector<std::string> afterOps = {}) {
-    ConditionalSpec spec;
+    ::vrt::graph::detail::ConditionalRecord spec;
     spec.condition = std::move(condition);
     spec.thenRegion = std::move(thenRegion);
     spec.elseRegion = std::move(elseRegion);
@@ -134,11 +134,11 @@ inline ConditionalSpec ifElseSpec(Condition condition,
     return spec;
 }
 
-inline ConditionalSpec ifElseSpec(IOTypeMap ioType, IOMap ioMap, Condition condition,
-                                  std::shared_ptr<GraphRegion> thenRegion,
-                                  std::shared_ptr<GraphRegion> elseRegion,
+inline ::vrt::graph::detail::ConditionalRecord ifElseSpec(IOTypeMap ioType, ::vrt::graph::detail::PortBindings ioMap, Condition condition,
+                                  std::shared_ptr<::vrt::graph::detail::AuthoringRegion> thenRegion,
+                                  std::shared_ptr<::vrt::graph::detail::AuthoringRegion> elseRegion,
                                   std::vector<std::string> afterOps = {}) {
-    ConditionalSpec spec;
+    ::vrt::graph::detail::ConditionalRecord spec;
     spec.ioType = std::move(ioType);
     spec.ioMap = std::move(ioMap);
     spec.condition = std::move(condition);

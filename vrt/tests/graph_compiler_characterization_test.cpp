@@ -20,151 +20,69 @@
 
 #include <gtest/gtest.h>
 
-#include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
-#include <utility>
-#include <vector>
 
-#include <vrt/graph/device/device.hpp>
-#include <vrt/graph/device/dgraph.hpp>
-#include <vrt/graph/graph.hpp>
-#include <vrt/graph/node/compiled_node.hpp>
+#include <vrt/graph/detail/authoring_region.hpp>
+#include <vrt/graph/device/cpu_device.hpp>
+#include <vrt/graph/ir/placed_graph.hpp>
+#include <vrt/graph/ir/resolved_graph.hpp>
+#include <vrt/graph/ir/routed_graph.hpp>
+#include <vrt/graph/ir/scheduled_graph.hpp>
 #include <vrt/graph/semantic_plan.hpp>
 
 using namespace vrt::graph;
 
 namespace {
 
-class NoopDevicePlan : public IDevicePlan {
-   public:
-    void launch() override {}
-    void wait() override {}
-};
-
-class StubCpuDevice : public IDevice {
-   public:
-    DeviceType type() const override { return DeviceType::CPU; }
-    std::string id() const override { return "cpu"; }
-
-    std::unique_ptr<IDevicePlan> compilePlan(const DGraph&) override {
-        return std::make_unique<NoopDevicePlan>();
-    }
-};
-
-SemanticPlan compileNestedScalarLoop() {
-    Graph graph;
-    graph.registerDevice(std::make_shared<StubCpuDevice>());
-
-    GraphScalar parent = graph.globalScalar(ScalarType::I32, "counter");
-    GraphScalar trips = graph.globalScalar(ScalarType::I32, "trips");
-
-    auto body = graph.rootRegion().createChild();
-    GraphScalar local = body->scalar(ScalarType::I32, "counter");
-    GraphScalar next = body->scalar(ScalarType::I32, "next");
-    const std::string start = body->importFromParent({{parent, local}});
-
-    IOTypeMap type;
-    type.inputScalars.push_back({"in", ScalarType::I32});
-    type.outputScalars.push_back({"out", ScalarType::I32});
-    IOMap io;
-    io.bindInputScalar("in", local).bindOutputScalar("out", next);
-    const std::string kernel = body->addKernel(
-        KernelDescriptor{"increment", DeviceType::CPU, std::nullopt, type},
-        std::move(io), "cpu", {start});
-    body->exportToParent({{next, parent}}, {kernel});
-
-    LoopSpec loop;
-    loop.tripCount = LoopTripCount::scalar(trips);
+ScheduledGraph nestedLoopSchedule(const std::string& kernelName) {
+    auto root = detail::AuthoringRegion::createRoot();
+    GraphScalar count = root->inputScalar(ScalarType::U32, "count");
+    auto body = root->createChild();
+    body->addKernel(
+        KernelDescriptor{kernelName, DeviceType::CPU, std::nullopt, {}},
+        {}, "cpu");
+    ::vrt::graph::detail::LoopRecord loop;
+    loop.tripCount = LoopTripCount::scalar(count);
     loop.body = std::move(body);
-    graph.addLoop(std::move(loop));
+    root->addLoop(std::move(loop));
 
-    CompiledGraph compiled = graph.compile();
-    return normalizeSemanticPlan(compiled.dgraphs());
-}
-
-std::vector<DGraph> generatedFixture(const std::string& prefix,
-                                     const std::string& outputName,
-                                     std::uint64_t outputScope,
-                                     std::uint32_t signalSlot,
-                                     std::string kernelName = "transform") {
-    const GraphBuffer input = GraphBuffer::make(BufferType::I32, "input", 0);
-    const GraphBuffer output =
-        GraphBuffer::make(BufferType::I32, outputName, outputScope);
-
-    IOMap io;
-    io.bindInput("in", input).bindExistingOutput("out", output);
-
-    CompiledSourceNode source;
-    source.id = prefix + "_source";
-    source.deviceId = "cpu";
-    source.inputBufferKeys.push_back(scopedBufferKey(0, "input"));
-
-    CompiledKernelNode kernel;
-    kernel.id = prefix + "_kernel";
-    kernel.deviceId = "cpu";
-    kernel.kernel = KernelDescriptor{
-        std::move(kernelName), DeviceType::CPU, std::nullopt, {}};
-    kernel.ioMap = std::move(io);
-    kernel.dependsOn.push_back(source.id);
-
-    CompiledSignalNode signal;
-    signal.id = prefix + "_signal";
-    signal.deviceId = "cpu";
-    signal.dependsOn.push_back(kernel.id);
-    signal.slot = signalSlot;
-    signal.value = 1;
-    signal.operation = 3;
-
-    CompiledWaitNode wait;
-    wait.id = prefix + "_wait";
-    wait.deviceId = "cpu";
-    wait.dependsOn.push_back(signal.id);
-    wait.slot = signalSlot;
-    wait.value = 1;
-    wait.conditionOp = 2;
-
-    DGraph dgraph;
-    dgraph.deviceId = "cpu";
-    dgraph.nodes = {
-        std::move(source),
-        std::move(kernel),
-        std::move(signal),
-        std::move(wait),
-    };
-    return {std::move(dgraph)};
+    CompileResult<ResolvedGraph> resolved =
+        resolveGraph(AuthoredGraph::snapshot(*root));
+    EXPECT_TRUE(resolved.ok());
+    auto cpu = std::make_shared<CpuDevice>("cpu");
+    std::map<std::string, std::shared_ptr<IDevice>> devices{{"cpu", cpu}};
+    CompileResult<PlacedGraph> placed = placeGraph(
+        *resolved.output, DeviceCapabilityCatalog::fromDevices(devices));
+    EXPECT_TRUE(placed.ok());
+    CompileResult<RoutedGraph> routed = routeGraph(
+        *placed.output,
+        TransferCapabilityCatalog::fromGraph(devices, {}));
+    EXPECT_TRUE(routed.ok());
+    CompileResult<ScheduledGraph> scheduled = scheduleGraph(*routed.output);
+    EXPECT_TRUE(scheduled.ok());
+    return std::move(*scheduled.output);
 }
 
 }  // namespace
 
 TEST(GraphCompilerCharacterizationTest,
-     CanonicalizesGeneratedIdsScopesValuesAndPhysicalSlots) {
-    const SemanticPlan first = normalizeSemanticPlan(
-        generatedFixture("old_17", "out_buf_91", 42, 7));
-    const SemanticPlan second = normalizeSemanticPlan(
-        generatedFixture("new_3", "result_tmp_8", 901, 233));
-
-    EXPECT_EQ(first, second) << first.toString() << "\n---\n"
-                             << second.toString();
-}
-
-TEST(GraphCompilerCharacterizationTest,
-     PreservesSemanticDifferences) {
-    const SemanticPlan first = normalizeSemanticPlan(
-        generatedFixture("a", "out_a", 3, 4, "transform"));
-    const SemanticPlan second = normalizeSemanticPlan(
-        generatedFixture("b", "out_b", 8, 99, "different_kernel"));
-
-    EXPECT_NE(first, second);
-}
-
-TEST(GraphCompilerCharacterizationTest,
-     NestedCompilationIsStableAcrossAuthoredScopeIds) {
-    const SemanticPlan first = compileNestedScalarLoop();
-    const SemanticPlan second = compileNestedScalarLoop();
-
+     ScheduledProjectionIgnoresGeneratedScopeIds) {
+    const SemanticPlacementPlan first = normalizeOperationPlacements(
+        nestedLoopSchedule("increment"));
+    const SemanticPlacementPlan second = normalizeOperationPlacements(
+        nestedLoopSchedule("increment"));
     EXPECT_EQ(first, second) << first.toString() << "\n---\n"
                              << second.toString();
     EXPECT_NE(first.toString().find("loop_body"), std::string::npos);
-    EXPECT_NE(first.toString().find("increment"), std::string::npos);
+}
+
+TEST(GraphCompilerCharacterizationTest,
+     ScheduledProjectionPreservesKernelIdentity) {
+    const SemanticPlacementPlan first = normalizeOperationPlacements(
+        nestedLoopSchedule("increment"));
+    const SemanticPlacementPlan second = normalizeOperationPlacements(
+        nestedLoopSchedule("different"));
+    EXPECT_NE(first, second);
 }

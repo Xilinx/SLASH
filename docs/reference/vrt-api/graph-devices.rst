@@ -7,8 +7,8 @@ Graph Devices
 ###################
 
 Graph devices implement the execution side of ``vrt::graph``. A ``Graph`` is
-authored once, compiled into per-device ``DGraph`` objects, then each registered
-device lowers its subgraph into an executable plan.
+authored once, scheduled into typed queue programs, then each registered
+device lowers its queue directly into an executable backend program.
 
 Device Interfaces
 =================
@@ -19,33 +19,6 @@ IDevice
 .. doxygenclass:: vrt::graph::IDevice
    :project: VRT
    :members:
-
-IDevicePlan
------------
-
-.. doxygenclass:: vrt::graph::IDevicePlan
-   :project: VRT
-   :members:
-
-DGraph
-------
-
-.. doxygenstruct:: vrt::graph::DGraph
-   :project: VRT
-   :members:
-
-DGraphChild
------------
-
-.. doxygenstruct:: vrt::graph::DGraphChild
-   :project: VRT
-   :members:
-
-DGraphChildRole
----------------
-
-.. doxygenenum:: vrt::graph::DGraphChildRole
-   :project: VRT
 
 CPU Device
 ==========

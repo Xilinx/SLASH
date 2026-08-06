@@ -33,30 +33,28 @@
  *      signal array) at the recommended `RP1_DEFAULT_*_OFFSET` layout.
  *   2. For each `submitAndWait()`:
  *        - Copies the node array, arg buffer, and signal clears into DDR.
- *        - Records `cq_write_idx` and `graph_done_seq` *before*
- *          incrementing `graph_seq` so callers can later compute the CQ
- *          delta of this graph.
+ *        - Records the monotonic CQ cursor before incrementing `graph_seq`.
  *        - Memory-fences, bumps `graph_seq` by one, memory-fences again.
- *        - Polls `graph_done_seq` at ~1 ms cadence until it catches up
- *          or the user-supplied timeout elapses.
- *   3. `drainCq()` reads the CQ entries written by the most recent
- *      submission (between the recorded "before" cq_write_idx and the
- *      current cq_write_idx).
+ *        - Polls by exact sequence equality and incrementally drains CQ so
+ *          firmware can make progress through a full ring.
+ *        - Surfaces ERROR/HALTED immediately with the complete terminal record.
+ *   3. `drainCq()` returns the retained CQ evidence for final validation.
  *
  * The submitter knows nothing about graphs, kernels, or VRT — it is a
  * mechanical adapter between a fully-realised RP1 graph image and the
  * BAR window. Higher-level code (FpgaDevice in phase 2) is responsible
  * for assembling the `Rp1GraphImage`.
  *
- * Not thread-safe: a single Rp1Submitter may not be driven from
- * multiple threads concurrently. Multiple submitters against the same
- * Rp1BarWindow are also unsafe; only one client should "own" the
- * RP1 at a time. Multi-tenancy is deferred to a later phase.
+ * Not generally thread-safe: overlapping submissions are rejected, and other
+ * operations must not race a submission. Multiple submitters against the same
+ * Rp1BarWindow are also unsafe; only one client should "own" the RP1 at a
+ * time. Multi-tenancy is deferred to a later phase.
  */
 
 #ifndef VRT_GRAPH_DEVICE_FPGA_RP1_SUBMITTER_HPP
 #define VRT_GRAPH_DEVICE_FPGA_RP1_SUBMITTER_HPP
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <stdexcept>
@@ -83,10 +81,12 @@ struct Rp1GraphImage {
 
     /// Signal slot indices that the submitter should zero before
     /// bumping `graph_seq` (typically: the sentinel slot + every slot
-    /// the graph plans to write).
+    /// the graph plans to write). Clearing the sentinel before peer
+    /// queues start distinguishes this launch from stale completion
+    /// state left by an earlier graph.
     std::vector<std::uint32_t> clear_signal_slots;
 
-    /// Optional override of cq_size.  Must be a power of 2.  Zero means
+    /// Optional override of cq_size. Must be a power of 2 <= 4096. Zero means
     /// "leave whatever was already programmed" (or use the submitter's
     /// default on the first submission).
     std::uint32_t cq_size_override = 0;
@@ -158,8 +158,15 @@ class Rp1Submitter {
      * Used by graph orchestration to zero rendezvous slots synchronously before
      * any peer queue starts producing signals. submitAndWait() still clears the
      * image slots for direct/standalone callers that do not use prepareLaunch().
+     * The early clear is what makes a later sentinel value proof that every
+     * participating queue reached the current launch's terminal node.
      */
     void clearSignalSlots(const std::vector<std::uint32_t>& slots);
+
+    /**
+     * @brief Read one signal slot after graph completion.
+     */
+    std::uint32_t readSignalValue(std::uint32_t slot) const;
 
     /**
      * @brief Submit @p image and block until graph_done_seq catches up.
@@ -176,8 +183,28 @@ class Rp1Submitter {
     /**
      * @brief Read the CQ entries written by the most recent
      *        @c submitAndWait() invocation (excluding any silent nodes).
+     *
+     * Entries drained incrementally while the graph was running are retained
+     * here for final validation.
+     *
+     * @throws std::runtime_error if the CQ cursors are corrupt or any entry
+     *         reports an RP1 node error or timeout.
      */
     std::vector<rp1_cq_entry_t> drainCq();
+
+    /**
+     * @brief Drain CQ records without interpreting node status.
+     *
+     * This lets higher layers reconcile side effects that completed before a
+     * later node or transport failure. Ring/cursor corruption still throws.
+     */
+    std::vector<rp1_cq_entry_t> drainCqRaw();
+
+    /**
+     * @brief Validate statuses from a previously drained raw CQ batch.
+     */
+    static void validateCq(
+        const std::vector<rp1_cq_entry_t>& entries);
 
     /**
      * @brief Read trace entries from the most recent @c submitAndWait().
@@ -195,10 +222,24 @@ class Rp1Submitter {
      */
     std::uint32_t lastGraphSeq() const noexcept { return last_graph_seq_; }
 
+    /// Host-local count incremented only after a graph doorbell is written.
+    std::uint64_t submissionSerial() const noexcept {
+        return submission_serial_.load(
+            std::memory_order_acquire);
+    }
+
     /**
-     * @brief @c cq_write_idx as it was just before the most recent
-     *        submission.  @c drainCq() reads the range
-     *        @c [lastCqStart(), readCqWriteIdx()].
+     * @brief True after an in-flight submission times out indeterminately.
+     *
+     * A poisoned submitter rejects further BAR mutations and submissions.
+     * Callers must reset/recover the device and construct a new submitter.
+     */
+    bool poisoned() const noexcept {
+        return poisoned_.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief CQ cursor at the latest submission/final drain boundary.
      */
     std::uint32_t lastCqStart() const noexcept { return last_cq_start_; }
 
@@ -209,10 +250,27 @@ class Rp1Submitter {
     std::uint32_t last_graph_seq_ = 0;
     std::uint32_t last_cq_start_  = 0;
     std::uint32_t last_trace_size_ = kDefaultTraceSize;
+    std::atomic_uint64_t submission_serial_{0};
+    /*
+     * cq_cursor_ follows the monotonic firmware producer cursor; pending_cq_
+     * retains incrementally copied records until the caller consumes the graph.
+     */
+    std::uint32_t cq_cursor_ = 0;
+    std::vector<rp1_cq_entry_t> pending_cq_;
+    /*
+     * Poison closes an indeterminate post-doorbell session permanently;
+     * submission_active_ rejects only overlap and clears during stack unwind.
+     */
+    std::atomic_bool poisoned_{false};
+    std::atomic_bool submission_active_{false};
 
+    void requireUsable() const;
     void waitForMagic(std::chrono::milliseconds timeout);
     void waitForState(std::uint32_t target, std::chrono::milliseconds timeout);
     void waitForGraphDone(std::uint32_t want_seq, std::chrono::milliseconds timeout);
+    void drainAvailableCq();
+    [[noreturn]] void throwTerminalError(
+        std::uint32_t state, std::uint32_t graph_seq) const;
 };
 
 }  // namespace vrt::graph::fpga

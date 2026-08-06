@@ -96,15 +96,18 @@ class ConditionOperand {
    public:
     enum class Kind { Scalar, Constant };
 
-    static ConditionOperand scalar(ScalarType type, std::string name, uint64_t scopeId = 0) {
+    static ConditionOperand scalar(
+        ScalarType type, std::string name, uint64_t scopeId = 0,
+        uint64_t graphId = 0) {
         if (name.empty()) {
             throw std::invalid_argument("ConditionOperand::scalar: name must not be empty");
         }
-        return ConditionOperand(Kind::Scalar, type, std::move(name), 0, scopeId);
+        return ConditionOperand(
+            Kind::Scalar, type, std::move(name), 0, scopeId, graphId);
     }
 
     static ConditionOperand constantFromBits(ScalarType type, uint64_t bits) {
-        return ConditionOperand(Kind::Constant, type, "", bits, 0);
+        return ConditionOperand(Kind::Constant, type, "", bits, 0, 0);
     }
 
     template <class T>
@@ -121,17 +124,24 @@ class ConditionOperand {
     const std::string& name() const { return name_; }
     uint64_t constantBits() const { return bits_; }
     uint64_t scopeId() const { return scopeId_; }
+    uint64_t graphId() const { return graphId_; }
 
    private:
     ConditionOperand(Kind kind, ScalarType type, std::string name, uint64_t bits,
-                     uint64_t scopeId)
-        : kind_(kind), type_(type), name_(std::move(name)), bits_(bits), scopeId_(scopeId) {}
+                     uint64_t scopeId, uint64_t graphId)
+        : kind_(kind),
+          type_(type),
+          name_(std::move(name)),
+          bits_(bits),
+          scopeId_(scopeId),
+          graphId_(graphId) {}
 
     Kind        kind_ = Kind::Constant;
     ScalarType  type_ = ScalarType::U64;
     std::string name_;
     uint64_t    bits_ = 0;
     uint64_t    scopeId_ = 0;
+    uint64_t    graphId_ = 0;
 };
 
 class Condition {
@@ -216,28 +226,38 @@ class LoopTripCount {
    public:
     enum class Kind { Scalar };
 
-    static LoopTripCount scalar(ScalarType type, std::string name, uint64_t scopeId = 0) {
+    static LoopTripCount scalar(
+        ScalarType type, std::string name, uint64_t scopeId = 0,
+        uint64_t graphId = 0) {
         if (!isIntegerScalarType(type)) {
             throw std::invalid_argument("LoopTripCount::scalar: type must be an integer scalar type");
         }
         if (name.empty()) {
             throw std::invalid_argument("LoopTripCount::scalar: name must not be empty");
         }
-        return LoopTripCount(type, std::move(name), scopeId);
+        return LoopTripCount(type, std::move(name), scopeId, graphId);
     }
 
     static LoopTripCount scalar(const GraphScalar& scalar) {
-        return LoopTripCount::scalar(scalar.type(), scalar.varName(), scalar.scopeId());
+        return LoopTripCount::scalar(
+            scalar.type(), scalar.varName(), scalar.scopeId(),
+            scalar.graphId());
     }
 
     Kind kind() const { return Kind::Scalar; }
     ScalarType type() const { return type_; }
     const std::string& name() const { return name_; }
     uint64_t scopeId() const { return scopeId_; }
+    uint64_t graphId() const { return graphId_; }
 
    private:
-    LoopTripCount(ScalarType type, std::string name, uint64_t scopeId)
-        : type_(type), name_(std::move(name)), scopeId_(scopeId) {
+    LoopTripCount(
+        ScalarType type, std::string name, uint64_t scopeId,
+        uint64_t graphId)
+        : type_(type),
+          name_(std::move(name)),
+          scopeId_(scopeId),
+          graphId_(graphId) {
         if (!isIntegerScalarType(type_)) {
             throw std::invalid_argument("LoopTripCount: type must be an integer scalar type");
         }
@@ -246,18 +266,21 @@ class LoopTripCount {
     ScalarType  type_ = ScalarType::U64;
     std::string name_;
     uint64_t    scopeId_ = 0;
+    uint64_t    graphId_ = 0;
 };
 
 // ---------------------------------------------------------------------------
 // Fluent condition construction from scalar tokens
 // ---------------------------------------------------------------------------
 //
-// Lets authors write `graph.addConditional({.condition = (parity == 0), ...})`.
+// Lets authors write typed predicates such as `parity == 0`.
 // The named scalar becomes the lhs operand; the literal is coerced to the
 // scalar's element type so Condition::validate()'s exact-type rule is met.
 
 inline ConditionOperand conditionOperandOf(const GraphScalar& scalar) {
-    return ConditionOperand::scalar(scalar.type(), scalar.varName(), scalar.scopeId());
+    return ConditionOperand::scalar(
+        scalar.type(), scalar.varName(), scalar.scopeId(),
+        scalar.graphId());
 }
 
 template <class T>

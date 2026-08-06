@@ -1,1 +1,1 @@
-add_subdirectory(render_demo)
+# Compiler-stage renderers are exercised by the test suite.

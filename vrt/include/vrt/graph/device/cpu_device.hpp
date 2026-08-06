@@ -32,11 +32,8 @@
  *     two plans for the same Graph naturally observe the same logical
  *     buffer when they reference the same scoped name, which mirrors
  *     accelerator hardware (a buffer "lives on" the device).
- *   - Each `CpuDevicePlan` owns its own *graph-level scalar map*, taken
- *     from `DGraph::scalarValues` at compile time. Scalar state is owned
- *     by the `Graph` and threaded into every device plan, so two plans
- *     for the same Graph see one shared scalar map and two plans for
- *     different Graphs see independent maps.
+ *   - Each `CpuDevicePlan` pins the execution plan's runtime state and scalar
+ *     map. Compiling another plan on the same CpuDevice cannot replace either.
  *
  * Execution model
  * ---------------
@@ -61,23 +58,26 @@
  * Cross-device synchronisation and data movement
  * ----------------------------------------------
  * CpuDevice has no built-in notion of either: the compiler synthesises
- * `CompiledBridgeOpNode` entries (each carrying an opaque `std::function<void()>`
- * closure produced by an `IBridge`) directly into the device's per-device
- * `DGraph::nodes`. CpuDevicePlan walks the node list with `std::visit` and
+ * `CompiledBridgeOpNode` entries that reference execution-plan-owned entries
+ * in `HostActionTable`. CpuDevicePlan resolves those ids while lowering and
  * runs the closures inline. A typical CPU↔X bridge gives the CPU side a
  * closure that reads/writes the device's buffer storage via the public
  * setInputBuffer/getOutputBuffer/bufferSize accessors, capturing whatever
  * bridge-private staging and synchronisation primitives it owns.
+ * Signal/wait nodes resolve their resource owner through the same execution
+ * plan's `BackendRuntimeState`; CpuDevice has no global FPGA-window accessor.
  */
 
 #ifndef VRT_GRAPH_DEVICE_CPU_DEVICE_HPP
 #define VRT_GRAPH_DEVICE_CPU_DEVICE_HPP
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -86,10 +86,8 @@
 #include <vector>
 
 #include <vrt/graph/device/device.hpp>
-#include <vrt/graph/device/dgraph.hpp>
-#include <vrt/graph/node/io_map.hpp>
+#include <vrt/graph/detail/port_bindings.hpp>
 #include <vrt/graph/node/kernel_descriptor.hpp>
-#include <vrt/graph/node/compiled_node.hpp>
 #include <vrt/graph/core/types.hpp>
 
 namespace vrt::graph {
@@ -100,6 +98,11 @@ namespace vrt::graph {
 
 /**
  * @brief Non-owning view of a buffer argument as seen by a CPU kernel function.
+ */
+/*
+ * A view is valid only for the surrounding CpuKernel::run() call. The
+ * executable pins every backing allocation before releasing the device's
+ * buffer-map lock, so replacing a map entry cannot dangle an active view.
  */
 struct CpuBufferView {
     void*      data       = nullptr;
@@ -150,6 +153,11 @@ class KernelSpan {
  *
  * Buffer and scalar look-ups are by port name (matching the IOTypeMap
  * declaration).  Throws std::out_of_range on an unknown port name.
+ */
+/*
+ * Input scalars are immutable snapshots taken before user code runs.
+ * Writable scalar pointers refer to invocation-local slots; the executable
+ * publishes those slots to shared runtime state only after run() returns.
  */
 class CpuKernelArgs {
    public:
@@ -316,7 +324,8 @@ class ElementwiseCpuKernel : public CpuKernel {
 
 class CpuDevicePlan;
 
-class CpuDevice : public IDevice {
+class CpuDevice : public IDevice,
+                  public std::enable_shared_from_this<CpuDevice> {
    public:
     /**
      * @brief Construct a CpuDevice.
@@ -358,49 +367,36 @@ class CpuDevice : public IDevice {
      */
     bool hasBuffer(const std::string& bufferName) const;
 
-    // --- Scalar accessors (also used by scalar bridges) ---
-
-    void setInputScalar(const std::string& scalarKey, std::uint64_t bits);
-    std::uint64_t getOutputScalar(const std::string& scalarKey) const;
-
-    // --- Cross-queue rendezvous signal access (Phase E) ---
-
-    /// Reads the 32-bit value of a host-visible signal slot.
-    using SignalReadFn = std::function<std::uint32_t(std::uint32_t /*slot*/)>;
-    /// Writes the 32-bit value of a host-visible signal slot.
-    using SignalWriteFn = std::function<void(std::uint32_t /*slot*/, std::uint32_t /*value*/)>;
-
-    /**
-     * @brief Wire this CPU device to a peer queue's host-visible signal array.
-     *
-     * A split cross-device loop runs its CPU body slice concurrently with the
-     * peer (FPGA) queue, rendezvousing per iteration through signal slots that
-     * live in the peer's BAR-visible DDR window. The Graph supplies these
-     * accessors before launch so the CPU's CompiledSignalNode / CompiledWaitNode
-     * execution can SET and poll those slots over the BAR. Without them, a CPU
-     * slice that contains rendezvous nodes throws at launch.
-     */
-    void setSignalAccessors(SignalReadFn reader, SignalWriteFn writer) {
-        signalRead_  = std::move(reader);
-        signalWrite_ = std::move(writer);
-    }
-
     // --- IDevice ---
 
     DeviceType  type() const override { return DeviceType::CPU; }
     std::string id()   const override { return id_; }
 
-    std::unique_ptr<IDevicePlan> compilePlan(const DGraph& dg) override;
+    std::unique_ptr<IDeviceExecutionLease> leaseExecution() override;
+    std::unique_ptr<IBackendExecutable> lowerQueue(
+        const BackendLoweringContext& context) override;
 
    private:
     friend class CpuDevicePlan;
 
     std::string                                  id_;
     std::map<std::string, std::shared_ptr<CpuKernel>> kernels_;
-    std::map<std::string, std::vector<uint8_t>>  buffers_;
-    std::shared_ptr<std::map<std::string, uint64_t>> scalarValues_;
-    SignalReadFn                                 signalRead_;
-    SignalWriteFn                                signalWrite_;
+    /*
+     * The map owns the current version of each scoped buffer. Individual
+     * kernel invocations retain shared_ptr pins when they form raw views, so
+     * bridge or boundary publication may replace a key without freeing the
+     * storage still used by that invocation.
+     */
+    mutable std::mutex                           bufferMutex_;
+    std::map<
+        std::string,
+        std::shared_ptr<std::vector<uint8_t>>>   buffers_;
+    /*
+     * CPU plans share this device-wide store, so only one compiled Execution
+     * may hold it live at a time. The execution lease clears the flag only
+     * after all queue workers and resource state have been destroyed.
+     */
+    std::atomic_bool                             executionLeased_{false};
 };
 
 }  // namespace vrt::graph

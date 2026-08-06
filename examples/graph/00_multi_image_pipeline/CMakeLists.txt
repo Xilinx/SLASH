@@ -79,3 +79,10 @@ endif()
 
 add_executable(${PROJECT_NAME} multi_image_pipeline.cpp)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${_VRT_TARGET})
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(multi_image_pipeline_test multi_image_pipeline_test.cpp)
+  target_link_libraries(multi_image_pipeline_test PRIVATE ${_VRT_TARGET})
+  add_test(NAME multi_image_pipeline_unit COMMAND multi_image_pipeline_test)
+endif()

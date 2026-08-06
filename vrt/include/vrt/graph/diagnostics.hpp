@@ -51,6 +51,7 @@ enum class DiagCode {
     UnknownDependency,
     MissingTransferRoute,
     Cycle,
+    MissingProducer,
     DuplicateProducer,
     TypeMismatch,
     SizeMismatch,

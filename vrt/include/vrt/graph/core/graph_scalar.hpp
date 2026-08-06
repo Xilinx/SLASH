@@ -22,9 +22,9 @@
  * @file graph_scalar.hpp
  * @brief GraphScalar — a typed reference to a scalar value slot.
  *
- * Scalar values live in the graph / compiled-graph scalar store keyed by
- * scope and name. Constants are represented by scalar slots with initial
- * values, not by a separate token kind.
+ * Scalar values live in execution-owned storage keyed by scope and name.
+ * Constants are represented by scalar slots with initial values, not by a
+ * separate token kind.
  */
 
 #ifndef VRT_GRAPH_CORE_GRAPH_SCALAR_HPP
@@ -62,18 +62,16 @@ inline uint64_t valueToBits(T value) {
 
 }  // namespace detail
 
+class GraphScalar;
+
+namespace detail {
+GraphScalar makeGraphScalar(
+    ScalarType type, std::string varName, std::uint64_t scopeId = 0,
+    std::uint64_t graphId = 0);
+}
+
 class GraphScalar {
    public:
-    /**
-     * @brief Creates a reference to a named scalar value slot.
-     */
-    static GraphScalar ref(ScalarType type, std::string varName, uint64_t scopeId = 0) {
-        if (varName.empty()) {
-            throw std::invalid_argument("GraphScalar::ref: varName must not be empty");
-        }
-        return GraphScalar(type, std::move(varName), scopeId);
-    }
-
     /**
      * @brief Returns the element type.
      */
@@ -90,14 +88,42 @@ class GraphScalar {
      */
     uint64_t scopeId() const { return scopeId_; }
 
+    /**
+     * @brief Identity of the Graph that minted this token.
+     */
+    uint64_t graphId() const { return graphId_; }
+
    private:
-    GraphScalar(ScalarType type, std::string varName, uint64_t scopeId)
-        : type_(type), varName_(std::move(varName)), scopeId_(scopeId) {}
+    friend GraphScalar detail::makeGraphScalar(
+        ScalarType, std::string, std::uint64_t, std::uint64_t);
+
+    GraphScalar(ScalarType type, std::string varName, uint64_t scopeId,
+                uint64_t graphId)
+        : type_(type),
+          varName_(std::move(varName)),
+          scopeId_(scopeId),
+          graphId_(graphId) {}
 
     ScalarType  type_;
     std::string varName_;
     uint64_t    scopeId_ = 0;
+    uint64_t    graphId_ = 0;
 };
+
+namespace detail {
+
+inline GraphScalar makeGraphScalar(
+    ScalarType type, std::string varName, std::uint64_t scopeId,
+    std::uint64_t graphId) {
+    if (varName.empty()) {
+        throw std::invalid_argument(
+            "makeGraphScalar: name must not be empty");
+    }
+    return GraphScalar(
+        type, std::move(varName), scopeId, graphId);
+}
+
+}  // namespace detail
 
 }  // namespace vrt::graph
 

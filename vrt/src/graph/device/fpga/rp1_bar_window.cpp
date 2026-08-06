@@ -41,6 +41,11 @@ struct Backend {
     virtual void          writeU32(std::uint32_t abs_off, std::uint32_t v)             = 0;
 };
 
+/*
+ * A BarFile pointer is also a dma-buf synchronization bracket, so it must not
+ * escape one accessor. The lock prevents two callers from nesting incompatible
+ * read/write brackets on the same mapping.
+ */
 class BarFileBackend final : public Backend {
    public:
     explicit BarFileBackend(vrtd::BarFile bar_file) : barFile_(std::move(bar_file)) {}
@@ -132,6 +137,10 @@ struct Rp1BarWindow::Impl {
     std::unique_ptr<Backend> backend;
     std::uint64_t            windowOffset;
 
+    /*
+     * Check the complete range in 64 bits before narrowing to the backend's
+     * 32-bit BAR offset; this rejects both end overflow and an oversized origin.
+     */
     std::uint32_t absoluteOffset(std::uint32_t window_off, std::size_t n) const {
         const std::uint64_t abs = windowOffset + window_off;
         const std::uint64_t end = abs + n;
@@ -189,6 +198,10 @@ void Rp1BarWindow::readAt(std::uint32_t offset, void* dst, std::size_t n) {
 
 void Rp1BarWindow::writeAt(std::uint32_t offset, const void* src, std::size_t n) {
     if (n == 0) return;
+    /*
+     * Bound each dma-buf synchronization window: large graph images otherwise
+     * pin one BAR write bracket for the full copy and delay peer access.
+     */
     static constexpr std::size_t kChunk = 1u << 20;  // Keep BAR sync windows bounded.
     const auto* bytes = static_cast<const std::uint8_t*>(src);
     while (n > 0) {

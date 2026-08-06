@@ -43,12 +43,16 @@ class ScheduledGraph {
         std::vector<QueueProgram> queues,
         std::map<ScheduleStepId, ScheduledStep> steps,
         std::vector<LogicalRendezvous> rendezvous,
-        std::vector<LogicalResourceRequirement> resources)
+        std::vector<SplitControlProtocol> splitControls,
+        std::vector<LogicalResourceRequirement> resources,
+        std::vector<LogicalScalarRequirement> scalarResources = {})
         : routed_(std::move(routed)),
           queues_(std::move(queues)),
           steps_(std::move(steps)),
           rendezvous_(std::move(rendezvous)),
-          resources_(std::move(resources)) {}
+          splitControls_(std::move(splitControls)),
+          resources_(std::move(resources)),
+          scalarResources_(std::move(scalarResources)) {}
 
     const RoutedGraph& routed() const { return *routed_; }
     const std::vector<QueueProgram>& queues() const { return queues_; }
@@ -58,8 +62,14 @@ class ScheduledGraph {
     const std::vector<LogicalRendezvous>& rendezvous() const {
         return rendezvous_;
     }
+    const std::vector<SplitControlProtocol>& splitControls() const {
+        return splitControls_;
+    }
     const std::vector<LogicalResourceRequirement>& resources() const {
         return resources_;
+    }
+    const std::vector<LogicalScalarRequirement>& scalarResources() const {
+        return scalarResources_;
     }
 
    private:
@@ -67,7 +77,9 @@ class ScheduledGraph {
     std::vector<QueueProgram>                      queues_;
     std::map<ScheduleStepId, ScheduledStep>        steps_;
     std::vector<LogicalRendezvous>                 rendezvous_;
+    std::vector<SplitControlProtocol>               splitControls_;
     std::vector<LogicalResourceRequirement>        resources_;
+    std::vector<LogicalScalarRequirement>          scalarResources_;
 };
 
 CompileResult<ScheduledGraph> scheduleGraph(

@@ -23,10 +23,9 @@
  * @brief IBridge — abstract interface for cross-device transfer and
  *        synchronisation between two devices.
  *
- * A bridge produces a pair of closures (producer-side + consumer-side) plus
- * an opaque `IBridgeOp` that owns whatever shared state the two closures
- * need. The compiler then synthesises a pair of `CompiledBridgeOpNode`s in the
- * relevant DGraphs from this returned data.
+ * A bridge produces the final runtime adapter: producer/consumer closures plus
+ * an opaque `IBridgeOp` that owns their shared state. Backend lowering stores
+ * those closures in the execution plan's host-action table.
  */
 
 #ifndef VRT_GRAPH_CROSSDEVICE_BRIDGE_HPP
@@ -35,6 +34,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -52,6 +52,12 @@ namespace vrt::graph {
  * (`consumerTryReady`) and the actual copy (`consumerAction`) so that
  * dep-driven schedulers can poll many transfers without dedicating a
  * thread to each blocking await.
+ */
+/*
+ * The producer snapshots payload state before signalling. A successful probe
+ * consumes that signal and grants exactly one consumer action, which publishes
+ * the snapshot at the destination. op is the explicit pin tying all three
+ * callbacks to the same per-transfer state.
  */
 struct BridgeStepPair {
     std::shared_ptr<IBridgeOp> op;
@@ -79,8 +85,25 @@ struct BridgeStepPair {
     std::function<void()>      consumerAction;
 };
 
+/*
+ * Scalar callbacks route through execution-owned runtime state rather than
+ * bridge-global storage: readScalar takes the producer snapshot and
+ * writeScalar publishes it to the destination's host/device binding.
+ */
+struct BridgeRuntimeContext {
+    std::function<std::uint64_t(IDevice&, const std::string&)>
+        readScalar;
+    std::function<void(IDevice&, const std::string&, std::uint64_t)>
+        writeScalar;
+};
+
 class IBridge {
    public:
+    /*
+     * Graph pins each bridge instance for the whole Execution. This matters
+     * for implementations whose operation objects point back to a bridge-owned
+     * semaphore pool while queue executables retain only per-operation pins.
+     */
     virtual ~IBridge() = default;
 
     /**
@@ -95,9 +118,7 @@ class IBridge {
      *      shared pointer.
      *   3. Returns the four pieces as a `BridgeStepPair`.
      *
-     * The compiler is responsible for splicing the resulting closures into
-     * the correct positions in the producer and consumer DGraphs as
-     * CompiledBridgeOpNodes; the bridge does not touch the devices directly.
+     * Backend lowering stores the returned closures in plan-owned host actions.
      */
     virtual BridgeStepPair makeTransfer(IDevice&            src,
                                          IDevice&            dst,
@@ -105,6 +126,22 @@ class IBridge {
                                          uint64_t            sizeHintBytes,
                                          const std::string&  producerNodeId,
                                          const std::string&  consumerNodeId) = 0;
+
+    virtual BridgeStepPair makeTransfer(
+        IDevice& src, IDevice& dst, const GraphBuffer& source,
+        const GraphBuffer& destination, uint64_t sizeHintBytes,
+        const std::string& producerNodeId,
+        const std::string& consumerNodeId) {
+        if (scopedBufferKey(source.scopeId(), source.name()) !=
+            scopedBufferKey(
+                destination.scopeId(), destination.name())) {
+            throw std::logic_error(
+                "IBridge: distinct transfer destinations are not supported");
+        }
+        return makeTransfer(
+            src, dst, source, sizeHintBytes, producerNodeId,
+            consumerNodeId);
+    }
 
     /**
      * @brief Build a producer/consumer closure pair for a cross-device
@@ -120,6 +157,31 @@ class IBridge {
                                                const std::string&  scalarKey,
                                                const std::string&  producerNodeId,
                                                const std::string&  consumerNodeId) = 0;
+
+    virtual BridgeStepPair makeScalarTransfer(
+        IDevice& src, IDevice& dst, const std::string& scalarKey,
+        const std::string& producerNodeId,
+        const std::string& consumerNodeId,
+        const BridgeRuntimeContext& runtime) {
+        (void)runtime;
+        return makeScalarTransfer(
+            src, dst, scalarKey, producerNodeId, consumerNodeId);
+    }
+
+    virtual BridgeStepPair makeScalarTransfer(
+        IDevice& src, IDevice& dst, const std::string& sourceKey,
+        const std::string& destinationKey,
+        const std::string& producerNodeId,
+        const std::string& consumerNodeId,
+        const BridgeRuntimeContext& runtime) {
+        if (sourceKey != destinationKey) {
+            throw std::logic_error(
+                "IBridge: distinct scalar transfer destinations are not supported");
+        }
+        return makeScalarTransfer(
+            src, dst, sourceKey, producerNodeId, consumerNodeId,
+            runtime);
+    }
 
     /**
      * @brief Build a pure-synchronisation closure pair (no data movement).

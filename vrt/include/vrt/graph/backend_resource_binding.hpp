@@ -50,25 +50,49 @@ struct BoundRendezvous {
     PhysicalRendezvousKind   kind =
         PhysicalRendezvousKind::HostEvent;
     DeviceId                 owner;
-    std::uint32_t            physicalIndex = 0;
+    BackendResourceId        physical;
 };
 
+struct BoundScalar {
+    ScalarResourceId logical;
+    ValueId          value;
+    DeviceId         owner;
+    std::string      key;
+    BackendScalarId  physical;
+};
+
+/*
+ * Resource binding is an ownership transaction, not just an id map.
+ * Execution leases exclude incompatible live plans; resource leases reserve
+ * physical slots; device pins keep both lease implementations valid.
+ * Member order makes teardown run access handles -> resource leases ->
+ * execution leases -> device pins, after backend executables are gone.
+ */
 class BackendResourceBindings {
    public:
     BackendResourceBindings(
         std::map<RendezvousId, BoundRendezvous> rendezvous,
-        std::vector<std::unique_ptr<IDeviceResourceLease>> leases,
-        std::vector<std::shared_ptr<IDevice>> devicePins)
+        std::map<ScalarResourceId, BoundScalar> scalars,
+        std::vector<std::shared_ptr<IDevice>> devicePins,
+        std::vector<std::unique_ptr<IDeviceExecutionLease>>
+            executionLeases,
+        std::vector<std::unique_ptr<IDeviceResourceLease>>
+            resourceLeases,
+        std::map<DeviceId, std::shared_ptr<IDeviceResourceAccess>>
+            ownerAccess)
         : rendezvous_(std::move(rendezvous)),
-          leases_(std::move(leases)),
-          devicePins_(std::move(devicePins)) {}
+          scalars_(std::move(scalars)),
+          devicePins_(std::move(devicePins)),
+          executionLeases_(std::move(executionLeases)),
+          resourceLeases_(std::move(resourceLeases)),
+          ownerAccess_(std::move(ownerAccess)) {}
 
     BackendResourceBindings(const BackendResourceBindings&) = delete;
     BackendResourceBindings& operator=(
         const BackendResourceBindings&) = delete;
     BackendResourceBindings(BackendResourceBindings&&) noexcept = default;
     BackendResourceBindings& operator=(
-        BackendResourceBindings&&) noexcept = default;
+        BackendResourceBindings&&) = delete;
 
     const std::map<RendezvousId, BoundRendezvous>& rendezvous() const {
         return rendezvous_;
@@ -79,10 +103,34 @@ class BackendResourceBindings {
         return it == rendezvous_.end() ? nullptr : &it->second;
     }
 
+    const std::map<ScalarResourceId, BoundScalar>& scalars() const {
+        return scalars_;
+    }
+
+    const BoundScalar* findScalar(
+        DeviceId owner, const std::string& key) const {
+        for (const auto& [logical, scalar] : scalars_) {
+            (void)logical;
+            if (scalar.owner == owner && scalar.key == key) return &scalar;
+        }
+        return nullptr;
+    }
+
+    const std::map<DeviceId, std::shared_ptr<IDeviceResourceAccess>>&
+    ownerAccess() const {
+        return ownerAccess_;
+    }
+
    private:
     std::map<RendezvousId, BoundRendezvous> rendezvous_;
-    std::vector<std::unique_ptr<IDeviceResourceLease>> leases_;
+    std::map<ScalarResourceId, BoundScalar> scalars_;
     std::vector<std::shared_ptr<IDevice>> devicePins_;
+    std::vector<std::unique_ptr<IDeviceExecutionLease>>
+        executionLeases_;
+    std::vector<std::unique_ptr<IDeviceResourceLease>>
+        resourceLeases_;
+    std::map<DeviceId, std::shared_ptr<IDeviceResourceAccess>>
+        ownerAccess_;
 };
 
 CompileResult<BackendResourceBindings> bindBackendResources(

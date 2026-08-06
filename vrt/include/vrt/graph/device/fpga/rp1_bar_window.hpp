@@ -141,6 +141,9 @@ class Rp1BarWindow {
     }
 
     /// Full write of the 4 KiB control block at window offset 0.
+    ///
+    /// Intended for setup/tests only. Once firmware is running, callers must
+    /// write host-owned words individually or risk clobbering live state.
     void writeCtrl(const rp1_ctrl_t& in) {
         writeAt(0, &in, sizeof(in));
     }
@@ -178,6 +181,11 @@ class Rp1BarWindow {
 
     // ---- Single-field accessors (cheap polling) ----------------------
 
+    /*
+     * The control block is concurrently owned at word granularity. Keep polling
+     * and doorbells as isolated 32-bit accesses so no read-modify-write spans
+     * fields that firmware may publish between host operations.
+     */
     std::uint32_t readMagic()        { return readU32(offsetof(rp1_ctrl_t, magic)); }
     std::uint32_t readGraphSeq()     { return readU32(offsetof(rp1_ctrl_t, graph_seq)); }
     std::uint32_t readGraphDoneSeq() { return readU32(offsetof(rp1_ctrl_t, graph_done_seq)); }

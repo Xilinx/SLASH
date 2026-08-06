@@ -22,9 +22,9 @@
  * @file compiler.hpp
  * @brief Staged graph compiler entry point.
  *
- * Compilation snapshots authored regions, resolves typed values, places work,
- * routes transfers, schedules queues, binds resources, and lowers backend
- * programs.
+ * Compilation validates an authored snapshot, resolves typed values, places
+ * work, routes transfers, schedules queues, binds resources, and lowers
+ * backend programs.
  */
 
 #ifndef VRT_GRAPH_COMPILER_HPP
@@ -38,9 +38,9 @@
 
 #include <vrt/graph/compile_result.hpp>
 #include <vrt/graph/crossdevice/bridge.hpp>
-#include <vrt/graph/control/graph_region.hpp>
 #include <vrt/graph/device/device.hpp>
 #include <vrt/graph/execution_plan.hpp>
+#include <vrt/graph/ir/authored_graph.hpp>
 
 namespace vrt::graph {
 
@@ -51,7 +51,7 @@ class GraphCompiler {
                                const std::string& dstDevId)>;
 
     CompileResult<ExecutionPlan> compile(
-        const GraphRegion&                                      rootRegion,
+        const AuthoredGraph&                                   authored,
         const std::map<std::string, std::shared_ptr<IDevice>>& devices,
         const std::map<std::pair<DeviceType, DeviceType>,
                        BridgeFactory>&                         bridgeFactories,

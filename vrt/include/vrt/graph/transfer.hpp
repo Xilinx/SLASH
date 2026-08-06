@@ -31,7 +31,9 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <vrt/graph/capabilities.hpp>
@@ -55,32 +57,310 @@ enum class TransferMechanism {
     HostMediatedDeviceCopy,
 };
 
-struct TransferEndpoint {
-    std::optional<NodeId>         operation;
-    DeviceId                      device;
+enum class TransferPhase {
+    PreLaunch,
+    Once,
+    PerIteration,
+    AfterControl,
+};
+
+enum class TransferAnchorKind {
+    GraphInput,
+    GraphOutput,
+    Operation,
+};
+
+class TransferControlAnchor {
+   public:
+    static TransferControlAnchor graphInput(RegionId region) {
+        return TransferControlAnchor(
+            TransferAnchorKind::GraphInput, region, NodeId{});
+    }
+
+    static TransferControlAnchor graphOutput(RegionId region) {
+        return TransferControlAnchor(
+            TransferAnchorKind::GraphOutput, region, NodeId{});
+    }
+
+    static TransferControlAnchor operation(
+        NodeId operation, RegionId region) {
+        return TransferControlAnchor(
+            TransferAnchorKind::Operation, region, operation);
+    }
+
+    TransferAnchorKind kind() const { return kind_; }
+    RegionId region() const { return region_; }
+    std::optional<NodeId> operation() const {
+        return kind_ == TransferAnchorKind::Operation
+                   ? std::optional<NodeId>(operation_)
+                   : std::nullopt;
+    }
+
+    friend bool operator==(
+        const TransferControlAnchor& lhs,
+        const TransferControlAnchor& rhs) {
+        return std::tie(lhs.kind_, lhs.region_, lhs.operation_) ==
+               std::tie(rhs.kind_, rhs.region_, rhs.operation_);
+    }
+
+    friend bool operator<(
+        const TransferControlAnchor& lhs,
+        const TransferControlAnchor& rhs) {
+        return std::tie(lhs.kind_, lhs.region_, lhs.operation_) <
+               std::tie(rhs.kind_, rhs.region_, rhs.operation_);
+    }
+
+   private:
+    TransferControlAnchor(
+        TransferAnchorKind kind, RegionId region, NodeId operation)
+        : kind_(kind), region_(region), operation_(operation) {}
+
+    TransferAnchorKind kind_;
+    RegionId           region_;
+    NodeId             operation_;
+};
+
+struct GraphTransferScope {
+    RegionId region;
+
+    friend bool operator==(
+        const GraphTransferScope& lhs,
+        const GraphTransferScope& rhs) {
+        return lhs.region == rhs.region;
+    }
+
+    friend bool operator<(
+        const GraphTransferScope& lhs,
+        const GraphTransferScope& rhs) {
+        return lhs.region < rhs.region;
+    }
+};
+
+struct ControlTransferScope {
+    NodeId   control;
+    RegionId region;
+
+    friend bool operator==(
+        const ControlTransferScope& lhs,
+        const ControlTransferScope& rhs) {
+        return std::tie(lhs.control, lhs.region) ==
+               std::tie(rhs.control, rhs.region);
+    }
+
+    friend bool operator<(
+        const ControlTransferScope& lhs,
+        const ControlTransferScope& rhs) {
+        return std::tie(lhs.control, lhs.region) <
+               std::tie(rhs.control, rhs.region);
+    }
+};
+
+using TransferControlScope =
+    std::variant<GraphTransferScope, ControlTransferScope>;
+
+struct HostTransferExecutor {
+    DeviceId device;
+
+    friend bool operator==(
+        const HostTransferExecutor& lhs,
+        const HostTransferExecutor& rhs) {
+        return lhs.device == rhs.device;
+    }
+
+    friend bool operator<(
+        const HostTransferExecutor& lhs,
+        const HostTransferExecutor& rhs) {
+        return lhs.device < rhs.device;
+    }
+};
+
+struct SourceQueueTransferExecutor {
+    friend bool operator==(
+        SourceQueueTransferExecutor, SourceQueueTransferExecutor) {
+        return true;
+    }
+
+    friend bool operator<(
+        SourceQueueTransferExecutor, SourceQueueTransferExecutor) {
+        return false;
+    }
+};
+
+struct DestinationQueueTransferExecutor {
+    friend bool operator==(
+        DestinationQueueTransferExecutor,
+        DestinationQueueTransferExecutor) {
+        return true;
+    }
+
+    friend bool operator<(
+        DestinationQueueTransferExecutor,
+        DestinationQueueTransferExecutor) {
+        return false;
+    }
+};
+
+using TransferExecutor =
+    std::variant<HostTransferExecutor, SourceQueueTransferExecutor,
+                 DestinationQueueTransferExecutor>;
+
+enum class TransferCompletionProtocol {
+    ProducerConsumerAcknowledged,
+    ExecutorSignalsReady,
+};
+
+struct HostEventSynchronization {};
+
+struct DeviceRendezvousSynchronization {
+    DeviceId owner;
+};
+
+using TransferSynchronization =
+    std::variant<HostEventSynchronization,
+                 DeviceRendezvousSynchronization>;
+
+struct ReplicaTransferEndpoint {
+    ReplicaId replica;
+
+    friend bool operator==(
+        ReplicaTransferEndpoint lhs, ReplicaTransferEndpoint rhs) {
+        return lhs.replica == rhs.replica;
+    }
+
+    friend bool operator<(
+        ReplicaTransferEndpoint lhs, ReplicaTransferEndpoint rhs) {
+        return lhs.replica < rhs.replica;
+    }
+};
+
+struct BarrierTransferEndpoint {
+    DeviceId device;
+    NodeId   operation;
+
+    friend bool operator==(
+        const BarrierTransferEndpoint& lhs,
+        const BarrierTransferEndpoint& rhs) {
+        return std::tie(lhs.device, lhs.operation) ==
+               std::tie(rhs.device, rhs.operation);
+    }
+
+    friend bool operator<(
+        const BarrierTransferEndpoint& lhs,
+        const BarrierTransferEndpoint& rhs) {
+        return std::tie(lhs.device, lhs.operation) <
+               std::tie(rhs.device, rhs.operation);
+    }
+};
+
+using TransferEndpoint =
+    std::variant<ReplicaTransferEndpoint, BarrierTransferEndpoint>;
+
+struct TransferLocation {
+    DeviceId                     device;
     std::optional<MemoryRegionId> region;
+
+    friend bool operator==(
+        const TransferLocation& lhs,
+        const TransferLocation& rhs) {
+        return std::tie(lhs.device, lhs.region) ==
+               std::tie(rhs.device, rhs.region);
+    }
+
+    friend bool operator<(
+        const TransferLocation& lhs,
+        const TransferLocation& rhs) {
+        return std::tie(lhs.device, lhs.region) <
+               std::tie(rhs.device, rhs.region);
+    }
+};
+
+struct RouteSignature {
+    TransferPayloadKind  payload = TransferPayloadKind::Buffer;
+    TransferEndpoint     source;
+    TransferEndpoint     destination;
+    TransferLocation     sourceLocation;
+    TransferLocation     destinationLocation;
+    TransferPhase        phase = TransferPhase::Once;
+    TransferControlScope scope = GraphTransferScope{};
+
+    friend bool operator==(
+        const RouteSignature& lhs, const RouteSignature& rhs) {
+        return std::tie(
+                   lhs.payload, lhs.source, lhs.destination,
+                   lhs.sourceLocation, lhs.destinationLocation,
+                   lhs.phase, lhs.scope) ==
+               std::tie(
+                   rhs.payload, rhs.source, rhs.destination,
+                   rhs.sourceLocation, rhs.destinationLocation,
+                   rhs.phase, rhs.scope);
+    }
+
+    friend bool operator<(
+        const RouteSignature& lhs, const RouteSignature& rhs) {
+        return std::tie(
+                   lhs.payload, lhs.source, lhs.destination,
+                   lhs.sourceLocation, lhs.destinationLocation,
+                   lhs.phase, lhs.scope) <
+               std::tie(
+                   rhs.payload, rhs.source, rhs.destination,
+                   rhs.sourceLocation, rhs.destinationLocation,
+                   rhs.phase, rhs.scope);
+    }
 };
 
 struct TransferRequirement {
-    RouteId                       id;
-    std::optional<ValueId>        value;
-    TransferPayloadKind           payload = TransferPayloadKind::Buffer;
-    TransferEndpoint              source;
-    TransferEndpoint              destination;
-    std::optional<RouteId>        prerequisite;
+    RouteSignature                     signature;
+    TransferControlAnchor              sourceAnchor =
+        TransferControlAnchor::graphInput(RegionId{});
+    TransferControlAnchor              destinationAnchor =
+        TransferControlAnchor::graphOutput(RegionId{});
+    TransferCompletionProtocol         completion =
+        TransferCompletionProtocol::ProducerConsumerAcknowledged;
+    TransferSynchronization            synchronization =
+        HostEventSynchronization{};
+    bool                               isolatedDestination = false;
+    std::vector<RouteId>               prerequisites;
+    std::vector<NodeId>                controlPrerequisites;
 };
 
 struct TransferLeg {
-    TransferMechanism       mechanism = TransferMechanism::DirectBridge;
-    DeviceId                source;
-    DeviceId                destination;
-    std::optional<DeviceId> executor;
+    TransferLegId       id;
+    TransferMechanism   mechanism = TransferMechanism::DirectBridge;
+    DeviceId            source;
+    DeviceId            destination;
+    TransferExecutor    executor =
+        DestinationQueueTransferExecutor{};
+    RegionId            sourceRegion;
+    RegionId            destinationRegion;
+    RegionId            executorRegion;
 };
 
 struct TransferRoute {
-    TransferRequirement     requirement;
+    RouteId                  id;
+    TransferRequirement      requirement;
     std::vector<TransferLeg> legs;
 };
+
+inline std::optional<ReplicaId> transferReplica(
+    const TransferEndpoint& endpoint) {
+    const auto* replica =
+        std::get_if<ReplicaTransferEndpoint>(&endpoint);
+    return replica ? std::optional<ReplicaId>(replica->replica)
+                   : std::nullopt;
+}
+
+inline DeviceId transferExecutorDevice(
+    const TransferExecutor& executor,
+    const DeviceId& source, const DeviceId& destination) {
+    if (const auto* host =
+            std::get_if<HostTransferExecutor>(&executor)) {
+        return host->device;
+    }
+    return std::holds_alternative<SourceQueueTransferExecutor>(
+               executor)
+               ? source
+               : destination;
+}
 
 class TransferCapabilityCatalog {
    public:
@@ -91,11 +371,13 @@ class TransferCapabilityCatalog {
 
     bool hasDirect(DeviceId source, DeviceId destination) const;
     bool supportsMemoryRegionCopies(DeviceId device) const;
+    bool ownsRendezvousNamespace(DeviceId device) const;
     const std::optional<DeviceId>& host() const { return host_; }
 
    private:
     std::set<std::pair<DeviceId, DeviceId>> direct_;
     std::set<DeviceId>                      memoryRegionCopyDevices_;
+    std::set<DeviceId>                      rendezvousOwners_;
     std::optional<DeviceId>                 host_;
 };
 

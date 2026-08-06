@@ -20,42 +20,18 @@
 
 /**
  * @file fpga_device.hpp
- * @brief FpgaDevice — IDevice backend that lowers DGraphs to RP1 graphs.
+ * @brief FPGA backend lowering typed scheduled queues to RP1 graph images.
  *
- * `compilePlan()` lowers a DGraph into a packed RP1 node program submitted to
- * the R5 command processor:
- *   - `CompiledKernelNode` -> `RP1_OP_KERNEL_DISPATCH`. Kernel arguments are
- *     taken from `IOMap` scalar bindings, packed in the order declared by the
- *     kernel's `IOTypeMap::inputScalars`. Constants are baked in at compile
- *     time; global-variable bindings are resolved at `launch()` time via the
- *     per-graph scalar map.
- *   - `CompiledReprogramNode` -> `RP1_OP_PDI_LOAD` (partial reconfiguration of
- *     the user region), with the PDI staged through QDMA/DDR.
- *   - `CompiledLoopNode` / `CompiledConditionalNode` -> autonomous
- *     `RP1_OP_LOOP` / branch packets when the whole body lowers to the FPGA,
- *     or a split Authority/Follower rendezvous when a peer (e.g. CPU) queue
- *     drives the control decision.
- *   - `CompiledSignalNode` / `CompiledWaitNode` -> cross-queue signal/wait
- *     rendezvous over host-visible BAR signal slots.
- *   - `CompiledBridgeOpNode` -> data movement via the registered bridge.
- *   - Barrier bits are allocated per reset domain; bit 31 of the lifecycle
- *     bucket is reserved for the trailing sentinel `RP1_OP_SIGNAL` that writes
- *     `kDefaultSentinelValue` into `kDefaultSentinelSlot` once every leaf node
- *     completes.
- *
- * Current limitations — these make `compilePlan()` throw a descriptive
- * diagnostic rather than silently misbehave:
- *   - Top-level `CompiledBoundaryNode`s are not yet supported (boundaries are
- *     only handled inside loop/conditional child DGraphs).
- *   - A loop body that mixes CPU and FPGA kernels, or an FPGA loop with no
- *     FPGA body nodes, is not yet supported.
- *   - Control-flow outputs published to a device other than the one that
- *     produced them are not yet executable.
+ * Kernel, reprogram, control, rendezvous, transfer, and boundary payloads
+ * lower directly from a QueueProgram. Arguments follow backend ABI metadata;
+ * physical scalar and signal slots come from execution-plan resource leases.
+ * Barrier bit 31 remains reserved for the lifecycle sentinel.
  */
 
 #ifndef VRT_GRAPH_DEVICE_FPGA_DEVICE_HPP
 #define VRT_GRAPH_DEVICE_FPGA_DEVICE_HPP
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -71,7 +47,7 @@
 #include <vrt/buffer.hpp>
 #include <vrt/device.hpp>
 #include <vrt/graph/device/device.hpp>
-#include <vrt/graph/device/dgraph.hpp>
+#include <vrt/graph/device/fpga/rp1_program.hpp>
 #include <vrt/graph/device/fpga/control_lowering.hpp>
 #include <vrt/graph/device/fpga/rp1_bar_window.hpp>
 #include <vrt/graph/device/fpga/rp1_submitter.hpp>
@@ -106,8 +82,8 @@ using FpgaKernelLocationLookup =
     std::function<FpgaKernelLocation(const std::string& kernel_name)>;
 
 /**
- * @brief Sentinel slot/value used by the trailing SIGNAL node in every
- *        compiled FPGA plan.
+ * @brief Sentinel slot/value used by the trailing SIGNAL packet in every
+ *        lowered RP1 image.
  */
 constexpr std::uint32_t kDefaultSentinelSlot  = RP1_MAX_SIGNALS - 1u;
 constexpr std::uint32_t kDefaultSentinelValue = 0xD1A1D0DDu;
@@ -123,17 +99,25 @@ class FpgaDevicePlan;
  * @brief IDevice backend that targets the RP1 command processor.
  *
  * Construction is light-weight; nothing is sent over the BAR until the
- * first compiled plan calls `launch()`.  Multiple plans built by the
+ * first lowered executable calls `launch()`. Multiple executables built by the
  * same `FpgaDevice` share a single `Rp1Submitter`, so kernel
  * submissions are serialised across the device by construction.
  *
- * Buffer arguments use the RP1-visible DDR window as a staging arena.
- * Kernel arguments are packed as all scalar inputs first, followed by
- * 64-bit DDR addresses for `IOTypeMap::inputs`,
- * `IOTypeMap::outputs`, and then each RW buffer pair's input and
- * output addresses in declaration order.
+ * Scheduled queues first become typed `Rp1Command` programs. Finalization
+ * allocates barriers and chooses a mainline or autonomous-control image;
+ * launch patches scalar values, buffer addresses, and staged PDI addresses.
+ *
+ * Buffer arguments use region-aware HBM/DDR storage when metadata and a
+ * staging device are available, with an RP1 BAR-arena fallback. Arguments are
+ * packed as input scalars, input/output buffer addresses, then each RW pair's
+ * shared pointer, using exact system_map register offsets when available.
+ *
+ * Execution and signal resources are leased until hardware is known idle.
+ * An indeterminate timeout poisons the device and quarantines live allocations
+ * rather than allowing firmware-visible addresses to be reused.
  */
-class FpgaDevice : public IDevice {
+class FpgaDevice : public IDevice,
+                   public std::enable_shared_from_this<FpgaDevice> {
    public:
     FpgaDevice(std::string                       id,
                std::shared_ptr<fpga::Rp1BarWindow> window,
@@ -159,8 +143,11 @@ class FpgaDevice : public IDevice {
     DeviceCapabilities compilerCapabilities() const override;
     CapabilityDecision evaluateControlCapability(
         const ControlCapabilityRequest& request) const override;
-    std::unique_ptr<IDeviceResourceLease> leaseRendezvousResources(
-        const std::vector<RendezvousId>& logical) override;
+    std::unique_ptr<IDeviceExecutionLease> leaseExecution() override;
+    std::unique_ptr<IDeviceResourceLease> leaseResources(
+        const std::vector<RendezvousId>& rendezvous,
+        const std::vector<ScalarResourceId>& scalars) override;
+    std::shared_ptr<IDeviceResourceAccess> resourceAccess() const override;
 
     std::optional<std::string> resolveMemoryRegion(
         const KernelDescriptor& kernel, const std::string& portName) const override;
@@ -169,7 +156,19 @@ class FpgaDevice : public IDevice {
         BufferType type, const std::string& sourceRegion,
         const std::string& targetRegion) override;
 
-    std::unique_ptr<IDevicePlan> compilePlan(const DGraph& dg) override;
+    std::unique_ptr<IBackendExecutable> lowerQueue(
+        const BackendLoweringContext& context) override;
+    std::unique_ptr<IBackendExecutable> compileProgram(
+        const Rp1QueueProgram& program);
+
+    /**
+     * @brief Project a direct RP1 queue program into its packet image.
+     *
+     * Intended for backend characterization and offline inspection; launch
+     * uses the same lowering path through compileProgram().
+     */
+    fpga::Rp1GraphImage projectProgram(
+        const Rp1QueueProgram& program);
 
     // ---- BAR-backed buffer accessors (also used by CPU↔FPGA bridges) --
 
@@ -201,13 +200,6 @@ class FpgaDevice : public IDevice {
      */
     bool hasBuffer(const std::string& bufferName) const;
 
-    // ---- BAR-backed scalar accessors (also used by scalar bridges) ----
-
-    /// Scalar signal slots are 32-bit RP1 values. Wider FPGA output scalars are
-    /// rejected during plan compilation until the protocol grows a multi-slot read.
-    void setInputScalar(const std::string& scalarKey, std::uint64_t bits);
-    std::uint64_t getOutputScalar(const std::string& scalarKey) const;
-
     // ---- FpgaDevice-specific configuration --------------------------
 
     /// Index of the signal slot the auto-generated sentinel SIGNAL node
@@ -223,6 +215,17 @@ class FpgaDevice : public IDevice {
     /// Default per-plan wait timeout used by @c FpgaDevicePlan::wait().
     void                       setWaitTimeout(std::chrono::milliseconds t);
     std::chrono::milliseconds  waitTimeout() const noexcept { return waitTimeout_; }
+
+    /**
+     * @brief True when an indeterminate RP1 timeout requires device recovery.
+     *
+     * A poisoned device rejects reuse and retains its execution/resources for
+     * process lifetime so live firmware cannot observe freed allocations.
+     */
+    bool executionPoisoned() const noexcept {
+        return executionPoisoned_.load(std::memory_order_acquire) ||
+               (submitter_ && submitter_->poisoned());
+    }
 
     /// Stable 1-based numeric id for @p imageId within this device's vbin
     /// spec, used to populate the RP1 expected-image guard fields on
@@ -250,6 +253,12 @@ class FpgaDevice : public IDevice {
     friend class FpgaDevicePlan;
     friend class FpgaRendezvousLease;
 
+    /**
+     * @brief Canonical backing shared by every alias of a graph buffer.
+     *
+     * `mem` selects region-aware HBM/DDR storage; a null `mem` selects the
+     * RP1 BAR arena at `offset`. Capacity may exceed the current logical size.
+     */
     struct BufferRecord {
         std::uint32_t offset = 0;     ///< Window-relative byte offset (BAR mode).
         std::size_t   size = 0;       ///< Logical bytes currently valid.
@@ -261,8 +270,14 @@ class FpgaDevice : public IDevice {
         std::shared_ptr<::vrt::Buffer<std::uint8_t>> mem;
     };
 
+    /**
+     * @brief Cached QDMA staging for a PDI_LOAD physical address.
+     *
+     * Plans retain an additional launch pin through completion; poisoned
+     * launches transfer that pin to process-lifetime quarantine.
+     */
     struct StagedPdiRecord {
-        std::unique_ptr<::vrt::Buffer<std::uint8_t>> buffer;
+        std::shared_ptr<::vrt::Buffer<std::uint8_t>> buffer;
         std::uint64_t                                physAddr = 0;
         std::size_t                                  size = 0;
     };
@@ -281,12 +296,16 @@ class FpgaDevice : public IDevice {
     /// in device memory when @ref bufferRegion_ has @p key and a staging device
     /// is configured; otherwise carves space from the BAR-window arena.
     BufferRecord ensureBufferByKey(const std::string& key, BufferType type,
-                                   std::size_t sizeBytes);
-    std::uint64_t bufferDeviceAddress(const GraphBuffer& buffer, std::size_t sizeBytes);
-    /// Walk a DGraph's kernel buffer bindings and record each bound buffer's
+                                   std::size_t sizeBytes,
+                                   const std::shared_ptr<::vrt::Device>&
+                                       stagingDevice);
+    std::uint64_t bufferDeviceAddress(
+        const GraphBuffer& buffer, std::size_t sizeBytes,
+        std::shared_ptr<::vrt::Buffer<std::uint8_t>>& pin);
+    /// Walk an RP1 queue program's kernel bindings and record each buffer's
     /// m_axi memory region into @ref bufferRegion_ (keyed by scoped buffer
     /// name) so later allocation lands in the region the kernel can reach.
-    void populateBufferRegions(const DGraph& dg);
+    void populateBufferRegions(const Rp1QueueProgram& program);
     FpgaKernelLocation resolveKernelLocation(const KernelDescriptor& kernel) const;
     /// Maps each functional-arg name to its AXI-Lite register byte offset
     /// (from the system_map of the active/declared image).  Returns an empty
@@ -316,12 +335,24 @@ class FpgaDevice : public IDevice {
     /// port), in which case the caller falls back to the BAR-window arena.
     std::optional<::vrt::MemoryConfig> resolveBufferRegion(
         const KernelDescriptor& kernel, const std::string& portName) const;
-    std::uint64_t stagePdiBytes(const std::string& cacheKey,
-                                const std::vector<std::uint8_t>& bytes);
-    std::uint64_t stagePdiFile(const std::string& pdiPath);
+    std::uint64_t stagePdiBytes(
+        const std::string& cacheKey,
+        const std::vector<std::uint8_t>& bytes,
+        std::shared_ptr<::vrt::Buffer<std::uint8_t>>& pin);
+    std::uint64_t stagePdiFile(
+        const std::string& pdiPath,
+        std::shared_ptr<::vrt::Buffer<std::uint8_t>>& pin);
     void setActiveImage(std::string imageId);
+    void markActiveImageUnknown();
     std::string activeImageId() const;
+    std::shared_ptr<FpgaDevice> sharedSelf();
+    void requireExecutionUsable(const char* method) const;
+    void poisonExecution() noexcept;
+    void quarantineLaunchPins(
+        std::vector<std::shared_ptr<::vrt::Buffer<std::uint8_t>>> bufferPins,
+        std::vector<std::shared_ptr<::vrt::Buffer<std::uint8_t>>> pdiPins);
 
+    // Device identity, packet transport, and lifecycle sentinel.
     std::string                            id_;
     std::shared_ptr<fpga::Rp1BarWindow>    window_;
     FpgaKernelLocationLookup               lookup_;
@@ -329,21 +360,37 @@ class FpgaDevice : public IDevice {
     std::shared_ptr<fpga::Rp1Submitter>    submitter_;
     std::uint32_t                          sentinelSlot_  = kDefaultSentinelSlot;
     std::uint32_t                          sentinelValue_ = kDefaultSentinelValue;
+    bool                                   sentinelConfigLocked_ = false;
     std::chrono::milliseconds              waitTimeout_   = kDefaultFpgaWaitTimeout;
+    std::atomic_bool                       executionLeased_{false};
+    std::atomic_bool                       executionPoisoned_{false};
 
+    // Canonical storage, aliases, and pre-resolved HBM/DDR placement.
     mutable std::mutex                     bufferMutex_;
     std::map<std::string, BufferRecord>    buffers_;
     std::map<std::string, std::string>      bufferAliases_;
     std::map<std::string, ::vrt::MemoryConfig> bufferRegion_;
     std::uint32_t                          nextBufferOffset_ = 0;
+
+    // One RP1 signal namespace shared by rendezvous and scalar resources.
     mutable std::mutex                     scalarMutex_;
     fpga::SignalSlotAllocator              scalarSlotAlloc_;
-    std::map<std::string, std::uint32_t>    scalarSlots_;
+
+    // PDI cache and the VRT device used for DDR/QDMA staging.
     mutable std::mutex                     pdiMutex_;
     std::shared_ptr<::vrt::Device>          pdiStagingDevice_;
     std::map<std::string, StagedPdiRecord>  stagedPdis_;
+
+    // Host image state updated only from reconciled PDI_LOAD completions.
     mutable std::mutex                     imageMutex_;
     std::string                            activeImageId_;
+
+    // Pins retained when RP1 may still own an indeterminate submission.
+    mutable std::mutex                     quarantineMutex_;
+    std::vector<std::shared_ptr<::vrt::Buffer<std::uint8_t>>>
+        quarantinedBufferPins_;
+    std::vector<std::shared_ptr<::vrt::Buffer<std::uint8_t>>>
+        quarantinedPdiPins_;
 };
 
 }  // namespace vrt::graph

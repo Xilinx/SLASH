@@ -36,36 +36,86 @@
 
 namespace vrt::graph {
 
+namespace detail {
+namespace {
+thread_local bool backendWorkerActive = false;
+}
+
+BackendWorkerScope::BackendWorkerScope() noexcept
+    : previous_(backendWorkerActive) {
+    backendWorkerActive = true;
+}
+
+BackendWorkerScope::~BackendWorkerScope() {
+    backendWorkerActive = previous_;
+}
+
+bool BackendWorkerScope::active() noexcept {
+    return backendWorkerActive;
+}
+
+}  // namespace detail
+
 namespace {
 
 std::mutex defaultLeaseMutex;
 std::map<const IDevice*, std::set<std::uint32_t>> defaultLeaseSlots;
 
+class DefaultExecutionLease final : public IDeviceExecutionLease {};
+
+class ExclusiveExecutionLease final : public IDeviceExecutionLease {
+   public:
+    explicit ExclusiveExecutionLease(std::atomic_bool& leased)
+        : leased_(&leased) {}
+
+    ~ExclusiveExecutionLease() override {
+        leased_->store(false, std::memory_order_release);
+    }
+
+   private:
+    std::atomic_bool* leased_;
+};
+
 class DefaultResourceLease : public IDeviceResourceLease {
    public:
     DefaultResourceLease(
         const IDevice* device,
-        std::map<RendezvousId, std::uint32_t> resources)
-        : device_(device), resources_(std::move(resources)) {}
+        std::map<RendezvousId, BackendResourceId> rendezvous,
+        std::map<ScalarResourceId, BackendScalarId> scalars)
+        : device_(device),
+          rendezvous_(std::move(rendezvous)),
+          scalars_(std::move(scalars)) {}
 
     ~DefaultResourceLease() override {
         std::lock_guard<std::mutex> lock(defaultLeaseMutex);
         auto state = defaultLeaseSlots.find(device_);
         if (state == defaultLeaseSlots.end()) return;
-        for (const auto& [logical, physical] : resources_) {
+        for (const auto& [logical, physical] : rendezvous_) {
             (void)logical;
-            state->second.erase(physical);
+            state->second.erase(
+                static_cast<std::uint32_t>(physical.value()));
+        }
+        for (const auto& [logical, physical] : scalars_) {
+            (void)logical;
+            state->second.erase(
+                static_cast<std::uint32_t>(physical.value()));
         }
     }
 
-    std::uint32_t physicalIndex(
+    BackendResourceId rendezvousResource(
         RendezvousId logical) const override {
-        return resources_.at(logical);
+        return rendezvous_.at(logical);
+    }
+
+    BackendScalarId scalarResource(
+        ScalarResourceId logical) const override {
+        return scalars_.at(logical);
     }
 
    private:
-    const IDevice*                           device_ = nullptr;
-    std::map<RendezvousId, std::uint32_t> resources_;
+    const IDevice* device_ = nullptr;
+    std::map<RendezvousId, BackendResourceId> rendezvous_;
+    std::map<ScalarResourceId, BackendScalarId> scalars_;
 };
 
 }  // namespace
@@ -147,20 +197,53 @@ CapabilityDecision IDevice::evaluateControlCapability(
             : "device does not support autonomous control");
 }
 
+std::unique_ptr<IDeviceExecutionLease> IDevice::leaseExecution() {
+    return std::make_unique<DefaultExecutionLease>();
+}
+
+std::unique_ptr<IDeviceExecutionLease>
+IDevice::tryAcquireExclusiveExecutionLease(std::atomic_bool& leased) {
+    bool expected = false;
+    if (!leased.compare_exchange_strong(
+            expected, true, std::memory_order_acquire,
+            std::memory_order_relaxed)) {
+        return nullptr;
+    }
+    try {
+        return std::make_unique<ExclusiveExecutionLease>(leased);
+    } catch (...) {
+        leased.store(false, std::memory_order_release);
+        throw;
+    }
+}
+
 std::unique_ptr<IDeviceResourceLease>
-IDevice::leaseRendezvousResources(
-    const std::vector<RendezvousId>& logical) {
-    std::map<RendezvousId, std::uint32_t> resources;
+IDevice::leaseResources(
+    const std::vector<RendezvousId>& rendezvous,
+    const std::vector<ScalarResourceId>& scalars) {
+    std::map<RendezvousId, BackendResourceId> rendezvousResources;
+    std::map<ScalarResourceId, BackendScalarId> scalarResources;
     std::lock_guard<std::mutex> lock(defaultLeaseMutex);
     auto& used = defaultLeaseSlots[this];
-    for (RendezvousId id : logical) {
+    for (RendezvousId id : rendezvous) {
         std::uint32_t physical = 0;
         while (used.count(physical) != 0) ++physical;
         used.insert(physical);
-        resources[id] = physical;
+        rendezvousResources[id] = BackendResourceId(physical);
+    }
+    for (ScalarResourceId id : scalars) {
+        std::uint32_t physical = 0;
+        while (used.count(physical) != 0) ++physical;
+        used.insert(physical);
+        scalarResources[id] = BackendScalarId(physical);
     }
     return std::make_unique<DefaultResourceLease>(
-        this, std::move(resources));
+        this, std::move(rendezvousResources),
+        std::move(scalarResources));
+}
+
+std::shared_ptr<IDeviceResourceAccess> IDevice::resourceAccess() const {
+    return nullptr;
 }
 
 DeviceCapabilityCatalog DeviceCapabilityCatalog::fromDevices(

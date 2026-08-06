@@ -20,7 +20,7 @@
 
 /**
  * @file control_node.hpp
- * @brief Authored control-flow op variants stored inside a GraphRegion.
+ * @brief Authored control-flow op variants stored inside a detail::AuthoringRegion.
  */
 
 #ifndef VRT_GRAPH_CONTROL_CONTROL_NODE_HPP
@@ -36,13 +36,15 @@
 #include <vector>
 
 #include <vrt/graph/control/condition.hpp>
-#include <vrt/graph/node/io_map.hpp>
+#include <vrt/graph/detail/port_bindings.hpp>
 #include <vrt/graph/node/io_type_map.hpp>
 #include <vrt/graph/node/kernel_descriptor.hpp>
 
 namespace vrt::graph {
 
-class GraphRegion;
+namespace detail {
+class AuthoringRegion;
+}
 
 /**
  * @brief Which side of a child-region boundary an import/export node models.
@@ -85,7 +87,7 @@ struct BoundaryMappings {
 };
 
 /**
- * @brief Authored kernel dispatch stored in a GraphRegion.
+ * @brief Authored kernel dispatch stored in a detail::AuthoringRegion.
  */
 struct KernelOp {
     /** Stable authored operation id. */
@@ -95,7 +97,7 @@ struct KernelOp {
     /** Target device id, matching IDevice::id(). */
     std::string device;
     /** Concrete graph-token bindings for this dispatch. */
-    IOMap ioMap;
+    detail::PortBindings ioMap;
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
@@ -103,7 +105,8 @@ struct KernelOp {
 /**
  * @brief User-authored request to load an FPGA image before later dispatches.
  */
-struct ReprogramSpec {
+namespace detail {
+struct ReprogramRecord {
     /** User-facing image id registered on the FPGA device. */
     std::string imageId;
     /** PDI file path to stage and load. */
@@ -115,9 +118,10 @@ struct ReprogramSpec {
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
+}  // namespace detail
 
 /**
- * @brief Authored reprogram op stored in a GraphRegion.
+ * @brief Authored reprogram op stored in a detail::AuthoringRegion.
  */
 struct ReprogramOp {
     /** Stable authored operation id. */
@@ -133,7 +137,7 @@ struct ReprogramOp {
     /** Reserved signature slot; reprogram ops currently have no user ports. */
     IOTypeMap ioType;
     /** Reserved binding slot; reprogram ops currently have no user ports. */
-    IOMap ioMap;
+    detail::PortBindings ioMap;
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
@@ -153,7 +157,7 @@ struct SubgraphBoundaryOp {
     /** Reserved signature slot; concrete mappings carry the boundary I/O. */
     IOTypeMap ioType;
     /** Reserved binding slot; concrete mappings carry the boundary I/O. */
-    IOMap ioMap;
+    detail::PortBindings ioMap;
     /** Scalar token copies performed by this boundary. */
     std::vector<ScalarBoundaryMapping> scalarMappings;
     /** Buffer token copies performed by this boundary. */
@@ -185,11 +189,12 @@ struct ControlOutputPlacementHints {
 /**
  * @brief User-authored loop region specification.
  */
-struct LoopSpec {
+namespace detail {
+struct LoopRecord {
     /** Typed boundary ports exposed by the loop. */
     IOTypeMap ioType;
     /** Parent-scope inputs, outputs, and inouts bound to loop ports. */
-    IOMap ioMap;
+    detail::PortBindings ioMap;
     /** Fixed-count or while-condition loop form. */
     LoopKind kind = LoopKind::FixedCount;
     /** Required when @ref kind is LoopKind::FixedCount. */
@@ -197,7 +202,7 @@ struct LoopSpec {
     /** Required when @ref kind is LoopKind::WhileCondition. */
     std::optional<Condition> condition;
     /** Child region containing the loop body. */
-    std::shared_ptr<GraphRegion> body;
+    std::shared_ptr<detail::AuthoringRegion> body;
     /** Optional backend placement hints for loop outputs. */
     ControlOutputPlacementHints outputPlacement;
     /** Preferred-authoring port names mapped to parent output tokens. */
@@ -205,9 +210,10 @@ struct LoopSpec {
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
+}  // namespace detail
 
 /**
- * @brief Authored loop op stored in a GraphRegion.
+ * @brief Authored loop op stored in a detail::AuthoringRegion.
  */
 struct LoopOp {
     /** Stable authored operation id. */
@@ -215,7 +221,7 @@ struct LoopOp {
     /** Typed boundary ports exposed by the loop. */
     IOTypeMap ioType;
     /** Parent-scope inputs, outputs, and inouts bound to loop ports. */
-    IOMap ioMap;
+    detail::PortBindings ioMap;
     /** Fixed-count or while-condition loop form. */
     LoopKind kind = LoopKind::FixedCount;
     /** Fixed iteration count, if this is a fixed-count loop. */
@@ -223,7 +229,7 @@ struct LoopOp {
     /** Loop predicate, if this is a while-condition loop. */
     std::optional<Condition> condition;
     /** Child region containing the loop body. */
-    std::shared_ptr<GraphRegion> body;
+    std::shared_ptr<detail::AuthoringRegion> body;
     /** Optional backend placement hints for loop outputs. */
     ControlOutputPlacementHints outputPlacement;
     /** Preferred-authoring port names mapped to parent output tokens. */
@@ -235,17 +241,18 @@ struct LoopOp {
 /**
  * @brief User-authored two-branch conditional region specification.
  */
-struct ConditionalSpec {
+namespace detail {
+struct ConditionalRecord {
     /** Typed boundary ports exposed by the conditional. */
     IOTypeMap ioType;
     /** Parent-scope inputs, outputs, and inouts bound to conditional ports. */
-    IOMap ioMap;
-    /// Required for ConditionalSpec; GraphRegion::addConditional throws if absent.
+    detail::PortBindings ioMap;
+    /// Required for ConditionalRecord; detail::AuthoringRegion::addConditional throws if absent.
     std::optional<Condition> condition;
     /** Branch region executed when @ref condition evaluates true. */
-    std::shared_ptr<GraphRegion> thenRegion;
+    std::shared_ptr<detail::AuthoringRegion> thenRegion;
     /** Branch region executed when @ref condition evaluates false. */
-    std::shared_ptr<GraphRegion> elseRegion;
+    std::shared_ptr<detail::AuthoringRegion> elseRegion;
     /** Optional backend placement hints for conditional outputs. */
     ControlOutputPlacementHints outputPlacement;
     /** Preferred-authoring port names mapped to parent output tokens. */
@@ -253,9 +260,19 @@ struct ConditionalSpec {
     /** Explicit side-effect ordering dependencies by authored op id. */
     std::vector<std::string> afterOps;
 };
+}  // namespace detail
+
+/** @brief Public raw reprogram specification. */
+using ReprogramSpec = detail::ReprogramRecord;
+
+/** @brief Public raw loop-region specification. */
+using LoopSpec = detail::LoopRecord;
+
+/** @brief Public raw conditional-region specification. */
+using ConditionalSpec = detail::ConditionalRecord;
 
 /**
- * @brief Authored conditional op stored in a GraphRegion.
+ * @brief Authored conditional op stored in a detail::AuthoringRegion.
  */
 struct ConditionalOp {
     /** Stable authored operation id. */
@@ -263,13 +280,13 @@ struct ConditionalOp {
     /** Typed boundary ports exposed by the conditional. */
     IOTypeMap ioType;
     /** Parent-scope inputs, outputs, and inouts bound to conditional ports. */
-    IOMap ioMap;
+    detail::PortBindings ioMap;
     /** Predicate evaluated to choose between @ref thenRegion and @ref elseRegion. */
     Condition condition = Condition::alwaysFalse();
     /** Branch region executed when @ref condition evaluates true. */
-    std::shared_ptr<GraphRegion> thenRegion;
+    std::shared_ptr<detail::AuthoringRegion> thenRegion;
     /** Branch region executed when @ref condition evaluates false. */
-    std::shared_ptr<GraphRegion> elseRegion;
+    std::shared_ptr<detail::AuthoringRegion> elseRegion;
     /** Optional backend placement hints for conditional outputs. */
     ControlOutputPlacementHints outputPlacement;
     /** Preferred-authoring port names mapped to parent output tokens. */

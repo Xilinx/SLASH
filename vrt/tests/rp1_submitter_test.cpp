@@ -35,6 +35,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <future>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -76,12 +78,14 @@ struct DdrView {
 /// magic.  The submitter's first ensureReady() will then succeed.
 void primeAsReady(DdrView ddr) {
     auto& c   = ddr.ctrl();
-    c.magic     = RP1_CTRL_MAGIC;
-    c.version   = RP1_PROTOCOL_VERSION;
-    c.rp1_state = RP1_STATE_READY;
-    c.heartbeat = 1;
+    c.version      = RP1_PROTOCOL_VERSION;
+    c.capabilities = RP1_REQUIRED_CAPABILITIES;
+    c.pdi_ipi_platform_id = 0x51454D55u;
+    c.rp1_state    = RP1_STATE_READY;
+    c.heartbeat    = 1;
     c.graph_seq      = 0;
     c.graph_done_seq = 0;
+    c.magic          = RP1_CTRL_MAGIC;
 }
 
 /// Worker that emulates the RP1 flat scanner just enough to make
@@ -102,20 +106,56 @@ class FakeRp1 {
 
     std::uint32_t graphsRun() const noexcept { return graphs_run_.load(); }
 
+    void setCqResult(std::uint32_t status, std::uint32_t detail) {
+        cq_status_.store(status, std::memory_order_relaxed);
+        cq_detail_.store(detail, std::memory_order_relaxed);
+    }
+
+    void setTerminalResult(std::uint32_t state, std::uint32_t code,
+                           std::uint32_t node, std::uint32_t detail,
+                           std::uint32_t aux,
+                           std::chrono::milliseconds publicationDelay = {}) {
+        terminal_state_.store(state, std::memory_order_relaxed);
+        terminal_code_.store(code, std::memory_order_relaxed);
+        terminal_node_.store(node, std::memory_order_relaxed);
+        terminal_detail_.store(detail, std::memory_order_relaxed);
+        terminal_aux_.store(aux, std::memory_order_relaxed);
+        terminal_delay_ms_.store(
+            static_cast<std::uint32_t>(publicationDelay.count()),
+            std::memory_order_relaxed);
+    }
+
    private:
     void run() {
-        std::uint32_t last_done = 0;
         while (!stop_.load(std::memory_order_relaxed)) {
             auto& c = ddr_.ctrl();
             const std::uint32_t seq      = c.graph_seq;
             const std::uint32_t done_seq = c.graph_done_seq;
-            if (seq > done_seq && seq > last_done) {
+            if (seq != done_seq &&
+                c.rp1_state != RP1_STATE_ERROR &&
+                c.rp1_state != RP1_STATE_HALTED) {
                 processGraph();
                 std::atomic_thread_fence(std::memory_order_seq_cst);
-                c.rp1_state      = RP1_STATE_READY;
+                const std::uint32_t terminal =
+                    terminal_state_.load(std::memory_order_relaxed);
+                c.rp1_error_code =
+                    terminal_code_.load(std::memory_order_relaxed);
+                c.terminal_error_node =
+                    terminal_node_.load(std::memory_order_relaxed);
+                c.terminal_error_detail =
+                    terminal_detail_.load(std::memory_order_relaxed);
+                c.terminal_error_aux =
+                    terminal_aux_.load(std::memory_order_relaxed);
+                c.rp1_state = terminal;
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+                const std::uint32_t delay =
+                    terminal_delay_ms_.load(std::memory_order_relaxed);
+                if (delay != 0u) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(delay));
+                }
                 c.graph_done_seq = seq;
                 std::atomic_thread_fence(std::memory_order_seq_cst);
-                last_done = seq;
                 graphs_run_.fetch_add(1);
             }
             // Cheap heartbeat tick.
@@ -158,11 +198,20 @@ class FakeRp1 {
                     break;
             }
             if ((n.flags & RP1_FLAG_SILENT) == 0u) {
+                while (!stop_.load(std::memory_order_relaxed) &&
+                       c.cq_write_idx - c.cq_read_idx == cq_size) {
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(50));
+                }
+                if (stop_.load(std::memory_order_relaxed))
+                    return;
                 const std::uint32_t idx = c.cq_write_idx & (cq_size - 1u);
                 rp1_cq_entry_t& entry = ddr_.cq()[idx];
                 entry.node_index   = i;
-                entry.status       = RP1_CQ_OK;
-                entry.error_detail = 0;
+                entry.status       =
+                    cq_status_.load(std::memory_order_relaxed);
+                entry.error_detail =
+                    cq_detail_.load(std::memory_order_relaxed);
                 entry.timestamp    = 1000u + i;
                 ++c.cq_write_idx;
             }
@@ -194,6 +243,15 @@ class FakeRp1 {
     std::uint32_t           cq_cap_;
     std::atomic<bool>       stop_{false};
     std::atomic<std::uint32_t> graphs_run_{0};
+    std::atomic<std::uint32_t> cq_status_{RP1_CQ_OK};
+    std::atomic<std::uint32_t> cq_detail_{0};
+    std::atomic<std::uint32_t> terminal_state_{RP1_STATE_READY};
+    std::atomic<std::uint32_t> terminal_code_{0};
+    std::atomic<std::uint32_t> terminal_node_{
+        RP1_TERMINAL_ERROR_NODE_NONE};
+    std::atomic<std::uint32_t> terminal_detail_{0};
+    std::atomic<std::uint32_t> terminal_aux_{0};
+    std::atomic<std::uint32_t> terminal_delay_ms_{0};
     std::thread             thread_;
 };
 
@@ -267,6 +325,16 @@ class SubmitterFixture : public ::testing::Test {
         return img;
     }
 
+    Rp1GraphImage makeNopGraph(std::size_t count) {
+        Rp1GraphImage img;
+        img.nodes.resize(count);
+        for (auto& node : img.nodes) {
+            node.opcode = RP1_OP_NOP;
+            node.status = RP1_NODE_PENDING;
+        }
+        return img;
+    }
+
     std::vector<std::byte>        backing_;
     DdrView                       ddr_{};
     std::unique_ptr<Rp1BarWindow> window_;
@@ -303,6 +371,28 @@ TEST_F(SubmitterFixture, MissingMagicTimesOut) {
                  Rp1TimeoutError);
 }
 
+TEST_F(SubmitterFixture, WrongProtocolVersionIsRejected) {
+    ddr_.ctrl().version = RP1_PROTOCOL_VERSION - 1u;
+    EXPECT_THROW(
+        submitter_->ensureReady(std::chrono::milliseconds(20)),
+        std::runtime_error);
+}
+
+TEST_F(SubmitterFixture, MissingRequiredCapabilityIsRejected) {
+    ddr_.ctrl().capabilities &=
+        ~RP1_CAP_LATCHED_TERMINAL_ERRORS;
+    EXPECT_THROW(
+        submitter_->ensureReady(std::chrono::milliseconds(20)),
+        std::runtime_error);
+}
+
+TEST_F(SubmitterFixture, UnknownPlatformConfigIsRejected) {
+    ddr_.ctrl().pdi_ipi_platform_id = RP1_PDI_IPI_PLATFORM_UNKNOWN;
+    EXPECT_THROW(
+        submitter_->ensureReady(std::chrono::milliseconds(20)),
+        std::runtime_error);
+}
+
 TEST_F(SubmitterFixture, EmptyGraphIsRejected) {
     submitter_->ensureReady(std::chrono::milliseconds(500));
     Rp1GraphImage img;
@@ -321,6 +411,119 @@ TEST_F(SubmitterFixture, SignalGraphRoundTrip) {
     ASSERT_EQ(cq.size(), 1u);
     EXPECT_EQ(cq[0].node_index, 0u);
     EXPECT_EQ(cq[0].status, static_cast<std::uint32_t>(RP1_CQ_OK));
+    EXPECT_EQ(submitter_->readSignalValue(2), 0xDEADBEEFu);
+}
+
+TEST_F(SubmitterFixture, NonOkCompletionEntryIsRejected) {
+    rp1_->setCqResult(RP1_CQ_TIMEOUT, 0x1234u);
+    submitter_->submitAndWait(
+        makeSignalGraph(2, 0xDEADBEEFu),
+        std::chrono::milliseconds(500));
+
+    EXPECT_THROW(
+        {
+            auto cq = submitter_->drainCq();
+            (void)cq;
+        },
+        std::runtime_error);
+    EXPECT_EQ(ddr_.ctrl().cq_read_idx, ddr_.ctrl().cq_write_idx);
+}
+
+TEST_F(SubmitterFixture, RawDrainPreservesLaterErrorEvidence) {
+    rp1_->setCqResult(RP1_CQ_TIMEOUT, 0x1234u);
+    submitter_->submitAndWait(
+        makeSignalGraph(2, 0xDEADBEEFu),
+        std::chrono::milliseconds(500));
+
+    const auto cq = submitter_->drainCqRaw();
+    ASSERT_EQ(cq.size(), 1u);
+    EXPECT_EQ(
+        cq.front().status,
+        static_cast<std::uint32_t>(RP1_CQ_TIMEOUT));
+    EXPECT_EQ(cq.front().error_detail, 0x1234u);
+    EXPECT_THROW(
+        Rp1Submitter::validateCq(cq),
+        std::runtime_error);
+}
+
+TEST_F(SubmitterFixture, CompletionQueueOverflowIsRejected) {
+    submitter_->submitAndWait(
+        makeSignalGraph(2, 0xDEADBEEFu),
+        std::chrono::milliseconds(500));
+    ddr_.ctrl().cq_write_idx =
+        ddr_.ctrl().cq_write_idx +
+        vrt::graph::fpga::kDefaultCqSize + 1u;
+
+    EXPECT_THROW(
+        {
+            auto cq = submitter_->drainCq();
+            (void)cq;
+        },
+        std::runtime_error);
+}
+
+TEST_F(SubmitterFixture, CompletionQueueBackpressureDrainsIncrementally) {
+    rp1_.reset();
+    submitter_.reset();
+    primeAsReady(ddr_);
+    submitter_ = std::make_unique<Rp1Submitter>(*window_, 4u);
+    rp1_ = std::make_unique<FakeRp1>(ddr_, 4u);
+
+    rp1_cq_entry_t& canary = ddr_.cq()[4];
+    canary.node_index = 0xA1A2A3A4u;
+    canary.status = 0xB1B2B3B4u;
+    canary.error_detail = 0xC1C2C3C4u;
+    canary.timestamp = 0xD1D2D3D4u;
+
+    submitter_->submitAndWait(
+        makeNopGraph(20), std::chrono::milliseconds(500));
+    const auto cq = submitter_->drainCq();
+
+    ASSERT_EQ(cq.size(), 20u);
+    for (std::uint32_t i = 0; i < cq.size(); ++i) {
+        EXPECT_EQ(cq[i].node_index, i);
+    }
+    EXPECT_EQ(canary.node_index, 0xA1A2A3A4u);
+    EXPECT_EQ(canary.status, 0xB1B2B3B4u);
+    EXPECT_EQ(canary.error_detail, 0xC1C2C3C4u);
+    EXPECT_EQ(canary.timestamp, 0xD1D2D3D4u);
+}
+
+TEST_F(SubmitterFixture, CompletionQueueCursorWrapIsLossless) {
+    rp1_.reset();
+    submitter_.reset();
+    ddr_.ctrl().cq_write_idx =
+        std::numeric_limits<std::uint32_t>::max() - 1u;
+    ddr_.ctrl().cq_read_idx = ddr_.ctrl().cq_write_idx;
+    submitter_ = std::make_unique<Rp1Submitter>(*window_, 4u);
+    rp1_ = std::make_unique<FakeRp1>(ddr_, 4u);
+
+    submitter_->submitAndWait(
+        makeNopGraph(3), std::chrono::milliseconds(500));
+    const auto cq = submitter_->drainCq();
+
+    ASSERT_EQ(cq.size(), 3u);
+    EXPECT_EQ(cq[0].node_index, 0u);
+    EXPECT_EQ(cq[1].node_index, 1u);
+    EXPECT_EQ(cq[2].node_index, 2u);
+    EXPECT_EQ(ddr_.ctrl().cq_write_idx, 1u);
+    EXPECT_EQ(ddr_.ctrl().cq_read_idx, 1u);
+}
+
+TEST_F(SubmitterFixture, GraphSequenceWrapUsesEquality) {
+    rp1_.reset();
+    submitter_.reset();
+    ddr_.ctrl().graph_seq = std::numeric_limits<std::uint32_t>::max();
+    ddr_.ctrl().graph_done_seq = ddr_.ctrl().graph_seq;
+    submitter_ = std::make_unique<Rp1Submitter>(*window_);
+    rp1_ = std::make_unique<FakeRp1>(
+        ddr_, vrt::graph::fpga::kDefaultCqSize);
+
+    submitter_->submitAndWait(
+        makeNopGraph(1), std::chrono::milliseconds(500));
+    EXPECT_EQ(submitter_->lastGraphSeq(), 0u);
+    EXPECT_EQ(ddr_.ctrl().graph_done_seq, 0u);
+    EXPECT_EQ(submitter_->drainCq().size(), 1u);
 }
 
 TEST_F(SubmitterFixture, TraceDisabledByDefaultDrainsEmpty) {
@@ -398,7 +601,8 @@ TEST_F(SubmitterFixture, SilentNodesDoNotProduceCqEntries) {
     EXPECT_EQ(ddr_.signals()[1].value, 0xCAFEBABE);
 }
 
-TEST_F(SubmitterFixture, BackToBackSubmissionsAccumulateGraphSeq) {
+TEST_F(SubmitterFixture,
+       BackToBackSubmissionsRetainOnlyLatestCqEvidence) {
     submitter_->submitAndWait(makeSignalGraph(0, 0x1111), std::chrono::milliseconds(500));
     submitter_->submitAndWait(makeSignalGraph(0, 0x2222), std::chrono::milliseconds(500));
     submitter_->submitAndWait(makeSignalGraph(0, 0x3333), std::chrono::milliseconds(500));
@@ -408,10 +612,8 @@ TEST_F(SubmitterFixture, BackToBackSubmissionsAccumulateGraphSeq) {
     EXPECT_EQ(ddr_.signals()[0].value, 0x3333u);
 
     auto cq = submitter_->drainCq();
-    // We drained nothing between submissions, so all three entries are
-    // now visible.  Slot writes overwrite each other, but each
-    // submission emits its own CQ entry.
-    EXPECT_EQ(cq.size(), 1u) << "third graph only; drainCq advances last_cq_start_";
+    ASSERT_EQ(cq.size(), 1u);
+    EXPECT_EQ(cq.front().node_index, 0u);
 }
 
 TEST_F(SubmitterFixture, ArgBufferIsStaged) {
@@ -427,7 +629,7 @@ TEST_F(SubmitterFixture, ArgBufferIsStaged) {
     n.barrier_set_bucket   = 0;
     n.payload.kernel_dispatch.kernel_base_addr  = 0x88010000u;
     n.payload.kernel_dispatch.arg_buffer_offset = 0;
-    n.payload.kernel_dispatch.arg_count         = 4;
+    n.payload.kernel_dispatch.arg_count         = 2;
 
     submitter_->submitAndWait(img, std::chrono::milliseconds(500));
 
@@ -457,11 +659,116 @@ TEST_F(SubmitterFixture, FirmwareErrorIsSurfacedAfterSubmission) {
                  std::runtime_error);
 }
 
+TEST_F(SubmitterFixture, TerminalErrorSurfacesBeforeDoneWithFullRecord) {
+    rp1_->setCqResult(RP1_CQ_ERROR, 0x80002001u);
+    rp1_->setTerminalResult(
+        RP1_STATE_ERROR,
+        RP1_ERR_PDI_FAILED | RP1_ERR_RECOVERY_REQUIRED,
+        0u, 0x80002001u, 0xDEADCAFEu,
+        std::chrono::milliseconds(200));
+
+    try {
+        submitter_->submitAndWait(
+            makeSignalGraph(2, 0xDEADBEEFu),
+            std::chrono::milliseconds(500));
+        FAIL() << "terminal firmware error was not surfaced";
+    } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("node=0"), std::string::npos);
+        EXPECT_NE(message.find("detail=2147491841"), std::string::npos);
+        EXPECT_NE(message.find("aux=3735931646"), std::string::npos);
+        EXPECT_NE(message.find("recovery_required=1"), std::string::npos);
+    }
+
+    EXPECT_EQ(ddr_.ctrl().rp1_state, RP1_STATE_ERROR);
+    EXPECT_NE(ddr_.ctrl().graph_done_seq, submitter_->lastGraphSeq())
+        << "host should observe terminal state before delayed done publication";
+    const auto evidence = submitter_->drainCqRaw();
+    ASSERT_EQ(evidence.size(), 1u);
+    EXPECT_EQ(evidence[0].error_detail, 0x80002001u);
+
+    EXPECT_THROW(
+        submitter_->submitAndWait(
+            makeSignalGraph(2, 1u), std::chrono::milliseconds(50)),
+        std::runtime_error);
+    EXPECT_EQ(rp1_->graphsRun(), 0u)
+        << "terminal fake firmware has not accepted a later graph";
+}
+
 TEST_F(SubmitterFixture, NoCompletionTimesOut) {
     rp1_.reset();  // no worker → graph_done_seq stays put forever
     auto img = makeSignalGraph(/*slot*/ 0, /*value*/ 0xDEADBEEFu);
     EXPECT_THROW(submitter_->submitAndWait(img, std::chrono::milliseconds(30)),
                  Rp1TimeoutError);
+    EXPECT_TRUE(submitter_->poisoned());
+}
+
+TEST_F(SubmitterFixture, OverlappingSubmissionIsRejected) {
+    rp1_.reset();
+    auto first = std::async(
+        std::launch::async, [&] {
+            submitter_->submitAndWait(
+                makeSignalGraph(0, 0x1111u),
+                std::chrono::milliseconds(200));
+        });
+
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::seconds(1);
+    while (submitter_->submissionSerial() == 0u &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    ASSERT_EQ(submitter_->submissionSerial(), 1u);
+
+    try {
+        submitter_->submitAndWait(
+            makeSignalGraph(0, 0x2222u),
+            std::chrono::milliseconds(30));
+        FAIL() << "overlapping submission was accepted";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(
+            std::string(error.what()).find(
+                "submission is already active"),
+            std::string::npos);
+    }
+    EXPECT_THROW(first.get(), Rp1TimeoutError);
+}
+
+TEST_F(SubmitterFixture,
+       LateCqAfterTimeoutCannotCrossSubmissionBoundary) {
+    rp1_.reset();
+    auto first =
+        makeSignalGraph(/*slot*/ 0, /*value*/ 0x1111u);
+    EXPECT_THROW(
+        submitter_->submitAndWait(
+            first, std::chrono::milliseconds(30)),
+        Rp1TimeoutError);
+    ASSERT_TRUE(submitter_->poisoned());
+    const std::uint32_t timedOutSequence =
+        ddr_.ctrl().graph_seq;
+
+    const std::uint32_t write = ddr_.ctrl().cq_write_idx;
+    rp1_cq_entry_t& late =
+        ddr_.cq()[write &
+                  (vrt::graph::fpga::kDefaultCqSize - 1u)];
+    late.node_index = 0u;
+    late.status = RP1_CQ_OK;
+    late.error_detail = 0xA11CEu;
+    late.timestamp = 1234u;
+    ddr_.ctrl().cq_write_idx = write + 1u;
+
+    EXPECT_THROW(
+        submitter_->submitAndWait(
+            makeSignalGraph(0, 0x2222u),
+            std::chrono::milliseconds(30)),
+        std::runtime_error);
+    EXPECT_EQ(ddr_.ctrl().graph_seq, timedOutSequence)
+        << "a poisoned submitter must not ring a second doorbell";
+
+    const auto evidence = submitter_->drainCqRaw();
+    ASSERT_EQ(evidence.size(), 1u);
+    EXPECT_EQ(evidence.front().error_detail, 0xA11CEu);
 }
 
 TEST_F(SubmitterFixture, TooManyNodesIsRejected) {
@@ -475,10 +782,86 @@ TEST_F(SubmitterFixture, TooManyNodesIsRejected) {
     EXPECT_THROW(submitter_->submitAndWait(img), std::logic_error);
 }
 
+TEST_F(SubmitterFixture, EverySignalBearingPacketValidatesItsSlot) {
+    const std::vector<std::uint16_t> opcodes = {
+        RP1_OP_SIGNAL,
+        RP1_OP_WAIT,
+        RP1_OP_SCALAR_READ,
+        RP1_OP_SCALAR_COPY,
+        RP1_OP_LOOP,
+        RP1_OP_COND,
+    };
+    for (std::uint16_t opcode : opcodes) {
+        Rp1GraphImage img;
+        img.nodes.resize(1);
+        rp1_node_t& node = img.nodes[0];
+        node.opcode = opcode;
+        node.status = RP1_NODE_PENDING;
+        switch (opcode) {
+            case RP1_OP_SIGNAL:
+                node.payload.signal.target_slot = RP1_MAX_SIGNALS;
+                node.payload.signal.operation = RP1_SIGOP_SET;
+                break;
+            case RP1_OP_WAIT:
+                node.payload.wait.condition_signal = RP1_MAX_SIGNALS;
+                node.payload.wait.condition_op = RP1_COP_EQ;
+                break;
+            case RP1_OP_SCALAR_READ:
+                node.payload.scalar_read.target_slot = RP1_MAX_SIGNALS;
+                break;
+            case RP1_OP_SCALAR_COPY:
+                node.payload.scalar_copy.source_slot = RP1_MAX_SIGNALS;
+                break;
+            case RP1_OP_LOOP:
+                node.payload.loop.condition_signal = RP1_MAX_SIGNALS;
+                node.payload.loop.condition_op = RP1_COP_EQ;
+                node.payload.loop.body_start = 0;
+                node.payload.loop.body_end = 0;
+                break;
+            case RP1_OP_COND:
+                node.payload.cond.condition_signal = RP1_MAX_SIGNALS;
+                node.payload.cond.condition_op = RP1_COP_EQ;
+                node.payload.cond.body_start = 1;
+                node.payload.cond.body_end = 0;
+                node.payload.cond.bucket_clear_start = 1;
+                node.payload.cond.bucket_clear_end = 0;
+                break;
+            default:
+                break;
+        }
+        EXPECT_THROW(
+            submitter_->submitAndWait(
+                img, std::chrono::milliseconds(50)),
+            std::logic_error)
+            << "opcode " << opcode;
+    }
+    EXPECT_EQ(rp1_->graphsRun(), 0u);
+}
+
+TEST_F(SubmitterFixture, SilentPdiIsRejectedWithoutActivation) {
+    Rp1GraphImage img;
+    img.nodes.resize(1);
+    img.nodes[0].opcode = RP1_OP_PDI_LOAD;
+    img.nodes[0].flags = RP1_FLAG_SILENT;
+    img.nodes[0].status = RP1_NODE_PENDING;
+    EXPECT_THROW(submitter_->submitAndWait(img), std::logic_error);
+    EXPECT_EQ(rp1_->graphsRun(), 0u);
+}
+
+TEST_F(SubmitterFixture, OversizeCqOverrideIsRejected) {
+    auto img = makeSignalGraph(0, 1u);
+    img.cq_size_override = RP1_MAX_CQ_ENTRIES * 2u;
+    EXPECT_THROW(submitter_->submitAndWait(img), std::invalid_argument);
+}
+
 TEST(Rp1SubmitterCtor, NonPowerOfTwoCqSizeIsRejected) {
     std::vector<std::byte> backing(kBarSize, std::byte{0});
     Rp1BarWindow window(backing.data(), backing.size(), kWindowOff);
     EXPECT_THROW(Rp1Submitter(window, /*cq_size*/ 5), std::invalid_argument);
     EXPECT_THROW(Rp1Submitter(window, /*cq_size*/ 0), std::invalid_argument);
+    EXPECT_THROW(
+        Rp1Submitter(window, /*cq_size*/ RP1_MAX_CQ_ENTRIES + 1u),
+        std::invalid_argument);
     EXPECT_NO_THROW(Rp1Submitter(window, /*cq_size*/ 64));
+    EXPECT_NO_THROW(Rp1Submitter(window, RP1_MAX_CQ_ENTRIES));
 }

@@ -41,7 +41,7 @@ popd
 # Step RP1 FW
 RP1_DIR=$(realpath ./../../fw/RP1)
 pushd ${RP1_DIR}
-  ./build_rp1.sh
+  XSA="$XSA" bash ./build-rp1.sh
   cp -a ${RP1_DIR}/build/rp1.elf ${HW_DIR}/build
 popd
 

@@ -18,99 +18,20 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-/**
- * @file semantic_plan.hpp
- * @brief Deterministic, implementation-neutral projection of compiled DGraphs.
- */
-
+/** @file semantic_plan.hpp @brief Stable scheduled-placement projection. */
 #ifndef VRT_GRAPH_SEMANTIC_PLAN_HPP
 #define VRT_GRAPH_SEMANTIC_PLAN_HPP
 
-#include <map>
 #include <string>
 #include <vector>
 
 namespace vrt::graph {
-
-struct DGraph;
 class ScheduledGraph;
 
-/**
- * @brief One normalized operation in a queue.
- *
- * Generated names, raw scope ids, closure identity, and physical RP1 slot
- * numbers are canonicalized by normalizeSemanticPlan().
- */
-struct SemanticNode {
-    std::string                        id;
-    std::string                        kind;
-    std::vector<std::string>           dependsOn;
-    std::map<std::string, std::string> attributes;
-
-    bool operator==(const SemanticNode& other) const {
-        return id == other.id && kind == other.kind &&
-               dependsOn == other.dependsOn && attributes == other.attributes;
-    }
-};
-
-/**
- * @brief Ordered operations assigned to one device queue.
- */
-struct SemanticQueue {
-    std::string               deviceId;
-    std::vector<SemanticNode> nodes;
-
-    bool operator==(const SemanticQueue& other) const {
-        return deviceId == other.deviceId && nodes == other.nodes;
-    }
-};
-
-/**
- * @brief Normalized region and its recursively nested control regions.
- */
-struct SemanticRegion {
-    std::string                 path;
-    std::string                 parentNode;
-    std::string                 role;
-    std::vector<SemanticQueue>  queues;
-    std::vector<SemanticRegion> children;
-
-    bool operator==(const SemanticRegion& other) const {
-        return path == other.path && parentNode == other.parentNode &&
-               role == other.role && queues == other.queues &&
-               children == other.children;
-    }
-};
-
-/**
- * @brief Deterministic semantic projection used by compiler differential tests.
- */
-struct SemanticPlan {
-    SemanticRegion root;
-
-    bool operator==(const SemanticPlan& other) const {
-        return root == other.root;
-    }
-
-    bool operator!=(const SemanticPlan& other) const {
-        return !(*this == other);
-    }
-
-    /**
-     * @brief Return a stable textual form suitable for diagnostics and fixtures.
-     */
-    std::string toString() const;
-};
-
-/**
- * @brief Normalize per-device DGraphs into a deterministic semantic plan.
- */
-SemanticPlan normalizeSemanticPlan(const std::vector<DGraph>& dgraphs);
-
 struct SemanticOperationPlacement {
-    std::string              regionPath;
-    std::string              authoredId;
-    std::string              kind;
+    std::string regionPath;
+    std::string authoredId;
+    std::string kind;
     std::vector<std::string> devices;
 
     bool operator==(const SemanticOperationPlacement& other) const {
@@ -126,16 +47,11 @@ struct SemanticPlacementPlan {
     bool operator==(const SemanticPlacementPlan& other) const {
         return operations == other.operations;
     }
-
     bool operator!=(const SemanticPlacementPlan& other) const {
         return !(*this == other);
     }
-
     std::string toString() const;
 };
-
-SemanticPlacementPlan normalizeOperationPlacements(
-    const std::vector<DGraph>& dgraphs);
 
 SemanticPlacementPlan normalizeOperationPlacements(
     const ScheduledGraph& scheduled);

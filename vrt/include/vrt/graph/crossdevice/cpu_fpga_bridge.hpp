@@ -57,6 +57,11 @@ class CpuFpgaBridge : public IBridge {
                                 uint64_t            sizeHintBytes,
                                 const std::string&  producerNodeId,
                                 const std::string&  consumerNodeId) override;
+    BridgeStepPair makeTransfer(
+        IDevice& src, IDevice& dst, const GraphBuffer& source,
+        const GraphBuffer& destination, uint64_t sizeHintBytes,
+        const std::string& producerNodeId,
+        const std::string& consumerNodeId) override;
 
     BridgeStepPair makeScalarTransfer(IDevice&            src,
                                       IDevice&            dst,
@@ -64,12 +69,29 @@ class CpuFpgaBridge : public IBridge {
                                       const std::string&  producerNodeId,
                                       const std::string&  consumerNodeId) override;
 
+    BridgeStepPair makeScalarTransfer(
+        IDevice& src, IDevice& dst, const std::string& scalarKey,
+        const std::string& producerNodeId,
+        const std::string& consumerNodeId,
+        const BridgeRuntimeContext& runtime) override;
+    BridgeStepPair makeScalarTransfer(
+        IDevice& src, IDevice& dst, const std::string& sourceKey,
+        const std::string& destinationKey,
+        const std::string& producerNodeId,
+        const std::string& consumerNodeId,
+        const BridgeRuntimeContext& runtime) override;
+
     BridgeStepPair makeBarrier(IDevice&            src,
                                 IDevice&            dst,
                                 const std::string&  producerNodeId,
                                 const std::string&  consumerNodeId) override;
 
    private:
+    /*
+     * Operations borrow pool_ and endpoint pointers. Execution destroys queue
+     * executables before its bridge pins, and releases device pins later, so
+     * both the pool and endpoints outlive every captured operation callback.
+     */
     SemaphorePool pool_;
     CpuDevice*    srcCpu_ = nullptr;
     FpgaDevice*   srcFpga_ = nullptr;

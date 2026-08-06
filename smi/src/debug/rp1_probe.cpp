@@ -45,6 +45,11 @@
 
 namespace {
 
+/*
+ * A distinctive nonzero sentinel distinguishes this probe's SIGNAL side effect
+ * from reset state or stale zeroes; the matching CQ record proves the scanner,
+ * rather than an unrelated writer, completed the node.
+ */
 constexpr uint32_t kSignalMagic     = 0xDEADBEEFu;
 constexpr uint32_t kBringupCqSize   = 64u;
 constexpr uint32_t kBringupTraceSize = 64u;
@@ -110,6 +115,11 @@ const char* traceEventStr(uint32_t e) {
     }
 }
 
+void printCapability(const char* name, uint32_t capabilities, uint32_t mask) {
+    std::printf("    %-29s = %s\n", name,
+                (capabilities & mask) != 0u ? "yes" : "no");
+}
+
 void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  magic            = 0x%08x (%s)\n",
                 c->magic, (c->magic == RP1_CTRL_MAGIC) ? "SQR1" : "BAD");
@@ -124,13 +134,54 @@ void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  trace_base       = 0x%08x_%08x\n", c->trace_base_hi, c->trace_base_lo);
     std::printf("  trace_size       = %u\n",   c->trace_size);
     std::printf("  trace_write_idx  = %u\n",   c->trace_write_idx);
+    const uint32_t capabilities = c->capabilities;
+    std::printf("  capabilities     = 0x%08x\n", capabilities);
+    printCapability("platform_pdi_ipi_config", capabilities,
+                    RP1_CAP_PLATFORM_PDI_IPI_CONFIG);
+    printCapability("pmu_cycle_timeouts", capabilities,
+                    RP1_CAP_PMU_CYCLE_TIMEOUTS);
+    printCapability("cq_flow_control", capabilities,
+                    RP1_CAP_CQ_FLOW_CONTROL);
+    printCapability("structured_pdi_response", capabilities,
+                    RP1_CAP_STRUCTURED_PDI_RESPONSE);
+    printCapability("latched_terminal_errors", capabilities,
+                    RP1_CAP_LATCHED_TERMINAL_ERRORS);
+    std::printf("  required_capabilities = 0x%08x\n",
+                static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES));
+    std::printf("  missing_capabilities  = 0x%08x\n",
+                static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES) & ~capabilities);
+    std::printf("  pdi_ipi_platform_id   = 0x%08x (generated platform/IPI identity)\n",
+                c->pdi_ipi_platform_id);
     std::printf("  graph_seq        = %u\n",   c->graph_seq);
     std::printf("  graph_done_seq   = %u\n",   c->graph_done_seq);
     std::printf("  cq_write_idx     = %u\n",   c->cq_write_idx);
+    std::printf("  cq_read_idx      = %u\n",   c->cq_read_idx);
     std::printf("  rp1_state        = %u (%s)\n", c->rp1_state, stateStr(c->rp1_state));
     std::printf("  rp1_error_code   = %u\n",   c->rp1_error_code);
     std::printf("  rp1_current_node = %u\n",   c->rp1_current_node);
+    if (c->terminal_error_node == RP1_TERMINAL_ERROR_NODE_NONE) {
+        std::printf("  terminal_error_node   = 0x%08x (none)\n",
+                    c->terminal_error_node);
+    } else {
+        std::printf("  terminal_error_node   = %u\n", c->terminal_error_node);
+    }
+    std::printf("  terminal_error_detail = 0x%08x\n", c->terminal_error_detail);
+    std::printf("  terminal_error_aux    = 0x%08x\n", c->terminal_error_aux);
     std::printf("  heartbeat        = %u\n",   c->heartbeat);
+}
+
+/*
+ * A usable probe requires four independent publications: magic, exact protocol
+ * layout, every mandatory behavior bit, and a non-unknown IPI identity.
+ * Keep this stricter than a heartbeat-only liveness check.
+ */
+bool contractCompatible(volatile rp1_ctrl_t* c) {
+    const uint32_t missing =
+        static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES) & ~c->capabilities;
+    return c->magic == RP1_CTRL_MAGIC &&
+           c->version == RP1_PROTOCOL_VERSION &&
+           missing == 0u &&
+           c->pdi_ipi_platform_id != RP1_PDI_IPI_PLATFORM_UNKNOWN;
 }
 
 /// Minimum BAR length needed to reach the bring-up trace ring.
@@ -201,7 +252,12 @@ bool checkFirmwareReady(volatile rp1_ctrl_t* c) {
     return true;
 }
 
-/// Poll graph_done_seq until it reaches @p wantSeq.  Returns 0 on success,
+/*
+ * The wait has three exits: exact sequence completion, a live-but-slow absolute
+ * timeout, or a heartbeat stall indicating the R5 stopped making progress.
+ * Separating the latter gives bring-up users an actionable recovery path.
+ */
+/// Poll graph_done_seq until it equals @p wantSeq. Returns 0 on success,
 /// -1 on timeout, -2 on a detected firmware hang (heartbeat stuck).
 int waitForSeq(volatile rp1_ctrl_t* c, uint32_t wantSeq) {
     using clock = std::chrono::steady_clock;
@@ -209,7 +265,7 @@ int waitForSeq(volatile rp1_ctrl_t* c, uint32_t wantSeq) {
     uint32_t   lastHb      = c->heartbeat;
     auto       lastHbTick  = clock::now();
 
-    while (c->graph_done_seq < wantSeq) {
+    while (c->graph_done_seq != wantSeq) {
         const auto now = clock::now();
 
         const uint32_t hb = c->heartbeat;
@@ -235,6 +291,10 @@ int waitForSeq(volatile rp1_ctrl_t* c, uint32_t wantSeq) {
     return 0;
 }
 
+/*
+ * Validate enough BAR length for every probe subregion up front. A short map
+ * must fail before pointer arithmetic can turn a diagnostic into a bad access.
+ */
 /// Open, validate, and map the RP1 BAR window for @p options.
 ///
 /// The returned BarFile borrows nothing from @p session beyond the mapping
@@ -268,6 +328,11 @@ vrtd::BarFile openRp1Bar(const Rp1Probe::Options& options,
 
 } // namespace
 
+/*
+ * dump is intentionally passive: snapshot the published contract, then sample
+ * heartbeat over a stall window. It diagnoses compatibility and liveness
+ * without changing sequence, CQ ownership, or graph storage.
+ */
 int Rp1Probe::dump(const Options& options) {
     const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
 
@@ -281,6 +346,9 @@ int Rp1Probe::dump(const Options& options) {
                 static_cast<unsigned long>(RP1_CTRL_PHYS_ADDR),
                 options.bar, static_cast<unsigned long>(ctrlOffset));
     printCtrl(c);
+    const bool compatible = contractCompatible(c);
+    std::printf("Protocol contract: %s\n",
+                compatible ? "compatible" : "INCOMPATIBLE");
 
     const uint32_t hb1 = c->heartbeat;
     std::this_thread::sleep_for(kStallWindow);
@@ -290,9 +358,21 @@ int Rp1Probe::dump(const Options& options) {
     } else {
         std::printf("Liveness: heartbeat unchanged at %u (stuck or not loaded)\n", hb1);
     }
+    if (!compatible) {
+        std::fprintf(stderr,
+                     "ERROR: RP1 must report magic SQR1, protocol v%u, all required "
+                     "capabilities, and a non-zero platform/IPI identity.\n",
+                     static_cast<uint32_t>(RP1_PROTOCOL_VERSION));
+        return 1;
+    }
     return 0;
 }
 
+/*
+ * ping bypasses the graph runtime with one SIGNAL packet. It validates the BAR
+ * layout, startup contract, doorbell ordering, scanner side effect, exact
+ * sequence publication, and CQ evidence as one minimal transaction.
+ */
 int Rp1Probe::ping(const Options& options) {
     const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
 
@@ -305,13 +385,21 @@ int Rp1Probe::ping(const Options& options) {
     volatile uint8_t* basePtr = base.get();
     auto* c     = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
     auto* nodes = reinterpret_cast<volatile rp1_node_t*>(basePtr + RP1_DEFAULT_NODE_ARRAY_OFFSET);
+    auto* cq    = reinterpret_cast<volatile rp1_cq_entry_t*>(basePtr + RP1_DEFAULT_CQ_OFFSET);
     auto* sigs  = reinterpret_cast<volatile rp1_signal_slot_t*>(basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
 
+    /*
+     * Phase 1: require idle READY firmware before claiming shared node, signal,
+     * and CQ storage; the probe cannot safely coexist with another graph.
+     */
     if (!checkFirmwareReady(c)) {
         return 1;
     }
 
-    // One-node SIGNAL graph: slot 0 <- kSignalMagic.
+    /*
+     * Phase 2: stage one SIGNAL node and clear its sentinel before publishing
+     * a sequence change, so success cannot be inherited from an older run.
+     */
     barZero(&nodes[0], sizeof(rp1_node_t));
     nodeSetHeader(&nodes[0], RP1_OP_SIGNAL, /*await*/ 0, 0x0, /*set*/ 0, 0x1);
     nodes[0].payload.signal.target_slot = 0;
@@ -322,8 +410,14 @@ int Rp1Probe::ping(const Options& options) {
     sigs[0].last_writer_node = 0;
     sigs[0].flags            = 0;
 
+    const uint32_t cqStart = c->cq_write_idx;
+    c->cq_read_idx = cqStart;
     programCtrl(c, /*nodeCount*/ 1);
 
+    /*
+     * Phase 3: fences make all staged bytes visible before graph_seq, the sole
+     * firmware doorbell and the exact completion value the probe awaits.
+     */
     const uint32_t wantSeq = c->graph_done_seq + 1;
     std::atomic_thread_fence(std::memory_order_seq_cst);
     c->graph_seq = wantSeq;
@@ -335,6 +429,10 @@ int Rp1Probe::ping(const Options& options) {
         return 1;
     }
 
+    /*
+     * Phase 4: completion publishes the signal and one CQ record. Validate both
+     * before releasing the monotonic consumer cursor back to firmware.
+     */
     std::atomic_thread_fence(std::memory_order_seq_cst);
     const uint32_t observed = sigs[0].value;
     if (observed != kSignalMagic) {
@@ -344,11 +442,33 @@ int Rp1Probe::ping(const Options& options) {
         return 1;
     }
 
+    const uint32_t cqEnd = c->cq_write_idx;
+    if (cqEnd - cqStart != 1u) {
+        std::fprintf(stderr,
+                     "FAIL: RP1 wrote %u CQ entries for one ping node\n",
+                     cqEnd - cqStart);
+        return 1;
+    }
+    const volatile rp1_cq_entry_t& completion =
+        cq[cqStart % kBringupCqSize];
+    if (completion.node_index != 0u || completion.status != RP1_CQ_OK) {
+        std::fprintf(stderr,
+                     "FAIL: ping CQ node=%u status=%u detail=0x%08x\n",
+                     completion.node_index, completion.status,
+                     completion.error_detail);
+        return 1;
+    }
+    c->cq_read_idx = cqEnd;
     std::printf("PASS: slot[0] = 0x%08x, cq_write_idx=%u, state=%s\n",
                 observed, c->cq_write_idx, stateStr(c->rp1_state));
     return 0;
 }
 
+/*
+ * trace-ping repeats the sentinel transaction with tracing enabled, then reads
+ * CQ and trace as rings. The two streams prove externally visible completion
+ * and the firmware's internal event ordering.
+ */
 int Rp1Probe::tracePing(const Options& options) {
     const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
 
@@ -363,10 +483,18 @@ int Rp1Probe::tracePing(const Options& options) {
     auto* sigs   = reinterpret_cast<volatile rp1_signal_slot_t*>(basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
     auto* traces = reinterpret_cast<volatile rp1_trace_entry_t*>(basePtr + RP1_DEFAULT_TRACE_OFFSET);
 
+    /*
+     * Phase 1: claim the shared bring-up regions only from READY. A trace probe
+     * cannot safely merge records with an in-flight submission.
+     */
     if (!checkFirmwareReady(c)) {
         return 1;
     }
 
+    /*
+     * Phase 2: clear node, sentinel, and trace storage before enabling trace;
+     * this makes every observed record attributable to the new sequence.
+     */
     barZero(&nodes[0], sizeof(rp1_node_t));
     nodeSetHeader(&nodes[0], RP1_OP_SIGNAL, /*await*/ 0, 0x0, /*set*/ 0, 0x1);
     nodes[0].payload.signal.target_slot = 0;
@@ -381,7 +509,12 @@ int Rp1Probe::tracePing(const Options& options) {
     programCtrl(c, /*nodeCount*/ 1);
     c->trace_enable = 1;
 
+    /*
+     * Phase 3: synchronize CQ ownership, publish the sequence doorbell, and
+     * wait exactly while heartbeat distinguishes timeout from a firmware hang.
+     */
     const uint32_t cqStart = c->cq_write_idx;
+    c->cq_read_idx = cqStart;
     const uint32_t wantSeq = c->graph_done_seq + 1;
     std::atomic_thread_fence(std::memory_order_seq_cst);
     c->graph_seq = wantSeq;
@@ -393,6 +526,10 @@ int Rp1Probe::tracePing(const Options& options) {
         return 1;
     }
 
+    /*
+     * Phase 4: validate the sentinel, drain CQ, then reconstruct the trace's
+     * chronological suffix when its producer count has wrapped the ring.
+     */
     std::atomic_thread_fence(std::memory_order_seq_cst);
     const uint32_t observed = sigs[0].value;
     if (observed != kSignalMagic) {

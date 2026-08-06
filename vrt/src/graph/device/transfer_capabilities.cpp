@@ -45,6 +45,9 @@ TransferCapabilityCatalog TransferCapabilityCatalog::fromGraph(
         if (capabilities.supportsMemoryRegionCopies) {
             result.memoryRegionCopyDevices_.insert(id);
         }
+        if (capabilities.ownsRendezvousNamespace) {
+            result.rendezvousOwners_.insert(id);
+        }
     }
 
     for (const auto& [sourceName, source] : devices) {
@@ -69,6 +72,11 @@ bool TransferCapabilityCatalog::hasDirect(
 bool TransferCapabilityCatalog::supportsMemoryRegionCopies(
     DeviceId device) const {
     return memoryRegionCopyDevices_.count(std::move(device)) != 0;
+}
+
+bool TransferCapabilityCatalog::ownsRendezvousNamespace(
+    DeviceId device) const {
+    return rendezvousOwners_.count(std::move(device)) != 0;
 }
 
 }  // namespace vrt::graph

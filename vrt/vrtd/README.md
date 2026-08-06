@@ -11,7 +11,7 @@ descriptors out-of-band via `SCM_RIGHTS`.
 vrtd sits between the client libraries and the low-level driver stack:
 
 ```
-vrt::graph::FpgaDevice  (RP1 graph backend; lowers vrt::graph::DGraph
+vrt::graph::FpgaDevice  (RP1 graph backend; lowers scheduled queues
                          into rp1_node_t packets and submits via BAR4)
 libvrt                 (graph authoring, host-driven kernels, buffers)
 libvrtdpp              (C++ RAII wrapper)
@@ -27,7 +27,7 @@ The `vrt::graph::FpgaDevice` consumer (in `vrt/include/vrt/graph/`)
 talks to vrtd via libvrtdpp's `vrtd::BarFile`, mmaps BAR4 + 64 MiB,
 and submits RP1 command-processor graphs through the shared protocol
 header at `driver/libslash/include/slash/uapi/rp1_protocol.h`. See
-`linker/resources/aved/rp1/ARCHITECTURE.md` §H for the layering and
+`linker/slashkit/resources/aved/rp1/ARCHITECTURE.md` §H for the layering and
 `examples/graph/00_multi_image_pipeline` for an end-to-end demo.
 
 Key responsibilities:

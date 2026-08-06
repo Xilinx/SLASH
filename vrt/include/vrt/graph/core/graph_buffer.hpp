@@ -26,13 +26,11 @@
  * element-type, size-scalar) tuple that the compiler resolves to a concrete,
  * device-allocated buffer in a compiled execution.
  *
- * Tokens are minted via the public factory:
- *   GraphBuffer::make(BufferType, std::string, scopeId)
+ * Tokens are minted by the compiler-private factory:
+ *   ::vrt::graph::detail::makeGraphBuffer(BufferType, std::string, scopeId)
  *
- * In normal usage the factory is invoked indirectly through:
- *  - Graph::inputBuffer()         — graph-level inputs (no producer node)
- *  - IOMap::bindOutput()    — output of a kernel node
- *  - IOMap::bindInout()        — output side of an in-place RW operation
+ * Public typed authoring methods invoke this factory indirectly; applications
+ * cannot forge GraphBuffer tokens.
  *
  * A default-constructed GraphBuffer is invalid (valid() == false).
  */
@@ -57,33 +55,18 @@ inline std::string scopedBufferKey(uint64_t scopeId, const std::string& name) {
     return "scope:" + std::to_string(scopeId) + ":" + name;
 }
 
+class GraphBuffer;
+
+namespace detail {
+GraphBuffer makeGraphBuffer(
+    BufferType type, std::string name, std::uint64_t scopeId = 0,
+    std::optional<GraphScalar> size = std::nullopt,
+    std::uint64_t graphId = 0);
+}
+
 class GraphBuffer {
    public:
     GraphBuffer() = default;
-
-    /**
-     * @brief Mint a new, valid buffer token.
-     *
-     * @param type  Element type of the buffer.
-     * @param name     Logical name (unique within its scope).  Must be non-empty.
-     * @param scopeId  Graph-region namespace that owns this token.
-     * @param size     U64 graph input scalar used as the symbolic element count.
-     * @throws std::invalid_argument if @p name is empty.
-     */
-    static GraphBuffer make(BufferType type, std::string name, uint64_t scopeId = 0,
-                            std::optional<GraphScalar> size = std::nullopt) {
-        if (name.empty()) {
-            throw std::invalid_argument(
-                "GraphBuffer::make: name must not be empty");
-        }
-        return GraphBuffer(type, std::move(name), scopeId, std::move(size));
-    }
-
-    static GraphBuffer make(BufferType type, std::string name, uint64_t scopeId,
-                            GraphScalar size) {
-        return make(type, std::move(name), scopeId,
-                    std::optional<GraphScalar>(std::move(size)));
-    }
 
     /**
      * @brief Returns the logical name of this buffer (unique within its Graph).
@@ -94,6 +77,11 @@ class GraphBuffer {
      * @brief Returns the graph-region namespace that owns this token.
      */
     uint64_t scopeId() const { return scopeId_; }
+
+    /**
+     * @brief Identity of the Graph that minted this token.
+     */
+    uint64_t graphId() const { return graphId_; }
 
     /**
      * @brief Returns the element type of this buffer.
@@ -134,15 +122,39 @@ class GraphBuffer {
     bool valid() const { return !name_.empty(); }
 
    private:
+    friend GraphBuffer detail::makeGraphBuffer(
+        BufferType, std::string, std::uint64_t,
+        std::optional<GraphScalar>, std::uint64_t);
+
     GraphBuffer(BufferType type, std::string name, uint64_t scopeId,
-                std::optional<GraphScalar> size)
-        : type_(type), name_(std::move(name)), scopeId_(scopeId), size_(std::move(size)) {}
+                std::optional<GraphScalar> size, uint64_t graphId)
+        : type_(type),
+          name_(std::move(name)),
+          scopeId_(scopeId),
+          size_(std::move(size)),
+          graphId_(graphId) {}
 
     BufferType  type_ = BufferType::U8;  // placeholder for default-constructed tokens
     std::string name_;
     uint64_t    scopeId_ = 0;
     std::optional<GraphScalar> size_;
+    uint64_t    graphId_ = 0;
 };
+
+namespace detail {
+
+inline GraphBuffer makeGraphBuffer(
+    BufferType type, std::string name, std::uint64_t scopeId,
+    std::optional<GraphScalar> size, std::uint64_t graphId) {
+    if (name.empty()) {
+        throw std::invalid_argument(
+            "makeGraphBuffer: name must not be empty");
+    }
+    return GraphBuffer(
+        type, std::move(name), scopeId, std::move(size), graphId);
+}
+
+}  // namespace detail
 
 inline std::size_t resolvedBufferElements(
     const GraphBuffer& buffer,

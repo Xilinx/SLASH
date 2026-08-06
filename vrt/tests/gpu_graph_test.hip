@@ -37,6 +37,7 @@
 #include <hip/hip_runtime.h>
 
 #include <vrt/graph/graph.hpp>
+#include "test_support/graph_internal.hpp"
 #include <vrt/graph/crossdevice/bridge.hpp>
 #include <vrt/graph/crossdevice/cpu_gpu_bridge.hpp>
 #include <vrt/graph/device/cpu_device.hpp>
@@ -45,10 +46,9 @@
 #include <vrt/graph/core/graph_buffer.hpp>
 #include <vrt/graph/core/graph_scalar.hpp>
 #include <vrt/graph/core/types.hpp>
-#include <vrt/graph/node/io_map.hpp>
+#include <vrt/graph/detail/port_bindings.hpp>
 #include <vrt/graph/node/io_type_map.hpp>
 #include <vrt/graph/node/kernel_descriptor.hpp>
-#include <vrt/graph/node/compiled_node.hpp>
 
 using namespace vrt::graph;
 
@@ -157,20 +157,20 @@ TEST(GpuGraphTest, SingleGpuKernel) {
         reinterpret_cast<const void*>(&gpu_vadd),
         {"a", "b", "c", "n"}));
 
-    Graph g;
-    g.registerDevice(gpu);
-    GraphScalar n = g.scalarInput<uint64_t>("n");
+    Graph g = detail::GraphTestAccess::make();
+    detail::GraphTestAccess::registerDevice(g, gpu);
+    GraphScalar n = detail::GraphTestAccess::scalarInput<uint64_t>(g, "n");
 
-    GraphBuffer bufA = g.inputBuffer(BufferType::F32, "a");
-    GraphBuffer bufB = g.inputBuffer(BufferType::F32, "b");
+    GraphBuffer bufA = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "a");
+    GraphBuffer bufB = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "b");
 
-    IOMap io;
+    detail::PortBindings io;
     GraphBuffer bufC;
     io.bindInput("a", bufA)
       .bindInput("b", bufB)
       .bindOutput("c", BufferType::F32, bufC)
       .bindInputScalar("n", n);
-    g.addNode(gpuKernel("vadd"), std::move(io), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("vadd"), std::move(io), "gpu:0");
 
     // Provide input data
     std::vector<float> a = {1.0f, 2.0f, 3.0f, 4.0f};
@@ -179,7 +179,7 @@ TEST(GpuGraphTest, SingleGpuKernel) {
     gpu->setInputBuffer("b", b.data(), b.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.writeScalar(n, 4ull);
+    detail::ExecutionTestAccess::writeScalar(exec, n, 4ull);
     exec.run();
 
     // Read output
@@ -209,37 +209,37 @@ TEST(GpuGraphTest, GpuPipeline) {
         reinterpret_cast<const void*>(&gpu_negate),
         {"in", "out", "n"}));
 
-    Graph g;
-    g.registerDevice(gpu);
-    GraphScalar n = g.scalarInput<uint64_t>("n");
+    Graph g = detail::GraphTestAccess::make();
+    detail::GraphTestAccess::registerDevice(g, gpu);
+    GraphScalar n = detail::GraphTestAccess::scalarInput<uint64_t>(g, "n");
 
-    GraphBuffer bufA = g.inputBuffer(BufferType::F32, "a");
-    GraphBuffer bufB = g.inputBuffer(BufferType::F32, "b");
+    GraphBuffer bufA = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "a");
+    GraphBuffer bufB = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "b");
 
     // Node 1: vadd
-    IOMap io1;
+    detail::PortBindings io1;
     GraphBuffer afterAdd;
     io1.bindInput("a", bufA)
        .bindInput("b", bufB)
        .bindOutput("c", BufferType::F32, afterAdd)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("vadd"), std::move(io1), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("vadd"), std::move(io1), "gpu:0");
 
     // Node 2: double
-    IOMap io2;
+    detail::PortBindings io2;
     GraphBuffer afterDbl;
     io2.bindInput("in", afterAdd)
        .bindOutput("out", BufferType::F32, afterDbl)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("dbl"), std::move(io2), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("dbl"), std::move(io2), "gpu:0");
 
     // Node 3: negate
-    IOMap io3;
+    detail::PortBindings io3;
     GraphBuffer afterNeg;
     io3.bindInput("in", afterDbl)
        .bindOutput("out", BufferType::F32, afterNeg)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("neg"), std::move(io3), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("neg"), std::move(io3), "gpu:0");
 
     // Input data
     std::vector<float> a = {1.0f, 2.0f, 3.0f, 4.0f};
@@ -248,7 +248,7 @@ TEST(GpuGraphTest, GpuPipeline) {
     gpu->setInputBuffer("b", b.data(), b.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.writeScalar(n, 4ull);
+    detail::ExecutionTestAccess::writeScalar(exec, n, 4ull);
     exec.run();
 
     // Expected: -((a + b) * 2) = {-22, -44, -66, -88}
@@ -277,36 +277,36 @@ TEST(GpuGraphTest, CpuToGpuCrossDevice) {
         reinterpret_cast<const void*>(&gpu_double),
         {"in", "out", "n"}));
 
-    Graph g;
-    g.registerDevice(cpu);
-    g.registerDevice(gpu);
-    GraphScalar n = g.scalarInput<uint64_t>("n");
-    g.registerBridgeFactory(DeviceType::CPU, DeviceType::GPU, CpuGpuBridgeFactory());
-    g.registerBridgeFactory(DeviceType::GPU, DeviceType::CPU, CpuGpuBridgeFactory());
+    Graph g = detail::GraphTestAccess::make();
+    detail::GraphTestAccess::registerDevice(g, cpu);
+    detail::GraphTestAccess::registerDevice(g, gpu);
+    GraphScalar n = detail::GraphTestAccess::scalarInput<uint64_t>(g, "n");
+    detail::GraphTestAccess::registerBridgeFactory(g, DeviceType::CPU, DeviceType::GPU, CpuGpuBridgeFactory());
+    detail::GraphTestAccess::registerBridgeFactory(g, DeviceType::GPU, DeviceType::CPU, CpuGpuBridgeFactory());
 
-    GraphBuffer input = g.inputBuffer(BufferType::F32, "input");
+    GraphBuffer input = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "input");
 
     // Node 1: CPU add 10
-    IOMap io1;
+    detail::PortBindings io1;
     GraphBuffer afterCpu;
     io1.bindInput("in", input)
        .bindOutput("out", BufferType::F32, afterCpu);
-    g.addNode(cpuKernel("cpu_add"), std::move(io1), "cpu");
+    detail::GraphTestAccess::addNode(g, cpuKernel("cpu_add"), std::move(io1), "cpu");
 
     // Node 2: GPU double
-    IOMap io2;
+    detail::PortBindings io2;
     GraphBuffer afterGpu;
     io2.bindInput("in", afterCpu)
        .bindOutput("out", BufferType::F32, afterGpu)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("gpu_dbl"), std::move(io2), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("gpu_dbl"), std::move(io2), "gpu:0");
 
     // Input data
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
     cpu->setInputBuffer("input", data.data(), data.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.writeScalar(n, 4ull);
+    detail::ExecutionTestAccess::writeScalar(exec, n, 4ull);
     exec.run();
 
     // Expected: (x + 10) * 2 = {22, 24, 26, 28}
@@ -339,52 +339,52 @@ TEST(GpuGraphTest, GpuDiamondDag) {
         reinterpret_cast<const void*>(&gpu_merge),
         {"left", "right", "out", "n"}));
 
-    Graph g;
-    g.registerDevice(gpu);
-    GraphScalar n = g.scalarInput<uint64_t>("n");
+    Graph g = detail::GraphTestAccess::make();
+    detail::GraphTestAccess::registerDevice(g, gpu);
+    GraphScalar n = detail::GraphTestAccess::scalarInput<uint64_t>(g, "n");
 
-    GraphBuffer input = g.inputBuffer(BufferType::F32, "input");
+    GraphBuffer input = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "input");
 
     // Node A: split → left, right
-    IOMap ioA;
+    detail::PortBindings ioA;
     GraphBuffer bufLeft, bufRight;
     ioA.bindInput("in", input)
        .bindOutput("left", BufferType::F32, bufLeft)
        .bindOutput("right", BufferType::F32, bufRight)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("split"), std::move(ioA), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("split"), std::move(ioA), "gpu:0");
 
     // Node B: double(left)
-    IOMap ioB;
+    detail::PortBindings ioB;
     GraphBuffer afterDbl;
     ioB.bindInput("in", bufLeft)
        .bindOutput("out", BufferType::F32, afterDbl)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("dbl"), std::move(ioB), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("dbl"), std::move(ioB), "gpu:0");
 
     // Node C: negate(right)
-    IOMap ioC;
+    detail::PortBindings ioC;
     GraphBuffer afterNeg;
     ioC.bindInput("in", bufRight)
        .bindOutput("out", BufferType::F32, afterNeg)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("neg"), std::move(ioC), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("neg"), std::move(ioC), "gpu:0");
 
     // Node D: merge(afterDbl, afterNeg)
-    IOMap ioD;
+    detail::PortBindings ioD;
     GraphBuffer output;
     ioD.bindInput("left", afterDbl)
        .bindInput("right", afterNeg)
        .bindOutput("out", BufferType::F32, output)
        .bindInputScalar("n", n);
-    g.addNode(gpuKernel("merge"), std::move(ioD), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("merge"), std::move(ioD), "gpu:0");
 
     // Input: {1, 2, 3, 4}
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
     gpu->setInputBuffer("input", data.data(), data.size() * sizeof(float));
 
     auto exec = g.compile();
-    exec.writeScalar(n, 4ull);
+    detail::ExecutionTestAccess::writeScalar(exec, n, 4ull);
     exec.run();
 
     // split:  left = x+1 = {2,3,4,5},  right = x*10 = {10,20,30,40}
@@ -409,17 +409,17 @@ TEST(GpuGraphTest, MissingKernelThrows) {
 
     // Do NOT register any kernels
 
-    Graph g;
-    g.registerDevice(gpu);
-    GraphScalar n = g.scalarInput<uint64_t>("n");
+    Graph g = detail::GraphTestAccess::make();
+    detail::GraphTestAccess::registerDevice(g, gpu);
+    GraphScalar n = detail::GraphTestAccess::scalarInput<uint64_t>(g, "n");
 
-    GraphBuffer input = g.inputBuffer(BufferType::F32, "input");
-    IOMap io;
+    GraphBuffer input = detail::GraphTestAccess::inputBuffer(g, BufferType::F32, "input");
+    detail::PortBindings io;
     GraphBuffer output;
     io.bindInput("in", input)
       .bindOutput("out", BufferType::F32, output)
       .bindInputScalar("n", n);
-    g.addNode(gpuKernel("nonexistent"), std::move(io), "gpu:0");
+    detail::GraphTestAccess::addNode(g, gpuKernel("nonexistent"), std::move(io), "gpu:0");
 
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
     gpu->setInputBuffer("input", data.data(), data.size() * sizeof(float));

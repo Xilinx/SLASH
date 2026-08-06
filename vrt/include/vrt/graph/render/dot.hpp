@@ -18,76 +18,23 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-/**
- * @file dot.hpp
- * @brief Graphviz DOT serialisation for Graph and DGraph.
- *
- * Free functions in `vrt::graph::render` that convert a Graph (or one of its
- * compiled per-device DGraphs) into a Graphviz `.dot` source string.  Edges
- * are derived from IOMap data flow (input/output buffer tokens, RW pairs)
- * and explicit authored `KernelOp::afterOps` ordering constraints.
- */
-
+/** @file dot.hpp @brief Graphviz projections of compiler stage IR. */
 #ifndef VRT_GRAPH_RENDER_DOT_HPP
 #define VRT_GRAPH_RENDER_DOT_HPP
 
 #include <string>
 
 namespace vrt::graph {
-
-class Graph;
-struct DGraph;
 class ResolvedGraph;
 class PlacedGraph;
 class RoutedGraph;
 class ScheduledGraph;
 
 namespace render {
-
-/**
- * @brief Render a full Graph as Graphviz DOT.
- *
- * Authored regions are rendered as nested clusters. Kernel nodes are grouped
- * per-device inside their region; control-flow bodies and branches appear as
- * child clusters. Data dependencies are drawn as solid edges; explicit
- * `afterOps` ordering is drawn as dashed edges.
- */
-std::string renderToDot(const Graph& graph);
-
-/**
- * @brief Render a single per-device DGraph as Graphviz DOT.
- *
- * Only nodes assigned to this device are emitted.  Edges are restricted to
- * pairs both present in the DGraph; cross-device flows are realised as
- * bridge-injected ops inside the device and are not represented at the
- * DGraph level.
- */
-std::string renderToDot(const DGraph& dgraph);
-
-/** @brief Render resolved value/dependency IR as Graphviz DOT. */
 std::string renderToDot(const ResolvedGraph& graph);
-
-/** @brief Render device and memory placement IR as Graphviz DOT. */
 std::string renderToDot(const PlacedGraph& graph);
-
-/** @brief Render declarative transfer routes as Graphviz DOT. */
 std::string renderToDot(const RoutedGraph& graph);
-
-/** @brief Render queue programs and logical rendezvous as Graphviz DOT. */
 std::string renderToDot(const ScheduledGraph& graph);
-
-/**
- * @brief Write `renderToDot(graph)` to @p path.
- * @throws std::runtime_error if the file cannot be opened for writing.
- */
-void writeToDotFile(const Graph& graph, const std::string& path);
-
-/**
- * @brief Write `renderToDot(dgraph)` to @p path.
- * @throws std::runtime_error if the file cannot be opened for writing.
- */
-void writeToDotFile(const DGraph& dgraph, const std::string& path);
-
 }  // namespace render
 }  // namespace vrt::graph
 

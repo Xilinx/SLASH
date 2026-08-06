@@ -20,7 +20,7 @@
 
 /**
  * @file execution_plan.hpp
- * @brief Final compiler output with scheduled and backend programs.
+ * @brief Final compiler output owning direct queue executables and resources.
  */
 
 #ifndef VRT_GRAPH_EXECUTION_PLAN_HPP
@@ -30,42 +30,67 @@
 #include <utility>
 #include <vector>
 
-#include <vrt/graph/backend_program_lowering.hpp>
-#include <vrt/graph/ir/scheduled_graph.hpp>
+#include <vrt/graph/detail/executable_assembler.hpp>
 
 namespace vrt::graph {
 
+/*
+ * ExecutionPlan is a single-use ownership handoff from compilation to
+ * Execution. roots_ contains non-owning pointers into executables_; the
+ * take* methods must move both sides together, along with every runtime pin
+ * and lease needed by those executables.
+ */
 class ExecutionPlan {
    public:
-    ExecutionPlan(std::shared_ptr<const ScheduledGraph> scheduled,
-                  BackendPrograms programs)
-        : scheduled_(std::move(scheduled)),
-          dgraphs_(programs.takeDGraphs()),
-          resources_(programs.takeResources()) {}
+    explicit ExecutionPlan(detail::AssembledExecutables assembled)
+        : devicePins_(assembled.takeDevicePins()),
+          resources_(assembled.takeResources()),
+          runtimeState_(assembled.takeRuntimeState()),
+          io_(assembled.takeIo()),
+          executables_(assembled.takeExecutables()),
+          roots_(assembled.takeRoots()) {}
 
     ExecutionPlan(const ExecutionPlan&) = delete;
     ExecutionPlan& operator=(const ExecutionPlan&) = delete;
     ExecutionPlan(ExecutionPlan&&) noexcept = default;
-    ExecutionPlan& operator=(ExecutionPlan&&) noexcept = default;
-
-    const ScheduledGraph& scheduled() const { return *scheduled_; }
-
-    const std::shared_ptr<const ScheduledGraph>& scheduledPtr() const {
-        return scheduled_;
-    }
-
-    std::vector<DGraph> takeDGraphs() {
-        return std::move(dgraphs_);
-    }
+    ExecutionPlan& operator=(ExecutionPlan&&) = delete;
 
     BackendResourceBindings takeResources() {
         return std::move(resources_);
     }
 
+    std::shared_ptr<BackendRuntimeState> takeRuntimeState() {
+        return std::move(runtimeState_);
+    }
+
+    detail::ExecutionIoMetadata takeIo() {
+        return std::move(io_);
+    }
+
+    std::vector<std::shared_ptr<IDevice>> takeDevicePins() {
+        return std::move(devicePins_);
+    }
+
+    std::vector<std::unique_ptr<IBackendExecutable>> takeExecutables() {
+        return std::move(executables_);
+    }
+
+    std::vector<IBackendExecutable*> takeRoots() {
+        return std::move(roots_);
+    }
+
    private:
-    std::shared_ptr<const ScheduledGraph> scheduled_;
-    std::vector<DGraph>                   dgraphs_;
+    /*
+     * Reverse destruction drops root indexes and executables before runtime
+     * state and resource leases. Device pins are last so lease destructors
+     * can still safely refer to their owning devices.
+     */
+    std::vector<std::shared_ptr<IDevice>> devicePins_;
     BackendResourceBindings               resources_;
+    std::shared_ptr<BackendRuntimeState>  runtimeState_;
+    detail::ExecutionIoMetadata                  io_;
+    std::vector<std::unique_ptr<IBackendExecutable>> executables_;
+    std::vector<IBackendExecutable*>      roots_;
 };
 
 }  // namespace vrt::graph

@@ -110,16 +110,45 @@ const char* mechanismName(TransferMechanism mechanism) {
     return "?";
 }
 
-const char* stepKindName(ScheduledStepKind kind) {
-    switch (kind) {
-        case ScheduledStepKind::Operation:       return "Operation";
-        case ScheduledStepKind::TransferProduce: return "TransferProduce";
-        case ScheduledStepKind::TransferConsume: return "TransferConsume";
-        case ScheduledStepKind::TransferAction:  return "TransferAction";
-        case ScheduledStepKind::EventPublish:    return "EventPublish";
-        case ScheduledStepKind::EventWait:       return "EventWait";
-    }
-    return "?";
+std::string stepDescription(const ScheduledStepPayload& payload) {
+    return std::visit(
+        [](const auto& concrete) {
+            using T = std::decay_t<decltype(concrete)>;
+            if constexpr (std::is_same_v<T, ScheduledOperation>) {
+                return std::string("Operation\nnode ") +
+                       std::to_string(concrete.operation.value());
+            } else if constexpr (
+                std::is_same_v<T, ScheduledTransferProduce>) {
+                return std::string("TransferProduce\nroute ") +
+                       std::to_string(concrete.route.value());
+            } else if constexpr (
+                std::is_same_v<T, ScheduledTransferConsume>) {
+                return std::string("TransferConsume\nroute ") +
+                       std::to_string(concrete.route.value());
+            } else if constexpr (
+                std::is_same_v<T, ScheduledTransferAction>) {
+                return std::string("TransferAction\nroute ") +
+                       std::to_string(concrete.route.value());
+            } else if constexpr (
+                std::is_same_v<T, ScheduledEventPublish>) {
+                return std::string("EventPublish\nevent ") +
+                       std::to_string(concrete.rendezvous.value());
+            } else if constexpr (
+                std::is_same_v<T, ScheduledEventWait>) {
+                return std::string("EventWait\nevent ") +
+                       std::to_string(concrete.rendezvous.value());
+            } else if constexpr (
+                std::is_same_v<T, ScheduledGraphInput>) {
+                return std::string("GraphInput");
+            } else if constexpr (
+                std::is_same_v<T, ScheduledGraphOutput>) {
+                return std::string("GraphOutput");
+            } else {
+                return std::string("Boundary\nnode ") +
+                       std::to_string(concrete.boundary.value());
+            }
+        },
+        payload);
 }
 
 std::map<NodeId, OperationDescription> descriptions(
@@ -151,9 +180,13 @@ void emitResolvedNodes(
         out << "];\n";
     }
     for (const auto& [id, operation] : graph.operations()) {
-        for (NodeId dependency : operation.dependencies) {
-            if (graph.operations().count(dependency) == 0) continue;
-            out << "  \"n" << dependency.value() << "\" -> \"n"
+        for (const ResolvedDependency& dependency :
+             operation.dependencies) {
+            if (graph.operations().count(dependency.predecessor) == 0) {
+                continue;
+            }
+            out << "  \"n" << dependency.predecessor.value()
+                << "\" -> \"n"
                 << id.value() << "\";\n";
         }
     }
@@ -176,10 +209,12 @@ std::string renderToDot(const PlacedGraph& graph) {
                       descriptions(graph.resolved()),
                       &graph.operationPlacements());
     for (const PortPlacement& port : graph.portPlacements()) {
-        if (!port.memory.region) continue;
+        const ValueReplica* replica =
+            graph.findReplica(port.replica);
+        if (!replica || !replica->memory.region) continue;
         out << "  \"n" << port.operation.value()
-            << "\" [xlabel=\"" << escapeStage(port.port + ": " +
-                   port.memory.region->value()) << "\"];\n";
+            << "\" [xlabel=\"" << escapeStage(port.port.value() + ": " +
+                   replica->memory.region->value()) << "\"];\n";
     }
     out << "}\n";
     return out.str();
@@ -194,25 +229,29 @@ std::string renderToDot(const RoutedGraph& graph) {
         &graph.placed().operationPlacements());
     for (const TransferRoute& route : graph.routes()) {
         std::string label = "Route " +
-            std::to_string(route.requirement.id.value());
+            std::to_string(route.id.value());
         for (const TransferLeg& leg : route.legs) {
             label += "\n" + std::string(mechanismName(leg.mechanism)) +
                      ": " + leg.source.value() + " -> " +
                      leg.destination.value();
         }
-        out << "  \"route" << route.requirement.id.value()
+        out << "  \"route" << route.id.value()
             << "\" [shape=diamond,label=\"" << escapeStage(label)
             << "\"];\n";
-        if (route.requirement.source.operation) {
+        const std::optional<NodeId> source =
+            route.requirement.sourceAnchor.operation();
+        const std::optional<NodeId> destination =
+            route.requirement.destinationAnchor.operation();
+        if (source) {
             out << "  \"n"
-                << route.requirement.source.operation->value()
+                << source->value()
                 << "\" -> \"route"
-                << route.requirement.id.value() << "\";\n";
+                << route.id.value() << "\";\n";
         }
-        if (route.requirement.destination.operation) {
-            out << "  \"route" << route.requirement.id.value()
+        if (destination) {
+            out << "  \"route" << route.id.value()
                 << "\" -> \"n"
-                << route.requirement.destination.operation->value()
+                << destination->value()
                 << "\";\n";
         }
     }
@@ -229,20 +268,8 @@ std::string renderToDot(const ScheduledGraph& graph) {
             << escapeStage(queue.device.value()) << "\";\n";
         for (ScheduleStepId id : queue.steps) {
             const ScheduledStep& step = graph.steps().at(id);
-            std::string label = stepKindName(step.kind);
-            if (step.operation) {
-                label += "\nnode " +
-                         std::to_string(step.operation->value());
-            }
-            if (step.route) {
-                label += "\nroute " +
-                         std::to_string(step.route->value());
-            }
-            if (step.rendezvous) {
-                label += "\nevent " +
-                         std::to_string(step.rendezvous->value());
-            }
-            if (step.preLaunch) label += "\npre-launch";
+            const std::string label =
+                stepDescription(step.payload);
             out << "    \"s" << id.value() << "\" [label=\""
                 << escapeStage(label) << "\"];\n";
         }

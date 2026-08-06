@@ -163,19 +163,21 @@ inline RegionBuilder RegionBuilder::addLoop(const LoopBuildSpec& spec) {
     RegionBuilder loop(body);
 
     for (const auto& in : spec.inputs) {
-        GraphBuffer localIn = GraphBuffer::make(in.buffer.type(),
-                                                detail::nextInternalToken("loop_in_" + in.port),
-                                                body->scopeId(),
-                                                in.buffer.maybeSizeScalar());
+        GraphBuffer localIn = detail::makeGraphBuffer(
+            in.buffer.type(),
+            detail::nextInternalToken("loop_in_" + in.port),
+            body->scopeId(), in.buffer.maybeSizeScalar(),
+            body->graphId());
         imports.push_back({in.buffer, localIn});
         loop.inputs_[in.port] = localIn;
     }
 
     for (const auto& out : spec.outputs) {
-        GraphBuffer localOut = GraphBuffer::make(out.buffer.type(),
-                                                 detail::nextInternalToken("loop_out_" + out.port),
-                                                 body->scopeId(),
-                                                 out.buffer.maybeSizeScalar());
+        GraphBuffer localOut = detail::makeGraphBuffer(
+            out.buffer.type(),
+            detail::nextInternalToken("loop_out_" + out.port),
+            body->scopeId(), out.buffer.maybeSizeScalar(),
+            body->graphId());
         loop.outputs_[out.port] = localOut;
         // Publish the produced value to the parent output token.
         exports.push_back({localOut, out.buffer});
@@ -225,10 +227,11 @@ inline std::pair<RegionBuilder, RegionBuilder> RegionBuilder::addConditional(
     auto wireInputs = [&](std::shared_ptr<GraphRegion>& branch, RegionBuilder& builder) {
         std::vector<BufferBoundaryMapping> imports;
         for (const auto& in : spec.inputs) {
-            GraphBuffer local = GraphBuffer::make(in.buffer.type(),
-                                                  detail::nextInternalToken("if_in_" + in.port),
-                                                  branch->scopeId(),
-                                                  in.buffer.maybeSizeScalar());
+            GraphBuffer local = detail::makeGraphBuffer(
+                in.buffer.type(),
+                detail::nextInternalToken("if_in_" + in.port),
+                branch->scopeId(), in.buffer.maybeSizeScalar(),
+                branch->graphId());
             imports.push_back({in.buffer, local});
             builder.inputs_[in.port] = local;
         }
@@ -238,10 +241,11 @@ inline std::pair<RegionBuilder, RegionBuilder> RegionBuilder::addConditional(
     auto wireOutputs = [&](std::shared_ptr<GraphRegion>& branch, RegionBuilder& builder) {
         std::vector<BufferBoundaryMapping> exports;
         for (const auto& out : spec.outputs) {
-            GraphBuffer local = GraphBuffer::make(out.buffer.type(),
-                                                  detail::nextInternalToken("if_out_" + out.port),
-                                                  branch->scopeId(),
-                                                  out.buffer.maybeSizeScalar());
+            GraphBuffer local = detail::makeGraphBuffer(
+                out.buffer.type(),
+                detail::nextInternalToken("if_out_" + out.port),
+                branch->scopeId(), out.buffer.maybeSizeScalar(),
+                branch->graphId());
             builder.outputs_[out.port] = local;
             exports.push_back({local, out.buffer});
         }

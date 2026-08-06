@@ -24,7 +24,7 @@
  *
  * IOTypeMap describes the abstract I/O signature of a kernel: which scalar
  * and buffer ports it exposes, their types, and their directions.
- * IOMap (a separate class) binds concrete graph values to these ports for a
+ * detail::PortBindings (a separate class) binds concrete graph values to these ports for a
  * specific node instantiation.
  */
 
@@ -55,7 +55,7 @@ struct BufferPort {
  *
  * From the graph's perspective an inout buffer "consumes" one GraphBuffer token
  * and "produces" a new one (even though physically it may be the same
- * allocation).  The in/out port names are distinct so that the IOMap can bind
+ * allocation).  The in/out port names are distinct so that the detail::PortBindings can bind
  * each side independently.
  */
 struct RWBufferPort {

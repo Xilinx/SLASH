@@ -26,25 +26,37 @@
 #include <string>
 #include <utility>
 
-#include <vrt/graph/backend_program_lowering.hpp>
 #include <vrt/graph/capabilities.hpp>
+#include <vrt/graph/detail/executable_assembler.hpp>
 #include <vrt/graph/ir/authored_graph.hpp>
 #include <vrt/graph/ir/placed_graph.hpp>
 #include <vrt/graph/ir/resolved_graph.hpp>
 #include <vrt/graph/ir/routed_graph.hpp>
 #include <vrt/graph/ir/scheduled_graph.hpp>
+#include <vrt/graph/pass/validate_authored_graph.hpp>
 #include <vrt/graph/transfer.hpp>
 
 namespace vrt::graph {
 
 CompileResult<ExecutionPlan> GraphCompiler::compile(
-    const GraphRegion& rootRegion,
+    const AuthoredGraph& authored,
     const std::map<std::string, std::shared_ptr<IDevice>>& devices,
     const std::map<std::pair<DeviceType, DeviceType>,
                    BridgeFactory>& bridgeFactories,
     const BridgeFor& bridgeFor,
     const std::shared_ptr<std::map<std::string, std::uint64_t>>&
         scalarValues) const {
+    /*
+     * Compilation has three phases:
+     * - preflight graph-host connectivity for every non-host device;
+     * - validate, resolve, place, route, and schedule backend-neutral IR;
+     * - bind physical resources and lower queue executables.
+     *
+     * Stop at the first failing phase. On success, retain non-fatal
+     * diagnostics from every completed IR stage.
+     */
+
+    /* Require bridge factories in both directions for graph I/O traffic. */
     Diagnostics preflight;
     std::optional<DeviceType> hostType;
     for (const auto& [name, device] : devices) {
@@ -75,8 +87,16 @@ CompileResult<ExecutionPlan> GraphCompiler::compile(
             std::move(preflight));
     }
 
+    /* Build each graph IR only after the preceding stage validates. */
+    CompileResult<AuthoredGraph> validated =
+        validateAuthoredGraph(authored);
+    if (!validated.ok()) {
+        return CompileResult<ExecutionPlan>::failure(
+            std::move(validated.diagnostics));
+    }
+
     CompileResult<ResolvedGraph> resolved =
-        resolveGraph(AuthoredGraph::snapshot(rootRegion));
+        detail::resolveValidatedGraph(*validated.output);
     if (!resolved.ok()) {
         return CompileResult<ExecutionPlan>::failure(
             std::move(resolved.diagnostics));
@@ -106,26 +126,25 @@ CompileResult<ExecutionPlan> GraphCompiler::compile(
             std::move(scheduled.diagnostics));
     }
 
-    CompileResult<BackendPrograms> programs =
-        lowerBackendPrograms(
+    /* Bind logical resources and lower scheduled queues to backend objects. */
+    CompileResult<detail::AssembledExecutables> programs =
+        detail::assembleExecutables(
             *scheduled.output, devices, bridgeFor, scalarValues);
     if (!programs.ok()) {
         return CompileResult<ExecutionPlan>::failure(
             std::move(programs.diagnostics));
     }
 
+    /* Preserve warnings and notes from every successful compiler stage. */
     Diagnostics diagnostics;
+    diagnostics.append(std::move(validated.diagnostics));
     diagnostics.append(std::move(resolved.diagnostics));
     diagnostics.append(std::move(placed.diagnostics));
     diagnostics.append(std::move(routed.diagnostics));
     diagnostics.append(std::move(scheduled.diagnostics));
     diagnostics.append(std::move(programs.diagnostics));
-    auto scheduledGraph = std::make_shared<ScheduledGraph>(
-        std::move(*scheduled.output));
     return CompileResult<ExecutionPlan>::success(
-        ExecutionPlan(
-            std::move(scheduledGraph),
-            std::move(*programs.output)),
+        ExecutionPlan(std::move(*programs.output)),
         std::move(diagnostics));
 }
 

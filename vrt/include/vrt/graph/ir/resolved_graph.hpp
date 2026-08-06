@@ -29,7 +29,10 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <vrt/graph/compile_result.hpp>
@@ -77,18 +80,48 @@ enum class ValueDefinitionKind {
     ControlResult,
 };
 
-struct ResolvedValue {
-    ValueId                    id;
-    RegionId                   region;
-    ValueType                  type;
-    std::string                sourceName;
-    ValueDefinitionKind        definition = ValueDefinitionKind::OperationOutput;
-    std::optional<NodeId>      producer;
-    std::optional<ValueId>     size;
-    std::optional<GraphBuffer> bufferToken;
-    std::optional<GraphScalar> scalarToken;
-    bool                       graphOutput = false;
+using ResolvedToken = std::variant<GraphBuffer, GraphScalar>;
+
+struct GraphInputOrigin {
+    ResolvedToken token;
 };
+
+struct OperationOutputOrigin {
+    NodeId        operation;
+    PortName      port;
+    ResolvedToken token;
+};
+
+struct RegionParameterOrigin {
+    RegionId      region;
+    PortName      port;
+    ResolvedToken token;
+};
+
+struct ControlResultOrigin {
+    NodeId        control;
+    PortName      port;
+    ResolvedToken token;
+};
+
+using ValueOrigin =
+    std::variant<GraphInputOrigin, OperationOutputOrigin,
+                 RegionParameterOrigin, ControlResultOrigin>;
+
+struct ResolvedValue {
+    ValueId                id;
+    RegionId               region;
+    ValueType              type;
+    std::string            sourceName;
+    ValueOrigin            origin;
+    std::optional<ValueId> size;
+    bool                   graphOutput = false;
+};
+
+ValueDefinitionKind valueDefinition(const ResolvedValue& value);
+std::optional<NodeId> valueProducer(const ResolvedValue& value);
+const GraphBuffer* resolvedBufferToken(const ResolvedValue& value);
+const GraphScalar* resolvedScalarToken(const ResolvedValue& value);
 
 enum class ValueAccess {
     Input,
@@ -102,9 +135,69 @@ enum class ValueAccess {
 };
 
 struct ResolvedBinding {
-    std::string port;
+    PortName    port;
+    PortName    localPort;
     ValueId     value;
     ValueAccess access = ValueAccess::Input;
+
+    ResolvedBinding() = default;
+    ResolvedBinding(std::string portValue, ValueId valueId,
+                    ValueAccess valueAccess)
+        : port(PortName(portValue)),
+          localPort(PortName(std::move(portValue))),
+          value(valueId),
+          access(valueAccess) {}
+    ResolvedBinding(PortName portValue, ValueId valueId,
+                    ValueAccess valueAccess)
+        : port(portValue),
+          localPort(std::move(portValue)),
+          value(valueId),
+          access(valueAccess) {}
+    ResolvedBinding(PortName portValue, PortName localPortValue,
+                    ValueId valueId,
+                    ValueAccess valueAccess)
+        : port(std::move(portValue)),
+          localPort(std::move(localPortValue)),
+          value(valueId),
+          access(valueAccess) {}
+};
+
+struct ResolvedInoutBinding {
+    NodeId   operation;
+    PortName port;
+    ValueId  input;
+    ValueId  output;
+};
+
+enum class DependencyReason {
+    Data,
+    UserOrdering,
+    ReprogramDrain,
+    ReadersBeforeMutator,
+    BoundaryOrdering,
+};
+
+struct ResolvedDependency {
+    NodeId                 predecessor;
+    DependencyReason       reason = DependencyReason::Data;
+    std::optional<ValueId> value;
+
+    friend bool operator<(const ResolvedDependency& lhs,
+                          const ResolvedDependency& rhs) {
+        if (lhs.predecessor != rhs.predecessor) {
+            return lhs.predecessor < rhs.predecessor;
+        }
+        if (lhs.reason != rhs.reason) {
+            return lhs.reason < rhs.reason;
+        }
+        return lhs.value < rhs.value;
+    }
+
+    friend bool operator==(const ResolvedDependency& lhs,
+                           const ResolvedDependency& rhs) {
+        return lhs.predecessor == rhs.predecessor &&
+               lhs.reason == rhs.reason && lhs.value == rhs.value;
+    }
 };
 
 enum class ResolvedOperationKind {
@@ -120,7 +213,7 @@ struct ResolvedOperation {
     RegionId                     region;
     ResolvedOperationKind        kind = ResolvedOperationKind::Kernel;
     bool                         structural = false;
-    std::vector<NodeId>          dependencies;
+    std::vector<ResolvedDependency> dependencies;
     std::vector<ResolvedBinding> bindings;
 };
 
@@ -139,8 +232,29 @@ struct ControlIncoming {
 
 struct ResolvedControlResult {
     NodeId                       control;
+    PortName                     port;
     ValueId                      result;
     std::vector<ControlIncoming> incoming;
+};
+
+struct BoundaryAlias {
+    NodeId   boundary;
+    PortName port;
+    ValueId  source;
+    ValueId  target;
+};
+
+class BoundaryAliasTable {
+   public:
+    explicit BoundaryAliasTable(std::vector<BoundaryAlias> aliases = {});
+
+    ValueId canonical(ValueId value) const;
+    std::optional<ValueId> directSource(ValueId target) const;
+    const std::vector<BoundaryAlias>& entries() const { return aliases_; }
+
+   private:
+    std::vector<BoundaryAlias> aliases_;
+    std::map<ValueId, ValueId> sources_;
 };
 
 struct ResolvedRegion {
@@ -158,10 +272,13 @@ class ResolvedGraph {
                   std::shared_ptr<const ResolvedRegion> root,
                   std::map<ValueId, ResolvedValue> values,
                   std::map<NodeId, ResolvedOperation> operations,
+                  std::vector<ResolvedInoutBinding> inouts,
+                  BoundaryAliasTable aliases,
                   std::vector<ResolvedControlResult> controlResults)
         : data_(std::make_shared<Data>(
               std::move(authored), std::move(root),
               std::move(values), std::move(operations),
+              std::move(inouts), std::move(aliases),
               std::move(controlResults))) {}
 
     const AuthoredGraph& authored() const { return *data_->authored; }
@@ -172,6 +289,10 @@ class ResolvedGraph {
     const std::map<NodeId, ResolvedOperation>& operations() const {
         return data_->operations;
     }
+    const std::vector<ResolvedInoutBinding>& inouts() const {
+        return data_->inouts;
+    }
+    const BoundaryAliasTable& aliases() const { return data_->aliases; }
     const std::vector<ResolvedControlResult>& controlResults() const {
         return data_->controlResults;
     }
@@ -192,17 +313,23 @@ class ResolvedGraph {
              std::shared_ptr<const ResolvedRegion> rootValue,
              std::map<ValueId, ResolvedValue> valuesValue,
              std::map<NodeId, ResolvedOperation> operationsValue,
+             std::vector<ResolvedInoutBinding> inoutsValue,
+             BoundaryAliasTable aliasesValue,
              std::vector<ResolvedControlResult> controlResultsValue)
             : authored(std::move(authoredValue)),
               root(std::move(rootValue)),
               values(std::move(valuesValue)),
               operations(std::move(operationsValue)),
+              inouts(std::move(inoutsValue)),
+              aliases(std::move(aliasesValue)),
               controlResults(std::move(controlResultsValue)) {}
 
         std::shared_ptr<const AuthoredGraph>  authored;
         std::shared_ptr<const ResolvedRegion> root;
         std::map<ValueId, ResolvedValue>      values;
         std::map<NodeId, ResolvedOperation>   operations;
+        std::vector<ResolvedInoutBinding>      inouts;
+        BoundaryAliasTable                    aliases;
         std::vector<ResolvedControlResult>    controlResults;
     };
 
@@ -210,6 +337,11 @@ class ResolvedGraph {
 };
 
 CompileResult<ResolvedGraph> resolveGraph(const AuthoredGraph& authored);
+
+namespace detail {
+CompileResult<ResolvedGraph> resolveValidatedGraph(
+    const AuthoredGraph& authored);
+}
 
 }  // namespace vrt::graph
 

@@ -24,10 +24,9 @@
  *
  * Execution model
  * ---------------
- * Nodes are compiled into a HIP Graph (hipGraph_t) in a GpuDevicePlan. Each
+ * Scheduled commands are lowered into a HIP Graph in a GpuDevicePlan. Each
  * kernel node becomes a hipGraphAddKernelNode.  Bridge-supplied opaque
- * closures (carried by `CompiledBridgeOpNode` entries in the per-device DGraph)
- * become hipGraphAddHostNode callbacks.
+ * plan-owned host action becomes a hipGraphAddHostNode callback.
  *
  * The HIP Graph is instantiated once per plan (hipGraphInstantiate) and
  * launched via hipGraphLaunch into a dedicated stream. Repeated launch()/wait()
@@ -47,13 +46,13 @@
  *
  * Kernel dispatch
  * ---------------
- * GPU kernels are registered before compilePlan() via registerKernel(). Each
+ * GPU kernels are registered before graph compilation. Each
  * registration provides:
  *   - A __global__ function pointer
  *   - A paramOrder vector mapping port names to kernel parameter positions
  *   - A grid/block configuration
  *
- * The compile step resolves IOMap bindings to device pointers and scalars,
+ * The compile step resolves detail::PortBindings bindings to device pointers and scalars,
  * packs them into a void** parameter array, and passes them to
  * hipGraphAddKernelNode.
  *
@@ -61,14 +60,13 @@
  * ----------------------------
  * GpuDevice has no built-in sync primitives.  Bridges construct opaque
  * closures, returned to the compiler in a `BridgeStepPair` and spliced as
- * `CompiledBridgeOpNode` entries into this device's `DGraph::nodes`; the GpuDevice
- * translates each
- * closure into a HIP host-node callback so it runs in stream order.
+ * direct GPU commands into HIP host-node callbacks so they run in stream order.
  */
 
 #ifndef VRT_GRAPH_DEVICE_GPU_DEVICE_HPP
 #define VRT_GRAPH_DEVICE_GPU_DEVICE_HPP
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -79,10 +77,10 @@
 
 #include <hip/hip_runtime.h>
 
+#include <vrt/graph/backend_runtime.hpp>
 #include <vrt/graph/device/device.hpp>
-#include <vrt/graph/device/dgraph.hpp>
-#include <vrt/graph/node/io_map.hpp>
-#include <vrt/graph/node/compiled_node.hpp>
+#include <vrt/graph/detail/port_bindings.hpp>
+#include <vrt/graph/node/kernel_descriptor.hpp>
 #include <vrt/graph/core/types.hpp>
 
 namespace vrt::graph {
@@ -94,7 +92,7 @@ namespace vrt::graph {
 /**
  * @brief Binding between a graph kernel name and a HIP __global__ function.
  *
- * @p paramOrder maps IOMap port names (buffers and scalars) to positional
+ * @p paramOrder maps detail::PortBindings port names (buffers and scalars) to positional
  * kernel parameters.  At launch time, each port name is resolved to either
  * a device pointer (for buffers) or a uint64_t value (for scalars), and
  * the resulting array is passed to hipGraphAddKernelNode.
@@ -117,7 +115,7 @@ struct GpuKernelBinding {
     /**
      * @brief Port names in kernel parameter order.
      *
-     * Each entry is looked up in the node's IOMap at compile time.  Buffer
+     * Each entry is looked up in the node's detail::PortBindings at compile time.  Buffer
      * ports resolve to device pointers; scalar ports resolve to uint64_t values.
      */
     std::vector<std::string> paramOrder;
@@ -135,11 +133,34 @@ struct GpuKernelBinding {
     std::function<dim3(size_t elemCount)> gridFn;
 };
 
+struct GpuKernelCommand {
+    ScheduleStepId step;
+    KernelDescriptor kernel;
+    detail::PortBindings ioMap;
+    std::vector<ScheduleStepId> dependencies;
+};
+
+struct GpuHostCommand {
+    ScheduleStepId step;
+    std::vector<ScheduleStepId> dependencies;
+    std::vector<HostAction> actions;
+};
+
+using GpuCommand = std::variant<GpuKernelCommand, GpuHostCommand>;
+
+struct GpuProgram {
+    QueueId queue;
+    DeviceId device;
+    std::vector<GpuCommand> commands;
+    std::shared_ptr<BackendRuntimeState> runtimeState;
+};
+
 // ---------------------------------------------------------------------------
 // GpuDevice
 // ---------------------------------------------------------------------------
 
-class GpuDevice : public IDevice {
+class GpuDevice : public IDevice,
+                  public std::enable_shared_from_this<GpuDevice> {
    public:
     /**
      * @brief Construct a GpuDevice.
@@ -204,7 +225,9 @@ class GpuDevice : public IDevice {
     DeviceType  type() const override { return DeviceType::GPU; }
     std::string id()   const override { return id_; }
 
-    std::unique_ptr<IDevicePlan> compilePlan(const DGraph& dg) override;
+    std::unique_ptr<IDeviceExecutionLease> leaseExecution() override;
+    std::unique_ptr<IBackendExecutable> lowerQueue(
+        const BackendLoweringContext& context) override;
 
    private:
     friend class GpuDevicePlan;
@@ -221,6 +244,7 @@ class GpuDevice : public IDevice {
     std::map<std::string, void*>                 deviceBuffers_;  // name → hipMalloc'd ptr
     std::map<std::string, size_t>                deviceBufferSizes_;
     hipStream_t     stream_   = nullptr;
+    std::atomic_bool executionLeased_{false};
 };
 
 }  // namespace vrt::graph

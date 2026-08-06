@@ -26,8 +26,10 @@
 #ifndef VRT_GRAPH_IR_ROUTED_GRAPH_HPP
 #define VRT_GRAPH_IR_ROUTED_GRAPH_HPP
 
+#include <map>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include <vrt/graph/compile_result.hpp>
@@ -42,24 +44,82 @@ enum class DependencyKind {
     Order,
 };
 
-struct DependencyEdge {
+struct ValueDependencyEdge {
     std::optional<NodeId>  producer;
     std::optional<NodeId>  consumer;
-    DependencyKind         kind = DependencyKind::Value;
-    std::optional<ValueId> value;
+    ReplicaId              source;
+    ReplicaId              target;
     std::optional<RouteId> route;
 };
+
+struct OrderDependencyEdge {
+    NodeId                 producer;
+    NodeId                 consumer;
+    std::optional<RouteId> route;
+};
+
+using DependencyEdge =
+    std::variant<ValueDependencyEdge, OrderDependencyEdge>;
+
+inline DependencyKind dependencyKind(const DependencyEdge& edge) {
+    return std::holds_alternative<ValueDependencyEdge>(edge)
+               ? DependencyKind::Value
+               : DependencyKind::Order;
+}
+
+inline std::optional<NodeId> dependencyProducer(
+    const DependencyEdge& edge) {
+    return std::visit(
+        [](const auto& concrete) -> std::optional<NodeId> {
+            return concrete.producer;
+        },
+        edge);
+}
+
+inline std::optional<NodeId> dependencyConsumer(
+    const DependencyEdge& edge) {
+    return std::visit(
+        [](const auto& concrete) -> std::optional<NodeId> {
+            return concrete.consumer;
+        },
+        edge);
+}
+
+inline std::optional<RouteId> dependencyRoute(
+    const DependencyEdge& edge) {
+    return std::visit(
+        [](const auto& concrete) {
+            return concrete.route;
+        },
+        edge);
+}
 
 class RoutedGraph {
    public:
     RoutedGraph(std::shared_ptr<const PlacedGraph> placed,
+                std::optional<DeviceId> graphIoHost,
+                std::map<ReplicaId, ValueReplica> transferReplicas,
                 std::vector<DependencyEdge> dependencies,
                 std::vector<TransferRoute> routes)
         : placed_(std::move(placed)),
+          graphIoHost_(std::move(graphIoHost)),
+          transferReplicas_(std::move(transferReplicas)),
           dependencies_(std::move(dependencies)),
           routes_(std::move(routes)) {}
 
     const PlacedGraph& placed() const { return *placed_; }
+    const std::optional<DeviceId>& graphIoHost() const {
+        return graphIoHost_;
+    }
+    const std::map<ReplicaId, ValueReplica>& transferReplicas() const {
+        return transferReplicas_;
+    }
+    const ValueReplica* findReplica(ReplicaId id) const {
+        auto replica = transferReplicas_.find(id);
+        return replica == transferReplicas_.end()
+                   ? placed_->findReplica(id)
+                   : &replica->second;
+    }
     const std::vector<DependencyEdge>& dependencies() const {
         return dependencies_;
     }
@@ -69,6 +129,8 @@ class RoutedGraph {
 
    private:
     std::shared_ptr<const PlacedGraph> placed_;
+    std::optional<DeviceId>            graphIoHost_;
+    std::map<ReplicaId, ValueReplica>  transferReplicas_;
     std::vector<DependencyEdge>        dependencies_;
     std::vector<TransferRoute>         routes_;
 };
