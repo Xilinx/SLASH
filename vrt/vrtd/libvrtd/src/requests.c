@@ -324,9 +324,12 @@ enum vrtd_ret vrtd_get_num_devices(int fd, uint32_t *out)
         return VRTD_RET_BAD_LIB_CALL;
     }
 
+    struct vrtd_req_get_num_devices req = {
+        .zero = 0,
+    };
     struct vrtd_resp_get_num_devices resp = {0};
     int ret = vrtd_raw_request(fd, VRTD_REQ_GET_NUM_DEVICES,
-                              NULL, 0,
+                              &req, sizeof(req),
                               &resp, sizeof(resp),
                               NULL, NULL);
     if (ret != VRTD_RET_OK) {
