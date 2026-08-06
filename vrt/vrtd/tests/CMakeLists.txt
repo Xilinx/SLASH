@@ -22,6 +22,8 @@ endmacro()
 
 add_vrtd_test(allocator_test allocator_test.cpp)
 add_vrtd_test(accept_test accept_test.cpp)
+add_vrtd_test(ancillary_test ancillary_test.cpp)
+target_link_libraries(ancillary_test PRIVATE libvrtd)
 add_vrtd_test(array_test array_test.cpp)
 add_vrtd_test(utils_test utils_test.cpp)
 add_vrtd_test(hotplug_test hotplug_test.cpp)

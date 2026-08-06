@@ -121,6 +121,9 @@ enum vrtd_opcode {
 
     /** Set vrtd's in-memory shell/JTAG state for a device. */
     VRTD_REQ_SET_SHELL_STATE,
+
+    /* Not an opcode. Bounds a walk over the whole set. */
+    VRTD_OPCODE_COUNT,
 };
 
 /**
