@@ -70,3 +70,31 @@ jobs:
         with:
           name: vrtd-coverage-report
           path: vrt/vrtd/build/coverage-report/
+
+  vrtd_sanitizers:
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: "true"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake pkg-config ninja-build \
+          libsystemd-dev libinih-dev
+
+      - name: Build and run VRTD unit tests under ASan and UBSan
+        run: |
+          mkdir vrt/vrtd/build-asan
+          cd vrt/vrtd/build-asan
+          cmake -DVRTD_BUILD_TESTS=1 -DVRTD_INCLUDE_LIBSLASH=1 \
+            -DENABLE_SANITIZERS=1 ..
+          make unit_tests -j$(nproc)
+          export LD_LIBRARY_PATH=$(pwd)/libslash/src/:$LD_LIBRARY_PATH
+          # Undefined behaviour is only reported by default, so make it fail.
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          cd tests && ctest --output-on-failure
