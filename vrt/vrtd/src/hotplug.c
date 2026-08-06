@@ -92,6 +92,44 @@ uint16_t hotplug_errno_to_vrtd_ret(int err)
 }
 
 /**
+ * Returns the human-readable name of a hotplug operation.
+ *
+ * @param op  One of the VRTD_DEVICE_HOTPLUG_OP_* constants from wire.h.
+ * @return Static string. "unknown" for unrecognized values.
+ */
+const char *vrtd_hotplug_op_to_string(uint32_t op)
+{
+    switch (op) {
+    case VRTD_DEVICE_HOTPLUG_OP_RESCAN:         return "rescan";
+    case VRTD_DEVICE_HOTPLUG_OP_REMOVE:         return "remove";
+    case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:     return "toggle_sbr";
+    case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG:        return "hotplug";
+    case VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE: return "reset_sequence";
+    default:                                    return "unknown";
+    }
+}
+
+bool hotplug_request_valid(uint8_t op, uint8_t function)
+{
+    if (op != VRTD_DEVICE_HOTPLUG_OP_REMOVE &&
+        op != VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR &&
+        op != VRTD_DEVICE_HOTPLUG_OP_HOTPLUG)
+        return true;
+    if (function != VRTD_DEVICE_HOTPLUG_FUNCTION_ALL && function > 7) {
+        LOG(LOG_ERR, "hotplug_op: %s: invalid function number %u",
+            vrtd_hotplug_op_to_string(op),
+            (unsigned int)function);
+        return false;
+    }
+    if (op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR &&
+        function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL) {
+        LOG(LOG_ERR, "hotplug_op: toggle_sbr requires a specific function number");
+        return false;
+    }
+    return true;
+}
+
+/**
  * Extract the BDF prefix (domain:bus:device) from a full BDF string,
  * stripping the ".function" suffix.
  *

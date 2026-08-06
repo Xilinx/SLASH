@@ -352,24 +352,6 @@ static const char *vrtd_opcode_to_string(uint16_t opcode)
     }
 }
 
-/**
- * Returns the human-readable name of a hotplug operation.
- *
- * @param op  One of the VRTD_DEVICE_HOTPLUG_OP_* constants from wire.h.
- * @return Static string; "unknown" for unrecognized values.
- */
-static const char *vrtd_hotplug_op_to_string(uint32_t op)
-{
-    switch (op) {
-    case VRTD_DEVICE_HOTPLUG_OP_RESCAN:         return "rescan";
-    case VRTD_DEVICE_HOTPLUG_OP_REMOVE:         return "remove";
-    case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:     return "toggle_sbr";
-    case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG:        return "hotplug";
-    case VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE: return "reset_sequence";
-    default:                                    return "unknown";
-    }
-}
-
 static struct device *device_ptr_array_find_by_bdf(
     struct device_ptr_array *devices,
     const char *bdf
@@ -2324,16 +2306,14 @@ static uint16_t client_handle_request_device_hotplug_op(
         d->pci_info.bdf, (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
+    if (!hotplug_request_valid(req_body->op, req_body->function))
+        return VRTD_RET_INVALID_ARGUMENT;
+
     switch (req_body->op) {
     case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
     case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:
     case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG: {
         if (req_body->function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL) {
-            if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR) {
-                LOG(LOG_ERR, "hotplug_op: toggle_sbr requires a specific function number");
-                return VRTD_RET_INVALID_ARGUMENT;
-            }
-
             bool any_removed = false;
             for (uint8_t func = 0; func < 3; func++) {
                 char pf_bdf[VRTD_PCI_BDF_LEN];
@@ -2384,13 +2364,6 @@ static uint16_t client_handle_request_device_hotplug_op(
         /* Individual hotplug operations are PCI-function-level (the hotplug
          * interface is SLASH-agnostic).  Construct a full DDDD:BB:DD.F BDF
          * from the device's board-level address and the requested function. */
-        if (req_body->function > 7) {
-            LOG(LOG_ERR, "hotplug_op: %s: invalid function number %u",
-                vrtd_hotplug_op_to_string(req_body->op),
-                (unsigned int)req_body->function);
-            return VRTD_RET_INVALID_ARGUMENT;
-        }
-
         char pf_bdf[VRTD_PCI_BDF_LEN];
         if (pci_bdf_set_function(d->pci_info.bdf, req_body->function, pf_bdf) != 0) {
             LOG(LOG_ERR, "hotplug_op: %s: failed to construct PF%u BDF from %s",

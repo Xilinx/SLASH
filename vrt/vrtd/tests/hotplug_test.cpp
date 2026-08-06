@@ -139,3 +139,18 @@ TEST(HotplugErrnoTest, UnknownErrno) {
     EXPECT_EQ(hotplug_errno_to_vrtd_ret(ENOMEM), VRTD_RET_INTERNAL_ERROR);
     EXPECT_EQ(hotplug_errno_to_vrtd_ret(EIO), VRTD_RET_INTERNAL_ERROR);
 }
+
+TEST(HotplugLifecycleTest, RejectsMalformedRequestBeforePreparation) {
+    EXPECT_FALSE(hotplug_request_valid(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR,
+        VRTD_DEVICE_HOTPLUG_FUNCTION_ALL));
+    EXPECT_TRUE(hotplug_request_valid(
+        VRTD_DEVICE_HOTPLUG_OP_REMOVE,
+        VRTD_DEVICE_HOTPLUG_FUNCTION_ALL));
+    EXPECT_FALSE(hotplug_request_valid(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, 8));
+    EXPECT_TRUE(hotplug_request_valid(
+        VRTD_DEVICE_HOTPLUG_OP_RESCAN, 255));
+    EXPECT_TRUE(hotplug_request_valid(
+        VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE, 255));
+}

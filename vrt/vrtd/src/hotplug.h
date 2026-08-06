@@ -21,6 +21,8 @@
 #ifndef VRTD_HOTPLUG_H
 #define VRTD_HOTPLUG_H
 
+#include <stdbool.h>
+
 #include <slash/hotplug.h>
 #include <vrtd/wire.h>
 
@@ -31,6 +33,9 @@ void hotplug_global_init(void);
 void hotplug_global_destroy(void);
 
 uint16_t hotplug_errno_to_vrtd_ret(int err);
+const char *vrtd_hotplug_op_to_string(uint32_t op);
+// Logs which rule a rejected request broke
+bool hotplug_request_valid(uint8_t op, uint8_t function);
 
 // Helper function but useful and generally used with hotplug
 int pci_bdf_set_function(const char *bdf, uint8_t func, char out_bdf[VRTD_PCI_BDF_LEN]);
