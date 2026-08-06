@@ -74,8 +74,8 @@ using CfgmemProgressCallback = std::function<void(const CfgmemProgramStatus&)>;
  * @brief Owning session/connection to the V Runtime Daemon (vrtd).
  *
  * A @c Session wraps a connected libvrtd socket and provides typed, exception-based
- * access to devices and BARs. All public member functions are thread-safe; calls
- * synchronize on an internal @c std::mutex.
+ * access to devices and BARs. Requests on a session may be issued from several
+ * threads at once and serialise on a @c std::mutex held alongside the connection.
  *
  * @par Exceptions
  * Most member functions throw #vrtd::Error on failure. The destructor never throws.
@@ -84,6 +84,8 @@ using CfgmemProgressCallback = std::function<void(const CfgmemProgramStatus&)>;
  * - The session is non-copyable and movable.
  * - Moving a session leaves the moved-from object in the closed state
  *   (i.e., @c isClosed()==true and @c operator bool() == false).
+ * - Closing, moving or destroying a session is not safe against concurrent use
+ *   of that session. Ensure no request is in flight before any of them.
  * - **Important:** Any @c Device or @c Bar previously obtained from a session becomes
  *   invalid once that session is closed or moved; subsequent operations on those
  *   objects will throw.
@@ -116,7 +118,7 @@ public:
      *
      * The moved-from session becomes closed.
      *
-     * @param other The session to move from.
+     * @param other The session to move from. No other thread may be using it.
      */
     Session(Session&& other) noexcept;
 
@@ -126,7 +128,8 @@ public:
      * Closes any existing connection, then takes ownership from @p other.
      * The moved-from session becomes closed.
     *
-     * @param other The session to move from.
+     * @param other The session to move from. No other thread may be using
+     *              either session.
      */
     Session& operator=(Session&& other) noexcept;
 
