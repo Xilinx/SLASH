@@ -58,6 +58,21 @@
 static int create_client_event(sd_event_source *listener_event_source, int cfd, struct vrtd *state, struct client **clientp);
 static int populate_uid_gid(int cfd, struct client *client);
 
+int vrtd_allocate_conn_id(struct vrtd *state, uint64_t *conn_id)
+{
+    if (state == NULL || conn_id == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (state->next_conn_id == UINT64_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    state->next_conn_id++;
+    *conn_id = state->next_conn_id;
+    return 0;
+}
+
 /**
  * sd_event I/O callback invoked when a new client connects to the listening socket.
  *
@@ -134,11 +149,15 @@ int on_event_new_connection(sd_event_source *s, int fd, uint32_t revents, void *
  */
 static int create_client_event(sd_event_source *listener_event_source, int cfd, struct vrtd *state, struct client **clientp)
 {
-    *clientp = calloc(1, sizeof **clientp);
-    PROPAGATE_ERROR_NULL_STDC_LOG(clientp, LOG_ERR, "Out of memory allocating client data");
+    *clientp = NULL;
+    struct client *client = calloc(1, sizeof *client);
+    PROPAGATE_ERROR_NULL_STDC_LOG(client, LOG_ERR, "Out of memory allocating client data");
+
+    client->fd = -1;
+    client->in_fd = -1;
 
     _cleanup_(cleanup_clientp)
-    struct client *client = *clientp;
+    struct client *client_cleanup = client;
 
     _cleanup_(cleanup_free)
     char *description = NULL;
@@ -175,27 +194,23 @@ static int create_client_event(sd_event_source *listener_event_source, int cfd, 
     ret = sd_event_source_set_description(source, description);
     PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Could not set description for client fd");
 
-    /* Assign a unique, non-zero connection ID.  IDs are monotonically
-     * increasing; on overflow we wrap to 1 (0 is reserved as "no owner"
-     * in the allocator's client_id tracking). */
-    state->next_conn_id++;
-    if (state->next_conn_id == 0) {
-        state->next_conn_id = 1;
-    }
+    uint64_t conn_id;
+    ret = vrtd_allocate_conn_id(state, &conn_id);
+    PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR,
+                             "Connection ID space exhausted");
 
     /* Finish initialising the client struct fields. */
     client->fd = cfd;
-    client->in_fd = -1;               /* no ancillary fd received yet */
-    client->conn_id = state->next_conn_id;
+    client->conn_id = conn_id;
     LOG(LOG_DEBUG, "New client connection uid=%u conn_id=%llu fd=%d", (unsigned int)client->uid, (unsigned long long)client->conn_id, cfd);
     client->state = state;
     client->event_source = source;
 
-    // Nothing went wrong. Do not unref.
+    /* The client now owns the event-source reference. */
     source = NULL;
 
-    // Nothing went wrong. Do not remove client.
-    client = NULL;
+    *clientp = client;
+    client_cleanup = NULL;
 
     return 0;
 }

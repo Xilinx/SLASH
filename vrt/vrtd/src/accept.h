@@ -25,6 +25,9 @@
 
 #include <systemd/sd-event.h>
 
+struct vrtd;
+
 int on_event_new_connection(sd_event_source *s, int fd, uint32_t revents, void *userdata);
+int vrtd_allocate_conn_id(struct vrtd *state, uint64_t *conn_id);
 
 #endif // VRTD_ACCEPT_H
