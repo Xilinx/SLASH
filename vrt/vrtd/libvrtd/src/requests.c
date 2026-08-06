@@ -104,7 +104,10 @@ static enum vrtd_ret vrtd_recv_response_fds(
         }
     }
 
-    ssize_t rn = recvmsg(fd, &rmsg, MSG_CMSG_CLOEXEC);
+    ssize_t rn;
+    do {
+        rn = recvmsg(fd, &rmsg, MSG_CMSG_CLOEXEC);
+    } while (rn == -1 && errno == EINTR);
     if (rn == -1) {
         return VRTD_RET_BAD_CONN;
     }
@@ -237,7 +240,12 @@ static enum vrtd_ret vrtd_raw_request_fds(
         memcpy(CMSG_DATA(cmsg), req_fd, sizeof(int));
     }
 
-    ssize_t sn = sendmsg(fd, &smsg, MSG_NOSIGNAL);
+    /* A datagram socket queues the whole message or none of it, so an
+     * interrupted send has put nothing on the wire and can be repeated. */
+    ssize_t sn;
+    do {
+        sn = sendmsg(fd, &smsg, MSG_NOSIGNAL);
+    } while (sn == -1 && errno == EINTR);
     if (sn == -1) {
         return VRTD_RET_BAD_CONN;
     }
