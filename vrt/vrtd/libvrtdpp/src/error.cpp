@@ -69,6 +69,9 @@ const char *Error::what() const noexcept {
     case VRTD_RET_SHELL_LOCKED:
         return "Device is JTAG-booted; refusing automatic shell reset";
 
+    case VRTD_RET_RESPONSE_MISMATCH:
+        return "Daemon reply did not answer this request. Connection shut down";
+
     default:
         return "Unknown error";
     }

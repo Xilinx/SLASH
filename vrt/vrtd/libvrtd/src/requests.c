@@ -29,8 +29,8 @@
  * are passed out-of-band via SCM_RIGHTS ancillary data on the Unix socket.
  *
  * The protocol is strictly request-response: one sendmsg() followed by
- * one recvmsg().  Sequence numbers are included for future pipelining
- * but currently always set to 1.
+ * one recvmsg().  Each request carries a sequence number the daemon
+ * echoes, which is what ties a reply to the request that asked for it.
  *
  * All functions are synchronous and thread-safe only if each thread uses
  * its own connection fd (obtained from vrtd_connect()).
@@ -52,8 +52,21 @@
 #include <assert.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 
 #include <vrtd/vrtd.h>
+
+/**
+ * vrtd_next_seqno(): allocate the sequence number for one request.
+ *
+ * Return: A sequence number distinct from every other one this process uses.
+ */
+static uint32_t vrtd_next_seqno(void)
+{
+    static _Atomic uint32_t counter;
+
+    return atomic_fetch_add_explicit(&counter, 1u, memory_order_relaxed) + 1u;
+}
 
 /**
  * vrtd_recv_response_fds() - Receive a response message from the daemon.
@@ -72,6 +85,7 @@
  */
 static enum vrtd_ret vrtd_recv_response_fds(
     int fd,
+    uint32_t seqno,
     void *resp_body_buf,
     size_t resp_bufsz,
     int *resp_fds,
@@ -121,6 +135,17 @@ static enum vrtd_ret vrtd_recv_response_fds(
 
     if ((size_t)rn < sizeof(rh)) {
         return VRTD_RET_BAD_CONN;
+    }
+
+    /* A reply carrying someone else's sequence number answers an earlier
+     * request, so this request's reply is still queued behind it and nothing
+     * further can be matched to what asked for it.  Shut the socket down
+     * rather than let the caller keep using a connection whose replies are
+     * one or more requests behind.  The descriptor stays valid, so the
+     * caller still owns it and closes it as usual. */
+    if (rh.seqno != seqno) {
+        (void)shutdown(fd, SHUT_RDWR);
+        return VRTD_RET_RESPONSE_MISMATCH;
     }
 
     size_t expect = sizeof(rh) + rh.size;
@@ -212,7 +237,7 @@ static enum vrtd_ret vrtd_raw_request_fds(
     struct vrtd_req_header h = {
         .size  = req_size,
         .opcode= opcode,
-        .seqno = 1,
+        .seqno = vrtd_next_seqno(),
     };
 
     struct iovec siov[2];
@@ -253,8 +278,8 @@ static enum vrtd_ret vrtd_raw_request_fds(
         return VRTD_RET_BAD_CONN;
     }
 
-    return vrtd_recv_response_fds(fd, resp_body_buf, resp_bufsz, resp_fds,
-                                  max_resp_fds, resp_fd_count);
+    return vrtd_recv_response_fds(fd, h.seqno, resp_body_buf, resp_bufsz,
+                                  resp_fds, max_resp_fds, resp_fd_count);
 }
 
 enum vrtd_ret vrtd_raw_request(

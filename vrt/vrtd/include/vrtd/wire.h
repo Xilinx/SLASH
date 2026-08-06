@@ -126,8 +126,9 @@ enum vrtd_opcode {
 /**
  * @brief Return codes for vrtd operations.
  *
- * @warning VRTD_RET_BAD_LIB_CALL and VRTD_RET_BAD_CONN are **client‑local**
- *          and are never returned by the server on the wire.
+ * @warning VRTD_RET_BAD_LIB_CALL, VRTD_RET_BAD_CONN and
+ *          VRTD_RET_RESPONSE_MISMATCH are **client‑local** and are never
+ *          returned by the server on the wire.
  */
 
 enum vrtd_ret {
@@ -141,6 +142,7 @@ enum vrtd_ret {
     VRTD_RET_AUTH_ERROR, ///< User does not have permission to execute request.
     VRTD_RET_BUSY, ///< Requested resource is busy.
     VRTD_RET_SHELL_LOCKED, ///< Device is JTAG-booted and will not be auto-reset for shell switching.
+    VRTD_RET_RESPONSE_MISMATCH, ///< A reply answered an earlier request, so the connection was shut down. This code will not be returned on the wire.
 };
 
 /**
