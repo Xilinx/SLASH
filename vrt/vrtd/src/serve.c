@@ -577,6 +577,18 @@ static void drain_deferred_buffer_cleanups(struct vrtd *state)
     state->deferred_buffer_cleanup_conn_ids.len = 0;
 }
 
+static void client_release_owned_out_fds(struct client *client)
+{
+    for (size_t i = 0; i < SIZEOF_ARRAY(client->out_fds); i++) {
+        if (client->out_fds_owned[i] && client->out_fds[i] >= 0)
+            (void)close(client->out_fds[i]);
+        client->out_fds[i] = -1;
+        client->out_fds_owned[i] = false;
+    }
+    client->out_fd_count = 0;
+    client->have_out_fd = false;
+}
+
 /**
  * Tears down a client: releases buffers, closes fds, unregisters the event
  * source, and frees memory.
@@ -601,6 +613,8 @@ void cleanup_client(struct client *client)
         (void) close(client->in_fd);
         client->in_fd = -1;
     }
+
+    client_release_owned_out_fds(client);
 
     /* Close the client's SOCK_SEQPACKET connection fd. */
     if (client->fd >= 0) {
@@ -1028,8 +1042,7 @@ retry:
 
     /* Response sent -- clear state so the client can send a new request. */
     client->have_response = false;
-    client->have_out_fd = false;
-    client->out_fd_count = 0;
+    client_release_owned_out_fds(client);
 
     return 0;
 }
@@ -1324,6 +1337,10 @@ static int client_handle_request(struct client *client)
      */
     if (client->pending_design_write || client->pending_async_device_op) {
         return 0;
+    }
+
+    if (resp_header->ret != VRTD_RET_OK) {
+        client_release_owned_out_fds(client);
     }
 
     if (resp_header->ret != VRTD_RET_OK) {
@@ -2822,7 +2839,8 @@ static uint16_t client_handle_request_qdma_qpair_get_fd(
         return VRTD_RET_NOEXIST;
     }
 
-    int fd = slash_qdma_qpair_get_fd(d->qdma, req_body->qid, (int)req_body->flags);
+    int fd = slash_qdma_qpair_get_fd(d->qdma, req_body->qid,
+                                     (int)req_body->flags);
     if (fd < 0) {
         LOG(LOG_WARNING, "qdma_qpair_get_fd: failed for device %u qid=%u: %m",
             (unsigned int)req_body->dev_number, (unsigned int)req_body->qid);
@@ -2831,6 +2849,7 @@ static uint16_t client_handle_request_qdma_qpair_get_fd(
 
     /* Schedule this fd for delivery via SCM_RIGHTS in client_handle_out(). */
     *out_fd = fd;
+    client->out_fds_owned[0] = true;
     *have_out_fd = true;
 
     resp_body->zero = 0;

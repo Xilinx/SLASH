@@ -77,6 +77,8 @@ struct client {
 
     /** @brief File descriptors to send back to the client via SCM_RIGHTS ancillary data. */
     int out_fds[2];
+    /** @brief True when the corresponding outbound descriptor must be closed by this client. */
+    bool out_fds_owned[2];
     /** @brief Number of valid descriptors in @c out_fds. */
     uint32_t out_fd_count;
     /** @brief True when @c out_fds contains at least one valid file descriptor to transmit. */
