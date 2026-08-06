@@ -40,6 +40,8 @@ set_target_properties(libvrtd PROPERTIES OUTPUT_NAME vrtd VERSION ${PROJECT_VERS
 target_link_libraries(libvrtd
   PUBLIC
     slash::slash
+  PRIVATE
+    vrtd_common
 )
 
 add_library(vrtd::libvrtd ALIAS libvrtd)

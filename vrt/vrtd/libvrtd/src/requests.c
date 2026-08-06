@@ -55,6 +55,7 @@
 #include <stdatomic.h>
 
 #include <vrtd/vrtd.h>
+#include "ancillary.h"
 
 /**
  * vrtd_next_seqno(): allocate the sequence number for one request.
@@ -85,6 +86,7 @@ static uint32_t vrtd_next_seqno(void)
  */
 static enum vrtd_ret vrtd_recv_response_fds(
     int fd,
+    uint16_t opcode,
     uint32_t seqno,
     void *resp_body_buf,
     size_t resp_bufsz,
@@ -94,6 +96,13 @@ static enum vrtd_ret vrtd_recv_response_fds(
 )
 {
     struct vrtd_resp_header rh = {0};
+    int received_fds[VRTD_ANCILLARY_MAX_FDS];
+    uint32_t received_fd_count = 0;
+
+    /* Filled by loop rather than an initialiser list, so widening
+     * VRTD_ANCILLARY_MAX_FDS cannot leave a tail holding descriptor 0. */
+    for (uint32_t i = 0; i < VRTD_ANCILLARY_MAX_FDS; i++)
+        received_fds[i] = -1;
 
     struct iovec riov[2];
     riov[0].iov_base = &rh;
@@ -101,12 +110,15 @@ static enum vrtd_ret vrtd_recv_response_fds(
     riov[1].iov_base = resp_body_buf;
     riov[1].iov_len  = resp_bufsz;
 
-    char cbuf[CMSG_SPACE(2 * sizeof(int))];
+    union {
+        struct cmsghdr align;
+        char buf[VRTD_ANCILLARY_BUFSIZE];
+    } control;
     struct msghdr rmsg = {
         .msg_iov        = riov,
         .msg_iovlen     = resp_bufsz ? 2 : 1,
-        .msg_control    = resp_fds ? cbuf : NULL,
-        .msg_controllen = resp_fds ? sizeof(cbuf) : 0,
+        .msg_control    = control.buf,
+        .msg_controllen = sizeof(control.buf),
     };
 
     if (resp_fd_count) {
@@ -126,16 +138,18 @@ static enum vrtd_ret vrtd_recv_response_fds(
         return VRTD_RET_BAD_CONN;
     }
 
-    if (rmsg.msg_flags & MSG_TRUNC) {
-        return VRTD_RET_BAD_LIB_CALL;
-    }
-    if (rmsg.msg_flags & MSG_CTRUNC) {
-        return VRTD_RET_BAD_LIB_CALL;
-    }
-
-    if ((size_t)rn < sizeof(rh)) {
+    uint32_t expected_fds = (size_t)rn >= sizeof(rh) &&
+                            rh.ret == VRTD_RET_OK
+                                ? (uint32_t)vrtd_response_expected_fds(opcode,
+                                                                       NULL)
+                                : 0;
+    if (vrtd_ancillary_extract(&rmsg, received_fds, expected_fds) !=
+        VRTD_ANCILLARY_OK)
         return VRTD_RET_BAD_CONN;
-    }
+    received_fd_count = expected_fds;
+
+    if ((size_t)rn < sizeof(rh))
+        goto bad_response;
 
     /* A reply carrying someone else's sequence number answers an earlier
      * request, so this request's reply is still queued behind it and nothing
@@ -144,33 +158,61 @@ static enum vrtd_ret vrtd_recv_response_fds(
      * one or more requests behind.  The descriptor stays valid, so the
      * caller still owns it and closes it as usual. */
     if (rh.seqno != seqno) {
+        for (uint32_t i = 0; i < received_fd_count; i++)
+            (void)close(received_fds[i]);
         (void)shutdown(fd, SHUT_RDWR);
         return VRTD_RET_RESPONSE_MISMATCH;
     }
 
     size_t expect = sizeof(rh) + rh.size;
-    if ((size_t) rn != expect) {
-        return VRTD_RET_BAD_CONN;
+    size_t expected_size = 0;
+    bool known_opcode = vrtd_response_expected_size(opcode, &expected_size);
+    bool valid_ret = rh.ret == VRTD_RET_OK ||
+                     (rh.ret >= VRTD_RET_BAD_REQUEST &&
+                      rh.ret <= VRTD_RET_WIRE_MAX);
+    /* A short body would leave the caller reading fields the server never
+     * wrote but a longer one is fine (see header documentation) */
+    if ((size_t)rn != expect || !valid_ret ||
+        (!known_opcode && rh.ret == VRTD_RET_OK) ||
+        rh.size > resp_bufsz ||
+        (rh.ret == VRTD_RET_OK && expected_size != SIZE_MAX &&
+         rh.size < expected_size) ||
+        (rh.ret != VRTD_RET_OK && rh.size != 0))
+        goto bad_response;
+
+    if (rh.ret == VRTD_RET_OK && opcode == VRTD_REQ_GET_SENSOR_INFO) {
+        struct vrtd_resp_get_sensor_info *response = resp_body_buf;
+        if (rh.size < sizeof(response->num_sensors) ||
+            (rh.size - sizeof(response->num_sensors)) %
+                    sizeof(struct vrtd_sensor_entry) != 0 ||
+            response->num_sensors !=
+                (rh.size - sizeof(response->num_sensors)) /
+                    sizeof(struct vrtd_sensor_entry))
+            goto bad_response;
     }
 
-    /* Extract file descriptors from SCM_RIGHTS ancillary data, if any. */
-    for (struct cmsghdr *c = CMSG_FIRSTHDR(&rmsg); c != NULL; c = CMSG_NXTHDR(&rmsg, c)) {
-        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len >= CMSG_LEN(sizeof(int))) {
-            assert(resp_fds != NULL);
-            size_t payload = c->cmsg_len - CMSG_LEN(0);
-            uint32_t n = (uint32_t)(payload / sizeof(int));
-            if (n > max_resp_fds) {
-                n = max_resp_fds;
-            }
-            memcpy(resp_fds, CMSG_DATA(c), n * sizeof(int));
-            if (resp_fd_count) {
-                *resp_fd_count = n;
-            }
-            break;
-        }
+    /* How many descriptors are expected comes from the opcode rather than the
+     * reply, so too little room means the caller made a bad call */
+    if (received_fd_count > 0 &&
+        (resp_fds == NULL || max_resp_fds < received_fd_count)) {
+        for (uint32_t i = 0; i < received_fd_count; i++)
+            (void)close(received_fds[i]);
+        return VRTD_RET_BAD_LIB_CALL;
     }
+
+    for (uint32_t i = 0; i < received_fd_count; i++) {
+        resp_fds[i] = received_fds[i];
+        received_fds[i] = -1;
+    }
+    if (resp_fd_count)
+        *resp_fd_count = received_fd_count;
 
     return (enum vrtd_ret) rh.ret;
+
+bad_response:
+    for (uint32_t i = 0; i < received_fd_count; i++)
+        (void)close(received_fds[i]);
+    return VRTD_RET_BAD_CONN;
 }
 
 int vrtd_connect(const char *path)
@@ -278,8 +320,9 @@ static enum vrtd_ret vrtd_raw_request_fds(
         return VRTD_RET_BAD_CONN;
     }
 
-    return vrtd_recv_response_fds(fd, h.seqno, resp_body_buf, resp_bufsz,
-                                  resp_fds, max_resp_fds, resp_fd_count);
+    return vrtd_recv_response_fds(fd, opcode, h.seqno,
+                                  resp_body_buf, resp_bufsz, resp_fds,
+                                  max_resp_fds, resp_fd_count);
 }
 
 enum vrtd_ret vrtd_raw_request(

@@ -142,6 +142,13 @@ enum vrtd_ret {
     VRTD_RET_AUTH_ERROR, ///< User does not have permission to execute request.
     VRTD_RET_BUSY, ///< Requested resource is busy.
     VRTD_RET_SHELL_LOCKED, ///< Device is JTAG-booted and will not be auto-reset for shell switching.
+
+    /* Highest code the server may send, so a client-local code added below
+     * cannot be mistaken for one.  A new server code has to extend this run
+     * rather than be appended after it, or the client will reject every reply
+     * carrying it.  Aliases the last such code, so no value shifts. */
+    VRTD_RET_WIRE_MAX = VRTD_RET_SHELL_LOCKED,
+
     VRTD_RET_RESPONSE_MISMATCH, ///< A reply answered an earlier request, so the connection was shut down. This code will not be returned on the wire.
 };
 
