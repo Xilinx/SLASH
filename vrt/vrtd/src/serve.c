@@ -140,6 +140,7 @@
 #include "serve.h"
 #include "utils.h"
 #include "state.h"
+#include "ancillary.h"
 #include "vrtd/wire.h"
 
 /**
@@ -827,15 +828,10 @@ static int client_update_wanted_epoll_events(struct client *client, sd_event_sou
  *
  * ## SCM_RIGHTS handling
  *
- * The cmsg ancillary-data buffer is sized for exactly one fd.  The loop over
- * CMSG_FIRSTHDR / CMSG_NXTHDR extracts fds as follows:
- *   - If the ancillary data is malformed (fractional fd size), all received
- *     fds are closed and the function returns -1.
- *   - If more than one fd was sent, or if a second SCM_RIGHTS header appears,
- *     all fds are closed and the function returns -1.  The daemon expects at
- *     most one inbound fd per message (currently only DESIGN_WRITE uses it).
- *   - On success the single fd is stored in client->in_fd and
- *     client->have_in_fd is set to true.
+ * The ancillary parser validates every ancillary record and closes all visible
+ * descriptors on failure. Each opcode declares an exact descriptor count.
+ * Malformed or truncated control data disconnects the client. A valid record
+ * with the wrong count receives VRTD_RET_BAD_REQUEST.
  *
  * ## Message validation
  *
@@ -867,24 +863,23 @@ static int client_handle_in(struct client *client)
         { .iov_base = client->inb, .iov_len = VRTD_MSG_MAX_SIZE },
     };
 
-    /*
-     * Allocate a cmsg buffer large enough for one fd.
-     * CMSG_SPACE includes alignment padding required by the kernel.
-     */
-    char cbuf[CMSG_SPACE(2 * sizeof(int))];
+    union {
+        struct cmsghdr align;
+        char buf[VRTD_ANCILLARY_BUFSIZE];
+    } control;
     struct msghdr msg = {
         .msg_name       = NULL,
         .msg_namelen    = 0,
         .msg_iov        = iovec,
         .msg_iovlen     = SIZEOF_ARRAY(iovec),
-        .msg_control    = cbuf,
-        .msg_controllen = sizeof(cbuf),
+        .msg_control    = control.buf,
+        .msg_controllen = sizeof(control.buf),
         .msg_flags      = 0,
     };
 
     ssize_t n;
 retry:
-    n = recvmsg(client->fd, &msg, MSG_DONTWAIT);
+    n = recvmsg(client->fd, &msg, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
     if (n == -1) {
         switch (errno) {
         case EINTR:
@@ -899,53 +894,33 @@ retry:
         }
     }
 
-    /* Reject truncated messages -- this should not happen with SEQPACKET. */
-    if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
-        // TODO: handle error from client
-        return -1;
-    }
+    size_t expected_fds = 0;
+    if ((size_t)n >= sizeof(struct vrtd_req_header)) {
+        struct vrtd_req_header *header =
+            (struct vrtd_req_header *)client->inb;
 
-    /*
-     * Walk the cmsg chain to extract any SCM_RIGHTS file descriptors.
-     * We expect at most one fd; anything else is a protocol violation.
-     */
+        expected_fds = vrtd_request_expected_fds(header->opcode);
+    }
     client->in_fd = -1;
     client->have_in_fd = false;
-    for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-         cmsg != NULL;
-         cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
-            continue;
-        }
-
-        size_t data_len = cmsg->cmsg_len - CMSG_LEN(0);
-        size_t count = data_len / sizeof(int);
-        int *fds = (int *) CMSG_DATA(cmsg);
-
-        /* Reject malformed ancillary data (fractional fd). */
-        if (data_len < sizeof(int) || (data_len % sizeof(int)) != 0) {
-            for (size_t i = 0; i < count; ++i) {
-                (void) close(fds[i]);
-            }
-            return -1;
-        }
-
-        /* Reject multiple fds or multiple SCM_RIGHTS headers. */
-        if (count != 1 || client->have_in_fd) {
-            for (size_t i = 0; i < count; ++i) {
-                (void) close(fds[i]);
-            }
-            return -1;
-        }
-
-        client->in_fd = fds[0];
-        client->have_in_fd = true;
-    }
+    client->bad_in_fd_count = false;
+    enum vrtd_ancillary_result ancillary_result = vrtd_ancillary_extract(
+        &msg, expected_fds ? &client->in_fd : NULL, expected_fds);
+    if (ancillary_result == VRTD_ANCILLARY_MALFORMED)
+        return -1;
+    client->bad_in_fd_count =
+        ancillary_result == VRTD_ANCILLARY_BAD_COUNT;
+    client->have_in_fd = ancillary_result == VRTD_ANCILLARY_OK &&
+                         expected_fds == 1;
 
     /* Validate request framing. */
     struct vrtd_req_header *header = (struct vrtd_req_header *) client->inb;
     if (n < sizeof(struct vrtd_req_header) || header->size + sizeof(struct vrtd_req_header) != n || header->size > VRTD_MSG_MAX_SIZE - sizeof *header) {
-        // TODO: handle error from client
+        if (client->in_fd >= 0) {
+            (void)close(client->in_fd);
+            client->in_fd = -1;
+            client->have_in_fd = false;
+        }
         return -1;
     }
 
@@ -1108,6 +1083,16 @@ static int client_handle_request(struct client *client)
 
     // Separate variable for allignment reasons
     uint16_t size = 0;
+
+    if (client->bad_in_fd_count) {
+        resp_header->ret = VRTD_RET_BAD_REQUEST;
+        resp_header->size = 0;
+        client->bad_in_fd_count = false;
+        client->have_request = false;
+        client->have_response = true;
+        client->have_new_response = true;
+        return 0;
+    }
 
     switch (req_header->opcode) {
     case VRTD_REQ_GET_NUM_DEVICES:

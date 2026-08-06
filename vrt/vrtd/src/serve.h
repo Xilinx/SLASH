@@ -72,6 +72,8 @@ struct client {
     int in_fd;
     /** @brief True when @c in_fd contains a valid received file descriptor. */
     bool have_in_fd;
+    /** @brief True when the request carried a valid but unexpected fd count. */
+    bool bad_in_fd_count;
 
     /** @brief File descriptors to send back to the client via SCM_RIGHTS ancillary data. */
     int out_fds[2];

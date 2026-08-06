@@ -79,6 +79,8 @@ pkg_check_modules(SYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 # Find libinih
 pkg_check_modules(INIH REQUIRED IMPORTED_TARGET inih)
 
+add_subdirectory(common)
+
 add_subdirectory(src)
 
 add_subdirectory(libvrtd)

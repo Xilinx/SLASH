@@ -53,6 +53,7 @@ target_include_directories(vrtd_core
 
 target_link_libraries(vrtd_core
   PUBLIC
+    vrtd_common
     ami::ami
     slash::slash
     PkgConfig::SYSTEMD
