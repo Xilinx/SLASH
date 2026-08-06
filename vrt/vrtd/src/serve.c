@@ -2210,6 +2210,106 @@ static uint16_t client_submit_device_reset(
 
 /* ---- DEVICE_HOTPLUG_OP -------------------------------------------------- */
 
+#define HOTPLUG_REDISCOVER_TIMEOUT_MS   5000
+#define HOTPLUG_REDISCOVER_INTERVAL_MS  100
+
+/**
+ * Reopens the device a hotplug operation replaced, waiting for it to reappear.
+ *
+ * The kernel side of the operation is already finished when the ioctl returns:
+ * pci_rescan_bus() re-enumerates and binds drivers before it returns. What is
+ * still outstanding is udev creating /dev/slash_ctlN and setting its ownership,
+ * which is what makes the node openable.
+ *
+ * Polling that rather than sleeping means an SBR costs nothing, since it
+ * leaves the node in place.
+ *
+ * @param devices  The daemon's device list, with the replaced device removed.
+ * @param want     Number of devices the list held before the removal.
+ * @return 0 once the list is back to @p want entries, -1 on timeout.
+ */
+/* True once every device present has its QDMA node open. */
+static bool devices_all_have_qdma(const struct device_ptr_array *devices)
+{
+    for (size_t i = 0; i < devices->len; i++) {
+        if (devices->d[i] != NULL && devices->d[i]->qdma == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Drop any device left without its QDMA node. Discovery only opens paths it
+ * does not already hold, so a device that came back before udev had applied
+ * ownership stays half open for good unless it is dropped first.
+ */
+static void devices_drop_half_open(struct device_ptr_array *devices)
+{
+    for (;;) {
+        struct device *victim = NULL;
+        for (size_t i = 0; i < devices->len; i++) {
+            if (devices->d[i] != NULL && devices->d[i]->qdma == NULL) {
+                victim = devices->d[i];
+                break;
+            }
+        }
+        if (victim == NULL) {
+            return;
+        }
+        device_ptr_array_rm_by_reference(devices, victim);
+    }
+}
+
+static int devices_reopen_after_hotplug(struct device_ptr_array *devices,
+                                        size_t want, bool need_qdma)
+{
+    struct timespec start;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        LOG(LOG_ERR, "hotplug_op: cannot read the monotonic clock: %m");
+        return -1;
+    }
+
+    for (;;) {
+        if (devices_discover_and_open(devices) == 0 && devices->len >= want &&
+            (!need_qdma || devices_all_have_qdma(devices))) {
+            return 0;
+        }
+
+        /* The node reappears before udev makes it accessible, so opening it
+         * can fail for a few hundred microseconds after the rescan. */
+        if (need_qdma) {
+            devices_drop_half_open(devices);
+        }
+
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            LOG(LOG_ERR, "hotplug_op: cannot read the monotonic clock: %m");
+            return -1;
+        }
+
+        time_t sec = now.tv_sec - start.tv_sec;
+        long nsec = now.tv_nsec - start.tv_nsec;
+        if (nsec < 0) {
+            sec -= 1;
+            nsec += 1000000000l;
+        }
+
+        uint64_t elapsed_ms = (uint64_t)sec * 1000ull + (uint64_t)nsec / 1000000ull;
+        if (elapsed_ms >= HOTPLUG_REDISCOVER_TIMEOUT_MS) {
+            LOG(LOG_ERR, "hotplug_op: device did not come back usable within %d ms",
+                HOTPLUG_REDISCOVER_TIMEOUT_MS);
+            return -1;
+        }
+
+        struct timespec interval = {
+            .tv_sec = 0,
+            .tv_nsec = HOTPLUG_REDISCOVER_INTERVAL_MS * 1000000l,
+        };
+        (void) nanosleep(&interval, NULL);
+    }
+}
+
 /**
  * Handles VRTD_REQ_DEVICE_HOTPLUG_OP -- performs a PCIe hotplug operation.
  *
@@ -2306,6 +2406,10 @@ static uint16_t client_handle_request_device_hotplug_op(
         d->pci_info.bdf, (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
+    char device_bdf[VRTD_PCI_BDF_LEN];
+    memcpy(device_bdf, d->pci_info.bdf, sizeof(device_bdf));
+    device_bdf[sizeof(device_bdf) - 1] = '\0';
+
     if (!hotplug_request_valid(req_body->op, req_body->function))
         return VRTD_RET_INVALID_ARGUMENT;
 
@@ -2372,10 +2476,26 @@ static uint16_t client_handle_request_device_hotplug_op(
             return VRTD_RET_INTERNAL_ERROR;
         }
 
+        /* The kernel frees a function's character device as the function goes
+         * away, so a descriptor still open at that point faults on close.
+         * Drop the device before asking for the operation whenever it can
+         * take one of our nodes with it, which means PF0 to PF2, or an SBR,
+         * which takes everything below the bridge. */
+        const bool takes_our_nodes =
+            hotplug_requires_device_rebuild(req_body->op, req_body->function) ||
+            (req_body->op == VRTD_DEVICE_HOTPLUG_OP_REMOVE &&
+             req_body->function <= 2);
+        size_t want = client->state->devices.len;
+        const bool had_qdma = d->qdma != NULL;
+        if (takes_our_nodes) {
+            device_ptr_array_rm_by_reference(&client->state->devices, d);
+            d = NULL;
+        }
+
         switch (req_body->op) {
         case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
             ret = slash_hotplug_remove(g_hotplug, pf_bdf);
-            if (ret == 0) {
+            if (ret == 0 && d != NULL) {
                 device_ptr_array_rm_by_reference(&client->state->devices, d);
                 d = NULL;
             }
@@ -2388,6 +2508,21 @@ static uint16_t client_handle_request_device_hotplug_op(
             break;
         default:
             break;
+        }
+
+        /* Rediscover whenever the device was dropped and should still be
+         * there. A remove that succeeded is meant to leave it absent; a
+         * remove that failed left the function in place. */
+        if (takes_our_nodes &&
+            !(req_body->op == VRTD_DEVICE_HOTPLUG_OP_REMOVE && ret == 0)) {
+            if (devices_reopen_after_hotplug(&client->state->devices, want,
+                                             had_qdma) != 0) {
+                LOG(LOG_WARNING,
+                    "hotplug_op: failed to rediscover device after PF%u %s",
+                    (unsigned int)req_body->function,
+                    vrtd_hotplug_op_to_string(req_body->op));
+                return VRTD_RET_INTERNAL_ERROR;
+            }
         }
         break;
     }
@@ -2413,7 +2548,7 @@ static uint16_t client_handle_request_device_hotplug_op(
     if (ret != 0) {
         LOG(LOG_WARNING, "hotplug_op: %s failed for device %u bdf=%s: %m",
             vrtd_hotplug_op_to_string(req_body->op),
-            (unsigned int)req_body->dev_number, d->pci_info.bdf);
+            (unsigned int)req_body->dev_number, device_bdf);
         return hotplug_errno_to_vrtd_ret(errno);
     }
 

@@ -34,6 +34,9 @@ void hotplug_global_destroy(void);
 
 uint16_t hotplug_errno_to_vrtd_ret(int err);
 const char *vrtd_hotplug_op_to_string(uint32_t op);
+bool hotplug_requires_device_rebuild(uint8_t op, uint8_t function);
+bool hotplug_should_rebuild_device(uint8_t op, uint8_t function,
+                                   int operation_result);
 // Logs which rule a rejected request broke
 bool hotplug_request_valid(uint8_t op, uint8_t function);
 

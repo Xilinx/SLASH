@@ -91,6 +91,27 @@ uint16_t hotplug_errno_to_vrtd_ret(int err)
     }
 }
 
+bool hotplug_requires_device_rebuild(uint8_t op, uint8_t function)
+{
+    /* The daemon holds PF1's QDMA node and PF2's control node, plus the BAR
+     * handles exported through that node, so hotplugging either replaces
+     * state still in use. PF0 is AMI, opened per operation rather than held,
+     * and is included only because a needless rebuild is cheap here while a
+     * missed one leaves stale handles behind with no error. FUNCTION_ALL is
+     * UINT8_MAX and is excluded on purpose, since that path rediscovers on
+     * its own. An SBR resets everything below the bridge, so it always
+     * rebuilds. */
+    return op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR ||
+           (op == VRTD_DEVICE_HOTPLUG_OP_HOTPLUG && function <= 2);
+}
+
+bool hotplug_should_rebuild_device(uint8_t op, uint8_t function,
+                                   int operation_result)
+{
+    return operation_result == 0 &&
+           hotplug_requires_device_rebuild(op, function);
+}
+
 /**
  * Returns the human-readable name of a hotplug operation.
  *

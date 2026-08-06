@@ -140,6 +140,51 @@ TEST(HotplugErrnoTest, UnknownErrno) {
     EXPECT_EQ(hotplug_errno_to_vrtd_ret(EIO), VRTD_RET_INTERNAL_ERROR);
 }
 
+TEST(HotplugLifecycleTest, RebuildsForAnyBoardFunctionAndBridgeWideSbr) {
+    /* The QDMA node comes from PF1 and the control node from PF2, so a
+     * hotplug of either replaces handles the daemon holds. PF0 is AMI and
+     * holds none, but a hotplug of it is disruptive regardless. */
+    EXPECT_TRUE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 0));
+    EXPECT_TRUE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 1));
+    EXPECT_TRUE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 2));
+    EXPECT_TRUE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, 0));
+    EXPECT_TRUE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, 1));
+    EXPECT_TRUE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, 2));
+}
+
+TEST(HotplugLifecycleTest, DoesNotDuplicateExistingRebuildPaths) {
+    EXPECT_FALSE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_REMOVE, 1));
+    /* The all-functions arm removes the device and rediscovers on its own. */
+    EXPECT_FALSE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG,
+        VRTD_DEVICE_HOTPLUG_FUNCTION_ALL));
+    /* The board presents three functions; a fourth is not part of it. */
+    EXPECT_FALSE(hotplug_requires_device_rebuild(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 3));
+}
+
+TEST(HotplugLifecycleTest, RebuildsTrackedDeviceOnlyAfterSuccess) {
+    EXPECT_TRUE(hotplug_should_rebuild_device(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, 0, 0));
+    EXPECT_TRUE(hotplug_should_rebuild_device(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 1, 0));
+    EXPECT_TRUE(hotplug_should_rebuild_device(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 2, 0));
+    EXPECT_FALSE(hotplug_should_rebuild_device(
+        VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, 0, -1));
+    EXPECT_FALSE(hotplug_should_rebuild_device(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 1, -1));
+    EXPECT_FALSE(hotplug_should_rebuild_device(
+        VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, 2, -1));
+}
+
 TEST(HotplugLifecycleTest, RejectsMalformedRequestBeforePreparation) {
     EXPECT_FALSE(hotplug_request_valid(
         VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR,
