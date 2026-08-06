@@ -577,6 +577,19 @@ static void drain_deferred_buffer_cleanups(struct vrtd *state)
     state->deferred_buffer_cleanup_conn_ids.len = 0;
 }
 
+void client_claim_out_fds(struct client *client, uint16_t opcode)
+{
+    bool owned = false;
+    size_t count = vrtd_response_expected_fds(opcode, &owned);
+
+    if (count > SIZEOF_ARRAY(client->out_fds))
+        count = SIZEOF_ARRAY(client->out_fds);
+
+    client->out_fd_count = (uint32_t)count;
+    for (size_t i = 0; i < count; i++)
+        client->out_fds_owned[i] = owned;
+}
+
 static void client_release_owned_out_fds(struct client *client)
 {
     for (size_t i = 0; i < SIZEOF_ARRAY(client->out_fds); i++) {
@@ -987,16 +1000,21 @@ static int client_handle_out(struct client *client)
         .msg_flags      = 0,
     };
 
-    char cbuf[CMSG_SPACE(sizeof(int))];
+    char cbuf[CMSG_SPACE(VRTD_ANCILLARY_MAX_FDS * sizeof(int))];
 
     /*
      * If we have an outbound fd, construct SCM_RIGHTS ancillary data.
      * The cbuf is zeroed to satisfy kernel expectations about padding.
      */
     if (client->have_out_fd) {
-        uint32_t fd_count = client->out_fd_count ? client->out_fd_count : 1;
+        /*
+         * client_handle_request() takes the count from the opcode table and
+         * fails the request if the table says the opcode carries none, so this
+         * is the only place that needs to know it.
+         */
+        uint32_t fd_count = client->out_fd_count;
 
-        if (fd_count > 2) {
+        if (fd_count == 0 || fd_count > SIZEOF_ARRAY(client->out_fds)) {
             LOG(LOG_ERR, "Invalid outbound fd count %u", (unsigned int)fd_count);
             return -1;
         }
@@ -1341,13 +1359,18 @@ static int client_handle_request(struct client *client)
 
     if (resp_header->ret != VRTD_RET_OK) {
         client_release_owned_out_fds(client);
-    }
-
-    if (resp_header->ret != VRTD_RET_OK) {
         LOG(LOG_DEBUG, "Request opcode=%u(%s) failed ret=%u uid=%u conn_id=%llu",
             (unsigned int)req_header->opcode, vrtd_opcode_to_string(req_header->opcode),
             (unsigned int)resp_header->ret,
             (unsigned int)client->uid, (unsigned long long)client->conn_id);
+    } else if (client->have_out_fd) {
+        client_claim_out_fds(client, req_header->opcode);
+        if (client->out_fd_count == 0) {
+            LOG(LOG_ERR, "Unexpected outbound fd for opcode=%u",
+                (unsigned int)req_header->opcode);
+            client_release_owned_out_fds(client);
+            return -1;
+        }
     }
 
     resp_header->size = size;
@@ -2849,7 +2872,6 @@ static uint16_t client_handle_request_qdma_qpair_get_fd(
 
     /* Schedule this fd for delivery via SCM_RIGHTS in client_handle_out(). */
     *out_fd = fd;
-    client->out_fds_owned[0] = true;
     *have_out_fd = true;
 
     resp_body->zero = 0;
@@ -3008,7 +3030,6 @@ static uint16_t client_handle_request_buffer_open(
     /* A single transfer fd owns all qpairs; the client selects channels by
      * qpair_index per sub-transfer. */
     client->out_fds[0] = fd;
-    client->out_fd_count = 1;
     *out_fd = fd;
     *have_out_fd = true;
     *resp_size = sizeof(*resp_body);
@@ -3135,7 +3156,6 @@ static uint16_t client_handle_request_buffer_open_raw(
 
     resp_body->qpair_count = qpair_count;
     client->out_fds[0] = fd;
-    client->out_fd_count = 1;
     *out_fd = fd;
     *have_out_fd = true;
     *resp_size = sizeof(*resp_body);

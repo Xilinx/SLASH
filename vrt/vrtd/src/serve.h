@@ -168,6 +168,17 @@ void cleanup_clientp(struct client **clientp)
 DECLARE_OWNING_PTR_ARRAY(client_ptr_array, struct client *, cleanup_client)
 
 /**
+ * @brief Record how many descriptors a response carries and who owns them.
+ *
+ * Both come from the opcode, so a handler cannot hand out a descriptor the
+ * daemon opened and leave it unclosed by forgetting to say it owns it.
+ *
+ * @param client The client whose prepared response carries the descriptors.
+ * @param opcode The opcode of the request being answered.
+ */
+void client_claim_out_fds(struct client *client, uint16_t opcode);
+
+/**
  * @brief Callback invoked by the systemd event loop when a client socket is ready for I/O.
  *
  * Drives the per-client state machine: reads requests, dispatches them through
