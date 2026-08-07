@@ -98,3 +98,33 @@ jobs:
           # Undefined behaviour is only reported by default, so make it fail.
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           cd tests && ctest --output-on-failure
+
+  vrtd_tsan:
+    runs-on: ubuntu-24.04
+    permissions: { contents: read }
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: "true"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake pkg-config ninja-build \
+          libsystemd-dev libinih-dev
+
+      - name: Build and run VRTD unit tests under TSan
+        run: |
+          mkdir vrt/vrtd/build-tsan
+          cd vrt/vrtd/build-tsan
+          # ThreadSanitizer refuses to start under the address space layout
+          # randomisation this image defaults to, so disable it for the build
+          # too: test discovery runs the binaries.
+          setarch $(uname -m) -R cmake -DVRTD_BUILD_TESTS=1 \
+            -DVRTD_INCLUDE_LIBSLASH=1 -DENABLE_TSAN=1 ..
+          setarch $(uname -m) -R make unit_tests -j$(nproc)
+          export LD_LIBRARY_PATH=$(pwd)/libslash/src/:$LD_LIBRARY_PATH
+          export TSAN_OPTIONS=halt_on_error=1:history_size=7
+          cd tests && setarch $(uname -m) -R ctest --output-on-failure

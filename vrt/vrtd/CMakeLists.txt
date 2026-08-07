@@ -49,10 +49,21 @@ if(ENABLE_SANITIZERS)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
+# ThreadSanitizer needs its own build because it cannot be combined with
+# AddressSanitizer.
+option(ENABLE_TSAN "Build with ThreadSanitizer" OFF)
+if(ENABLE_TSAN)
+  if(ENABLE_SANITIZERS)
+    message(FATAL_ERROR "ENABLE_TSAN and ENABLE_SANITIZERS cannot be used together")
+  endif()
+  add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=thread)
+endif()
+
 option(ENABLE_COVERAGE "Build with gcov coverage instrumentation" OFF)
 if(ENABLE_COVERAGE)
-  if(ENABLE_SANITIZERS)
-    message(FATAL_ERROR "ENABLE_COVERAGE and ENABLE_SANITIZERS cannot be used together")
+  if(ENABLE_SANITIZERS OR ENABLE_TSAN)
+    message(FATAL_ERROR "ENABLE_COVERAGE cannot be used with a sanitizer")
   endif()
   add_compile_options(--coverage -fno-inline)
   add_link_options(--coverage)
