@@ -85,6 +85,7 @@ add_subdirectory(libvrtd)
 add_subdirectory(libvrtdpp)
 
 if(VRTD_BUILD_TESTS)
+  enable_testing()
   add_subdirectory(tests)
 endif()
 
