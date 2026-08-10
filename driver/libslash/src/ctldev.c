@@ -30,7 +30,7 @@
 
 #include <slash/ctldev.h>
 
-#include "ctldev_mock.h"
+#include "mock_sock.h"
 #include "sock_transport.h"
 
 #include <fcntl.h>
@@ -48,15 +48,11 @@
 struct slash_ctldev *slash_ctldev_open(const char *path)
 {
     struct slash_ctldev *ctldev;
-    int is_sock;
+    int is_mock, is_sock;
 
     if (path == NULL) {
         errno = EINVAL;
         return NULL;
-    }
-
-    if (strcmp(path, "@mock") == 0) {
-        return slash_ctldev_mock_open();
     }
 
     ctldev = calloc(1, sizeof(*ctldev));
@@ -64,17 +60,27 @@ struct slash_ctldev *slash_ctldev_open(const char *path)
         return NULL;
     }
 
-    is_sock = slash_path_is_socket(path);
-    if (is_sock < 0) {
-        goto err_free_ctldev;
+    is_mock = strcmp(path, "@mock") == 0;
+    if (!is_mock) {
+        is_sock = slash_path_is_socket(path);
+        if (is_sock < 0) {
+            free(ctldev);
+            return NULL;
+        }
     }
 
-    if (is_sock) {
+    if (is_mock) {
+        ctldev->fd = slash_mock_sock_create(SLASH_MOCK_SOCK_ENDPOINT_CTLDEV);
+        if (ctldev->fd < 0) {
+            goto err_free_ctldev;
+        }
+        ctldev->transport = SLASH_TRANSPORT_SOCKET;
+        ctldev->seq       = 0;
+    } else if (is_sock) {
         ctldev->fd = slash_sock_connect(path);
         if (ctldev->fd < 0) {
             goto err_free_ctldev;
         }
-        ctldev->mock      = false;
         ctldev->transport = SLASH_TRANSPORT_SOCKET;
         ctldev->seq       = 0;
     } else {
@@ -82,7 +88,6 @@ struct slash_ctldev *slash_ctldev_open(const char *path)
         if (ctldev->fd < 0) {
             goto err_free_ctldev;
         }
-        ctldev->mock      = false;
         ctldev->transport = SLASH_TRANSPORT_IOCTL;
         ctldev->seq       = 0;
     }
@@ -102,10 +107,6 @@ int slash_ctldev_close(struct slash_ctldev *ctldev)
     if (ctldev == NULL) {
         errno = EINVAL;
         return -1;
-    }
-
-    if (ctldev->mock) {
-        return slash_ctldev_mock_close(ctldev);
     }
 
     ret = 0;
@@ -128,10 +129,6 @@ struct slash_ioctl_device_info *slash_device_info_read(struct slash_ctldev *ctld
     if (ctldev == NULL) {
         errno = EINVAL;
         return NULL;
-    }
-
-    if (ctldev->mock) {
-        return slash_device_info_mock_read(ctldev);
     }
 
     info = calloc(1, sizeof(*info));
@@ -157,15 +154,17 @@ struct slash_ioctl_device_info *slash_device_info_read(struct slash_ctldev *ctld
             goto err_free_info;
         }
         return info;
-    }
+    } else if (ctldev->transport == SLASH_TRANSPORT_IOCTL) {
+        ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, info);
+        if (ret < 0) {
+            goto err_free_info;
+        }
 
-    /* IOCTL path */
-    ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, info);
-    if (ret < 0) {
+        return info;
+    } else {
+        errno = EINVAL;
         goto err_free_info;
     }
-
-    return info;
 
 err_free_info:
     free(info);
@@ -187,10 +186,6 @@ struct slash_ioctl_bar_info *slash_bar_info_read(struct slash_ctldev *ctldev, in
     if (ctldev == NULL) {
         errno = EINVAL;
         return NULL;
-    }
-
-    if (ctldev->mock) {
-        return slash_bar_info_mock_read(ctldev, bar_number);
     }
 
     bar_info = calloc(1, sizeof(*bar_info));
@@ -216,15 +211,17 @@ struct slash_ioctl_bar_info *slash_bar_info_read(struct slash_ctldev *ctldev, in
             goto err_free_bar_info;
         }
         return bar_info;
-    }
+    } else if (ctldev->transport == SLASH_TRANSPORT_IOCTL) {
+        ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_INFO, bar_info);
+        if (ret < 0) {
+            goto err_free_bar_info;
+        }
 
-    /* IOCTL path */
-    ret = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_INFO, bar_info);
-    if (ret < 0) {
+        return bar_info;
+    } else {
+        errno = EINVAL;
         goto err_free_bar_info;
     }
-
-    return bar_info;
 
 err_free_bar_info:
     free(bar_info);
@@ -236,7 +233,6 @@ struct slash_bar_file *slash_bar_file_open(struct slash_ctldev *ctldev, int bar_
 {
     struct slash_ioctl_bar_fd_request req;
     struct slash_bar_file *bar_file;
-    int recv_fd;
     size_t n_recv;
     int32_t rv;
 
@@ -250,82 +246,59 @@ struct slash_bar_file *slash_bar_file_open(struct slash_ctldev *ctldev, int bar_
         return NULL;
     }
 
-    if (ctldev->mock) {
-        return slash_bar_file_mock_open(ctldev, bar_number, flags);
-    }
-
     bar_file = calloc(1, sizeof(*bar_file));
     if (bar_file == NULL) {
         return NULL;
     }
 
     if (ctldev->transport == SLASH_TRANSPORT_SOCKET) {
-        recv_fd  = -1;
         n_recv   = 0;
         rv = slash_sock_request(ctldev->fd,
                                 (uint32_t)SLASH_CTLDEV_IOCTL_GET_BAR_FD,
                                 &req, sizeof(req),
                                 NULL, 0,
-                                &recv_fd, 1, &n_recv,
+                                &bar_file->fd, 1, &n_recv,
                                 &ctldev->seq);
         if (rv == SLASH_SOCK_TRANSPORT_ERR) {
             goto err_free_bar_file;
         }
         if (rv < 0) {
             errno = (int)-rv;
-            if (recv_fd >= 0) { close(recv_fd); recv_fd = -1; }
             goto err_free_bar_file;
         }
-        if (n_recv < 1 || recv_fd < 0) {
+        if (n_recv < 1 || bar_file->fd < 0) {
             /* Daemon didn't send us an fd — treat as transport error */
             errno = ENODEV;
             goto err_free_bar_file;
         }
-        /* req.length was filled in by the daemon. */
-        bar_file->fd        = recv_fd;
-        bar_file->len       = (size_t)req.length;
-        bar_file->mock      = false;
-        bar_file->transport = SLASH_TRANSPORT_SOCKET;
-
-        bar_file->map = mmap(NULL, bar_file->len, PROT_READ | PROT_WRITE,
-                             MAP_SHARED, bar_file->fd, 0);
-        if (bar_file->map == MAP_FAILED) {
-            close(bar_file->fd);
+    } else if (ctldev->transport == SLASH_TRANSPORT_IOCTL) {
+        bar_file->fd = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_FD, &req);
+        if (bar_file->fd < 0) {
             goto err_free_bar_file;
         }
-        return bar_file;
-    }
-
-    /* IOCTL path: the ioctl returns the dma-buf fd directly as its return value. */
-    bar_file->fd = ioctl(ctldev->fd, SLASH_CTLDEV_IOCTL_GET_BAR_FD, &req);
-    if (bar_file->fd < 0) {
+    } else {
+        errno = EINVAL;
         goto err_free_bar_file;
     }
 
-    /* The kernel filled in req.length with the BAR size. */
-    bar_file->len = (size_t)req.length;
+    /* After this point, bar_file->fd is a valid FD */
 
-    /*
-     * Map the entire BAR into our address space.  The dma-buf fd
-     * backs this mapping — the kernel's slash_bar_dmabuf_mmap()
-     * installs a fault handler that maps BAR pages via
-     * vmf_insert_pfn() on first access.  Callers must bracket
-     * accesses with the DMA_BUF_IOCTL_SYNC start/end helpers
-     * (see the inline functions in ctldev.h).
-     */
+    /* req.length was filled in by the server. */
+    bar_file->len       = (size_t)req.length;
+    bar_file->transport = ctldev->transport;
+
     bar_file->map = mmap(NULL, bar_file->len, PROT_READ | PROT_WRITE,
-                         MAP_SHARED, bar_file->fd, 0);
+                            MAP_SHARED, bar_file->fd, 0);
     if (bar_file->map == MAP_FAILED) {
+        close(bar_file->fd);
         goto err_close_fd;
     }
-
-    bar_file->mock      = false;
-    bar_file->transport = SLASH_TRANSPORT_IOCTL;
-
     return bar_file;
 
 err_close_fd:
-    (void)close(bar_file->fd);
+    if (bar_file->fd >= 0) {
+        (void)close(bar_file->fd);
+    }
 
 err_free_bar_file:
     free(bar_file);
@@ -340,10 +313,6 @@ int slash_bar_file_close(struct slash_bar_file *bar_file)
     if (bar_file == NULL) {
         errno = EINVAL;
         return -1;
-    }
-
-    if (bar_file->mock) {
-        return slash_bar_file_mock_close(bar_file);
     }
 
     if (munmap(bar_file->map, bar_file->len) != 0) {

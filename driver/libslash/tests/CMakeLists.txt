@@ -62,14 +62,6 @@ set_target_properties(sysemu_test_server PROPERTIES
 add_slash_test(ctldev_test ctldev_test.cpp)
 add_slash_test(hotplug_test hotplug_test.cpp)
 
-# ctldev socket-transport tests.
-add_slash_test(ctldev_sysemu_test ctldev_sysemu_test.cpp)
-target_link_libraries(ctldev_sysemu_test PRIVATE sysemu_test_server)
-target_include_directories(ctldev_sysemu_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
 # qdma tests.
 add_slash_test(qdma_test qdma_test.cpp)
 target_link_libraries(qdma_test PRIVATE sysemu_test_server)

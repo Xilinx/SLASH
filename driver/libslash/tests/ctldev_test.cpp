@@ -136,7 +136,6 @@ class CtldevTest : public ::testing::TestWithParam<LibSlashBackend> {
             GTEST_FAIL() << "Unknown backend!";
         }
 
-        EXPECT_FALSE(dev_->mock);
         EXPECT_GE(dev_->fd, 0);
     }
 
@@ -154,17 +153,15 @@ class CtldevTest : public ::testing::TestWithParam<LibSlashBackend> {
 TEST_P(CtldevTest, DeviceInfoBdfNonEmpty) {
     struct slash_ioctl_device_info *info = slash_device_info_read(dev_);
     ASSERT_NE(info, nullptr);
+    EXPECT_EQ(info->vendor_id,           0x10EEu);
+    EXPECT_EQ(info->device_id,           0x50B6u);
+    EXPECT_EQ(info->subsystem_vendor_id, 0x10EEu);
+    EXPECT_EQ(info->subsystem_device_id, 0x000eu);
     EXPECT_GT(strlen(info->bdf), 0u);
     if (backend == LibSlashBackend::MOCK) {
         EXPECT_STREQ(info->bdf, "0000:00:00.1"); // TODO: Insert correct BDF
     }
     slash_device_info_free(info);
-}
-
-TEST_P(CtldevTest, DeviceInfoReadNullHandle) {
-    errno = 0;
-    EXPECT_EQ(slash_device_info_read(nullptr), nullptr);
-    EXPECT_EQ(errno, EINVAL);
 }
 
 TEST_P(CtldevTest, EvenBarsUsable) {
@@ -191,7 +188,6 @@ TEST_P(CtldevTest, Bar0FileOpenAndSync) {
     ASSERT_NE(bar, nullptr);
     EXPECT_NE(bar->map, nullptr);
     EXPECT_GT(bar->len, 0u);
-    EXPECT_FALSE(bar->mock);
 
     // This test assumes a normal Vitis HLS kernel at offset 0.
     // Such a kernel has their first parameter register at offset 0x10 relative

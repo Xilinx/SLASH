@@ -21,7 +21,6 @@
 # Library sources (list explicitly; avoid GLOB for reproducible builds)
 add_library(slash
   ${CMAKE_CURRENT_SOURCE_DIR}/ctldev.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/ctldev_mock.c
   ${CMAKE_CURRENT_SOURCE_DIR}/hotplug.c
   ${CMAKE_CURRENT_SOURCE_DIR}/qdma.c
   ${CMAKE_CURRENT_SOURCE_DIR}/mock_sock.c

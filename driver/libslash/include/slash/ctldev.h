@@ -67,7 +67,6 @@ extern "C" {
  */
 enum slash_transport {
     SLASH_TRANSPORT_IOCTL,
-    SLASH_TRANSPORT_MOCK,
     SLASH_TRANSPORT_SOCKET
 };
 
@@ -76,7 +75,6 @@ enum slash_transport {
  */
 struct slash_ctldev {
     int fd;                    /**< File descriptor (char device or socket). */
-    bool mock;                 /**< True if this is a mock device (no real hardware). */
     enum slash_transport transport; /**< Transport selector. */
     uint32_t seq;              /**< Next sequence id for socket requests. */
 };
@@ -91,13 +89,6 @@ struct slash_bar_file {
     void *map;    /**< Pointer to the mmap'd BAR region. */
     size_t len;   /**< Size of the mapping in bytes. */
     int fd;       /**< The dma-buf or memfd file descriptor backing the mapping. */
-    bool mock;    /**< True if backed by a mock file instead of real hardware. */
-    /**
-     * Path to the backing file (mock mode only); NULL otherwise.
-     * Allocated by slash_bar_file_open() (mock path) and freed
-     * by slash_bar_file_close().  NULL in non-mock mode.
-     */
-    char *mock_path;
     enum slash_transport transport; /**< Transport selector (matches parent ctldev). */
 };
 
@@ -195,10 +186,6 @@ static __inline__ int slash_bar_file_sync(struct slash_bar_file *bar_file, unsig
         return -1;
     }
 
-    if (bar_file->mock) {
-        return 0;
-    }
-
     if (bar_file->transport == SLASH_TRANSPORT_SOCKET) {
         /*
          * Translate DMA_BUF_SYNC_* into flock(2) operations.
@@ -224,17 +211,17 @@ static __inline__ int slash_bar_file_sync(struct slash_bar_file *bar_file, unsig
             ret = flock(bar_file->fd, how);
         } while (ret == -1 && errno == EINTR);
         return ret;
+    } else {
+        /* IOCTL path: issue DMA_BUF_IOCTL_SYNC against the dma-buf fd. */
+        sync.flags = flags;
+        ret = ioctl(bar_file->fd, DMA_BUF_IOCTL_SYNC, &sync);
+        if (ret == -1) {
+            fprintf(stderr, "slash_bar_file_sync: DMA_BUF_IOCTL_SYNC failed "
+                    "(flags=0x%x, fd=%d, errno=%d)\n",
+                    flags, bar_file->fd, errno);
+        }
+        return ret;
     }
-
-    /* IOCTL path: issue DMA_BUF_IOCTL_SYNC against the dma-buf fd. */
-    sync.flags = flags;
-    ret = ioctl(bar_file->fd, DMA_BUF_IOCTL_SYNC, &sync);
-    if (ret == -1) {
-        fprintf(stderr, "slash_bar_file_sync: DMA_BUF_IOCTL_SYNC failed "
-                "(flags=0x%x, fd=%d, errno=%d)\n",
-                flags, bar_file->fd, errno);
-    }
-    return ret;
 }
 
 /** Acquire write access to the BAR mapping. Equivalent to slash_bar_file_sync(bar_file, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE). */
