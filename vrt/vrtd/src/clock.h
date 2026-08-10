@@ -45,6 +45,16 @@
 #define CLOCK_DRIVER_BAR_NUMBER 4
 
 /**
+ * @brief Fallback BAR index for the clock wizard registers.
+ *
+ * TEMPORARY. The compute-only platform exposes the clock wizards
+ * on BAR2 rather than BAR4. Until the platforms agree on one BAR (or the BAR
+ * is discovered from metadata), the driver tries BAR4 first and falls back
+ * to this one.
+ */
+#define CLOCK_DRIVER_BAR_NUMBER_FALLBACK 2
+
+/**
  * @name Clock wizard region offsets within BAR4.
  * Each region contains the AXI register set for one clock wizard instance.
  * @{

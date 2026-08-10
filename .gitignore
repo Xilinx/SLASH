@@ -40,7 +40,11 @@ Thumbs.db
 # Ignore IDE specific files
 .vscode/
 .idea/
+.cursor/
 *.iml
+
+# Ignore local git worktrees
+.worktrees/
 
 # Ignore test binaries
 /tests/*.exe
@@ -80,6 +84,11 @@ driver/kcompat/.scratch/
 # VBIN build directories
 *.prj
 
+# Root design build outputs
+/linker/install.prj.compute/
+/linker/slashkit/resources/static_shell/
+/linker/slashkit/resources/static_shell_compute/
+
 # Python virtual environment
 .venv
 
@@ -88,3 +97,9 @@ driver/kcompat/.scratch/
 
 # Project-local scratch space
 /tmp/
+tmp/
+**/build-host/
+
+# Claude Code files
+/CLAUDE.md
+/.claude/

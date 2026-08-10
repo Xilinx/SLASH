@@ -18,10 +18,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-"""Tests for the LD_PRELOAD environment helper in emit.hw.project_gen."""
+"""Tests for hardware project generation helpers."""
 
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
+from slashkit.core.command_config import ShellType
 from slashkit.emit.hw import project_gen
 
 LIBUDEV = "/lib/x86_64-linux-gnu/libudev.so.1"
@@ -58,3 +61,40 @@ def test_no_preload_when_libudev_absent(monkeypatch):
     monkeypatch.delenv("LD_PRELOAD", raising=False)
     env = project_gen._environment_with_udev_ld_preload()
     assert "LD_PRELOAD" not in env
+
+
+def test_service_networking_reuses_common_ip_repository(monkeypatch, tmp_path):
+    """Building slash and service-layer RMs exports common IP only once."""
+    config = SimpleNamespace(
+        build_dir=tmp_path,
+        ip_repository=tmp_path / "iprepo",
+        kernels=[],
+        shell_type=ShellType.SERVICE,
+        pre_synth_tcls=[],
+        project_name="test",
+        n_jobs=1,
+        vivado_bin=Path("/usr/bin/true"),
+    )
+    export_calls = []
+
+    def export_once(_package, out_dir):
+        export_calls.append(out_dir)
+        out_dir.mkdir()
+
+    def run_vivado(*_args, **_kwargs):
+        images = tmp_path / "images"
+        (images / "top_i_slash_slash_test_inst_0_partial.pdi").touch()
+        (images / "top_i_service_layer_service_layer_test_inst_0_partial.pdi").touch()
+
+    monkeypatch.setattr(project_gen, "export_package", export_once)
+    monkeypatch.setattr(
+        project_gen.resources,
+        "path",
+        lambda _package, name: nullcontext(tmp_path / name),
+    )
+    monkeypatch.setattr(project_gen.subprocess, "run", run_vivado)
+
+    project_gen.build_slash_rm(config)
+    project_gen.build_service_layer_rm(config)
+
+    assert export_calls == [config.ip_repository / "slash_base"]

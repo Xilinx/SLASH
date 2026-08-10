@@ -2,7 +2,7 @@
 
 Command-line tool for managing AMD Alveo V80 devices.  v80-smi can
 enumerate boards, inspect vrtbin metadata, program devices, reset
-hardware, and validate memory integrity and bandwidth.
+hardware, write the static shell, and validate memory integrity and bandwidth.
 
 | Command    | Purpose                                           |
 |------------|---------------------------------------------------|
@@ -12,8 +12,9 @@ hardware, and validate memory integrity and bandwidth.
 | `query`    | Display metadata of the vbin loaded on a device   |
 | `program`  | Load a vbin file onto a V80 device                |
 | `reset`    | Hardware-reset a V80 board                        |
+| `write-static-shell` | Write the static SLASH shell to a V80 board |
 | `validate` | Reset board and test memory integrity + bandwidth |
-| `debug`    | Low-level BAR, memory, and clock debug utilities   |
+| `debug`    | Low-level BAR, memory, clock, and hotplug debug utilities |
 
 ## Building
 
@@ -36,7 +37,8 @@ Requires a C++20 compiler.
 sudo cmake --install build --prefix /usr/local
 ```
 
-This installs the `v80-smi` binary to `<prefix>/bin/`.
+This installs the `v80-smi` binary to `<prefix>/bin/` and the JTAG helper
+script to `<prefix>/share/v80-smi/`.
 
 ## Commands
 
@@ -80,8 +82,8 @@ v80-smi list [-l] [-s] [-j | -J]
 Readiness checks per board:
 
 - **PF0** (device 0x50B4) &mdash; expected driver: `ami`
-- **PF1** (device 0x50B5) &mdash; expected driver: `slash_qdma`
-- **PF2** (device 0x50B6) &mdash; expected driver: `slash_ctl`
+- **PF1** (device 0x50C1) &mdash; expected driver: `slash_qdma`
+- **PF2** (device 0x50C2) &mdash; expected driver: `slash_ctl`
 - **VRTD** &mdash; daemon reachable and device registered
 
 ```console
@@ -175,6 +177,41 @@ v80-smi reset -d <BDF>
 
 Requires root access and a running VRTD daemon.  The device must be
 programmed with the static SLASH design.
+
+### write-static-shell
+
+Write the installed static SLASH shell PDI to a V80 board.  The `--flash`
+mode programs the flash-image PDI through VRTD cfgmem programming.
+The `--jtag` mode programs the no-FPT PDI over JTAG with `xsdb`.
+
+```
+v80-smi write-static-shell --flash -d <BDF> [--pdi <file>]
+v80-smi write-static-shell --jtag -d <BDF> [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+v80-smi write-static-shell --jtag --no-remove-device [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `--flash`         | Program the flash-image PDI via VRTD cfgmem programming |
+| `--jtag`          | Program the no-FPT PDI over JTAG via `xsdb`          |
+| `-d,--device`     | Board address, required except with `--jtag --no-remove-device` |
+| `--pdi`           | Use this PDI file instead of resolving the installed static shell PDI |
+| `--no-remove-device` | Skip the pre-JTAG PCIe device removal; valid only with `--jtag` |
+| `--bash-source`   | Source a Vivado/Vitis setup script before running `xsdb`; may be repeated and is valid only with `--jtag` |
+| `--xsdb-target-id` | Select the `Versal xcv80` XSDB `target_id`; valid only with `--jtag` |
+
+Both modes resolve their PDI path with `python3 -m slashkit static-shell-path`,
+so setting `PYTHONPATH` can select an in-repo `slashkit`.  Use `--pdi` to bypass
+that resolution during active development; the file must match the selected
+mode (`--flash` expects a flash-image PDI, `--jtag` expects a no-FPT/JTAG-bootable
+PDI).  JTAG mode removes the board's PCIe functions via VRTD unless
+`--no-remove-device` is given, runs `/bin/bash -c 'source ...; xsdb ...'` with
+`PDI_PATH` set to the selected PDI, optionally sets `V80_TARGET_ID` from
+`--xsdb-target-id`, and rescans PCIe through VRTD afterward.
+
+The command prints progress to stderr.  Flash mode reports VRTD cfgmem phases
+and interval-based PDI download progress, while JTAG mode reports local stages
+such as PCIe removal, `xsdb`, and PCIe rescan.
 
 ### validate
 
@@ -418,6 +455,45 @@ achieved_hz=300000000
 
 Requires a running VRTD daemon and clock permission in the user's role.
 
+### debug hotplug-op
+
+Perform low-level PCIe hotplug operations through the vrtd hotplug-op API.
+
+```
+v80-smi debug hotplug-op --op rescan
+v80-smi debug hotplug-op -d <BDF> --op <remove|hotplug> [--function <N>]
+v80-smi debug hotplug-op -d <BDF> --op toggle-sbr --function <N>
+```
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address, e.g. `03:00` or `0000:03:00`; required except for `rescan` |
+| `--op`            | Operation: `rescan`, `remove`, `toggle-sbr`, or `hotplug` |
+| `--function`      | PCI function number, range `0-7`; defaults to all PFs for `remove` and `hotplug`; required for `toggle-sbr` |
+
+Rules:
+
+- `rescan` is device-independent and rejects both `--device` and `--function`.
+- `remove` and `hotplug` default to all V80 PFs (PF0, PF1, PF2) so vrtd does not leave dangling PFs behind.
+- Passing `--function` to `remove` or `hotplug` targets only that PCI function.
+- `toggle-sbr` requires `--function` because it uses a single PF BDF to find the upstream bridge.
+- `reset-sequence` is not exposed here; use `v80-smi reset` for the full board reset flow.
+- `rescan` is unauthenticated in vrtd.
+- Other operations require `pcie-hotplug` permission in the user's vrtd role.
+
+Examples:
+
+```console
+$ v80-smi debug hotplug-op --op rescan
+hotplug_op=rescan
+
+$ v80-smi debug hotplug-op -d 03:00 --op remove
+hotplug_op=remove bdf=0000:03:00 function=all
+
+$ v80-smi debug hotplug-op -d 03:00 --op remove --function 2
+hotplug_op=remove bdf=0000:03:00 function=2
+```
+
 ## Device addressing
 
 All commands that accept a `-d,--device` option support four BDF
@@ -441,6 +517,8 @@ since v80-smi always operates at board granularity.
 | libvrt     | VRT runtime library (device, kernel, vrtbin APIs) |
 | vrtd       | Runtime daemon (sensors, reset, validate, query)  |
 | libslash   | Raw SLASH QDMA backend for `validate --raw-transfer-test` |
+| slashkit   | Static-shell PDI path resolution for `write-static-shell` |
+| xsdb       | JTAG programming backend for `write-static-shell --jtag` |
 | qdma_nl.h  | Optional stock QDMA-driver backend (`SMI_ENABLE_QDMA_DRIVER_BACKEND=ON`) |
 
 ## Project layout
@@ -453,14 +531,18 @@ smi/
     inspect.cpp/hpp   Vbin metadata inspection and device query
     program.cpp/hpp   Device programming
     reset.cpp/hpp     Hardware reset via VRTD
+    write_static_shell.cpp/hpp  Static shell flash/JTAG programming
     validate.cpp/hpp  Memory integrity and bandwidth testing
     raw_transfer.hpp  Shared raw QDMA host mapping and transfer helpers
     qdma_driver_backend.cpp/hpp  Optional stock QDMA-driver validate backend
     debug/bar_poke.cpp/hpp  BAR read/write debug command
     debug/mem_poke.cpp/hpp  Raw device memory read/write command
     debug/clockwiz.cpp/hpp  Clock read/set debug command
+    debug/hotplug.cpp/hpp   PCIe hotplug debug command
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
+  resources/
+    versal_flash_pdi.tcl  JTAG PDI programming script installed with v80-smi
 ```
 
 ## License

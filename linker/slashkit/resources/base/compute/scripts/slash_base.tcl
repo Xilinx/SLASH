@@ -132,9 +132,6 @@ if { $bCheckIPs == 1 } {
 xilinx.com:hls:hbm_bandwidth:1.0\
 xilinx.com:ip:smartconnect:1.0\
 xilinx.com:ip:axi_noc:1.1\
-xilinx.com:ip:axis_noc:1.0\
-xilinx.com:hls:traffic_producer:1.0\
-xilinx.com:ip:xlconstant:1.1\
 xilinx.com:ip:c_shift_ram:12.0\
 xilinx.com:inline_hdl:ilreduced_logic:1.0\
 xilinx.com:ip:util_ds_buf:2.2\
@@ -1081,86 +1078,6 @@ proc create_root_design { parentCell } {
    CONFIG.INI_STRATEGY {driver} \
    ] $HBM_VNOC_INI_07
 
-  set M_DCMAC_INIS0 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS0 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS0
-
-  set M_DCMAC_INIS1 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS1 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS1
-
-  set M_DCMAC_INIS2 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS2 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS2
-
-  set M_DCMAC_INIS3 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS3 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS3
-
-  set M_DCMAC_INIS4 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS4 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS4
-
-  set M_DCMAC_INIS5 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS5 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS5
-
-  set M_DCMAC_INIS6 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS6 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS6
-
-  set M_DCMAC_INIS7 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inis_rtl:1.0 M_DCMAC_INIS7 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $M_DCMAC_INIS7
-
-  set S_DCMAC_INIS0 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS0 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS0
-
-  set S_DCMAC_INIS1 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS1 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS1
-
-  set S_DCMAC_INIS2 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS2 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS2
-
-  set S_DCMAC_INIS3 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS3 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS3
-
-  set S_DCMAC_INIS4 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS4 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS4
-
-  set S_DCMAC_INIS5 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS5 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS5
-
-  set S_DCMAC_INIS6 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS6 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS6
-
-  set S_DCMAC_INIS7 [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inis_rtl:1.0 S_DCMAC_INIS7 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   ] $S_DCMAC_INIS7
-
   set S_AXILITE_INI [ create_bd_intf_port -mode Slave -vlnv xilinx.com:interface:inimm_rtl:1.0 S_AXILITE_INI ]
   set_property -dict [ list \
    CONFIG.COMPUTED_STRATEGY {load} \
@@ -1168,30 +1085,58 @@ proc create_root_design { parentCell } {
    ] $S_AXILITE_INI
   set_property APERTURES {{0x202_0000_0000 128M}} [get_bd_intf_ports S_AXILITE_INI]
 
-  set SL_VIRT_00 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 SL_VIRT_00 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $SL_VIRT_00
-
-  set SL_VIRT_01 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 SL_VIRT_01 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $SL_VIRT_01
-
-  set SL_VIRT_02 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 SL_VIRT_02 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $SL_VIRT_02
-
-  set SL_VIRT_03 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 SL_VIRT_03 ]
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
-   ] $SL_VIRT_03
-
   set QDMA_SLAVE_BRIDGE_0 [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 QDMA_SLAVE_BRIDGE_0 ]
   set_property -dict [ list \
    CONFIG.INI_STRATEGY {driver} \
    ] $QDMA_SLAVE_BRIDGE_0
+
+  set M04_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M04_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M04_INI
+
+  set M05_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M05_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M05_INI
+
+  set M06_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M06_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M06_INI
+
+  set M07_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M07_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M07_INI
+
+  set M08_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M08_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M08_INI
+
+  set M09_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M09_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M09_INI
+
+  set M10_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M10_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M10_INI
+
+  set M11_INI [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M11_INI ]
+  set_property -dict [ list \
+   CONFIG.COMPUTED_STRATEGY {driver} \
+   CONFIG.INI_STRATEGY {driver} \
+   ] $M11_INI
 
 
   # Create ports
@@ -1565,6 +1510,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /ddr_noc_0/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1587,6 +1533,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /ddr_noc_1/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1609,6 +1556,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /ddr_noc_2/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1631,6 +1579,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /ddr_noc_3/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1695,6 +1644,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_00/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1719,6 +1669,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_01/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1743,6 +1694,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_02/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1767,6 +1719,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_03/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1791,6 +1744,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_04/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1815,6 +1769,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_05/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1839,6 +1794,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_06/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1863,6 +1819,7 @@ proc create_root_design { parentCell } {
  ] [get_bd_intf_pins /hbm_vnoc_07/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -1871,453 +1828,6 @@ proc create_root_design { parentCell } {
   set_property -dict [ list \
    CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
  ] [get_bd_pins /hbm_vnoc_07/aclk0]
-
-  # Create instance: dcmac_axis_noc_0, and set properties
-  set dcmac_axis_noc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_0 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_0
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_0/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS { write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_0/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_0/aclk0]
-
-  # Create instance: dcmac_axis_noc_1, and set properties
-  set dcmac_axis_noc_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_1 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_1
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_1/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_1/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_1/aclk0]
-
-  # Create instance: dcmac_axis_noc_2, and set properties
-  set dcmac_axis_noc_2 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_2 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_2
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_2/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_2/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_2/aclk0]
-
-  # Create instance: dcmac_axis_noc_3, and set properties
-  set dcmac_axis_noc_3 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_3 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_3
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_3/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_3/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_3/aclk0]
-
-  # Create instance: dcmac_axis_noc_4, and set properties
-  set dcmac_axis_noc_4 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_4 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_4
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_4/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_4/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_4/aclk0]
-
-  # Create instance: dcmac_axis_noc_5, and set properties
-  set dcmac_axis_noc_5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_5 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_5
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_5/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_5/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_5/aclk0]
-
-  # Create instance: dcmac_axis_noc_6, and set properties
-  set dcmac_axis_noc_6 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_6 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_6
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_6/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_6/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_6/aclk0]
-
-  # Create instance: dcmac_axis_noc_7, and set properties
-  set dcmac_axis_noc_7 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_7 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-  ] $dcmac_axis_noc_7
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /dcmac_axis_noc_7/M00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CONNECTIONS {M00_INIS {write_bw {500}}} \
-   CONFIG.DEST_IDS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_7/S00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_7/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_0, and set properties
-  set dcmac_axis_noc_s_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_0 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_0
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_0/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_0/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_0/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_1, and set properties
-  set dcmac_axis_noc_s_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_1 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_1
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_1/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_1/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_1/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_2, and set properties
-  set dcmac_axis_noc_s_2 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_2 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_2
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_2/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_2/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_2/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_3, and set properties
-  set dcmac_axis_noc_s_3 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_3 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_3
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_3/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_3/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_3/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_4, and set properties
-  set dcmac_axis_noc_s_4 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_4 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_4
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_4/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_4/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_4/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_5, and set properties
-  set dcmac_axis_noc_s_5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_5 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_5
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_5/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_5/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_5/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_6, and set properties
-  set dcmac_axis_noc_s_6 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_6 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_6
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_6/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_6/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_6/aclk0]
-
-  # Create instance: dcmac_axis_noc_s_7, and set properties
-  set dcmac_axis_noc_s_7 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_noc:1.0 dcmac_axis_noc_s_7 ]
-  set_property -dict [list \
-    CONFIG.NUM_NSI {1} \
-    CONFIG.NUM_SI {0} \
-  ] $dcmac_axis_noc_s_7
-
-
-  set_property -dict [ list \
-   CONFIG.TDATA_NUM_BYTES {64} \
-   CONFIG.TDEST_WIDTH {0} \
-   CONFIG.TID_WIDTH {0} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_7/M00_AXIS]
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {load} \
-   CONFIG.CONNECTIONS {M00_AXIS { write_bw {500} write_avg_burst {4}}} \
-   CONFIG.DEST_IDS {} \
- ] [get_bd_intf_pins /dcmac_axis_noc_s_7/S00_INIS]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {M00_AXIS} \
- ] [get_bd_pins /dcmac_axis_noc_s_7/aclk0]
-
-  # Create instance: traffic_producer_0, and set properties
-  set traffic_producer_0 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_0 ]
-
-  # Create instance: traffic_producer_1, and set properties
-  set traffic_producer_1 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_1 ]
-
-  # Create instance: traffic_producer_2, and set properties
-  set traffic_producer_2 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_2 ]
-
-  # Create instance: traffic_producer_3, and set properties
-  set traffic_producer_3 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_3 ]
-
-  # Create instance: traffic_producer_4, and set properties
-  set traffic_producer_4 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_4 ]
-
-  # Create instance: traffic_producer_5, and set properties
-  set traffic_producer_5 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_5 ]
-
-  # Create instance: traffic_producer_6, and set properties
-  set traffic_producer_6 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_6 ]
-
-  # Create instance: traffic_producer_7, and set properties
-  set traffic_producer_7 [ create_bd_cell -type ip -vlnv xilinx.com:hls:traffic_producer:1.0 traffic_producer_7 ]
-
-  # Create instance: xlconstant_0, and set properties
-  set xlconstant_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_0 ]
-
-  # Create instance: traffic_virt_0, and set properties
-  set traffic_virt_0 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 traffic_virt_0 ]
-  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {512} $traffic_virt_0
-
-
-  # Create instance: traffic_virt_1, and set properties
-  set traffic_virt_1 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 traffic_virt_1 ]
-  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {512} $traffic_virt_1
-
-
-  # Create instance: traffic_virt_2, and set properties
-  set traffic_virt_2 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 traffic_virt_2 ]
-  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {512} $traffic_virt_2
-
-
-  # Create instance: traffic_virt_3, and set properties
-  set traffic_virt_3 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 traffic_virt_3 ]
-  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {512} $traffic_virt_3
-
 
   # Create instance: traffic_virt_4, and set properties
   set traffic_virt_4 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 traffic_virt_4 ]
@@ -2364,7 +1874,7 @@ proc create_root_design { parentCell } {
   set smartconnect_5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_5 ]
   set_property -dict [list \
     CONFIG.NUM_CLKS {1} \
-    CONFIG.NUM_MI {14} \
+    CONFIG.NUM_MI {10} \
     CONFIG.NUM_SI {1} \
   ] $smartconnect_5
 
@@ -2903,103 +2413,12 @@ proc create_root_design { parentCell } {
   ] $hbm_sc_63
 
 
-  # Create instance: noc_virt_00, and set properties
-  set noc_virt_00 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 noc_virt_00 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-    CONFIG.NUM_NSI {0} \
-  ] $noc_virt_00
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /noc_virt_00/M00_INI]
-
-  set_property -dict [ list \
-   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
-   CONFIG.NOC_PARAMS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /noc_virt_00/S00_AXI]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
- ] [get_bd_pins /noc_virt_00/aclk0]
-
-  # Create instance: qdma_slave_bridge_noc, and set properties
-  set qdma_slave_bridge_noc [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 qdma_slave_bridge_noc ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-    CONFIG.NUM_NSI {0} \
-  ] $qdma_slave_bridge_noc
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /qdma_slave_bridge_noc/M00_INI]
-
-  set_property -dict [ list \
-   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
-   CONFIG.NOC_PARAMS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /qdma_slave_bridge_noc/S00_AXI]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
- ] [get_bd_pins /qdma_slave_bridge_noc/aclk0]
-
-  # Create instance: noc_virt_02, and set properties
-  set noc_virt_02 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 noc_virt_02 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-    CONFIG.NUM_NSI {0} \
-  ] $noc_virt_02
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /noc_virt_02/M00_INI]
-
-  set_property -dict [ list \
-   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
-   CONFIG.NOC_PARAMS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /noc_virt_02/S00_AXI]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
- ] [get_bd_pins /noc_virt_02/aclk0]
-
-  # Create instance: noc_virt_03, and set properties
-  set noc_virt_03 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 noc_virt_03 ]
-  set_property -dict [list \
-    CONFIG.NUM_MI {0} \
-    CONFIG.NUM_NMI {1} \
-    CONFIG.NUM_NSI {0} \
-  ] $noc_virt_03
-
-
-  set_property -dict [ list \
-   CONFIG.INI_STRATEGY {driver} \
- ] [get_bd_intf_pins /noc_virt_03/M00_INI]
-
-  set_property -dict [ list \
-   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
-   CONFIG.NOC_PARAMS {} \
-   CONFIG.CATEGORY {pl} \
- ] [get_bd_intf_pins /noc_virt_03/S00_AXI]
-
-  set_property -dict [ list \
-   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
- ] [get_bd_pins /noc_virt_03/aclk0]
-
   # Create instance: axi_noc_1, and set properties
   set axi_noc_1 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 axi_noc_1 ]
   set_property -dict [list \
     CONFIG.NUM_MI {0} \
     CONFIG.NUM_NMI {1} \
+    CONFIG.SI_SIDEBAND_PINS {} \
   ] $axi_noc_1
 
 
@@ -3038,34 +2457,258 @@ proc create_root_design { parentCell } {
   set_property CONFIG.C_BUF_TYPE {BUFG_FABRIC} $util_ds_buf_0
 
 
+  # Create instance: ddr_bandwidth_68, and set properties
+  set ddr_bandwidth_68 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_68 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_68
+
+
+  # Create instance: ddr_bandwidth_69, and set properties
+  set ddr_bandwidth_69 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_69 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_69
+
+
+  # Create instance: ddr_bandwidth_70, and set properties
+  set ddr_bandwidth_70 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_70 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_70
+
+
+  # Create instance: ddr_bandwidth_71, and set properties
+  set ddr_bandwidth_71 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_71 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_71
+
+
+  # Create instance: ddr_bandwidth_72, and set properties
+  set ddr_bandwidth_72 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_72 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_72
+
+
+  # Create instance: ddr_bandwidth_73, and set properties
+  set ddr_bandwidth_73 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_73 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_73
+
+
+  # Create instance: ddr_bandwidth_74, and set properties
+  set ddr_bandwidth_74 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_74 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_74
+
+
+  # Create instance: ddr_bandwidth_75, and set properties
+  set ddr_bandwidth_75 [ create_bd_cell -type ip -vlnv xilinx.com:hls:hbm_bandwidth:1.0 ddr_bandwidth_75 ]
+  set_property CONFIG.C_M_AXI_GMEM0_DATA_WIDTH {256} $ddr_bandwidth_75
+
+
+  # Create instance: ddr_noc_4, and set properties
+  set ddr_noc_4 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_4 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_4
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_4/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_4/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_4/aclk0]
+
+  # Create instance: ddr_noc_5, and set properties
+  set ddr_noc_5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_5 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_5
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_5/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_5/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_5/aclk0]
+
+  # Create instance: ddr_noc_6, and set properties
+  set ddr_noc_6 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_6 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_6
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_6/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_6/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_6/aclk0]
+
+  # Create instance: ddr_noc_7, and set properties
+  set ddr_noc_7 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_7 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_7
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_7/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_7/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_7/aclk0]
+
+  # Create instance: ddr_noc_8, and set properties
+  set ddr_noc_8 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_8 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_8
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_8/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_8/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_8/aclk0]
+
+  # Create instance: ddr_noc_9, and set properties
+  set ddr_noc_9 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_9 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_9
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_9/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_9/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_9/aclk0]
+
+  # Create instance: ddr_noc_10, and set properties
+  set ddr_noc_10 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_10 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_10
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_10/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_10/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_10/aclk0]
+
+  # Create instance: ddr_noc_11, and set properties
+  set ddr_noc_11 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 ddr_noc_11 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $ddr_noc_11
+
+
+  set_property -dict [ list \
+   CONFIG.INI_STRATEGY {driver} \
+ ] [get_bd_intf_pins /ddr_noc_11/M00_INI]
+
+  set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {} \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /ddr_noc_11/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /ddr_noc_11/aclk0]
+
   # Create interface connections
-  connect_bd_intf_net -intf_net S00_INIS_0_1 [get_bd_intf_ports S_DCMAC_INIS0] [get_bd_intf_pins dcmac_axis_noc_s_0/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_1_1 [get_bd_intf_ports S_DCMAC_INIS1] [get_bd_intf_pins dcmac_axis_noc_s_1/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_2_1 [get_bd_intf_ports S_DCMAC_INIS2] [get_bd_intf_pins dcmac_axis_noc_s_2/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_3_1 [get_bd_intf_ports S_DCMAC_INIS3] [get_bd_intf_pins dcmac_axis_noc_s_3/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_4_1 [get_bd_intf_ports S_DCMAC_INIS4] [get_bd_intf_pins dcmac_axis_noc_s_4/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_5_1 [get_bd_intf_ports S_DCMAC_INIS5] [get_bd_intf_pins dcmac_axis_noc_s_5/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_6_1 [get_bd_intf_ports S_DCMAC_INIS6] [get_bd_intf_pins dcmac_axis_noc_s_6/S00_INIS]
-  connect_bd_intf_net -intf_net S00_INIS_7_1 [get_bd_intf_ports S_DCMAC_INIS7] [get_bd_intf_pins dcmac_axis_noc_s_7/S00_INIS]
   connect_bd_intf_net -intf_net S_AXILITE_INI_1 [get_bd_intf_ports S_AXILITE_INI] [get_bd_intf_pins axi_noc_0/S00_INI]
   connect_bd_intf_net -intf_net axi_noc_0_M00_AXI [get_bd_intf_pins axi_noc_0/M00_AXI] [get_bd_intf_pins smartconnect_0/S00_AXI]
   connect_bd_intf_net -intf_net axi_noc_1_M00_INI [get_bd_intf_ports QDMA_SLAVE_BRIDGE_0] [get_bd_intf_pins axi_noc_1/M00_INI]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_0_M00_INIS [get_bd_intf_ports M_DCMAC_INIS0] [get_bd_intf_pins dcmac_axis_noc_0/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_1_M00_INIS [get_bd_intf_ports M_DCMAC_INIS1] [get_bd_intf_pins dcmac_axis_noc_1/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_2_M00_INIS [get_bd_intf_ports M_DCMAC_INIS2] [get_bd_intf_pins dcmac_axis_noc_2/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_3_M00_INIS [get_bd_intf_ports M_DCMAC_INIS3] [get_bd_intf_pins dcmac_axis_noc_3/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_4_M00_INIS [get_bd_intf_ports M_DCMAC_INIS4] [get_bd_intf_pins dcmac_axis_noc_4/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_5_M00_INIS [get_bd_intf_ports M_DCMAC_INIS5] [get_bd_intf_pins dcmac_axis_noc_5/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_6_M00_INIS [get_bd_intf_ports M_DCMAC_INIS6] [get_bd_intf_pins dcmac_axis_noc_6/M00_INIS]
-  connect_bd_intf_net -intf_net dcmac_axis_noc_7_M00_INIS [get_bd_intf_ports M_DCMAC_INIS7] [get_bd_intf_pins dcmac_axis_noc_7/M00_INIS]
   connect_bd_intf_net -intf_net ddr_bandwidth_64_m_axi_gmem0 [get_bd_intf_pins ddr_bandwidth_64/m_axi_gmem0] [get_bd_intf_pins ddr_noc_0/S00_AXI]
   connect_bd_intf_net -intf_net ddr_bandwidth_65_m_axi_gmem0 [get_bd_intf_pins ddr_bandwidth_65/m_axi_gmem0] [get_bd_intf_pins ddr_noc_1/S00_AXI]
   connect_bd_intf_net -intf_net ddr_bandwidth_66_m_axi_gmem0 [get_bd_intf_pins ddr_bandwidth_66/m_axi_gmem0] [get_bd_intf_pins ddr_noc_2/S00_AXI]
   connect_bd_intf_net -intf_net ddr_bandwidth_67_m_axi_gmem0 [get_bd_intf_pins ddr_bandwidth_67/m_axi_gmem0] [get_bd_intf_pins ddr_noc_3/S00_AXI]
+  connect_bd_intf_net -intf_net ddr_bandwidth_68_m_axi_gmem0 [get_bd_intf_pins ddr_noc_4/S00_AXI] [get_bd_intf_pins ddr_bandwidth_68/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_69_m_axi_gmem0 [get_bd_intf_pins ddr_noc_5/S00_AXI] [get_bd_intf_pins ddr_bandwidth_69/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_70_m_axi_gmem0 [get_bd_intf_pins ddr_noc_6/S00_AXI] [get_bd_intf_pins ddr_bandwidth_70/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_71_m_axi_gmem0 [get_bd_intf_pins ddr_noc_7/S00_AXI] [get_bd_intf_pins ddr_bandwidth_71/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_72_m_axi_gmem0 [get_bd_intf_pins ddr_noc_8/S00_AXI] [get_bd_intf_pins ddr_bandwidth_72/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_73_m_axi_gmem0 [get_bd_intf_pins ddr_noc_9/S00_AXI] [get_bd_intf_pins ddr_bandwidth_73/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_74_m_axi_gmem0 [get_bd_intf_pins ddr_noc_10/S00_AXI] [get_bd_intf_pins ddr_bandwidth_74/m_axi_gmem0]
+  connect_bd_intf_net -intf_net ddr_bandwidth_75_m_axi_gmem0 [get_bd_intf_pins ddr_noc_11/S00_AXI] [get_bd_intf_pins ddr_bandwidth_75/m_axi_gmem0]
   connect_bd_intf_net -intf_net ddr_noc_0_M00_INI [get_bd_intf_ports M00_INI] [get_bd_intf_pins ddr_noc_0/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_10_M00_INI [get_bd_intf_ports M10_INI] [get_bd_intf_pins ddr_noc_10/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_11_M00_INI [get_bd_intf_ports M11_INI] [get_bd_intf_pins ddr_noc_11/M00_INI]
   connect_bd_intf_net -intf_net ddr_noc_1_M00_INI [get_bd_intf_ports M01_INI] [get_bd_intf_pins ddr_noc_1/M00_INI]
   connect_bd_intf_net -intf_net ddr_noc_2_M00_INI [get_bd_intf_ports M02_INI] [get_bd_intf_pins ddr_noc_2/M00_INI]
   connect_bd_intf_net -intf_net ddr_noc_3_M00_INI [get_bd_intf_ports M03_INI] [get_bd_intf_pins ddr_noc_3/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_4_M00_INI [get_bd_intf_ports M04_INI] [get_bd_intf_pins ddr_noc_4/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_5_M00_INI [get_bd_intf_ports M05_INI] [get_bd_intf_pins ddr_noc_5/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_6_M00_INI [get_bd_intf_ports M06_INI] [get_bd_intf_pins ddr_noc_6/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_7_M00_INI [get_bd_intf_ports M07_INI] [get_bd_intf_pins ddr_noc_7/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_8_M00_INI [get_bd_intf_ports M08_INI] [get_bd_intf_pins ddr_noc_8/M00_INI]
+  connect_bd_intf_net -intf_net ddr_noc_9_M00_INI [get_bd_intf_ports M09_INI] [get_bd_intf_pins ddr_noc_9/M00_INI]
   connect_bd_intf_net -intf_net hbm_bandwidth_0_m_axi_gmem0 [get_bd_intf_pins hbm_bandwidth_0/m_axi_gmem0] [get_bd_intf_pins hbm_sc_00/S00_AXI]
   connect_bd_intf_net -intf_net hbm_bandwidth_10_m_axi_gmem0 [get_bd_intf_pins hbm_bandwidth_10/m_axi_gmem0] [get_bd_intf_pins hbm_sc_10/S00_AXI]
   connect_bd_intf_net -intf_net hbm_bandwidth_11_m_axi_gmem0 [get_bd_intf_pins hbm_bandwidth_11/m_axi_gmem0] [get_bd_intf_pins hbm_sc_11/S00_AXI]
@@ -3210,10 +2853,6 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net hbm_vnoc_05_M00_INI [get_bd_intf_ports HBM_VNOC_INI_05] [get_bd_intf_pins hbm_vnoc_05/M00_INI]
   connect_bd_intf_net -intf_net hbm_vnoc_06_M00_INI [get_bd_intf_ports HBM_VNOC_INI_06] [get_bd_intf_pins hbm_vnoc_06/M00_INI]
   connect_bd_intf_net -intf_net hbm_vnoc_07_M00_INI [get_bd_intf_ports HBM_VNOC_INI_07] [get_bd_intf_pins hbm_vnoc_07/M00_INI]
-  connect_bd_intf_net -intf_net noc_virt_00_M00_INI [get_bd_intf_ports SL_VIRT_00] [get_bd_intf_pins noc_virt_00/M00_INI]
-  connect_bd_intf_net -intf_net noc_virt_01_M00_INI [get_bd_intf_ports SL_VIRT_01] [get_bd_intf_pins qdma_slave_bridge_noc/M00_INI]
-  connect_bd_intf_net -intf_net noc_virt_02_M00_INI [get_bd_intf_ports SL_VIRT_02] [get_bd_intf_pins noc_virt_02/M00_INI]
-  connect_bd_intf_net -intf_net noc_virt_03_M00_INI [get_bd_intf_ports SL_VIRT_03] [get_bd_intf_pins noc_virt_03/M00_INI]
   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins hbm_bandwidth_0/s_axi_control] [get_bd_intf_pins smartconnect_0/M00_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins hbm_bandwidth_1/s_axi_control] [get_bd_intf_pins smartconnect_0/M01_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M02_AXI [get_bd_intf_pins hbm_bandwidth_2/s_axi_control] [get_bd_intf_pins smartconnect_0/M02_AXI]
@@ -3295,31 +2934,15 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net smartconnect_4_M14_AXI1 [get_bd_intf_pins smartconnect_4/M14_AXI] [get_bd_intf_pins ddr_bandwidth_66/s_axi_control]
   connect_bd_intf_net -intf_net smartconnect_4_M15_AXI [get_bd_intf_pins smartconnect_5/S00_AXI] [get_bd_intf_pins smartconnect_4/M15_AXI]
   connect_bd_intf_net -intf_net smartconnect_5_M00_AXI [get_bd_intf_pins smartconnect_5/M00_AXI] [get_bd_intf_pins ddr_bandwidth_67/s_axi_control]
-  connect_bd_intf_net -intf_net smartconnect_5_M01_AXI [get_bd_intf_pins traffic_producer_0/s_axi_control] [get_bd_intf_pins smartconnect_5/M01_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M02_AXI [get_bd_intf_pins traffic_producer_1/s_axi_control] [get_bd_intf_pins smartconnect_5/M02_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M03_AXI [get_bd_intf_pins traffic_producer_2/s_axi_control] [get_bd_intf_pins smartconnect_5/M03_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M04_AXI [get_bd_intf_pins traffic_producer_3/s_axi_control] [get_bd_intf_pins smartconnect_5/M04_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M05_AXI [get_bd_intf_pins traffic_producer_4/s_axi_control] [get_bd_intf_pins smartconnect_5/M05_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M06_AXI [get_bd_intf_pins traffic_producer_5/s_axi_control] [get_bd_intf_pins smartconnect_5/M06_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M07_AXI [get_bd_intf_pins traffic_producer_6/s_axi_control] [get_bd_intf_pins smartconnect_5/M07_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M08_AXI [get_bd_intf_pins traffic_producer_7/s_axi_control] [get_bd_intf_pins smartconnect_5/M08_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M09_AXI [get_bd_intf_pins traffic_virt_0/s_axi_control] [get_bd_intf_pins smartconnect_5/M09_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M10_AXI [get_bd_intf_pins traffic_virt_1/s_axi_control] [get_bd_intf_pins smartconnect_5/M10_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M11_AXI [get_bd_intf_pins traffic_virt_2/s_axi_control] [get_bd_intf_pins smartconnect_5/M11_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M12_AXI [get_bd_intf_pins traffic_virt_3/s_axi_control] [get_bd_intf_pins smartconnect_5/M12_AXI]
-  connect_bd_intf_net -intf_net smartconnect_5_M13_AXI [get_bd_intf_pins traffic_virt_4/s_axi_control] [get_bd_intf_pins smartconnect_5/M13_AXI]
-  connect_bd_intf_net -intf_net traffic_producer_0_axis_out [get_bd_intf_pins traffic_producer_0/axis_out] [get_bd_intf_pins dcmac_axis_noc_0/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_1_axis_out [get_bd_intf_pins traffic_producer_1/axis_out] [get_bd_intf_pins dcmac_axis_noc_1/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_2_axis_out [get_bd_intf_pins traffic_producer_2/axis_out] [get_bd_intf_pins dcmac_axis_noc_2/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_3_axis_out [get_bd_intf_pins traffic_producer_3/axis_out] [get_bd_intf_pins dcmac_axis_noc_3/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_4_axis_out [get_bd_intf_pins traffic_producer_4/axis_out] [get_bd_intf_pins dcmac_axis_noc_4/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_5_axis_out [get_bd_intf_pins traffic_producer_5/axis_out] [get_bd_intf_pins dcmac_axis_noc_5/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_6_axis_out [get_bd_intf_pins traffic_producer_6/axis_out] [get_bd_intf_pins dcmac_axis_noc_6/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_producer_7_axis_out [get_bd_intf_pins traffic_producer_7/axis_out] [get_bd_intf_pins dcmac_axis_noc_7/S00_AXIS]
-  connect_bd_intf_net -intf_net traffic_virt_0_m_axi_gmem0 [get_bd_intf_pins noc_virt_00/S00_AXI] [get_bd_intf_pins traffic_virt_0/m_axi_gmem0]
-  connect_bd_intf_net -intf_net traffic_virt_1_m_axi_gmem0 [get_bd_intf_pins qdma_slave_bridge_noc/S00_AXI] [get_bd_intf_pins traffic_virt_1/m_axi_gmem0]
-  connect_bd_intf_net -intf_net traffic_virt_2_m_axi_gmem0 [get_bd_intf_pins noc_virt_02/S00_AXI] [get_bd_intf_pins traffic_virt_2/m_axi_gmem0]
-  connect_bd_intf_net -intf_net traffic_virt_3_m_axi_gmem0 [get_bd_intf_pins noc_virt_03/S00_AXI] [get_bd_intf_pins traffic_virt_3/m_axi_gmem0]
+  connect_bd_intf_net -intf_net smartconnect_5_M01_AXI [get_bd_intf_pins traffic_virt_4/s_axi_control] [get_bd_intf_pins smartconnect_5/M01_AXI]
+  connect_bd_intf_net -intf_net smartconnect_5_M02_AXI [get_bd_intf_pins smartconnect_5/M02_AXI] [get_bd_intf_pins ddr_bandwidth_68/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M03_AXI [get_bd_intf_pins smartconnect_5/M03_AXI] [get_bd_intf_pins ddr_bandwidth_69/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M04_AXI [get_bd_intf_pins smartconnect_5/M04_AXI] [get_bd_intf_pins ddr_bandwidth_70/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M05_AXI [get_bd_intf_pins smartconnect_5/M05_AXI] [get_bd_intf_pins ddr_bandwidth_71/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M06_AXI [get_bd_intf_pins smartconnect_5/M06_AXI] [get_bd_intf_pins ddr_bandwidth_72/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M07_AXI [get_bd_intf_pins smartconnect_5/M07_AXI] [get_bd_intf_pins ddr_bandwidth_73/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M08_AXI [get_bd_intf_pins smartconnect_5/M08_AXI] [get_bd_intf_pins ddr_bandwidth_74/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M09_AXI [get_bd_intf_pins smartconnect_5/M09_AXI] [get_bd_intf_pins ddr_bandwidth_75/s_axi_control]
   connect_bd_intf_net -intf_net traffic_virt_4_m_axi_gmem0 [get_bd_intf_pins axi_noc_1/S00_AXI] [get_bd_intf_pins traffic_virt_4/m_axi_gmem0]
 
   # Create port connections
@@ -3340,30 +2963,6 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_vnoc_05/aclk0] \
   [get_bd_pins hbm_vnoc_06/aclk0] \
   [get_bd_pins hbm_vnoc_07/aclk0] \
-  [get_bd_pins dcmac_axis_noc_0/aclk0] \
-  [get_bd_pins dcmac_axis_noc_1/aclk0] \
-  [get_bd_pins dcmac_axis_noc_2/aclk0] \
-  [get_bd_pins dcmac_axis_noc_3/aclk0] \
-  [get_bd_pins dcmac_axis_noc_4/aclk0] \
-  [get_bd_pins dcmac_axis_noc_5/aclk0] \
-  [get_bd_pins dcmac_axis_noc_6/aclk0] \
-  [get_bd_pins dcmac_axis_noc_7/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_0/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_1/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_2/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_3/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_4/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_5/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_6/aclk0] \
-  [get_bd_pins dcmac_axis_noc_s_7/aclk0] \
-  [get_bd_pins traffic_producer_0/ap_clk] \
-  [get_bd_pins traffic_producer_1/ap_clk] \
-  [get_bd_pins traffic_producer_2/ap_clk] \
-  [get_bd_pins traffic_producer_3/ap_clk] \
-  [get_bd_pins traffic_producer_4/ap_clk] \
-  [get_bd_pins traffic_producer_5/ap_clk] \
-  [get_bd_pins traffic_producer_6/ap_clk] \
-  [get_bd_pins traffic_producer_7/ap_clk] \
   [get_bd_pins ddr_bandwidth_64/ap_clk] \
   [get_bd_pins ddr_bandwidth_65/ap_clk] \
   [get_bd_pins ddr_bandwidth_66/ap_clk] \
@@ -3440,10 +3039,6 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_bandwidth_7/ap_clk] \
   [get_bd_pins hbm_bandwidth_8/ap_clk] \
   [get_bd_pins hbm_bandwidth_9/ap_clk] \
-  [get_bd_pins traffic_virt_0/ap_clk] \
-  [get_bd_pins traffic_virt_1/ap_clk] \
-  [get_bd_pins traffic_virt_2/ap_clk] \
-  [get_bd_pins traffic_virt_3/ap_clk] \
   [get_bd_pins traffic_virt_4/ap_clk] \
   [get_bd_pins smartconnect_1/aclk1] \
   [get_bd_pins smartconnect_0/aclk] \
@@ -3516,13 +3111,25 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_sc_61/aclk] \
   [get_bd_pins hbm_sc_62/aclk] \
   [get_bd_pins hbm_sc_63/aclk] \
-  [get_bd_pins noc_virt_00/aclk0] \
-  [get_bd_pins qdma_slave_bridge_noc/aclk0] \
-  [get_bd_pins noc_virt_02/aclk0] \
-  [get_bd_pins noc_virt_03/aclk0] \
   [get_bd_pins axi_noc_1/aclk0] \
   [get_bd_pins axi_noc_0/aclk0] \
-  [get_bd_pins c_shift_ram_0/CLK]
+  [get_bd_pins c_shift_ram_0/CLK] \
+  [get_bd_pins ddr_noc_4/aclk0] \
+  [get_bd_pins ddr_noc_5/aclk0] \
+  [get_bd_pins ddr_noc_6/aclk0] \
+  [get_bd_pins ddr_noc_7/aclk0] \
+  [get_bd_pins ddr_noc_8/aclk0] \
+  [get_bd_pins ddr_noc_9/aclk0] \
+  [get_bd_pins ddr_noc_10/aclk0] \
+  [get_bd_pins ddr_noc_11/aclk0] \
+  [get_bd_pins ddr_bandwidth_68/ap_clk] \
+  [get_bd_pins ddr_bandwidth_69/ap_clk] \
+  [get_bd_pins ddr_bandwidth_70/ap_clk] \
+  [get_bd_pins ddr_bandwidth_71/ap_clk] \
+  [get_bd_pins ddr_bandwidth_72/ap_clk] \
+  [get_bd_pins ddr_bandwidth_73/ap_clk] \
+  [get_bd_pins ddr_bandwidth_74/ap_clk] \
+  [get_bd_pins ddr_bandwidth_75/ap_clk]
   connect_bd_net -net proc_sys_reset_0_interconnect_aresetn  [get_bd_pins ilreduced_logic_0/Res] \
   [get_bd_pins smartconnect_0/aresetn] \
   [get_bd_pins smartconnect_1/aresetn] \
@@ -3530,14 +3137,6 @@ proc create_root_design { parentCell } {
   [get_bd_pins smartconnect_3/aresetn] \
   [get_bd_pins smartconnect_4/aresetn] \
   [get_bd_pins smartconnect_5/aresetn] \
-  [get_bd_pins traffic_producer_0/ap_rst_n] \
-  [get_bd_pins traffic_producer_1/ap_rst_n] \
-  [get_bd_pins traffic_producer_2/ap_rst_n] \
-  [get_bd_pins traffic_producer_3/ap_rst_n] \
-  [get_bd_pins traffic_producer_4/ap_rst_n] \
-  [get_bd_pins traffic_producer_5/ap_rst_n] \
-  [get_bd_pins traffic_producer_6/ap_rst_n] \
-  [get_bd_pins traffic_producer_7/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_64/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_65/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_66/ap_rst_n] \
@@ -3614,10 +3213,6 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_bandwidth_7/ap_rst_n] \
   [get_bd_pins hbm_bandwidth_8/ap_rst_n] \
   [get_bd_pins hbm_bandwidth_9/ap_rst_n] \
-  [get_bd_pins traffic_virt_0/ap_rst_n] \
-  [get_bd_pins traffic_virt_1/ap_rst_n] \
-  [get_bd_pins traffic_virt_2/ap_rst_n] \
-  [get_bd_pins traffic_virt_3/ap_rst_n] \
   [get_bd_pins traffic_virt_4/ap_rst_n] \
   [get_bd_pins hbm_sc_00/aresetn] \
   [get_bd_pins hbm_sc_01/aresetn] \
@@ -3682,7 +3277,15 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_sc_60/aresetn] \
   [get_bd_pins hbm_sc_61/aresetn] \
   [get_bd_pins hbm_sc_62/aresetn] \
-  [get_bd_pins hbm_sc_63/aresetn]
+  [get_bd_pins hbm_sc_63/aresetn] \
+  [get_bd_pins ddr_bandwidth_68/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_69/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_70/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_71/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_72/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_73/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_74/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_75/ap_rst_n]
   connect_bd_net -net static_region_clk_1  [get_bd_ports static_region_clk] \
   [get_bd_pins hbm_sc_00/aclk1] \
   [get_bd_pins hbm_sc_01/aclk1] \
@@ -3750,15 +3353,6 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_sc_63/aclk1]
   connect_bd_net -net util_ds_buf_0_BUFG_FABRIC_O  [get_bd_pins util_ds_buf_0/BUFG_FABRIC_O] \
   [get_bd_pins ilreduced_logic_0/Op1]
-  connect_bd_net -net xlconstant_0_dout  [get_bd_pins xlconstant_0/dout] \
-  [get_bd_pins dcmac_axis_noc_s_0/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_1/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_2/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_3/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_4/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_5/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_6/M00_AXIS_tready] \
-  [get_bd_pins dcmac_axis_noc_s_7/M00_AXIS_tready]
 
   # Create address segments
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_64/Data_m_axi_gmem0] [get_bd_addr_segs M00_INI/Reg] -force
@@ -3837,15 +3431,27 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x004000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces hbm_bandwidth_69/Data_m_axi_gmem0] [get_bd_addr_segs HBM_VNOC_INI_05/Reg] -force
   assign_bd_address -offset 0x004000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces hbm_bandwidth_70/Data_m_axi_gmem0] [get_bd_addr_segs HBM_VNOC_INI_06/Reg] -force
   assign_bd_address -offset 0x004000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces hbm_bandwidth_71/Data_m_axi_gmem0] [get_bd_addr_segs HBM_VNOC_INI_07/Reg] -force
-  assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -with_name SEG_SL_VIRT_0_Reg -target_address_space [get_bd_addr_spaces traffic_virt_0/Data_m_axi_gmem0] [get_bd_addr_segs SL_VIRT_00/Reg] -force
-  assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -with_name SEG_SL_VIRT_1_Reg -target_address_space [get_bd_addr_spaces traffic_virt_1/Data_m_axi_gmem0] [get_bd_addr_segs SL_VIRT_01/Reg] -force
-  assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -with_name SEG_SL_VIRT_2_Reg -target_address_space [get_bd_addr_spaces traffic_virt_2/Data_m_axi_gmem0] [get_bd_addr_segs SL_VIRT_02/Reg] -force
-  assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -with_name SEG_SL_VIRT_3_Reg -target_address_space [get_bd_addr_spaces traffic_virt_3/Data_m_axi_gmem0] [get_bd_addr_segs SL_VIRT_03/Reg] -force
   assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -with_name SEG_QDMA_SLAVE_BRIDGE_Reg -target_address_space [get_bd_addr_spaces traffic_virt_4/Data_m_axi_gmem0] [get_bd_addr_segs QDMA_SLAVE_BRIDGE_0/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_68/Data_m_axi_gmem0] [get_bd_addr_segs M04_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_69/Data_m_axi_gmem0] [get_bd_addr_segs M05_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_70/Data_m_axi_gmem0] [get_bd_addr_segs M06_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_71/Data_m_axi_gmem0] [get_bd_addr_segs M07_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_72/Data_m_axi_gmem0] [get_bd_addr_segs M08_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_73/Data_m_axi_gmem0] [get_bd_addr_segs M09_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_74/Data_m_axi_gmem0] [get_bd_addr_segs M10_INI/Reg] -force
+  assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_75/Data_m_axi_gmem0] [get_bd_addr_segs M11_INI/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_64/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200490000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_65/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202004A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_66/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202004B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_67/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x0202004C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_68/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x0202004D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_69/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x0202004E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_70/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x0202004F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_71/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x020200500000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_72/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x020200510000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_73/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x020200520000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_74/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x020200530000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs ddr_bandwidth_75/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_0/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202000A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_10/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202000B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_11/s_axi_control/Reg] -force
@@ -3918,18 +3524,6 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020200070000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_7/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200080000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_8/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200090000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_9/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x0202004C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_0/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x0202004D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_1/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x0202004E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_2/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x0202004F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_3/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200500000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_4/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200510000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_5/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200520000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_6/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200530000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_producer_7/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200540000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_virt_0/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200550000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_virt_1/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200560000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_virt_2/s_axi_control/Reg] -force
-  assign_bd_address -offset 0x020200570000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_virt_3/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200580000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_virt_4/s_axi_control/Reg] -force
 
   set_property USAGE memory [get_bd_addr_segs HBM_AXI_00/Reg]

@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -31,6 +32,22 @@ extern "C" {
 
 static constexpr const char *REAL_QDMA_PATH = "/dev/slash_qdma_ctl0";
 static constexpr uint64_t DDR_BASE_ADDRESS = 0x60000000000ULL;
+
+static bool isPf1Bdf(const char *bdf) {
+    if (bdf == nullptr || std::strlen(bdf) != 12 || bdf[4] != ':' || bdf[7] != ':' ||
+        bdf[10] != '.' || bdf[11] != '1') {
+        return false;
+    }
+    for (size_t i = 0; i < 12; ++i) {
+        if (i == 4 || i == 7 || i == 10) {
+            continue;
+        }
+        if (!std::isxdigit(static_cast<unsigned char>(bdf[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
 
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
 
@@ -167,7 +184,12 @@ TEST_P(ParametrizedQdmaTest, OpenSucceeds) {
 
 TEST_P(ParametrizedQdmaTest, InfoRead) {
     struct slash_qdma_info info{};
-    EXPECT_EQ(slash_qdma_info_read(qdma_, &info), 0);
+    ASSERT_EQ(slash_qdma_info_read(qdma_, &info), 0);
+    if (mock) {
+        EXPECT_STREQ(info.bdf, "0000:00:00.1");
+    } else {
+        EXPECT_TRUE(isPf1Bdf(info.bdf)) << "invalid PF1 BDF: " << info.bdf;
+    }
 }
 
 TEST_P(ParametrizedQdmaTest, QueueDmaTransfer) {

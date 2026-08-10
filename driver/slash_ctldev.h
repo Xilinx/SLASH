@@ -17,7 +17,7 @@
  *
  * Control device interface for the SLASH kernel module.
  *
- * Each probed PF2 device gets a control misc device (/dev/slash_ctl<N>)
+ * Each probed PF2 device gets a control character device (/dev/slash_ctl<N>)
  * that exposes device identity, BAR properties, and dma-buf-backed BAR
  * mappings to userspace via ioctl.
  */
@@ -25,8 +25,11 @@
 #ifndef SLASH_CTLDEV_H
 #define SLASH_CTLDEV_H
 
+#include <linux/cdev.h>
+#include <linux/device.h>
 #include <linux/dma-buf.h>
-#include <linux/miscdevice.h>
+#include <linux/kref.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
 
 /**
@@ -52,16 +55,26 @@ struct slash_ctldev_bar {
 
 /**
  * struct slash_ctldev - Per-device control device state.
- * @pdev: Back-pointer to the PCI device this control device manages.
- * @misc: Kernel misc device registered as /dev/slash_ctl<N>.
- * @bars: Cached BAR metadata for all standard PCI BARs (0-5).
+ * @pdev:   Back-pointer to the PCI device this control device manages.
+ * @cdev:   Character device embedded for inode-to-device lookup.
+ * @device: Class device with the BDF-specific sysfs name.
+ * @ref:    Lifetime reference held by the PCI binding and each open fd.
+ * @lock:   Serializes remove against open and ioctl.
+ * @slot:   Stable board number shared with the matching PF1 endpoint.
+ * @dead:   Set during remove; all subsequent opens/ioctls return -ENODEV.
+ * @bars:   Cached BAR metadata for all standard PCI BARs (0-5).
  *
  * Allocated during probe, stored via pci_set_drvdata(), and freed
  * during remove.
  */
 struct slash_ctldev {
     struct pci_dev *pdev;
-    struct miscdevice misc;
+    struct cdev cdev;
+    struct device *device;
+    struct kref ref;
+    struct mutex lock;
+    int slot;
+    bool dead;
     struct slash_ctldev_bar bars[PCI_STD_NUM_BARS];
 };
 
@@ -70,7 +83,7 @@ struct slash_ctldev {
  * @pdev: PCI device to create the control device for.
  *
  * Probes BARs, creates dma-buf exporters for MMIO BARs, and registers
- * a misc device.  The control device state is stored as PCI driver
+ * a character device.  The control device state is stored as PCI driver
  * data on @pdev.
  *
  * Return: 0 on success, negative errno on failure.
@@ -81,7 +94,7 @@ int slash_ctldev_create(struct pci_dev *pdev);
  * slash_ctldev_destroy() - Destroy a control device.
  * @pdev: PCI device whose control device should be torn down.
  *
- * Deregisters the misc device, destroys dma-buf exporters, and frees
+ * Deregisters the character device, destroys dma-buf exporters, and frees
  * the control device state.
  */
 void slash_ctldev_destroy(struct pci_dev *pdev);

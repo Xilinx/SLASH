@@ -157,7 +157,8 @@ local IP repository before building:
 
 1. Download the SMBus IP from https://www.xilinx.com/member/v80.html
    (AMD account required).
-2. Copy the downloaded IP directory into ``linker/slashkit/resources/base/iprepo/``
+2. Copy the downloaded IP directory into
+   ``linker/slashkit/resources/base/common/iprepo/``
    so that Vivado can locate it during synthesis.
 
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for
@@ -197,7 +198,8 @@ Install the AMI Driver
 
 The V80 board's PF0 function (device ID ``0x50B4``) is managed by the
 **AMI** (AVED Management Interface) kernel module. AMI should be installed
-along with the rest of the SLASH stack.
+along with the rest of the SLASH stack so it can bind to PF0 when the board
+enumerates over PCIe.
 
 .. tab-set::
 
@@ -221,13 +223,15 @@ along with the rest of the SLASH stack.
    existing AMI installation before proceeding, or skip this step and
    ensure your installed AMI version is compatible with this SLASH release.
 
-Verify that the ``ami`` driver is bound to PF0 after installation:
+If the board already enumerates over PCIe, verify that the ``ami`` driver is
+bound to PF0 after installation:
 
 .. code-block:: bash
 
    lspci -d 10ee:50b4 -k
 
-The output should show ``Kernel driver in use: ami``.
+The output should show ``Kernel driver in use: ami``. If no PF0 is visible yet,
+continue to `Program the Board`_ and boot the temporary JTAG image first.
 
 Install SLASH Packages
 ======================
@@ -334,59 +338,6 @@ The following table summarises what each package provides:
      - Metapackage: pulls in development packages for simulation and
        emulation.
 
-Program the Board
-=================
-
-.. note::
-
-   This step assumes the AMI driver is already bound to PF0
-   (``10ee:50b4``). If your V80 has never been programmed with AVED — for
-   example, a brand-new board — first complete :doc:`bootstrap-aved` to
-   install AVED via JTAG.
-
-After installing the packages, the board's flash memory must be programmed
-with the static shell before the system can be used. This step is required:
-
-- on the **first install** of SLASH, and
-- when **upgrading** to a version that changes the static shell (noted in
-  the release notes).
-
-It is **not** required after crashes, daemon restarts, or other normal
-operations — SLASH reads from flash but never writes to it during regular use.
-
-Program the primary flash partition (replace ``<BDF>`` with the bus address
-from ``lspci -d 10ee:``, e.g. ``03:00``):
-
-.. tab-set::
-
-   .. tab-item:: Ubuntu
-
-      .. code-block:: bash
-
-         sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-            -i /usr/lib/python3.10/dist-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
-
-   .. tab-item:: RHEL 9 / Rocky Linux 9 / AlmaLinux 9
-
-      .. code-block:: bash
-
-         sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-            -i /usr/lib/python3.9/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
-
-   .. tab-item:: RHEL 10 / Rocky Linux 10 / AlmaLinux 10
-
-      .. code-block:: bash
-
-         sudo ami_tool cfgmem_program -d <BDF> -t primary -p 0 \
-            -i /usr/lib/python3.12/site-packages/slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi
-
-After programming completes, reboot the system for the new flash contents
-to take effect:
-
-.. code-block:: bash
-
-   sudo reboot
-
 Verify the Kernel Module
 ========================
 
@@ -398,8 +349,9 @@ To confirm the module is loaded:
    lsmod | grep slash
    dmesg | grep slash
 
-You should see one line in ``lsmod`` and, in ``dmesg``, messages for each
-V80 PCI function discovered.
+You should see one line in ``lsmod``. If the board already enumerates over
+PCIe, ``dmesg`` should also show messages for each V80 PCI function
+discovered.
 
 Each V80 board exposes three PCI functions:
 
@@ -416,15 +368,19 @@ Each V80 board exposes three PCI functions:
      - ``ami``
      - AVED management interface
    * - PF1
-     - ``0x50B5``
+     - ``0x50C1``
      - ``slash_qdma``
      - Queue-based DMA subsystem
    * - PF2
-     - ``0x50B6``
+     - ``0x50C2``
      - ``slash_ctl``
      - BAR MMIO access (register reads/writes)
 
-Check that all three appear with their drivers bound:
+The legacy device IDs ``0x50B5`` (PF1) and ``0x50B6`` (PF2) are still accepted
+as a fallback for cards carrying a pre-compute-platform bitstream.
+
+For boards already visible over PCIe, check that all three functions appear
+with their drivers bound:
 
 .. code-block:: bash
 
@@ -446,21 +402,9 @@ Verify the daemon is reachable:
 
    v80-smi list
 
-Each board should show all four readiness checks passing (PF0, PF1, PF2,
-VRTD).
-
-Validate the Board
-==================
-
-Run the built-in memory integrity and bandwidth test:
-
-.. code-block:: bash
-
-   v80-smi validate -d <BDF>
-
-Replace ``<BDF>`` with the bus address shown by ``v80-smi list``
-(e.g. ``03:00``). This tests both HBM and DDR subsystems. A passing result
-confirms the hardware, drivers, and daemon are all working correctly.
+Boards that already enumerate over PCIe should show all four readiness checks
+passing (PF0, PF1, PF2, VRTD). If a fresh board is not listed yet, continue to
+step A below and boot the temporary JTAG image first.
 
 User Access
 ===========
@@ -477,6 +421,105 @@ The user must log out and back in for the group change to take effect.
 For fine-grained permission control (per-device, per-operation), edit
 ``/etc/vrt/vrtd.conf``. See :doc:`/reference/vrtd/configuration` for the
 full configuration reference.
+
+.. note::
+   Access permissions must be granted before the programming step.
+
+Program the Board
+=================
+
+After installing the packages and starting ``vrtd``, program the board with the
+SLASH static shell. New users should complete both steps below:
+
+A. boot a temporary image over JTAG so the board enumerates over PCIe, then
+B. use PCIe to write the permanent image to the on-board flash.
+
+If the board is already running AVED or a previous SLASH static shell, skip
+step A and perform only step B. In normal operation, repeat step B only when
+upgrading to a release that changes the static shell, as noted in the release
+notes. It is **not** required after crashes, daemon restarts, or other normal
+operations — SLASH reads from flash but never writes to it during regular use.
+
+No system restart is required after either step.
+
+A. Write a Temporary Image via JTAG Boot
+---------------------------------------
+
+This step loads the no-FPT static-shell PDI over JTAG. The image is temporary:
+it lets the board enumerate over PCIe so that step B can write the permanent
+flash image.
+
+A1. Identify the XSDB Target if Multiple Boards Are Present
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If the host has more than one V80 connected over USB-JTAG, use ``xsdb`` to find
+the ``target_id`` for the ``Versal xcv80`` device you want to program:
+
+.. code-block:: text
+
+   source <path-to-vitis>/settings64.sh
+   xsdb
+   connect
+   targets
+
+Use the number from the matching ``Versal xcv80`` target.
+
+A2. Write via JTAG
+~~~~~~~~~~~~~~~~~~
+
+If there is a single connected V80, run:
+
+.. code-block:: bash
+
+   source <path-to-vitis>/settings64.sh
+   v80-smi write-static-shell --jtag --no-remove-device
+
+For multiple connected V80s, pass the XSDB target ID from step A1:
+
+.. code-block:: bash
+
+   source <path-to-vitis>/settings64.sh
+   v80-smi write-static-shell --jtag --no-remove-device --xsdb-target-id <XSDB_TARGET_ID>
+
+B. Flash the Permanent Image via PCIe
+-------------------------------------
+
+B1. Identify the Board in ``v80-smi list``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+After step A completes, or if the board was already running a previous
+version of SLASH, find the board's PCIe bus address:
+
+.. code-block:: bash
+
+   v80-smi list
+
+B2. Write via PCIe
+~~~~~~~~~~~~~~~~~~
+
+Program the primary flash partition (replace ``<BDF>`` with the bus address
+shown by ``v80-smi list``, e.g. ``03:00``):
+
+.. code-block:: bash
+
+   v80-smi write-static-shell --flash -d <BDF>
+
+The command resolves the packaged static shell PDI, programs it through VRTD,
+and resets the board into the programmed partition. No host reboot or system
+restart is required.
+
+Validate the Board
+==================
+
+Run the built-in memory integrity and bandwidth test:
+
+.. code-block:: bash
+
+   v80-smi validate -d <BDF>
+
+Replace ``<BDF>`` with the bus address shown by ``v80-smi list``
+(e.g. ``03:00``). This tests both HBM and DDR subsystems. A passing result
+confirms the hardware, drivers, and daemon are all working correctly.
 
 Next Steps
 ==========

@@ -49,21 +49,54 @@ package_linker:
     # Unzipping the SMBus IP
     - glab -R $CI_PROJECT_PATH securefile download --name "smbus_v1_1-20240328.zip"
     - unzip smbus_v1_1-20240328.zip
-    - mv smbus_v1_1-20240328 slashkit/resources/base/iprepo/
+    - mv smbus_v1_1-20240328 slashkit/resources/base/common/iprepo/
     # Building the other IP cores
-    - make -C slashkit/resources/base/iprepo -j16
-    # Building the base design
-    - if [ ${{ job.inputs.build_base_design }} = "true" -a -e slashkit/resources/static_shell ]; then rm -r slashkit/resources/static_shell; fi
-    - if [ ${{ job.inputs.build_base_design }} = "true" ]; then python3 -m slashkit install --jobs 16 --out-dir slashkit/resources/ > install.out.log 2> install.err.log; fi
+    - make -C slashkit/resources/base/common/iprepo -j16
+    # Build both static shells when requested or when the cached artifact is missing.
+    - |
+      if [ ${{ job.inputs.build_base_design }} = "true" ]; then
+        rm -rf slashkit/resources/static_shell slashkit/resources/static_shell_compute
+      fi
+    - |
+      if [ ! -d slashkit/resources/static_shell ]; then
+        python3 -m slashkit install --shell-type service --jobs 16 \
+          --build-dir install.prj --out-dir slashkit/resources/ \
+          > install.service.out.log 2> install.service.err.log
+      fi
+    - |
+      if [ ! -d slashkit/resources/static_shell_compute ]; then
+        python3 -m slashkit install --shell-type compute --jobs 16 \
+          --build-dir install.prj.compute --out-dir slashkit/resources/ \
+          > install.compute.out.log 2> install.compute.err.log
+      fi
+    - |
+      for path in \
+        slashkit/resources/static_shell/amd_v80_gen5x8_25.1.pdi \
+        slashkit/resources/static_shell/amd_v80_gen5x8_25.1_nofpt.pdi \
+        slashkit/resources/static_shell/static_shell_slash.dcp \
+        slashkit/resources/static_shell/static_shell_service_layer.dcp \
+        slashkit/resources/static_shell/debug_nets.ltx \
+        slashkit/resources/static_shell/slash_base/slash_base.bd \
+        slashkit/resources/static_shell/service_layer/service_layer.bd \
+        slashkit/resources/static_shell_compute/amd_v80_gen5x8_25.1.pdi \
+        slashkit/resources/static_shell_compute/amd_v80_gen5x8_25.1_nofpt.pdi \
+        slashkit/resources/static_shell_compute/static_shell_slash.dcp \
+        slashkit/resources/static_shell_compute/slash_base/slash_base.bd
+      do
+        test -e "$path"
+      done
     # Packaging the linker
     - pip wheel --no-deps .
   artifacts:
     public: false
     when: always
     paths:
-      - linker/install.out.log
-      - linker/install.err.log
+      - linker/install.service.out.log
+      - linker/install.service.err.log
+      - linker/install.compute.out.log
+      - linker/install.compute.err.log
       - linker/slashkit/resources/static_shell
+      - linker/slashkit/resources/static_shell_compute
       - linker/slashkit*.whl
 
 .integration_test:

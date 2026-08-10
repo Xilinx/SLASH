@@ -30,14 +30,15 @@ extern "C" {
 }
 
 static struct device_policy *make_dp(const char *bdf, bool bar, bool qdma, bool buffer,
-                                     bool design_write, bool clock, bool pcie_hotplug,
-                                     bool raw_mem) {
+                                     bool design_write, bool cfgmem_program, bool clock,
+                                     bool pcie_hotplug, bool raw_mem) {
     auto *dp = static_cast<struct device_policy *>(calloc(1, sizeof(struct device_policy)));
     dp->bdf = strdup(bdf);
     dp->bar = bar;
     dp->qdma = qdma;
     dp->buffer = buffer;
     dp->design_write = design_write;
+    dp->cfgmem_program = cfgmem_program;
     dp->clock = clock;
     dp->pcie_hotplug = pcie_hotplug;
     dp->raw_mem_access = raw_mem;
@@ -65,7 +66,7 @@ class AuthTest : public ::testing::Test {
 
         ASSERT_EQ(role_merge_new(&fullaccess_role, "fullaccess"), 0);
         fullaccess_role->query = true;
-        struct device_policy *dp = make_dp("any", true, true, true, true, true, true, true);
+        struct device_policy *dp = make_dp("any", true, true, true, true, true, true, true, true);
         struct device_policy *dp_ptr = dp;
         ASSERT_EQ(device_policy_ptr_array_push_move(&fullaccess_role->device_policies, &dp_ptr), 0);
 
@@ -210,6 +211,13 @@ TEST_F(AuthTest, DesignWriteAllowed) {
     EXPECT_EQ(auth_request_design_write(&cl, &req), 1);
 }
 
+TEST_F(AuthTest, CfgmemProgramAllowed) {
+    assignRole(fullaccess_role);
+    struct vrtd_req_cfgmem_program req{};
+    req.dev_number = 0;
+    EXPECT_EQ(auth_request_cfgmem_program(&cl, &req), 1);
+}
+
 TEST_F(AuthTest, ClockOpAllowed) {
     assignRole(fullaccess_role);
     struct vrtd_req_clock_op req{};
@@ -254,6 +262,13 @@ TEST_F(AuthTest, DesignWriteDeniedInfoOnly) {
     EXPECT_EQ(auth_request_design_write(&cl, &req), 0);
 }
 
+TEST_F(AuthTest, CfgmemProgramDeniedInfoOnly) {
+    assignRole(info_role);
+    struct vrtd_req_cfgmem_program req{};
+    req.dev_number = 0;
+    EXPECT_EQ(auth_request_cfgmem_program(&cl, &req), 0);
+}
+
 TEST_F(AuthTest, ClockOpDeniedInfoOnly) {
     assignRole(info_role);
     struct vrtd_req_clock_op req{};
@@ -275,11 +290,11 @@ TEST_F(AuthTest, ExactBdfMatchTakesPriority) {
     ASSERT_EQ(role_merge_new(&role, "mixed"), 0);
     role->query = true;
 
-    struct device_policy *any_dp = make_dp("any", false, false, false, false, false, false, false);
+    struct device_policy *any_dp = make_dp("any", false, false, false, false, false, false, false, false);
     struct device_policy *any_ptr = any_dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&role->device_policies, &any_ptr), 0);
 
-    struct device_policy *exact_dp = make_dp("0000:03:00", true, true, true, true, true, true, true);
+    struct device_policy *exact_dp = make_dp("0000:03:00", true, true, true, true, true, true, true, true);
     struct device_policy *exact_ptr = exact_dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&role->device_policies, &exact_ptr), 0);
 
@@ -295,7 +310,7 @@ TEST_F(AuthTest, WildcardFallbackWhenNoExactMatch) {
     ASSERT_EQ(role_merge_new(&role, "wildcard_only"), 0);
     role->query = true;
 
-    struct device_policy *any_dp = make_dp("any", true, false, false, false, false, false, false);
+    struct device_policy *any_dp = make_dp("any", true, false, false, false, false, false, false, false);
     struct device_policy *any_ptr = any_dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&role->device_policies, &any_ptr), 0);
 
@@ -311,7 +326,7 @@ TEST_F(AuthTest, NoPolicyMatchDenied) {
     ASSERT_EQ(role_merge_new(&role, "no_devices"), 0);
     role->query = true;
 
-    struct device_policy *other_dp = make_dp("0000:99:00", true, true, true, true, true, true, true);
+    struct device_policy *other_dp = make_dp("0000:99:00", true, true, true, true, true, true, true, true);
     struct device_policy *other_ptr = other_dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&role->device_policies, &other_ptr), 0);
 

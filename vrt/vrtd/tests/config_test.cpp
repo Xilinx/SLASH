@@ -27,14 +27,15 @@ extern "C" {
 }
 
 static struct device_policy *make_device_policy(const char *bdf, bool bar, bool qdma, bool buffer,
-                                                bool design_write, bool clock, bool pcie_hotplug,
-                                                bool raw_mem_access) {
+                                                bool design_write, bool cfgmem_program, bool clock,
+                                                bool pcie_hotplug, bool raw_mem_access) {
     auto *dp = static_cast<struct device_policy *>(calloc(1, sizeof(struct device_policy)));
     dp->bdf = strdup(bdf);
     dp->bar = bar;
     dp->qdma = qdma;
     dp->buffer = buffer;
     dp->design_write = design_write;
+    dp->cfgmem_program = cfgmem_program;
     dp->clock = clock;
     dp->pcie_hotplug = pcie_hotplug;
     dp->raw_mem_access = raw_mem_access;
@@ -93,7 +94,7 @@ TEST(RoleMergeTest, MergeDevicePolicies) {
     ASSERT_EQ(role_merge_new(&dst, "dst"), 0);
     ASSERT_EQ(role_merge_new(&src, "src"), 0);
 
-    struct device_policy *dp = make_device_policy("0000:03:00", true, false, true, false, false, false, false);
+    struct device_policy *dp = make_device_policy("0000:03:00", true, false, true, false, false, false, false, false);
     struct device_policy *src_ptr = dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&src->device_policies, &src_ptr), 0);
 
@@ -115,11 +116,11 @@ TEST(RoleMergeTest, MergeDevicePoliciesOrPerField) {
     ASSERT_EQ(role_merge_new(&dst, "dst"), 0);
     ASSERT_EQ(role_merge_new(&src, "src"), 0);
 
-    struct device_policy *dp1 = make_device_policy("0000:03:00", true, false, false, false, false, false, false);
+    struct device_policy *dp1 = make_device_policy("0000:03:00", true, false, false, false, false, false, false, false);
     struct device_policy *ptr1 = dp1;
     ASSERT_EQ(device_policy_ptr_array_push_move(&dst->device_policies, &ptr1), 0);
 
-    struct device_policy *dp2 = make_device_policy("0000:03:00", false, true, false, false, true, false, false);
+    struct device_policy *dp2 = make_device_policy("0000:03:00", false, true, false, false, true, true, false, false);
     struct device_policy *ptr2 = dp2;
     ASSERT_EQ(device_policy_ptr_array_push_move(&src->device_policies, &ptr2), 0);
 
@@ -128,6 +129,7 @@ TEST(RoleMergeTest, MergeDevicePoliciesOrPerField) {
     ASSERT_EQ(dst->device_policies.len, 1u);
     EXPECT_TRUE(dst->device_policies.d[0]->bar);
     EXPECT_TRUE(dst->device_policies.d[0]->qdma);
+    EXPECT_TRUE(dst->device_policies.d[0]->cfgmem_program);
     EXPECT_TRUE(dst->device_policies.d[0]->clock);
 
     cleanup_role(src);
@@ -140,11 +142,11 @@ TEST(RoleMergeTest, MergeDevicePoliciesDifferentBdf) {
     ASSERT_EQ(role_merge_new(&dst, "dst"), 0);
     ASSERT_EQ(role_merge_new(&src, "src"), 0);
 
-    struct device_policy *dp1 = make_device_policy("0000:03:00", true, false, false, false, false, false, false);
+    struct device_policy *dp1 = make_device_policy("0000:03:00", true, false, false, false, false, false, false, false);
     struct device_policy *ptr1 = dp1;
     ASSERT_EQ(device_policy_ptr_array_push_move(&dst->device_policies, &ptr1), 0);
 
-    struct device_policy *dp2 = make_device_policy("0000:04:00", false, true, false, false, false, false, false);
+    struct device_policy *dp2 = make_device_policy("0000:04:00", false, true, false, false, false, false, false, false);
     struct device_policy *ptr2 = dp2;
     ASSERT_EQ(device_policy_ptr_array_push_move(&src->device_policies, &ptr2), 0);
 
@@ -162,7 +164,7 @@ TEST(RoleMergeTest, MergeWildcardPolicy) {
     ASSERT_EQ(role_merge_new(&dst, "dst"), 0);
     ASSERT_EQ(role_merge_new(&src, "src"), 0);
 
-    struct device_policy *dp = make_device_policy("any", true, true, true, true, true, true, true);
+    struct device_policy *dp = make_device_policy("any", true, true, true, true, true, true, true, true);
     struct device_policy *ptr = dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&src->device_policies, &ptr), 0);
 
@@ -171,6 +173,7 @@ TEST(RoleMergeTest, MergeWildcardPolicy) {
     ASSERT_EQ(dst->device_policies.len, 1u);
     EXPECT_STREQ(dst->device_policies.d[0]->bdf, "any");
     EXPECT_TRUE(dst->device_policies.d[0]->bar);
+    EXPECT_TRUE(dst->device_policies.d[0]->cfgmem_program);
     EXPECT_TRUE(dst->device_policies.d[0]->raw_mem_access);
 
     cleanup_role(src);
@@ -190,7 +193,7 @@ TEST(RoleMergeTest, MergeArray) {
 
     r1->query = true;
 
-    struct device_policy *dp = make_device_policy("any", false, true, false, false, false, false, false);
+    struct device_policy *dp = make_device_policy("any", false, true, false, false, false, false, false, false);
     struct device_policy *ptr = dp;
     ASSERT_EQ(device_policy_ptr_array_push_move(&r2->device_policies, &ptr), 0);
 

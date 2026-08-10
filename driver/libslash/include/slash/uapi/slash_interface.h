@@ -147,6 +147,7 @@ struct slash_qdma_info {
     __u32 size;          /**< Struct size for ABI versioning. */
 
     /* Kernel to userspace */
+    char bdf[SLASH_PCI_BDF_LEN]; /**< [out] Full PF1 PCI BDF string, NUL-terminated. */
     __u32 qsets_max;     /**< [out] Maximum number of queue sets the hardware supports. */
     __u32 msix_qvecs;    /**< [out] Number of MSI-X vectors available for queues. */
     __u32 vf_max;        /**< [out] Maximum number of virtual functions. */

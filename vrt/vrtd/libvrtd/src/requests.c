@@ -677,7 +677,8 @@ enum vrtd_ret vrtd_buffer_open_raw(
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,
-    int input_fd
+    int input_fd,
+    uint8_t required_shell
 )
 {
     if (input_fd < 0) {
@@ -686,6 +687,7 @@ enum vrtd_ret vrtd_design_write(
 
     struct vrtd_req_design_write req = {
         .dev_number = dev,
+        .required_shell = required_shell,
     };
     struct vrtd_resp_design_write resp = {0};
 
@@ -703,7 +705,8 @@ enum vrtd_ret vrtd_design_write(
 enum vrtd_ret vrtd_design_write_file(
     int fd,
     uint32_t dev,
-    const char *path
+    const char *path,
+    uint8_t required_shell
 )
 {
     if (path == NULL) {
@@ -715,9 +718,226 @@ enum vrtd_ret vrtd_design_write_file(
         return VRTD_RET_BAD_LIB_CALL;
     }
 
-    enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd);
+    enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd, required_shell);
     (void) close(input_fd);
     return ret;
+}
+
+enum vrtd_ret vrtd_set_shell_state(
+    int fd,
+    uint32_t dev,
+    uint8_t shell_type,
+    uint8_t jtag
+)
+{
+    struct vrtd_req_set_shell_state req = {
+        .dev_number = dev,
+        .shell_type = shell_type,
+        .jtag = jtag,
+    };
+    struct vrtd_resp_set_shell_state resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_SET_SHELL_STATE,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    return VRTD_RET_OK;
+}
+
+enum vrtd_ret vrtd_cfgmem_program(
+    int fd,
+    uint32_t dev,
+    int input_fd,
+    uint8_t boot_device,
+    uint32_t partition
+)
+{
+    if (input_fd < 0) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    struct vrtd_req_cfgmem_program req = {
+        .dev_number = dev,
+        .boot_device = boot_device,
+        .reserved = {0},
+        .partition = partition,
+    };
+    struct vrtd_resp_cfgmem_program resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_CFGMEM_PROGRAM,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, &input_fd);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    return VRTD_RET_OK;
+}
+
+enum vrtd_ret vrtd_cfgmem_program_file(
+    int fd,
+    uint32_t dev,
+    const char *path,
+    uint8_t boot_device,
+    uint32_t partition
+)
+{
+    if (path == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    int input_fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (input_fd < 0) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    enum vrtd_ret ret = vrtd_cfgmem_program(fd, dev, input_fd,
+                                            boot_device, partition);
+    (void) close(input_fd);
+    return ret;
+}
+
+enum vrtd_ret vrtd_cfgmem_program_start(
+    int fd,
+    uint32_t dev,
+    int input_fd,
+    uint8_t boot_device,
+    uint32_t partition,
+    uint64_t *job_id_out
+)
+{
+    if (input_fd < 0 || job_id_out == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    struct vrtd_req_cfgmem_program_start req = {
+        .dev_number = dev,
+        .boot_device = boot_device,
+        .reserved = {0},
+        .partition = partition,
+    };
+    struct vrtd_resp_cfgmem_program_start resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_CFGMEM_PROGRAM_START,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, &input_fd);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    *job_id_out = resp.job_id;
+    return VRTD_RET_OK;
+}
+
+enum vrtd_ret vrtd_cfgmem_program_file_start(
+    int fd,
+    uint32_t dev,
+    const char *path,
+    uint8_t boot_device,
+    uint32_t partition,
+    uint64_t *job_id_out
+)
+{
+    if (path == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    int input_fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (input_fd < 0) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    enum vrtd_ret ret = vrtd_cfgmem_program_start(
+        fd, dev, input_fd, boot_device, partition, job_id_out);
+    (void) close(input_fd);
+    return ret;
+}
+
+enum vrtd_ret vrtd_cfgmem_program_status(
+    int fd,
+    uint64_t job_id,
+    struct vrtd_cfgmem_program_status *status_out
+)
+{
+    if (job_id == 0 || status_out == NULL) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    struct vrtd_req_cfgmem_program_status req = {
+        .job_id = job_id,
+    };
+    struct vrtd_resp_cfgmem_program_status resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_CFGMEM_PROGRAM_STATUS,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    *status_out = resp.status;
+    return VRTD_RET_OK;
+}
+
+enum vrtd_ret vrtd_cfgmem_program_wait(
+    int fd,
+    uint64_t job_id,
+    uint64_t poll_interval_msec,
+    vrtd_cfgmem_progress_callback progress_cb,
+    void *progress_ctx
+)
+{
+    if (job_id == 0) {
+        return VRTD_RET_BAD_LIB_CALL;
+    }
+
+    for (;;) {
+        struct vrtd_cfgmem_program_status status = {0};
+        enum vrtd_ret ret = vrtd_cfgmem_program_status(fd, job_id, &status);
+        if (ret != VRTD_RET_OK) {
+            return ret;
+        }
+
+        if (progress_cb != NULL) {
+            progress_cb(&status, progress_ctx);
+        }
+
+        if (status.state == VRTD_CFGMEM_PROGRAM_STATE_DONE ||
+            status.state == VRTD_CFGMEM_PROGRAM_STATE_FAILED) {
+            return (enum vrtd_ret)status.result;
+        }
+
+        uint64_t sleep_msec = poll_interval_msec == 0 ? 10000ULL : poll_interval_msec;
+        usleep((useconds_t)(sleep_msec * 1000ULL));
+    }
+}
+
+enum vrtd_ret vrtd_cfgmem_program_file_progress(
+    int fd,
+    uint32_t dev,
+    const char *path,
+    uint8_t boot_device,
+    uint32_t partition,
+    uint64_t poll_interval_msec,
+    vrtd_cfgmem_progress_callback progress_cb,
+    void *progress_ctx
+)
+{
+    uint64_t job_id = 0;
+    enum vrtd_ret ret = vrtd_cfgmem_program_file_start(
+        fd, dev, path, boot_device, partition, &job_id);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    return vrtd_cfgmem_program_wait(fd, job_id, poll_interval_msec, progress_cb, progress_ctx);
 }
 
 enum vrtd_ret vrtd_device_hotplug_op(
@@ -731,6 +951,7 @@ enum vrtd_ret vrtd_device_hotplug_op(
         .dev_number = dev,
         .op = op,
         .function = function,
+        .shell_type = VRTD_SHELL_SERVICE,
     };
     struct vrtd_resp_device_hotplug_op resp = {0};
 
@@ -745,9 +966,9 @@ enum vrtd_ret vrtd_device_hotplug_op(
     return VRTD_RET_OK;
 }
 
-enum vrtd_ret vrtd_device_hotplug_rescan(int fd, uint32_t dev)
+enum vrtd_ret vrtd_device_hotplug_rescan(int fd)
 {
-    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_RESCAN, 0);
+    return vrtd_device_hotplug_op(fd, 0, VRTD_DEVICE_HOTPLUG_OP_RESCAN, 0);
 }
 
 enum vrtd_ret vrtd_device_hotplug_remove(int fd, uint32_t dev, uint8_t function)
@@ -763,6 +984,27 @@ enum vrtd_ret vrtd_device_hotplug_toggle_sbr(int fd, uint32_t dev, uint8_t funct
 enum vrtd_ret vrtd_device_hotplug_hotplug(int fd, uint32_t dev, uint8_t function)
 {
     return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, function);
+}
+
+enum vrtd_ret vrtd_device_reset_sequence(int fd, uint32_t dev, uint8_t shell_type)
+{
+    struct vrtd_req_device_hotplug_op req = {
+        .dev_number = dev,
+        .op = VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE,
+        .function = 0,
+        .shell_type = shell_type,
+    };
+    struct vrtd_resp_device_hotplug_op resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_DEVICE_HOTPLUG_OP,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    return VRTD_RET_OK;
 }
 
 enum vrtd_ret vrtd_clock_get_rate(

@@ -36,6 +36,7 @@
 
 #include "debug/bar_poke.hpp"
 #include "debug/clockwiz.hpp"
+#include "debug/hotplug.hpp"
 #include "debug/mem_poke.hpp"
 #include "inspect.hpp"
 #include "list.hpp"
@@ -43,6 +44,7 @@
 #include "reset.hpp"
 #include "validate.hpp"
 #include "version.hpp"
+#include "write_static_shell.hpp"
 
 // Forward declarations
 static int smiMain(int argc, char **argv);
@@ -107,6 +109,45 @@ static int smiMain(int argc, char **argv) {
     auto* resetCommand = app.add_subcommand("reset", "Hardware reset a V80 board");
     Reset::Options resetOptions;
     resetCommand->add_option("-d,--device", resetOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    const std::map<std::string, std::string> shellTypeMap{
+        {"service", "service"},
+        {"compute", "compute"},
+    };
+    resetCommand->add_option("--shell-type", resetOptions.shellType,
+        "Shell to boot after reset: service (partition 0) or compute (partition 1)")
+        ->transform(CLI::CheckedTransformer(shellTypeMap, CLI::ignore_case))
+        ->default_str("service");
+
+    // -- write-static-shell (persistent static shell programming) --
+    auto* writeStaticShellCommand = app.add_subcommand("write-static-shell",
+        "Write the static SLASH shell to a V80 board");
+    WriteStaticShell::Options writeStaticShellOptions;
+    auto* writeStaticShellFlashFlag = writeStaticShellCommand->add_flag("--flash",
+        writeStaticShellOptions.flash, "Program the flash image via VRTD cfgmem programming");
+    auto* writeStaticShellJtagFlag = writeStaticShellCommand->add_flag("--jtag",
+        writeStaticShellOptions.jtag, "Program the no-FPT PDI over JTAG via xsdb");
+    writeStaticShellFlashFlag->excludes(writeStaticShellJtagFlag);
+    writeStaticShellJtagFlag->excludes(writeStaticShellFlashFlag);
+    writeStaticShellCommand->add_option("-d,--device", writeStaticShellOptions.bdf,
+        "Board address (e.g. 03:00 or 0000:03:00)");
+    writeStaticShellCommand->add_option("--pdi", writeStaticShellOptions.pdiPath,
+        "Use this PDI file instead of resolving the installed static shell PDI");
+    const std::map<std::string, std::string> writeStaticShellTypeMap{
+        {"service", "service"},
+        {"compute", "compute"},
+        {"all", "all"},
+    };
+    writeStaticShellCommand->add_option("--shell-type", writeStaticShellOptions.shellType,
+        "Shell to program: all (both flash partitions), service (partition 0), or compute (partition 1)")
+        ->transform(CLI::CheckedTransformer(writeStaticShellTypeMap, CLI::ignore_case))
+        ->default_str("all for --flash without --pdi, service otherwise");
+    writeStaticShellCommand->add_flag("--no-remove-device", writeStaticShellOptions.noRemoveDevice,
+        "Skip pre-JTAG PCIe device removal; only valid with --jtag");
+    writeStaticShellCommand->add_option("--bash-source", writeStaticShellOptions.bashSources,
+        "Source this shell script before running xsdb; may be repeated and is only valid with --jtag")
+        ->expected(1);
+    writeStaticShellCommand->add_option("--xsdb-target-id", writeStaticShellOptions.xsdbTargetId,
+        "XSDB target_id of the Versal xcv80 device to program; only valid with --jtag");
 
     // -- validate (memory integrity + bandwidth) --
     auto* validateCommand = app.add_subcommand("validate", "Validate board memory (integrity + bandwidth)");
@@ -254,6 +295,20 @@ static int smiMain(int argc, char **argv) {
         "With -x: hexdump format (no 0x prefix); without -x: raw binary. "
         "In file mode -W and -c determine the byte count (-W * -c), not word alignment.");
 
+    auto* hotplugOpCommand = debugCommand->add_subcommand("hotplug-op",
+        "Perform a PCIe hotplug operation (rescan/remove/toggle-sbr/hotplug)");
+    Hotplug::Options hotplugOptions;
+    hotplugOpCommand->add_option("-d,--device", hotplugOptions.bdf,
+        "Board address (e.g. 03:00 or 0000:03:00), required except for rescan");
+    hotplugOpCommand->add_option("--op", hotplugOptions.opText,
+        "Hotplug operation: rescan, remove, toggle-sbr, or hotplug")->required();
+    hotplugOpCommand->add_option_function<uint32_t>("--function",
+        [&hotplugOptions](uint32_t value) {
+            hotplugOptions.function = static_cast<uint8_t>(value);
+        },
+        "PCI function number (0-7); defaults to all PFs for remove/hotplug")
+        ->check(CLI::Range(0u, 7u));
+
     CLI11_PARSE(app, argc, argv);
 
     // Route commands
@@ -269,6 +324,8 @@ static int smiMain(int argc, char **argv) {
         return Program::run(programOptions);
     } else if (resetCommand->parsed()) {
         return Reset::run(resetOptions);
+    } else if (writeStaticShellCommand->parsed()) {
+        return WriteStaticShell::run(writeStaticShellOptions);
     } else if (validateCommand->parsed()) {
         return Validate::run(validateOptions);
     } else if (barPokeCommand->parsed()) {
@@ -277,6 +334,8 @@ static int smiMain(int argc, char **argv) {
         return Clockwiz::run(clockwizOptions);
     } else if (memPokeCommand->parsed()) {
         return MemPoke::run(memPokeOptions);
+    } else if (hotplugOpCommand->parsed()) {
+        return Hotplug::run(hotplugOptions);
     } else {
         // No subcommand given - print help and exit with error.
         std::cerr << app.help() << std::endl;

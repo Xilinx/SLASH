@@ -21,14 +21,17 @@
 add_executable(
     v80-smi
     
+    shell_build_id.cpp
     debug/bar_poke.cpp
     debug/clockwiz.cpp
+    debug/hotplug.cpp
     debug/mem_poke.cpp
     inspect.cpp
     list.cpp
     program.cpp
     reset.cpp
     validate.cpp
+    write_static_shell.cpp
     smi.cpp
 )
 
@@ -48,6 +51,12 @@ if(SMI_ENABLE_QDMA_DRIVER_BACKEND)
 endif()
 
 target_compile_features(v80-smi PRIVATE cxx_std_20)
+
+target_compile_definitions(
+    v80-smi
+    PRIVATE
+    SMI_VERSAL_FLASH_TCL="${CMAKE_INSTALL_FULL_DATADIR}/v80-smi/versal_flash_pdi.tcl"
+)
 
 target_include_directories(
     v80-smi

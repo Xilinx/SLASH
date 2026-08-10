@@ -33,6 +33,7 @@ from slashkit.emit.hw.user_region.terminator_ctx import build_ddr_noc_terminator
 from slashkit.emit.hw.user_region.terminator_ctx import build_mem_noc_terminators
 from slashkit.emit.hw.user_region.terminator_ctx import build_virt_noc_terminators
 from slashkit.emit.hw.user_region.terminator_ctx import build_host_noc_terminator
+from slashkit.emit.hw.user_region.debug_ctx import build_system_ila_debug_context, build_debug_hub_slaves
 from slashkit.emit.hw.service_region.network_ctx import build_network_axis_context
 from slashkit.emit.hw.service_region.stream_ctx import build_stream_connect_context
 from slashkit.emit.hw.user_region.host_ctx import build_host_smartconnect_context
@@ -41,7 +42,7 @@ from slashkit.emit.hw.user_region.param_ctx import build_data_width_param_contex
 from slashkit.emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from slashkit.emit.hw.service_region.service_layer_ctx import *
 
-from slashkit.core.command_config import LinkerConfiguration
+from slashkit.core.command_config import LinkerConfiguration, ShellType
 
 logger = logging.getLogger(__name__)
 
@@ -237,39 +238,65 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     instances = {kernel.name: kernel for kernel in config.kernel_instances}
     streams = cfg.streams
     kernel_hls_by_type = {
-        kernel.name: kernel.hls_data_path for kernel in config.kernels}
+        kernel.name: kernel.hls_data_path for kernel in config.kernels
+    }
+
+    # Early error: VIRT targets are not supported on the compute shell.
+    if config.shell_type == ShellType.COMPUTE:
+        for inst in instances.values():
+            for port, tgt in inst.params.get("mem_sp", {}).items():
+                if str(tgt.get("domain", "")).upper() == "VIRT":
+                    raise ValueError(
+                        f"sp={inst.name}.{port}:VIRT requires shell=service "
+                        "(compute shell has no virtual memory ports)."
+                    )
+
+    # Debug hub S_AXI joins the AXI-Lite control fan-out as an extra slave
+    # (empty when no debug nets are configured).
+    hub_slaves = build_debug_hub_slaves(cfg.debug)
 
     ctx = build_kernel_add_context(instances)
     ctx.update(build_data_width_param_context(instances))
-    ctx.update(build_axilite_smartconnect_context(instances))
+    ctx.update(build_axilite_smartconnect_context(
+        instances, extra_slaves=[s["dst_pin"] for s in hub_slaves]))
     ctx.update(build_hbm_smartconnect_context(instances, bd, max_si=16))
     ctx.update(build_ddr_smartconnect_context(instances, max_si=16))
     ctx.update(build_mem_smartconnect_context(
         instances, num_mem_ports=8, max_si=16))
     ctx.update(build_host_smartconnect_context(instances, bd, max_si=16))
-    ctx.update(build_virt_smartconnect_context(instances, bd, max_si=16))
-    net_ctx = build_network_axis_context(instances, streams, cfg.net)
-    ctx.update({
-        # inst.AXIS -> /dcmac_axis_noc_k/S00_AXIS
-        "axis_to_fabric":   net_ctx["axis_to_fabric"],
-        # /dcmac_axis_noc_s_k/M00_AXIS -> inst.AXIS
-        "axis_from_fabric": net_ctx["axis_from_fabric"],
-    })
-    used_rx_slots: set[int] = set()
-    for e in net_ctx.get("axis_from_fabric", []):
-        m = _RX_SRC_PIN_RE.match(str(e.get("src_pin", "")).strip())
-        if m:
-            used_rx_slots.add(int(m.group(1)))
+    if config.shell_type == ShellType.SERVICE:
+        ctx.update(build_virt_smartconnect_context(instances, bd, max_si=16))
+        net_ctx = build_network_axis_context(instances, streams, cfg.net)
+        ctx.update(
+            {
+                # inst.AXIS -> /dcmac_axis_noc_k/S00_AXIS
+                "axis_to_fabric": net_ctx["axis_to_fabric"],
+                # /dcmac_axis_noc_s_k/M00_AXIS -> inst.AXIS
+                "axis_from_fabric": net_ctx["axis_from_fabric"],
+            }
+        )
+        used_rx_slots: set[int] = set()
+        for e in net_ctx.get("axis_from_fabric", []):
+            m = _RX_SRC_PIN_RE.match(str(e.get("src_pin", "")).strip())
+            if m:
+                used_rx_slots.add(int(m.group(1)))
 
-    # Tie-off RX NoC tready only for unused RX slots (0..7).
-    # If no RX is used, we tie all 8.
-    dcmac_rx_tready_tie_slots = [i for i in range(8) if i not in used_rx_slots]
-    ctx["dcmac_rx_tready_tie_pins"] = [
-        f"dcmac_axis_noc_s_{i}/M00_AXIS_tready" for i in dcmac_rx_tready_tie_slots
-    ]
-
-    ctx.update(build_stream_connect_context(
-        instances, net_ctx["streams_leftover"]))
+        # Tie-off RX NoC tready only for unused RX slots (0..7).
+        dcmac_rx_tready_tie_slots = [
+            i for i in range(8) if i not in used_rx_slots]
+        ctx["dcmac_rx_tready_tie_pins"] = [
+            f"dcmac_axis_noc_s_{i}/M00_AXIS_tready" for i in dcmac_rx_tready_tie_slots
+        ]
+        ctx.update(build_stream_connect_context(
+            instances, net_ctx["streams_leftover"]))
+    else:  # COMPUTE — no DCMAC / stream fabric, no VIRT
+        ctx["virt_direct"] = []
+        ctx["virt_smart_nodes"] = []
+        ctx["virt_smart_roots"] = []
+        ctx["axis_to_fabric"] = []
+        ctx["axis_from_fabric"] = []
+        ctx["dcmac_rx_tready_tie_pins"] = []
+        ctx.update(build_stream_connect_context(instances, streams))
 
     used_targets = _collect_used_targets(ctx)
 
@@ -277,13 +304,21 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         used_targets.add(s["dst"])
 
     terms_generic = build_axi_terminators_context(
-        bd, used_targets)  # HBM/VIRT BD ports only
+        bd, used_targets
+    )  # HBM BD ports only (compute has no VIRT BD ports)
+    num_ddr = 12 if config.shell_type == ShellType.COMPUTE else 4
     terms_ddr_noc = build_ddr_noc_terminators(
-        used_targets, num_ddr=4, noc_pin_fmt="/ddr_noc_{index}/S00_AXI")
+        used_targets, num_ddr=num_ddr, noc_pin_fmt="/ddr_noc_{index}/S00_AXI"
+    )
     terms_mem_noc = build_mem_noc_terminators(
-        used_targets, num_mem=8, noc_pin_fmt="/hbm_vnoc_0{index}/S00_AXI")
-    terms_virt_noc = build_virt_noc_terminators(
-        used_targets, num_virt=4, noc_pin_fmt="/noc_virt_0{index}/S00_AXI")
+        used_targets, num_mem=8, noc_pin_fmt="/hbm_vnoc_0{index}/S00_AXI"
+    )
+    if config.shell_type == ShellType.SERVICE:
+        terms_virt_noc = build_virt_noc_terminators(
+            used_targets, num_virt=4, noc_pin_fmt="/noc_virt_0{index}/S00_AXI"
+        )
+    else:
+        terms_virt_noc = {"axi_terminators": []}
     terms_host_noc = build_host_noc_terminator(used_targets)
 
     ctx["axi_terminators"] = (
@@ -298,13 +333,19 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         addr_space="S_AXILITE_INI",
         base_offset=0x0202_0000_0000,
         min_align=0x0001_0000,
+        extra_slaves=hub_slaves,
     )
     ctx.update(axilite_ctx)
+    ctx.update(build_system_ila_debug_context(instances, cfg.debug))
     ctx["project_name"] = config.project_name
     ctx["slash_bd_name"] = f"slash_{config.project_name}"
-    out_path = config.build_dir / "slash.tcl"  # slash.tcl
+
+    slash_template = (
+        "slash.tcl" if config.shell_type == ShellType.SERVICE else "slash_compute.tcl"
+    )
+    out_path = config.build_dir / "slash.tcl"
     render_template(
-        template="slash.tcl",
+        template=slash_template,
         out_path=out_path,
         context=ctx,
     )
@@ -316,6 +357,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         axilite_ctx.get("axilite_addr", []),
         clock_hz=clock_hz,
         platform="Hardware",
+        shell_type=config.shell_type.value,
         kernel_hls_by_type=kernel_hls_by_type,
         network=getattr(cfg, "network", None),
     )
@@ -327,27 +369,23 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     )
     logger.info("Rendered system map to %s", system_map_out)
 
-    svc_ctx = {}
-    svc_ctx.update(build_service_layer_context(cfg.net))
-    svc_ctx.update(build_service_axilite_ctx(cfg.net)
-                   )    # SmartConnect + MI targets
-    svc_ctx.update(build_service_noc_axis_ctx(cfg.net))
+    if config.shell_type == ShellType.SERVICE:
+        svc_ctx = {}
+        svc_ctx.update(build_service_layer_context(cfg.net))
+        svc_ctx.update(build_service_axilite_ctx(cfg.net))
+        svc_ctx.update(build_service_noc_axis_ctx(cfg.net))
 
-    svc_ctx["project_name"] = config.project_name
-    svc_ctx["service_layer_bd_name"] = f"service_layer_{config.project_name}"
+        svc_ctx["project_name"] = config.project_name
+        svc_ctx["service_layer_bd_name"] = f"service_layer_{config.project_name}"
 
-    # --- Render service-layer Tcl ---
-    svc_out = config.build_dir / "service_layer.tcl"
-
-    dcmac_dir = config.build_dir / "dcmac"
-    if not dcmac_dir.is_dir():
+        dcmac_dir = config.build_dir / "dcmac"
         export_package("slashkit.resources.dcmac", dcmac_dir)
+        svc_ctx.update(dcmac_paths(dcmac_dir))
 
-    svc_ctx.update(dcmac_paths(dcmac_dir))
-    render_template(
-        template="service_layer.tcl",
-        out_path=svc_out,
-        context=svc_ctx,
-    )
-
-    logger.info("Rendered service layer Tcl to %s", svc_out)
+        svc_out = config.build_dir / "service_layer.tcl"
+        render_template(
+            template="service_layer.tcl",
+            out_path=svc_out,
+            context=svc_ctx,
+        )
+        logger.info("Rendered service layer Tcl to %s", svc_out)

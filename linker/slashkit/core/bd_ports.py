@@ -198,6 +198,45 @@ def _parse_width(s: Optional[str]) -> Optional[int]:
         return None
 
 
+def load_bd_ports_from_lines(lines) -> BlockDesignPorts:
+    """Parse BD ports from an iterable of strings (same format as the file)."""
+    bd = BlockDesignPorts()
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        try:
+            lhs, rhs = line.split(None, 1)
+        except ValueError:
+            raise ValueError(
+                f"Expected '<logical>:<rtl> <type> [width]'. Got: {line!r}"
+            )
+        if ":" not in lhs:
+            raise ValueError(
+                f"Missing ':' in '{lhs}'. Expected '<logical>:<rtl>'.")
+        logical, rtl = [t.strip() for t in lhs.split(":", 1)]
+        parts = rhs.split()
+        if len(parts) not in (1, 2):
+            raise ValueError(
+                f"Invalid RHS. Expected '<type> [width]'. Got: {rhs!r}")
+        ptype = _parse_ptype(parts[0])
+        width = _parse_width(parts[1]) if len(parts) == 2 else None
+        if ptype in (BusType.CLOCK, BusType.RESET, BusType.INTERRUPT):
+            width = 1
+        domain, index = _infer_domain_index(logical)
+        bd.add(
+            BdPort(
+                name=logical,
+                ptype=ptype,
+                rtl_name=rtl,
+                width=width,
+                domain=domain,
+                index=index,
+            )
+        )
+    return bd
+
+
 def load_bd_ports_from_file(path: str) -> BlockDesignPorts:
     """
     File format (one entry per line; comments with # or ; are ignored):

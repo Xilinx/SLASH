@@ -172,5 +172,16 @@ report_timing_summary -delay_type min_max -check_timing_verbose -max_paths 1 -in
 
 set partial_pdi [file join $artifact_out_dir "top_i_slash_slash_${proj_name}_inst_0_partial.pdi"]
 write_device_image -cell top_i/slash -force $partial_pdi
-write_debug_probes -cell top_i/slash -force $ltx_file
+
 report_utilization -hierarchical -hierarchical_percentages -file $util_report_file
+
+# Exporting the probes from the impl_1 project run segfaults Vivado: a PR/GateLvl project
+# has no IPI block design, so the LTX exporter dereferences a null hardware definition
+# ([Pfi 67-20] immediately precedes the crash). Re-open the routed checkpoint standalone
+# and export from there instead.
+close_design
+close_project
+set routed_dcp [file join $rm_work_dir "${slash_proj_name}.runs" "impl_1" "top_wrapper_routed.dcp"]
+_require_file $routed_dcp "routed top checkpoint"
+open_checkpoint $routed_dcp
+write_debug_probes -cell top_i/slash -file $ltx_file

@@ -39,6 +39,7 @@ public:
     /// @brief Options parsed from the CLI for the reset command.
     struct Options {
         std::string bdf;        ///< BDF (Bus:Device.Function) address of the target device.
+        std::string shellType = "service"; ///< Shell to boot after reset.
     };
 
     /// @brief Executes the reset command.

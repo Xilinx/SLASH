@@ -49,7 +49,7 @@
  *   - **Device-access** operations (get_bar_fd, qdma_qpair_add/op/get_fd,
  *     buffer_open/close, design_write, clock_op): require `query` plus
  *     the corresponding per-device per-subsystem permission (bar, qdma,
- *     buffer, design-write, clock) as defined in the role's device_policies.
+ *     buffer, design-write, cfgmem-program, clock) as defined in the role's device_policies.
  *   - **Hotplug** operations (device_hotplug_op): require `query` plus
  *     per-device pcie-hotplug permission or the global pcie_hotplug flag.
  *
@@ -82,6 +82,7 @@ enum auth_subsystem {
     AUTH_SUBSYSTEM_QDMA,
     AUTH_SUBSYSTEM_BUFFER,
     AUTH_SUBSYSTEM_DESIGN_WRITE,
+    AUTH_SUBSYSTEM_CFGMEM_PROGRAM,
     AUTH_SUBSYSTEM_CLOCK,
     AUTH_SUBSYSTEM_PCIE_HOTPLUG,
     AUTH_SUBSYSTEM_RAW_MEM_ACCESS,
@@ -97,6 +98,7 @@ static const char *auth_subsystem_name(enum auth_subsystem subsystem)
     case AUTH_SUBSYSTEM_QDMA:         return "qdma";
     case AUTH_SUBSYSTEM_BUFFER:       return "buffer";
     case AUTH_SUBSYSTEM_DESIGN_WRITE: return "design-write";
+    case AUTH_SUBSYSTEM_CFGMEM_PROGRAM: return "cfgmem-program";
     case AUTH_SUBSYSTEM_CLOCK:        return "clock";
     case AUTH_SUBSYSTEM_PCIE_HOTPLUG:  return "pcie-hotplug";
     case AUTH_SUBSYSTEM_RAW_MEM_ACCESS: return "raw-mem-access";
@@ -114,6 +116,7 @@ static bool device_policy_check(const struct device_policy *dp, enum auth_subsys
     case AUTH_SUBSYSTEM_QDMA:         return dp->qdma;
     case AUTH_SUBSYSTEM_BUFFER:       return dp->buffer;
     case AUTH_SUBSYSTEM_DESIGN_WRITE: return dp->design_write;
+    case AUTH_SUBSYSTEM_CFGMEM_PROGRAM: return dp->cfgmem_program;
     case AUTH_SUBSYSTEM_CLOCK:        return dp->clock;
     case AUTH_SUBSYSTEM_PCIE_HOTPLUG:  return dp->pcie_hotplug;
     case AUTH_SUBSYSTEM_RAW_MEM_ACCESS: return dp->raw_mem_access;
@@ -714,6 +717,35 @@ int auth_request_design_write(
     );
 }
 
+/**
+ * @brief Authorize a cfgmem_program request (persistent flash programming).
+ *
+ * Requires: query + cfgmem-program permission on the target device.
+ *
+ * This operation also resets the board into the programmed partition, so the
+ * cfgmem-program permission should be granted only to users allowed to disrupt
+ * device availability.
+ *
+ * @param client    The requesting client.
+ * @param req_body  The request payload.
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_cfgmem_program(
+    struct client *client,
+    const struct vrtd_req_cfgmem_program *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    return auth_check_device_permission(
+        client, req_body->dev_number, AUTH_SUBSYSTEM_CFGMEM_PROGRAM, "cfgmem_program"
+    );
+}
+
 /* ========================================================================
  * Hotplug authorization check
  *
@@ -744,6 +776,31 @@ int auth_request_device_hotplug_op(
 
     return auth_check_device_permission(
         client, req_body->dev_number, AUTH_SUBSYSTEM_PCIE_HOTPLUG, "device_hotplug_op"
+    );
+}
+
+/**
+ * @brief Authorize a set_shell_state request.
+ *
+ * Requires: query + pcie-hotplug permission on the target device.
+ *
+ * @param client    The requesting client.
+ * @param req_body  The request payload.
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_set_shell_state(
+    struct client *client,
+    const struct vrtd_req_set_shell_state *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    return auth_check_device_permission(
+        client, req_body->dev_number, AUTH_SUBSYSTEM_PCIE_HOTPLUG, "set_shell_state"
     );
 }
 

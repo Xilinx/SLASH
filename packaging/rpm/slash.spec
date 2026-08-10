@@ -158,6 +158,7 @@ VRT Runtime (development files)
 Summary:        V80 System Management Interface
 Requires:       libvrt = %{version}-%{release}
 Requires:       libslash = %{version}-%{release}
+Requires:       slashkit = %{version}-%{release}
 
 %description -n v80-smi
 V80 System Management Interface
@@ -308,6 +309,7 @@ udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 
 %files -n v80-smi
 %{_bindir}/v80-smi
+%{_datadir}/v80-smi/versal_flash_pdi.tcl
 
 %files -n slashkit
 %{_bindir}/slashkit

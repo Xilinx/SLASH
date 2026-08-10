@@ -90,6 +90,8 @@ struct client {
     bool pending_design_write;
     /** @brief The device on which the pending asynchronous design write is running (non-owning). */
     struct device *pending_design_write_device;
+    /** @brief True while an asynchronous device operation is in progress for this client. */
+    bool pending_async_device_op;
 
     /** @brief Bitmask of epoll events currently requested for this client's fd. */
     uint32_t wanted_epoll_events;

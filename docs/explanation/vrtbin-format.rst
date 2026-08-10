@@ -76,6 +76,7 @@ Schema
 
    <SystemMap>
      <Platform>Hardware</Platform>
+     <ShellType>service</ShellType>
      <ClockFrequency>250000000</ClockFrequency>
 
      <ServiceLayer>
@@ -114,6 +115,12 @@ Key elements:
 ``<Platform>``
    One of ``Hardware``, ``Emulation``, or ``Simulation``. VRT maps this to
    the ``vrt::Platform`` enum and selects the appropriate back-end.
+
+``<ShellType>``
+   Hardware shell required by the design. Hardware vbins use ``service`` or
+   ``compute``. VRT passes this to ``vrtd`` before programming so the daemon
+   can reset the board to the matching boot partition when needed. Legacy
+   vbins without this element are treated as ``service``.
 
 ``<ClockFrequency>``
    Kernel clock frequency in Hz (e.g. ``250000000`` for 250 MHz).

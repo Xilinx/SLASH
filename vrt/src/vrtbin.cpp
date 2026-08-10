@@ -263,6 +263,7 @@ Vrtbin::Vrtbin(std::string vrtbinPath, const std::string& bdf) {
     XMLParser parser(tempSystemMapPath.string());
     parser.parseXML();
     this->platform = parser.getPlatform();
+    this->shellType = parser.getShellType();
     copy(tempSystemMapPath.string(), systemMapPath);
 
     const std::filesystem::path reportPath =
@@ -479,6 +480,8 @@ std::string Vrtbin::getEmulationManifest() { return emulationManifestPath; }
 std::string Vrtbin::getSimulationExec() { return simulationExecPath; }
 
 Platform Vrtbin::getPlatform() const { return platform; }
+
+ShellType Vrtbin::getShellType() const { return shellType; }
 
 void Vrtbin::discoverPdiFiles() {
     pdiPaths.clear();

@@ -48,8 +48,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -61,6 +59,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <glob.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -472,62 +471,6 @@ static void warnIfNotRoot(const char* mode) {
     }
 }
 
-std::string readDevNameFromUevent(const std::filesystem::path& miscPath) {
-    std::ifstream uevent(miscPath / "uevent");
-    if (!uevent.is_open()) {
-        throw std::runtime_error("Failed to open " + (miscPath / "uevent").string());
-    }
-
-    std::string line;
-    while (std::getline(uevent, line)) {
-        static constexpr std::string_view key{"DEVNAME="};
-        if (!line.starts_with(key)) {
-            continue;
-        }
-
-        std::string devName = line.substr(key.size());
-        while (!devName.empty() && (devName.back() == '\n' || devName.back() == '\r')) {
-            devName.pop_back();
-        }
-        return "/dev/" + devName;
-    }
-
-    throw std::runtime_error("No DEVNAME entry found in " + (miscPath / "uevent").string());
-}
-
-std::string resolveQdmaDevicePath(const std::string& boardBdf) {
-    static const std::filesystem::path MISC_PATH{"/sys/class/misc"};
-
-    const std::string exactName = "slash_qdma_ctl_" + boardBdf + ".1";
-    const auto exactPath = MISC_PATH / exactName;
-    if (std::filesystem::exists(exactPath)) {
-        return readDevNameFromUevent(exactPath);
-    }
-
-    const std::string prefix = "slash_qdma_ctl_" + boardBdf + ".";
-    std::vector<std::filesystem::path> matches;
-    for (const auto& entry : std::filesystem::directory_iterator(MISC_PATH)) {
-        const std::string name = entry.path().filename().string();
-        if (name.starts_with(prefix)) {
-            matches.push_back(entry.path());
-        }
-    }
-
-    if (matches.empty()) {
-        throw std::runtime_error(
-            "No QDMA misc device found for board " + boardBdf +
-            " (looked for /sys/class/misc/" + prefix + "*)");
-    }
-
-    std::sort(matches.begin(), matches.end());
-    if (matches.size() > 1) {
-        std::cerr << "Warning: multiple QDMA devices found for " << boardBdf
-                  << "; using " << matches.front().filename().string() << std::endl;
-    }
-
-    return readDevNameFromUevent(matches.front());
-}
-
 class RawQdmaDevice {
 public:
     explicit RawQdmaDevice(const std::string& path) : qdma_{slash_qdma_open(path.c_str())} {
@@ -570,6 +513,37 @@ private:
 
     slash_qdma* qdma_ = nullptr;
 };
+
+std::string resolveQdmaDevicePath(const std::string& boardBdf) {
+    struct GlobResult {
+        glob_t paths{};
+        ~GlobResult() { globfree(&paths); }
+    } devices;
+
+    const int ret = glob("/dev/slash_qdma_ctl*", GLOB_ERR, nullptr, &devices.paths);
+    if (ret == GLOB_NOMATCH) {
+        throw std::runtime_error("No QDMA devices found matching /dev/slash_qdma_ctl*");
+    }
+    if (ret != 0) {
+        throw std::runtime_error("Failed to enumerate /dev/slash_qdma_ctl*");
+    }
+
+    const std::string expectedBdf = boardBdf + ".1";
+    for (size_t i = 0; i < devices.paths.gl_pathc; ++i) {
+        const std::string path = devices.paths.gl_pathv[i];
+        RawQdmaDevice qdma(path);
+
+        struct slash_qdma_info info{};
+        if (slash_qdma_info_read(qdma.get(), &info) != 0) {
+            throwSystemError("Failed to read QDMA info from " + path);
+        }
+        if (std::strncmp(info.bdf, expectedBdf.c_str(), sizeof(info.bdf)) == 0) {
+            return path;
+        }
+    }
+
+    throw std::runtime_error("No QDMA device found for PF1 " + expectedBdf);
+}
 
 class RawTransferBuffer {
 public:
