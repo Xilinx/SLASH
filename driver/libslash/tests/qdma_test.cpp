@@ -21,7 +21,7 @@
  * SOFTWARE.
  */
 
-#include <gtest/gtest.h>
+#include "common.hpp"
 
 #include <cctype>
 #include <cerrno>
@@ -52,12 +52,6 @@ static constexpr const char *DRIVER_QDMA_PATH = "/dev/slash_qdma_ctl0";
 static constexpr const char *SYSEMU_QDMA_PATH =
     "/run/slash_sysemu/slash_qdma_ctl0";
 static constexpr uint64_t DDR_BASE_ADDRESS = 0x60000000000ULL;
-
-enum class LibSlashBackend {
-    DRIVER,
-    SYSEMU,
-    MOCK,
-};
 
 /* --- mock sock tests --- */
 

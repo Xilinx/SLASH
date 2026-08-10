@@ -26,6 +26,7 @@
 #include <slash/uapi/slash_interface.h>
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -146,7 +147,8 @@ ctldev_ioctl_bar_fd_request(struct slash_mock_sock_ctldev_state *state,
         slash_checked_copy_from_user(&fd_request, sizeof(fd_request), arg,
                                      arg_size, SLASH_IOCTL_BAR_FD_MIN_SIZE);
 
-    if (fd_request.size == -1 || fd_request.bar_number > 6 || (fd_request.bar_number % 2) != 0) {
+    if (fd_request.size == -1 || fd_request.bar_number > 6 ||
+        (fd_request.bar_number % 2) != 0) {
         return -EINVAL;
     }
 
@@ -183,7 +185,8 @@ int slash_mock_sock_ctldev_dispatch(struct slash_mock_sock_ctldev_state *state,
     case SLASH_CTLDEV_IOCTL_GET_BAR_INFO:
         return ctldev_ioctl_get_bar_info(arg, arg_size);
     case SLASH_CTLDEV_IOCTL_GET_BAR_FD:
-        return ctldev_ioctl_bar_fd_request(state, arg, arg_size, output_fds, n_output_fds);
+        return ctldev_ioctl_bar_fd_request(state, arg, arg_size, output_fds,
+                                           n_output_fds);
     case SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO:
         return ctldev_ioctl_get_device_info(arg, arg_size);
     default:

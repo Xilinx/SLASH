@@ -190,6 +190,11 @@ static __inline__ int slash_bar_file_sync(struct slash_bar_file *bar_file, unsig
     int how;
     int ret;
 
+    if (bar_file == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
     if (bar_file->mock) {
         return 0;
     }
