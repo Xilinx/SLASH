@@ -16,7 +16,7 @@ macro(add_vrtd_test test_name test_source)
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
   )
-  gtest_discover_tests(${test_name})
+  gtest_discover_tests(${test_name} PROPERTIES TIMEOUT 120)
   add_dependencies(unit_tests ${test_name})
 endmacro()
 
