@@ -348,12 +348,14 @@ TEST_P(ParametrizedQdmaTest, BufCreateViaCtlFD) {
     EXPECT_EQ(buf.length, 4096u);
     EXPECT_EQ(buf.granule, 4096u);
 
-    // Test that the FD is still valid after some time, and that the length is
-    // correct.
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    struct stat buf_stat{};
-    EXPECT_EQ(fstat(buf.fd, &buf_stat), 0) << strerror(errno);
-    EXPECT_EQ(buf_stat.st_size, 4096u);
+    // Write to the buffer and read from it, to check that it behaves like a
+    // buffer.
+    for (size_t i = 0; i < 4096 / sizeof(size_t); i++) {
+        static_cast<size_t *>(buf.addr)[i] = i;
+    }
+    for (size_t i = 0; i < 4096 / sizeof(size_t); i++) {
+        EXPECT_EQ(static_cast<size_t *>(buf.addr)[i], i);
+    }
 
     EXPECT_EQ(slash_qdma_buffer_destroy(&buf), 0);
 }
@@ -372,6 +374,15 @@ TEST_P(ParametrizedQdmaTest, BufCreateViaQpairFD) {
     EXPECT_NE(buf.addr, nullptr);
     EXPECT_EQ(buf.length, 4096u);
     EXPECT_EQ(buf.granule, 4096u);
+
+    // Write to the buffer and read from it, to check that it behaves like a
+    // buffer.
+    for (size_t i = 0; i < 4096 / sizeof(size_t); i++) {
+        static_cast<size_t *>(buf.addr)[i] = i;
+    }
+    for (size_t i = 0; i < 4096 / sizeof(size_t); i++) {
+        EXPECT_EQ(static_cast<size_t *>(buf.addr)[i], i);
+    }
 
     EXPECT_EQ(slash_qdma_buffer_destroy(&buf), 0);
     ::close(xfer_fd);
