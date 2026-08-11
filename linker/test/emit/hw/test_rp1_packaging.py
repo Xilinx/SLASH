@@ -29,19 +29,17 @@ import pytest
 from slashkit.emit.hw import project_gen
 
 
-def test_service_shell_keeps_rp1_mailbox_and_bar_window():
-    """The service topology exposes the mailbox and BAR space required by RP1."""
+def test_service_shell_keeps_rp1_bar_window():
+    """The service topology exposes the BAR space required by RP1."""
     top_tcl = (
         resources.files("slashkit.resources.base.service.scripts")
         .joinpath("top.tcl")
         .read_text()
     )
 
-    assert "xilinx.com:ip:pcie_qdma_mailbox:1.0" in top_tcl
-    assert "assign_bd_address -offset 0x80200000 -range 0x00200000" in top_tcl
-    assert "CONFIG.APERTURES {{0x204_0000_0000 64M}}" in top_tcl
     assert "CPM_PCIE1_PF2_BAR4_QDMA_PREFETCHABLE {1}" in top_tcl
     assert "CPM_PCIE1_PF2_BAR4_QDMA_SIZE {128}" in top_tcl
+    assert "0x20404000000 0x00030000000 0x04000000" in top_tcl
     assert "M04_INI {read_bw {500} write_bw {500} initial_boot {true}}" in top_tcl
     assert "assign_bd_address -offset 0x020200600000 -range 0x00200000" in top_tcl
 
