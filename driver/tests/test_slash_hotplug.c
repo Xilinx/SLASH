@@ -9,18 +9,17 @@
  * against the live device(s).
  *
  * Discovery: the fixture enumerates every SLASH accelerator on the
- * system at setup time by scanning /sys/class/misc/ for slash_ctl_<BDF>
+ * system at setup time by scanning /sys/class/slash/ for slash_ctl_<BDF>
  * (PF2) and slash_qdma_ctl_<BDF> (PF1), then pairs them by the
  * "DDDD:BB:SS" bus prefix.  Operations target the first accelerator;
  * the teardown polls until *every* discovered accelerator has both its
- * ctl and qdma sysfs entries back and pointing at a /dev node whose
- * major:minor match the sysfs `dev` attribute.  This catches both
+ * ctl and qdma sysfs entries back with the same paths and device numbers
+ * recorded before removal.  This catches both
  * cross-card damage (touching the wrong accelerator) and stale /dev
  * state (sysfs back but udev missed the node, or wrong minor).
  *
- * Two tests perform a full board reset (TOGGLE_SBR) or accept ~10 s of
- * PCIe downtime; these are gated by SLASH_TEST_DESTRUCTIVE=1.  All other
- * tests run on every invocation.
+ * Tests that retain open resources across removal or perform a full board
+ * reset are gated by SLASH_TEST_DESTRUCTIVE=1.
  *
  * The accelerator-discovery helpers live in this file rather than in
  * slash_test_helpers.h because no other test binary needs them.
@@ -35,17 +34,9 @@
 
 #include <dirent.h>
 #include <stdio.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/sysmacros.h>
 
 #define NODE_RECOVERY_TIMEOUT_S 10
 #define SBR_SETTLE_SECONDS 7
-
-#define SLASH_TEST_MAX_ACCELERATORS 16
-#define SYSFS_MISC_DIR "/sys/class/misc"
-#define CTL_SYSFS_PREFIX "slash_ctl_"
-#define QDMA_SYSFS_PREFIX "slash_qdma_ctl_"
 
 /* ====================================================================
  * Accelerator discovery + verification
@@ -54,138 +45,51 @@
 struct accelerator
 {
 	char pf0_bdf[SLASH_PCI_BDF_LEN]; /* derived: "<bus_prefix>.0" */
-	char pf1_bdf[SLASH_PCI_BDF_LEN]; /* from slash_qdma_ctl_<BDF>   */
-	char pf2_bdf[SLASH_PCI_BDF_LEN]; /* from slash_ctl_<BDF>        */
+	char pf1_bdf[SLASH_PCI_BDF_LEN]; /* from slash_qdma_ctl_<BDF> */
+	char pf2_bdf[SLASH_PCI_BDF_LEN]; /* from slash_ctl_<BDF> */
+	struct slash_test_node_identity ctl_identity;
+	struct slash_test_node_identity qdma_identity;
 };
 
-/* Slurp a sysfs file into a NUL-terminated buffer, trimming a trailing newline. */
-static int read_sysfs_string(const char *path, char *buf, size_t buf_sz)
-{
-	int fd = open(path, O_RDONLY);
-	ssize_t n;
-
-	if (fd < 0)
-		return -errno;
-	n = read(fd, buf, buf_sz - 1);
-	close(fd);
-	if (n < 0)
-		return -errno;
-	buf[n] = '\0';
-	while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
-		buf[--n] = '\0';
-	return 0;
-}
-
-/* Read DEVNAME=... from /sys/class/misc/<basename>/uevent. */
-static int get_misc_devname(const char *sysfs_basename, char *out, size_t out_sz)
-{
-	char path[256];
-	char buf[1024];
-	char *line, *saveptr;
-	int err;
-
-	snprintf(path, sizeof(path), SYSFS_MISC_DIR "/%s/uevent", sysfs_basename);
-	err = read_sysfs_string(path, buf, sizeof(buf));
-	if (err)
-		return err;
-
-	for (line = strtok_r(buf, "\n", &saveptr); line;
-		 line = strtok_r(NULL, "\n", &saveptr))
-	{
-		if (strncmp(line, "DEVNAME=", 8) == 0)
-		{
-			strncpy(out, line + 8, out_sz - 1);
-			out[out_sz - 1] = '\0';
-			return 0;
-		}
-	}
-	return -ENOENT;
-}
-
-/* Read MAJOR:MINOR from /sys/class/misc/<basename>/dev. */
-static int get_misc_devnum(const char *sysfs_basename,
-						   unsigned int *major_out, unsigned int *minor_out)
-{
-	char path[256];
-	char buf[64];
-	int err;
-
-	snprintf(path, sizeof(path), SYSFS_MISC_DIR "/%s/dev", sysfs_basename);
-	err = read_sysfs_string(path, buf, sizeof(buf));
-	if (err)
-		return err;
-	if (sscanf(buf, "%u:%u", major_out, minor_out) != 2)
-		return -EINVAL;
-	return 0;
-}
-
-/*
- * Verify a misc-class sysfs entry exists and points at a real /dev node.
- *
- *   0       — sysfs entry exists, /dev node exists, major:minor match
- *   -ENOENT — sysfs entry or /dev node missing
- *   -EIO    — /dev node isn't a char dev, or its rdev doesn't match sysfs
- *   other   — read/stat failure
- */
-static int verify_misc_node(const char *sysfs_basename)
-{
-	char devname[64];
-	char devpath[128];
-	unsigned int sysfs_major = 0, sysfs_minor = 0;
-	struct stat st;
-	int err;
-
-	err = get_misc_devnum(sysfs_basename, &sysfs_major, &sysfs_minor);
-	if (err)
-		return err;
-	err = get_misc_devname(sysfs_basename, devname, sizeof(devname));
-	if (err)
-		return err;
-
-	snprintf(devpath, sizeof(devpath), "/dev/%s", devname);
-	if (stat(devpath, &st) < 0)
-		return -errno;
-	if (!S_ISCHR(st.st_mode))
-		return -EIO;
-	if (major(st.st_rdev) != sysfs_major || minor(st.st_rdev) != sysfs_minor)
-		return -EIO;
-	return 0;
-}
-
-/* Both ctl and qdma nodes for one accelerator verify cleanly. */
+/* Both nodes must reappear with their recorded dev_t and path identity. */
 static int verify_accelerator_present(const struct accelerator *a)
 {
-	char name[64];
+	struct slash_test_node_identity current;
 	int err;
 
-	snprintf(name, sizeof(name), CTL_SYSFS_PREFIX "%s", a->pf2_bdf);
-	err = verify_misc_node(name);
+	err = slash_test_read_node_identity(a->ctl_identity.sysfs_name, &current);
 	if (err)
 		return err;
+	if (!slash_test_node_identity_equal(&a->ctl_identity, &current))
+		return -ESTALE;
 
-	snprintf(name, sizeof(name), QDMA_SYSFS_PREFIX "%s", a->pf1_bdf);
-	return verify_misc_node(name);
+	err = slash_test_read_node_identity(a->qdma_identity.sysfs_name, &current);
+	if (err)
+		return err;
+	if (!slash_test_node_identity_equal(&a->qdma_identity, &current))
+		return -ESTALE;
+	return 0;
 }
 
 /*
- * Discover every SLASH accelerator by scanning /sys/class/misc/.
+ * Discover every SLASH accelerator by scanning /sys/class/slash/.
  *
  * Unpaired entries (PF2 without a matching PF1, or vice versa) indicate
  * a partial probe failure — log a warning and skip the orphan.
  */
 static int discover_accelerators(struct accelerator *out, int max, int *n_out)
 {
-	char pf2_bdfs[SLASH_TEST_MAX_ACCELERATORS][SLASH_PCI_BDF_LEN] = {{0}};
-	char pf1_bdfs[SLASH_TEST_MAX_ACCELERATORS][SLASH_PCI_BDF_LEN] = {{0}};
-	int pf2_paired[SLASH_TEST_MAX_ACCELERATORS] = {0};
-	int pf1_paired[SLASH_TEST_MAX_ACCELERATORS] = {0};
+	char pf2_bdfs[SLASH_TEST_MAX_CARDS][SLASH_PCI_BDF_LEN] = {{0}};
+	char pf1_bdfs[SLASH_TEST_MAX_CARDS][SLASH_PCI_BDF_LEN] = {{0}};
+	int pf2_paired[SLASH_TEST_MAX_CARDS] = {0};
+	int pf1_paired[SLASH_TEST_MAX_CARDS] = {0};
 	int n_pf2 = 0, n_pf1 = 0;
 	int n_accels = 0;
 	int i, j;
 	DIR *d;
 	struct dirent *de;
 
-	d = opendir(SYSFS_MISC_DIR);
+	d = opendir(SLASH_TEST_SYSFS_CLASS_DIR);
 	if (!d)
 		return -errno;
 
@@ -193,24 +97,24 @@ static int discover_accelerators(struct accelerator *out, int max, int *n_out)
 	{
 		/* Match QDMA prefix first — neither prefix is a prefix of
 		 * the other, but the ordering keeps intent obvious. */
-		if (strncmp(de->d_name, QDMA_SYSFS_PREFIX,
-					strlen(QDMA_SYSFS_PREFIX)) == 0)
+		if (strncmp(de->d_name, SLASH_TEST_QDMA_SYSFS_PREFIX,
+					strlen(SLASH_TEST_QDMA_SYSFS_PREFIX)) == 0)
 		{
-			if (n_pf1 < SLASH_TEST_MAX_ACCELERATORS)
+			if (n_pf1 < SLASH_TEST_MAX_CARDS)
 			{
 				strncpy(pf1_bdfs[n_pf1],
-						de->d_name + strlen(QDMA_SYSFS_PREFIX),
+						de->d_name + strlen(SLASH_TEST_QDMA_SYSFS_PREFIX),
 						SLASH_PCI_BDF_LEN - 1);
 				n_pf1++;
 			}
 		}
-		else if (strncmp(de->d_name, CTL_SYSFS_PREFIX,
-						 strlen(CTL_SYSFS_PREFIX)) == 0)
+		else if (strncmp(de->d_name, SLASH_TEST_CTL_SYSFS_PREFIX,
+						 strlen(SLASH_TEST_CTL_SYSFS_PREFIX)) == 0)
 		{
-			if (n_pf2 < SLASH_TEST_MAX_ACCELERATORS)
+			if (n_pf2 < SLASH_TEST_MAX_CARDS)
 			{
 				strncpy(pf2_bdfs[n_pf2],
-						de->d_name + strlen(CTL_SYSFS_PREFIX),
+						de->d_name + strlen(SLASH_TEST_CTL_SYSFS_PREFIX),
 						SLASH_PCI_BDF_LEN - 1);
 				n_pf2++;
 			}
@@ -238,6 +142,27 @@ static int discover_accelerators(struct accelerator *out, int max, int *n_out)
 			out[n_accels].pf0_bdf[SLASH_PCI_BDF_LEN - 1] = '\0';
 			out[n_accels].pf0_bdf[11] = '0';
 
+			{
+				char sysfs_name[64];
+				int err;
+
+				snprintf(sysfs_name, sizeof(sysfs_name),
+						 SLASH_TEST_CTL_SYSFS_PREFIX "%s",
+						 out[n_accels].pf2_bdf);
+				err = slash_test_read_node_identity(
+					sysfs_name, &out[n_accels].ctl_identity);
+				if (err)
+					return err;
+
+				snprintf(sysfs_name, sizeof(sysfs_name),
+						 SLASH_TEST_QDMA_SYSFS_PREFIX "%s",
+						 out[n_accels].pf1_bdf);
+				err = slash_test_read_node_identity(
+					sysfs_name, &out[n_accels].qdma_identity);
+				if (err)
+					return err;
+			}
+
 			pf2_paired[i] = 1;
 			pf1_paired[j] = 1;
 			n_accels++;
@@ -248,17 +173,19 @@ static int discover_accelerators(struct accelerator *out, int max, int *n_out)
 	for (i = 0; i < n_pf2; i++)
 		if (!pf2_paired[i])
 			fprintf(stderr,
-					"# WARNING: unpaired " CTL_SYSFS_PREFIX
-					"%s (no matching " QDMA_SYSFS_PREFIX "<%.*s.x>)\n",
+					"# WARNING: unpaired " SLASH_TEST_CTL_SYSFS_PREFIX
+					"%s (no matching " SLASH_TEST_QDMA_SYSFS_PREFIX
+					"<%.*s.x>)\n",
 					pf2_bdfs[i],
-					SLASH_TEST_BUS_PREFIX_LEN - 1, pf2_bdfs[i]);
+					SLASH_TEST_BUS_PREFIX_LEN, pf2_bdfs[i]);
 	for (j = 0; j < n_pf1; j++)
 		if (!pf1_paired[j])
 			fprintf(stderr,
-					"# WARNING: unpaired " QDMA_SYSFS_PREFIX
-					"%s (no matching " CTL_SYSFS_PREFIX "<%.*s.x>)\n",
+					"# WARNING: unpaired " SLASH_TEST_QDMA_SYSFS_PREFIX
+					"%s (no matching " SLASH_TEST_CTL_SYSFS_PREFIX
+					"<%.*s.x>)\n",
 					pf1_bdfs[j],
-					SLASH_TEST_BUS_PREFIX_LEN - 1, pf1_bdfs[j]);
+					SLASH_TEST_BUS_PREFIX_LEN, pf1_bdfs[j]);
 
 	*n_out = n_accels;
 	return 0;
@@ -305,13 +232,14 @@ static int poll_accelerators_present(const struct accelerator *accels,
 	return -ETIMEDOUT;
 }
 
-/* Wait until /sys/class/misc/<basename> is gone. */
-static int poll_misc_absent(const char *sysfs_basename, int timeout_s)
+/* Wait until /sys/class/slash/<basename> is gone. */
+static int poll_slash_absent(const char *sysfs_basename, int timeout_s)
 {
 	char path[256];
 	int i;
 
-	snprintf(path, sizeof(path), SYSFS_MISC_DIR "/%s", sysfs_basename);
+	snprintf(path, sizeof(path), SLASH_TEST_SYSFS_CLASS_DIR "/%s",
+			 sysfs_basename);
 	for (i = 0; i < timeout_s * 10; i++)
 	{
 		if (access(path, F_OK) != 0)
@@ -328,7 +256,8 @@ static int poll_misc_absent(const char *sysfs_basename, int timeout_s)
 FIXTURE(hotplug)
 {
 	int hp_fd;
-	struct accelerator accels[SLASH_TEST_MAX_ACCELERATORS];
+	struct slash_test_node_identity hotplug_identity;
+	struct accelerator accels[SLASH_TEST_MAX_CARDS];
 	int n_accels;
 };
 
@@ -346,11 +275,17 @@ FIXTURE_SETUP(hotplug)
 	TH_LOG("open(%s) failed: %s",
 		   SLASH_TEST_HOTPLUG_DEV, strerror(errno));
 
+	ASSERT_EQ(0, slash_test_read_node_identity(
+					 SLASH_TEST_HOTPLUG_SYSFS_NAME,
+					 &self->hotplug_identity))
+	TH_LOG("hotplug sysfs dev/uevent or /dev node disagree");
+
 	ASSERT_EQ(0, discover_accelerators(self->accels,
-									   SLASH_TEST_MAX_ACCELERATORS,
+									   SLASH_TEST_MAX_CARDS,
 									   &self->n_accels));
 	if (self->n_accels == 0)
-		SKIP(return, "no SLASH accelerators discovered in " SYSFS_MISC_DIR);
+		SKIP(return, "no SLASH accelerators discovered in "
+				   SLASH_TEST_SYSFS_CLASS_DIR);
 
 	/* Starting state must be sane: every discovered accelerator's nodes
 	 * must already pass verification.  If not, a previous run left the
@@ -399,11 +334,45 @@ static int hp_ioctl_bdf(int hp_fd, unsigned long cmd, const char *bdf)
  * Tests
  * ==================================================================== */
 
+TEST_F(hotplug, stable_chrdev_layout)
+{
+	struct stat hp_stat;
+	int i;
+
+	ASSERT_TRUE(slash_test_validate_hotplug_node(&self->hotplug_identity))
+	TH_LOG("hotplug node has invalid minor/name (%u:%u, %s)",
+		   self->hotplug_identity.major, self->hotplug_identity.minor,
+		   self->hotplug_identity.devname);
+	ASSERT_EQ(0, fstat(self->hp_fd, &hp_stat));
+	EXPECT_EQ(self->hotplug_identity.dev, hp_stat.st_rdev);
+	EXPECT_GT(self->hotplug_identity.major, 0);
+
+	for (i = 0; i < self->n_accels; i++)
+	{
+		const struct accelerator *a = &self->accels[i];
+
+		EXPECT_TRUE(slash_test_validate_ctl_node(&a->ctl_identity))
+		TH_LOG("invalid control node %s (%u:%u)",
+			   a->ctl_identity.devpath,
+			   a->ctl_identity.major, a->ctl_identity.minor);
+		EXPECT_TRUE(slash_test_validate_qdma_node(&a->qdma_identity))
+		TH_LOG("invalid QDMA node %s (%u:%u)",
+			   a->qdma_identity.devpath,
+			   a->qdma_identity.major, a->qdma_identity.minor);
+		EXPECT_EQ(self->hotplug_identity.major, a->ctl_identity.major);
+		EXPECT_EQ(self->hotplug_identity.major, a->qdma_identity.major);
+		EXPECT_EQ(a->ctl_identity.minor + 1, a->qdma_identity.minor)
+		TH_LOG("PF2 %s and PF1 %s do not have paired minors",
+			   a->pf2_bdf, a->pf1_bdf);
+		EXPECT_TRUE(slash_same_card(a->pf2_bdf, a->pf1_bdf));
+	}
+}
+
 TEST_F(hotplug, rescan_smoke)
 {
 	EXPECT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
 
-	/* All accelerators that were present before must still be present. */
+	/* Presence includes unchanged class name, /dev path, and dev_t. */
 	EXPECT_EQ(0, poll_accelerators_present(self->accels, self->n_accels,
 										   NODE_RECOVERY_TIMEOUT_S));
 }
@@ -436,92 +405,175 @@ TEST_F(hotplug, remove_unknown_bdf)
 						   "ffff:ff:1f.7"));
 }
 
-TEST_F(hotplug, remove_then_rescan_recovers_pf2)
+TEST_F(hotplug, remove_then_rescan_preserves_pf2_identity)
 {
 	char sysfs_name[64];
 
 	snprintf(sysfs_name, sizeof(sysfs_name),
-			 CTL_SYSFS_PREFIX "%s", self->accels[0].pf2_bdf);
+			 SLASH_TEST_CTL_SYSFS_PREFIX "%s", self->accels[0].pf2_bdf);
 
 	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
 							  self->accels[0].pf2_bdf));
-	EXPECT_EQ(0, poll_misc_absent(sysfs_name, NODE_RECOVERY_TIMEOUT_S))
+	EXPECT_EQ(0, poll_slash_absent(sysfs_name, NODE_RECOVERY_TIMEOUT_S))
 	TH_LOG("%s/%s did not disappear after REMOVE",
-		   SYSFS_MISC_DIR, sysfs_name);
+		   SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
 
 	ASSERT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
 	EXPECT_EQ(0, poll_accelerators_present(self->accels, self->n_accels,
 										   NODE_RECOVERY_TIMEOUT_S))
-	TH_LOG("not all accelerators reappeared after RESCAN");
+	TH_LOG("node identity changed after PF2 REMOVE + RESCAN");
 }
 
-TEST_F(hotplug, remove_then_rescan_recovers_pf1)
+TEST_F(hotplug, remove_then_rescan_preserves_pf1_identity)
 {
 	char sysfs_name[64];
 
 	snprintf(sysfs_name, sizeof(sysfs_name),
-			 QDMA_SYSFS_PREFIX "%s", self->accels[0].pf1_bdf);
+			 SLASH_TEST_QDMA_SYSFS_PREFIX "%s", self->accels[0].pf1_bdf);
 
 	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
 							  self->accels[0].pf1_bdf));
-	EXPECT_EQ(0, poll_misc_absent(sysfs_name, NODE_RECOVERY_TIMEOUT_S))
+	EXPECT_EQ(0, poll_slash_absent(sysfs_name, NODE_RECOVERY_TIMEOUT_S))
 	TH_LOG("%s/%s did not disappear after REMOVE",
-		   SYSFS_MISC_DIR, sysfs_name);
+		   SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
 
 	ASSERT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
 	EXPECT_EQ(0, poll_accelerators_present(self->accels, self->n_accels,
 										   NODE_RECOVERY_TIMEOUT_S))
-	TH_LOG("not all accelerators reappeared after RESCAN");
+	TH_LOG("node identity changed after PF1 REMOVE + RESCAN");
+}
+
+/* ---------- Open-resource lifetime (destructive, env-gated) ---------- */
+
+TEST_F(hotplug, open_pf2_fd_survives_remove_but_stays_offline)
+{
+	struct slash_ioctl_device_info info;
+	int ctl_fd;
+
+	if (getenv("SLASH_TEST_DESTRUCTIVE") == NULL)
+		SKIP(return, "remove PF2 while its fd is open; "
+					 "set SLASH_TEST_DESTRUCTIVE=1 to run");
+
+	ctl_fd = open(self->accels[0].ctl_identity.devpath, O_RDWR);
+	ASSERT_GE(ctl_fd, 0);
+
+	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
+							  self->accels[0].pf2_bdf));
+	EXPECT_EQ(0, poll_slash_absent(
+					 self->accels[0].ctl_identity.sysfs_name,
+					 NODE_RECOVERY_TIMEOUT_S));
+
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	errno = 0;
+	EXPECT_EQ(-1, ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &info));
+	EXPECT_EQ(ENODEV, errno);
+
+	EXPECT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
+	EXPECT_EQ(0, poll_accelerators_present(self->accels, self->n_accels,
+										   NODE_RECOVERY_TIMEOUT_S));
+
+	errno = 0;
+	EXPECT_EQ(-1, ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &info));
+	EXPECT_EQ(ENODEV, errno)
+	TH_LOG("old PF2 fd rebound to the rescanned device");
+	EXPECT_EQ(0, close(ctl_fd));
+}
+
+TEST_F(hotplug, open_pf1_fd_survives_remove_but_stays_offline)
+{
+	struct slash_qdma_info info;
+	int qdma_fd;
+
+	if (getenv("SLASH_TEST_DESTRUCTIVE") == NULL)
+		SKIP(return, "remove PF1 while its fd is open; "
+					 "set SLASH_TEST_DESTRUCTIVE=1 to run");
+
+	qdma_fd = open(self->accels[0].qdma_identity.devpath, O_RDWR);
+	ASSERT_GE(qdma_fd, 0);
+
+	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
+							  self->accels[0].pf1_bdf));
+	EXPECT_EQ(0, poll_slash_absent(
+					 self->accels[0].qdma_identity.sysfs_name,
+					 NODE_RECOVERY_TIMEOUT_S));
+
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	errno = 0;
+	EXPECT_EQ(-1, ioctl(qdma_fd, SLASH_QDMA_IOCTL_INFO, &info));
+	EXPECT_EQ(ENODEV, errno);
+
+	EXPECT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
+	EXPECT_EQ(0, poll_accelerators_present(self->accels, self->n_accels,
+										   NODE_RECOVERY_TIMEOUT_S));
+
+	errno = 0;
+	EXPECT_EQ(-1, ioctl(qdma_fd, SLASH_QDMA_IOCTL_INFO, &info));
+	EXPECT_EQ(ENODEV, errno)
+	TH_LOG("old PF1 fd rebound to the rescanned device");
+	EXPECT_EQ(0, close(qdma_fd));
 }
 
 TEST_F(hotplug, remove_pf1_with_live_qpair_cleans_up)
 {
 	/*
-	 * Closing the qdma_ctl fd does not release qpairs — they live on
-	 * the device, not the fd. If userspace leaks a qpair and the device
-	 * is then removed, slash_qdma_destroy_qdma_device's xa_for_each
-	 * teardown loop must stop and reclaim the leaked HW queues via
-	 * slash_qdma_ioctl_qpair_rm_q. This test exercises that path: add a
-	 * qpair, close the fd without DEL, REMOVE the PF1, then RESCAN.
-	 * Recovery is verified via poll_accelerators_present.
+	 * Keep both the management fd and an anon transfer fd open while PF1
+	 * is removed. The driver must reclaim the live HW queues, leave both
+	 * old fds safely offline, and permit a fresh instance after rescan.
 	 */
-	char qdma_sysfs[64];
-	char qdma_devname[64];
-	char qdma_path[128];
+	struct slash_qdma_buf_create create;
 	int qdma_fd;
-	uint32_t qid;
+	int io_fd = -1;
+	uint32_t qid = 0;
 
 	if (getenv("SLASH_TEST_DESTRUCTIVE") == NULL)
 		SKIP(return, "remove PF1 with live queue pairs."
 					 "set SLASH_TEST_DESTRUCTIVE=1 to run");
 
-	snprintf(qdma_sysfs, sizeof(qdma_sysfs),
-			 QDMA_SYSFS_PREFIX "%s", self->accels[0].pf1_bdf);
-	ASSERT_EQ(0, get_misc_devname(qdma_sysfs, qdma_devname,
-								  sizeof(qdma_devname)));
-	snprintf(qdma_path, sizeof(qdma_path), "/dev/%s", qdma_devname);
-
-	qdma_fd = open(qdma_path, O_RDWR);
+	qdma_fd = open(self->accels[0].qdma_identity.devpath, O_RDWR);
 	ASSERT_GE(qdma_fd, 0)
-	TH_LOG("open(%s) failed: %s", qdma_path, strerror(errno));
+	TH_LOG("open(%s) failed: %s",
+		   self->accels[0].qdma_identity.devpath, strerror(errno));
 
 	/* Add a qpair and intentionally skip DEL — the teardown loop must
 	 * reclaim it when the device disappears. Bidirectional so both
 	 * H2C and C2H queue handles need cleanup. */
 	ASSERT_EQ(0, slash_qpair_add(qdma_fd, 0 /* MM */, 0x3, &qid));
-
-	close(qdma_fd);
+	ASSERT_EQ(0, slash_qpair_op(qdma_fd, qid, SLASH_QDMA_QUEUE_OP_START));
+	io_fd = slash_qpair_get_fd(qdma_fd, qid, O_CLOEXEC);
+	ASSERT_GE(io_fd, 0);
 
 	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
 							  self->accels[0].pf1_bdf));
-	EXPECT_EQ(0, poll_misc_absent(qdma_sysfs, NODE_RECOVERY_TIMEOUT_S))
+	EXPECT_EQ(0, poll_slash_absent(
+					 self->accels[0].qdma_identity.sysfs_name,
+					 NODE_RECOVERY_TIMEOUT_S))
 	TH_LOG("%s/%s did not disappear after REMOVE",
-		   SYSFS_MISC_DIR, qdma_sysfs);
+		   SLASH_TEST_SYSFS_CLASS_DIR,
+		   self->accels[0].qdma_identity.sysfs_name);
+
+	memset(&create, 0, sizeof(create));
+	create.size = sizeof(create);
+	create.flags = O_CLOEXEC;
+	create.length = 4096;
+	errno = 0;
+	EXPECT_EQ(-1, ioctl(io_fd, SLASH_QDMA_IOCTL_BUF_CREATE, &create));
+	EXPECT_EQ(ENODEV, errno)
+	TH_LOG("old QDMA anon fd remained usable after PF1 removal");
 
 	ASSERT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
 	EXPECT_EQ(0, poll_accelerators_present(self->accels, self->n_accels,
 										   NODE_RECOVERY_TIMEOUT_S))
 	TH_LOG("not all accelerators reappeared after RESCAN");
+
+	errno = 0;
+	EXPECT_EQ(-1, ioctl(io_fd, SLASH_QDMA_IOCTL_BUF_CREATE, &create));
+	EXPECT_EQ(ENODEV, errno)
+	TH_LOG("old QDMA anon fd rebound to the rescanned device");
+
+	EXPECT_EQ(0, close(io_fd));
+	EXPECT_EQ(0, close(qdma_fd));
 }
 
 TEST_F(hotplug, hotplug_atomic_pf2)
@@ -566,16 +618,23 @@ TEST_F(hotplug, toggle_sbr_no_upstream_bridge)
 }
 
 /* ====================================================================
- * Destructive (env-gated)
- * ==================================================================== */
-
-/* ====================================================================
  * ABI size-versioning tests
  *
  * REMOVE, TOGGLE_SBR, and HOTPLUG share slash_hotplug_copy_request,
- * which rejects any size < sizeof(struct) with -EINVAL. Non-destructive:
- * no real device is touched.
+ * which accepts size zero for legacy callers and rejects nonzero sizes below
+ * sizeof(struct) with -EINVAL. Non-destructive: no real device is touched.
  * ==================================================================== */
+
+TEST_F(hotplug, zero_size_uses_legacy_request_layout)
+{
+	struct slash_hotplug_device_request req;
+
+	memset(&req, 0, sizeof(req));
+	strncpy(req.bdf, "ffff:ff:1f.7", sizeof(req.bdf) - 1);
+
+	EXPECT_EQ(-1, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE, &req));
+	EXPECT_EQ(ENODEV, errno);
+}
 
 TEST_F(hotplug, remove_size_below_struct_returns_einval)
 {

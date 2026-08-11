@@ -80,7 +80,7 @@ Source the Vivado settings, then launch ``xsdb`` and source the
 
 At the ``xsdb%`` prompt:
 
-.. code-block:: tcl
+.. code-block:: text
 
    connect
    targets -set -filter {name =~ "Versal*"}

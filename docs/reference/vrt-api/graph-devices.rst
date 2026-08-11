@@ -140,20 +140,6 @@ CpuFpgaBridge
    :project: VRT
    :members:
 
-BridgeRouter
-------------
-
-.. doxygenclass:: vrt::graph::BridgeRouter
-   :project: VRT
-   :members:
-
-RoutedLeg
----------
-
-.. doxygenstruct:: vrt::graph::RoutedLeg
-   :project: VRT
-   :members:
-
 SemaphorePool
 -------------
 

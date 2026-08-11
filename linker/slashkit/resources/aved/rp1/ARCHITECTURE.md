@@ -42,7 +42,7 @@ mirrors the PCIe-visible `0x0202_0000_0000` user-region window into the R5's
 32-bit address space at `0x8800_0000` (128MB). This is what the
 `r5_addr = xml_addr - 0x0202'0000'0000 + 0x8800'0000` formula (used in
 Section H) converts between. See
-`linker/slashkit/resources/base/scripts/top.tcl` (`rpu_sc`, `M02_AXI`,
+`linker/slashkit/resources/base/service/scripts/top.tcl` (`rpu_sc`, `M02_AXI`,
 `REMAPS`).
 
 **Remaining gap:** the linker does not yet emit an R5-address table

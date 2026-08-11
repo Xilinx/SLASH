@@ -4,7 +4,7 @@
 
 ######################
 Using the Graph API
-###################
+######################
 
 The graph API authors a typed hardware-style netlist and compiles it into an
 ``Execution``. Applications declare ``GraphBuffer`` and ``GraphScalar`` tokens,

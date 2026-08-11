@@ -29,7 +29,42 @@ from slashkit.core.port import BusType
 
 _AXIS_ILA_NAME = "axis_ila_debug_0"
 _MAX_MONITOR_SLOTS = 16
+
+# AXI Debug Hub: paired with the axis_ila cores so the Versal debug packet
+# network has a hub to bind to. Exposed as an AXI-Lite slave on the control
+# SmartConnect fan-out at a FIXED address that must match slash_base.tcl, so
+# host debug tooling can reach it at one known location across all RM configs.
+_DBG_HUB_NAME = "axi_dbg_hub_0"
+_DBG_HUB_DST_PIN = f"{_DBG_HUB_NAME}/S_AXI"      # SmartConnect MI target
+# address-segment bus interface
+_DBG_HUB_BUSIF = "S_AXI_DBG_HUB"
+_DBG_HUB_SEGMENT = "Mem0"                        # address-segment name
+_DBG_HUB_RANGE = 0x0020_0000                     # 2 MiB
+# FIXED - must match slash_base.tcl
+_DBG_HUB_OFFSET = 0x0202_0060_0000
+
+
 def _port_norm(s): return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def build_debug_hub_slaves(debug_spec) -> list[dict]:
+    """! @brief AXI-Lite slave descriptor(s) for the debug hub.
+
+    Returns a single-element list describing the debug hub's S_AXI as an extra
+    AXI-Lite slave (SmartConnect MI target + fixed address window), or an empty
+    list when no debug nets are configured. Consumed by the SmartConnect and
+    address context builders so the hub joins the existing control fan-out.
+    """
+    if not (getattr(debug_spec, "nets", None) or []):
+        return []
+    return [{
+        "dst_pin": _DBG_HUB_DST_PIN,
+        "inst": _DBG_HUB_NAME,
+        "busif": _DBG_HUB_BUSIF,
+        "segment": _DBG_HUB_SEGMENT,
+        "range": _DBG_HUB_RANGE,
+        "offset": _DBG_HUB_OFFSET,     # explicit fixed offset
+    }]
 
 
 def _resolve_port_name(kernel, requested: str) -> str:
@@ -102,4 +137,7 @@ def build_system_ila_debug_context(
         "debug_axis_ila_name": _AXIS_ILA_NAME,
         "debug_axis_ila_slots": slots,
         "debug_axis_ila_num_slots": len(slots),
+        # Debug hub is created whenever there are ILA slots (i.e. debug nets).
+        "debug_hub_enabled": bool(slots),
+        "debug_hub_name": _DBG_HUB_NAME,
     }

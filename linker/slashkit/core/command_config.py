@@ -27,7 +27,12 @@ import argparse
 import sys
 import importlib.resources as resources
 
-from slashkit.core.bd_ports import load_bd_ports_from_file, BlockDesignPorts
+from slashkit.core.bd_ports import (
+    load_bd_ports_from_file,
+    load_bd_ports_from_lines,
+    generate_bd_port_lines,
+    BlockDesignPorts,
+)
 from slashkit.core.kernel import Kernel, KernelInstance
 from slashkit.core.connectivity import ConnectivityConfig
 from slashkit.parser.config_parser import parse_connectivity_file, apply_config_to_instances
@@ -38,6 +43,11 @@ class Platform(Enum):
     HARDWARE = "hw"
     SIMULATION = "sim"
     EMULATION = "emu"
+
+
+class ShellType(Enum):
+    SERVICE = "service"
+    COMPUTE = "compute"
 
 
 def _find_vitis_include() -> Path:
@@ -251,15 +261,24 @@ class LinkerConfiguration(CommandConfiguration):
         # =======================
         # Argument interpretation
         # =======================
-        with resources.path("slashkit.resources", "bd_ports.txt") as bd_ports_path:
-            self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
-                bd_ports_path)
-
-        self._kernels: List[Kernel] = [parse_component_xml(
-            kfile) for kfile in self.kernel_component_paths]
+        self._kernels: List[Kernel] = [
+            parse_component_xml(kfile) for kfile in self.kernel_component_paths
+        ]
 
         self._configuration: ConnectivityConfig = parse_connectivity_file(
-            configuration_file)
+            configuration_file
+        )
+
+        if self._configuration.shell == "compute":
+            self._bd_ports: BlockDesignPorts = load_bd_ports_from_lines(
+                generate_bd_port_lines(num_ddr=12, num_virt=0)
+            )
+        else:
+            with resources.path("slashkit.resources", "bd_ports.txt") as bd_ports_path:
+                self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
+                    bd_ports_path
+                )
+
         self._kernel_instances: List[KernelInstance] = apply_config_to_instances(
             self.configuration, self.kernels)
 
@@ -287,8 +306,23 @@ class LinkerConfiguration(CommandConfiguration):
 
     @property
     def networking_enabled(self) -> bool:
-        # TODO: Change to some sort of description for different service layers once available.
         return len(self.configuration.net.enabled_eth) > 0
+
+    @property
+    def shell_type(self) -> ShellType:
+        try:
+            st = ShellType(self.configuration.shell)
+        except ValueError:
+            raise ValueError(
+                f"Invalid shell '{self.configuration.shell}' in connectivity config. "
+                "Use 'compute' or 'service'."
+            )
+        if st == ShellType.COMPUTE and self.networking_enabled:
+            raise ValueError(
+                "Ethernet connections (eth_* in [network]) require shell=service. "
+                "Either remove the [network] section or set shell=service in [connectivity]."
+            )
+        return st
 
     @property
     def out_path(self) -> Path:
@@ -369,22 +403,54 @@ class InstallerConfiguration(CommandConfiguration):
         super().populate_argument_parser(ap)
         ap.description = "Build and install base images for hardware builds."
         ap.epilog = INSTALL_HELP_EPILOG
-        ap.add_argument("--build-dir", required=False, type=Path, default=Path(
-            "./install.prj"), help="The build directory for the installer. Default: ./install_prj")
-        ap.add_argument("--aved-repo", required=False, type=str, default="https://github.com/Xilinx/AVED.git",
-                        help="The AVED git repository to check out. Default: https://github.com/Xilinx/AVED.git")
-        ap.add_argument("--aved-ref", required=False, type=str, default="amd_v80_gen5x8_25.1_xbtest_20251113",
-                        help="The AVED git ref to check out. Default: amd_v80_gen5x8_25.1_xbtest_20251113")
-        ap.add_argument("--out-dir", required=True, type=Path,
-                        help="The resource directory to install the artifacts to. "
-                        + "If you have checked out the SLASH repository, this would be linker/slashkit/resources")
-        ap.add_argument("--ignore-timing-failure", action="store_true",
-                        help="Install static shell artifacts even when timing failed (WNS < 0 or WHS < 0).")
-        ap.add_argument("--stage", required=False, choices=cls.VALID_STAGES, default="all",
-                        help="Installer stage to run. Default: all. "
-                             "Development-only: use base-shell to build/reuse implementation artifacts, "
-                             "firmware to rebuild AMC+RP1 firmware and repack an existing build-dir, "
-                             "or rp1-firmware to rebuild only RP1 and repack using existing AMC/FPT artifacts.")
+        ap.add_argument(
+            "--build-dir",
+            required=False,
+            type=Path,
+            default=Path("./install.prj"),
+            help="The build directory for the installer. Default: ./install_prj",
+        )
+        ap.add_argument(
+            "--aved-repo",
+            required=False,
+            type=str,
+            default="https://github.com/Xilinx/AVED.git",
+            help="The AVED git repository to check out. Default: https://github.com/Xilinx/AVED.git",
+        )
+        ap.add_argument(
+            "--aved-ref",
+            required=False,
+            type=str,
+            default="amd_v80_gen5x8_25.1_xbtest_20251113",
+            help="The AVED git ref to check out. Default: amd_v80_gen5x8_25.1_xbtest_20251113",
+        )
+        ap.add_argument(
+            "--out-dir",
+            required=True,
+            type=Path,
+            help="The resource directory to install the artifacts to. "
+            + "If you have checked out the SLASH repository, this would be linker/slashkit/resources",
+        )
+        ap.add_argument(
+            "--ignore-timing-failure",
+            action="store_true",
+            help="Install static shell artifacts even when timing failed (WNS < 0 or WHS < 0).",
+        )
+        ap.add_argument(
+            "--stage",
+            choices=cls.VALID_STAGES,
+            default="all",
+            help="Installer stage to run. Default: all. "
+            "Development-only: use base-shell to build/reuse implementation artifacts, "
+            "firmware to rebuild AMC+RP1 firmware and repack an existing build-dir, "
+            "or rp1-firmware to rebuild only RP1 and repack using existing AMC/FPT artifacts.",
+        )
+        ap.add_argument(
+            "--shell-type",
+            choices=["compute", "service"],
+            default="service",
+            help="Hardware shell variant to build and install (compute or service). Default: service",
+        )
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
@@ -393,15 +459,18 @@ class InstallerConfiguration(CommandConfiguration):
         self._stage: str = args.stage
 
         self._build_dir: Path = args.build_dir.expanduser().resolve()
-        if self._stage in ("all", "base-shell"):
+        if self._stage == "all":
             if self._build_dir.is_dir():
                 shutil.rmtree(self._build_dir)
             self._build_dir.mkdir(parents=True)
+        elif self._stage == "base-shell":
+            self._build_dir.mkdir(parents=True, exist_ok=True)
         elif not self._build_dir.is_dir():
             raise FileNotFoundError(self._build_dir)
 
         self._aved_repo: str = args.aved_repo
         self._aved_ref: str = args.aved_ref
+        self._shell_type: ShellType = ShellType(args.shell_type)
 
         self._out_dir: Path = args.out_dir.expanduser().resolve()
         if not self._out_dir.is_dir():
@@ -422,6 +491,10 @@ class InstallerConfiguration(CommandConfiguration):
     @property
     def aved_ref(self) -> str:
         return self._aved_ref
+
+    @property
+    def shell_type(self) -> ShellType:
+        return self._shell_type
 
     @property
     def out_dir(self) -> Path:

@@ -110,6 +110,14 @@ static int smiMain(int argc, char **argv) {
     auto* resetCommand = app.add_subcommand("reset", "Hardware reset a V80 board");
     Reset::Options resetOptions;
     resetCommand->add_option("-d,--device", resetOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    const std::map<std::string, std::string> shellTypeMap{
+        {"service", "service"},
+        {"compute", "compute"},
+    };
+    resetCommand->add_option("--shell-type", resetOptions.shellType,
+        "Shell to boot after reset: service (partition 0) or compute (partition 1)")
+        ->transform(CLI::CheckedTransformer(shellTypeMap, CLI::ignore_case))
+        ->default_str("service");
 
     // -- write-static-shell (persistent static shell programming) --
     auto* writeStaticShellCommand = app.add_subcommand("write-static-shell",
@@ -125,6 +133,15 @@ static int smiMain(int argc, char **argv) {
         "Board address (e.g. 03:00 or 0000:03:00)");
     writeStaticShellCommand->add_option("--pdi", writeStaticShellOptions.pdiPath,
         "Use this PDI file instead of resolving the installed static shell PDI");
+    const std::map<std::string, std::string> writeStaticShellTypeMap{
+        {"service", "service"},
+        {"compute", "compute"},
+        {"all", "all"},
+    };
+    writeStaticShellCommand->add_option("--shell-type", writeStaticShellOptions.shellType,
+        "Shell to program: all (both flash partitions), service (partition 0), or compute (partition 1)")
+        ->transform(CLI::CheckedTransformer(writeStaticShellTypeMap, CLI::ignore_case))
+        ->default_str("all for --flash without --pdi, service otherwise");
     writeStaticShellCommand->add_flag("--no-remove-device", writeStaticShellOptions.noRemoveDevice,
         "Skip pre-JTAG PCIe device removal; only valid with --jtag");
     writeStaticShellCommand->add_option("--bash-source", writeStaticShellOptions.bashSources,

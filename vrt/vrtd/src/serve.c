@@ -261,6 +261,13 @@ static uint16_t client_handle_request_design_write(
     struct vrtd_resp_design_write *resp_body,
     uint16_t *resp_size
 );
+static uint16_t client_handle_request_set_shell_state(
+    struct client *client,
+    const struct vrtd_req_set_shell_state *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_set_shell_state *resp_body,
+    uint16_t *resp_size
+);
 static uint16_t client_handle_request_cfgmem_program(
     struct client *client,
     const struct vrtd_req_cfgmem_program *req_body,
@@ -340,6 +347,7 @@ static const char *vrtd_opcode_to_string(uint16_t opcode)
     case VRTD_REQ_DEVICE_HOTPLUG_OP: return "DEVICE_HOTPLUG_OP";
     case VRTD_REQ_GET_SENSOR_INFO:   return "GET_SENSOR_INFO";
     case VRTD_REQ_BUFFER_OPEN_RAW:   return "BUFFER_OPEN_RAW";
+    case VRTD_REQ_SET_SHELL_STATE:   return "SET_SHELL_STATE";
     default:                         return "UNKNOWN";
     }
 }
@@ -360,6 +368,21 @@ static const char *vrtd_hotplug_op_to_string(uint32_t op)
     case VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE: return "reset_sequence";
     default:                                    return "unknown";
     }
+}
+
+static struct device *device_ptr_array_find_by_bdf(
+    struct device_ptr_array *devices,
+    const char *bdf
+)
+{
+    for (size_t i = 0; i < devices->len; i++) {
+        struct device *d = devices->d[i];
+        if (d != NULL && strcmp(d->pci_info.bdf, bdf) == 0) {
+            return d;
+        }
+    }
+
+    return NULL;
 }
 
 /* ---- Post-design-write device refresh ----------------------------------- */
@@ -426,26 +449,12 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
     }
 
     /*
-     * The /dev/slash_ctlN suffix is assigned by an incrementing kernel counter
-     * and changes after each hotplug remove+rescan.  d->path still holds the
-     * path from daemon startup (e.g. /dev/slash_ctl0); that node no longer
-     * exists.  Resolve the new path via the stable sysfs name
-     * /sys/class/misc/slash_ctl_<bdf>/uevent and update d->path in-place so
-     * that subsequent GET_BAR_FD and devices_discover_and_open deduplication
-     * both see the current path.
+     * The stable character-device path survives PF2 remove+rescan, but the
+     * existing handle still refers to the pre-PDI device. Close it and reopen
+     * the same path so subsequent BAR operations use the freshly-probed PF2.
      */
-    _cleanup_(cleanup_free) char *new_ctl_path = NULL;
-    if (find_slash_ctl_dev_path_by_bdf(pf2_bdf, &new_ctl_path) != 0 || new_ctl_path == NULL) {
-        LOG(LOG_ERR, "device_refresh_pf2: cannot find slash_ctl device for %s in sysfs", pf2_bdf);
-        return VRTD_RET_INTERNAL_ERROR;
-    }
-
-    LOG(LOG_INFO, "device_refresh_pf2: new slash_ctl path for %s is %s", pf2_bdf, new_ctl_path);
-
-    slash_ctldev_close(d->ctl);
-    free(d->path);
-    d->path = new_ctl_path;
-    new_ctl_path = NULL; /* ownership transferred — prevent cleanup_free from freeing */
+    (void) slash_ctldev_close(d->ctl);
+    d->ctl = NULL;
 
     /*
      * After a hotplug rescan the kernel creates the device node immediately
@@ -1257,6 +1266,16 @@ static int client_handle_request(struct client *client)
                 &size
             );
         break;
+    case VRTD_REQ_SET_SHELL_STATE:
+        resp_header->ret =
+            client_handle_request_set_shell_state(
+                client,
+                CLIENT_IN_BODY(*client, vrtd_req_set_shell_state),
+                req_header->size,
+                CLIENT_OUT_BODY(*client, vrtd_resp_set_shell_state),
+                &size
+            );
+        break;
     case VRTD_REQ_CFGMEM_PROGRAM:
         resp_header->ret =
             client_handle_request_cfgmem_program(
@@ -1768,15 +1787,57 @@ static uint16_t client_handle_request_design_write(
         return VRTD_RET_BAD_REQUEST;
     }
 
+    enum vrtd_shell_type required_shell = (enum vrtd_shell_type)req_body->required_shell;
+    uint32_t boot_partition = 0;
+    if (shell_boot_partition(required_shell, &boot_partition) != 0) {
+        LOG(LOG_WARNING, "design_write: invalid required shell %u",
+            (unsigned int)req_body->required_shell);
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
+    if (design_writer_is_busy(d->design_writer)) {
+        LOG(LOG_NOTICE, "design_write: writer busy for device %u", (unsigned int)req_body->dev_number);
+        return VRTD_RET_BUSY;
+    }
+
+    if (shell_switch_blocked_by_jtag(d->current_shell, required_shell, d->jtag)) {
+        LOG(LOG_NOTICE,
+            "design_write: refusing automatic shell reset for JTAG-booted device dev=%u bdf=%s current=%u required=%u",
+            (unsigned int)req_body->dev_number, d->pci_info.bdf,
+            (unsigned int)d->current_shell, (unsigned int)required_shell);
+        return VRTD_RET_SHELL_LOCKED;
+    }
+
+    if (shell_reset_required(d->current_shell, required_shell)) {
+        char target_bdf[VRTD_PCI_BDF_LEN] = {0};
+        strncpy(target_bdf, d->pci_info.bdf, sizeof(target_bdf) - 1);
+
+        LOG(LOG_INFO,
+            "design_write: shell switch required for dev=%u bdf=%s current=%u required=%u partition=%u",
+            (unsigned int)req_body->dev_number, target_bdf,
+            (unsigned int)d->current_shell, (unsigned int)required_shell,
+            boot_partition);
+
+        uint16_t reset_ret = reset_with_ami(d, &client->state->devices, required_shell);
+        if (reset_ret != VRTD_RET_OK) {
+            return reset_ret;
+        }
+
+        d = device_ptr_array_find_by_bdf(&client->state->devices, target_bdf);
+        if (d == NULL || d->design_writer == NULL) {
+            LOG(LOG_ERR, "design_write: device %s missing after shell reset", target_bdf);
+            return VRTD_RET_NOEXIST;
+        }
+    }
+
     /*
      * Submit the fd for asynchronous DMA.  design_writer_submit_fd_async()
      * takes ownership of the fd -- we must not close it on success.
      */
     int fd = client->in_fd;
-    bool writer_busy_before = design_writer_is_busy(d->design_writer);
     ret = design_writer_submit_fd_async(d->design_writer, fd);
     if (ret != 0) {
-        if (writer_busy_before || design_writer_is_busy(d->design_writer)) {
+        if (design_writer_is_busy(d->design_writer)) {
             LOG(LOG_NOTICE, "design_write: writer busy for device %u", (unsigned int)req_body->dev_number);
             return VRTD_RET_BUSY;
         }
@@ -1800,6 +1861,79 @@ static uint16_t client_handle_request_design_write(
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     *resp_size = 0;
+    return VRTD_RET_OK;
+}
+
+/* ---- SET_SHELL_STATE ---------------------------------------------------- */
+
+static uint16_t client_handle_request_set_shell_state(
+    struct client *client,
+    const struct vrtd_req_set_shell_state *req_body,
+    uint16_t req_size,
+    struct vrtd_resp_set_shell_state *resp_body,
+    uint16_t *resp_size
+)
+{
+    if (req_size < sizeof(*req_body)) {
+        LOG(LOG_WARNING, "set_shell_state: malformed request");
+        return VRTD_RET_BAD_REQUEST;
+    }
+
+    int ret = auth_request_set_shell_state(client, req_body);
+    if (ret == -1) {
+        return VRTD_RET_INTERNAL_ERROR;
+    } else if (ret == 0) {
+        return VRTD_RET_AUTH_ERROR;
+    }
+
+    *resp_size = 0;
+
+    if (req_body->dev_number >= client->state->devices.len) {
+        LOG(LOG_NOTICE, "set_shell_state: device %u does not exist",
+            (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    struct device *d = client->state->devices.d[req_body->dev_number];
+    if (d == NULL) {
+        LOG(LOG_NOTICE, "set_shell_state: device %u is null",
+            (unsigned int)req_body->dev_number);
+        return VRTD_RET_NOEXIST;
+    }
+
+    enum vrtd_shell_type shell_type = (enum vrtd_shell_type)req_body->shell_type;
+    uint32_t unused_partition = 0;
+    if (shell_boot_partition(shell_type, &unused_partition) != 0) {
+        LOG(LOG_WARNING, "set_shell_state: invalid shell type %u",
+            (unsigned int)req_body->shell_type);
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
+    if (d->current_shell != VRTD_SHELL_UNKNOWN && d->current_shell != shell_type) {
+        LOG(LOG_NOTICE,
+            "set_shell_state: refusing to change known shell state dev=%u current=%u requested=%u",
+            (unsigned int)req_body->dev_number,
+            (unsigned int)d->current_shell, (unsigned int)shell_type);
+        return VRTD_RET_BUSY;
+    }
+
+    if (req_body->jtag == 0 && d->jtag) {
+        LOG(LOG_NOTICE, "set_shell_state: refusing to clear JTAG flag for dev=%u",
+            (unsigned int)req_body->dev_number);
+        return VRTD_RET_BUSY;
+    }
+
+    d->current_shell = shell_type;
+    d->jtag = req_body->jtag != 0;
+
+    memset(resp_body, 0, sizeof(*resp_body));
+    *resp_size = sizeof(*resp_body);
+
+    LOG(LOG_INFO, "set_shell_state: dev=%u shell=%u jtag=%u uid=%u conn_id=%llu",
+        (unsigned int)req_body->dev_number, (unsigned int)d->current_shell,
+        (unsigned int)d->jtag, (unsigned int)client->uid,
+        (unsigned long long)client->conn_id);
+
     return VRTD_RET_OK;
 }
 
@@ -2038,7 +2172,8 @@ static uint16_t client_handle_request_cfgmem_program_status(
 static uint16_t client_submit_device_reset(
     struct client *client,
     uint32_t dev_number,
-    struct device *device
+    struct device *device,
+    uint32_t partition
 )
 {
     if (device == NULL) {
@@ -2069,7 +2204,7 @@ static uint16_t client_submit_device_reset(
         client->state->flash_worker,
         device,
         &client->state->devices,
-        0,
+        partition,
         client->conn_id,
         &job_id
     );
@@ -2286,7 +2421,15 @@ static uint16_t client_handle_request_device_hotplug_op(
     case VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE: {
         (void) resp_body;
         (void) resp_size;
-        return client_submit_device_reset(client, req_body->dev_number, d);
+        uint32_t boot_partition = 0;
+        if (shell_boot_partition((enum vrtd_shell_type)req_body->shell_type,
+                                 &boot_partition) != 0) {
+            LOG(LOG_WARNING, "reset_sequence: invalid shell type %u",
+                (unsigned int)req_body->shell_type);
+            return VRTD_RET_INVALID_ARGUMENT;
+        }
+        return client_submit_device_reset(client, req_body->dev_number, d,
+                                          boot_partition);
     }
     default:
         LOG(LOG_WARNING, "hotplug_op: invalid op %u for device %u",
@@ -3167,7 +3310,7 @@ static uint16_t client_handle_request_clock_op(
  * device.
  *
  * Populates a vrtd_device_info structure containing:
- *   - name: the basename of the device's sysfs path (e.g. "0000:65:00.0").
+ *   - name: the basename of the device's /dev path (e.g. "slash_ctl0").
  *   - pci:  BDF string, vendor/device/subsystem IDs.
  *
  * Auth: auth_request_get_device_info.
@@ -3222,6 +3365,8 @@ static uint16_t client_handle_request_get_device_info(
     memset(resp_body, 0, sizeof(*resp_body));
     snprintf(resp_body->info.name, sizeof(resp_body->info.name), "%s", basename(path));
     memcpy(&resp_body->info.pci, &d->pci_info, sizeof(struct vrtd_pci_info));
+    resp_body->info.shell_type = (uint8_t)d->current_shell;
+    resp_body->info.jtag = d->jtag ? 1 : 0;
 
     *resp_size = sizeof(*resp_body);
 

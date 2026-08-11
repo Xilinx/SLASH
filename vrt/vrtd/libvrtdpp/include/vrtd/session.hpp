@@ -93,11 +93,15 @@ public:
     /**
      * @brief Construct and connect to the vrtd socket.
      *
-     * @param socket_path Filesystem path to the vrtd UNIX socket.
-     *                    Defaults to the standard path.
+     * @param socket_path Filesystem path to the vrtd UNIX socket. When
+     *                    @c nullptr (the default), the path is taken from the
+     *                    @c VRTD_SOCKET environment variable if it is set and
+     *                    non-empty, otherwise it falls back to
+     *                    #VRTD_STANDARD_PATH. This mirrors how vrt::Device
+     *                    resolves the daemon socket.
      * @throws vrtd::Error if the connection cannot be established.
      */
-    explicit Session(const char *socket_path = VRTD_STANDARD_PATH);
+    explicit Session(const char *socket_path = nullptr);
 
     /**
      * @brief Destructor; closes the session if still open.
@@ -302,22 +306,45 @@ private:
                    uint8_t function = 0) const;
 
     /**
+     * @internal Reset a board and boot the requested shell.
+     *
+     * @param device    Device target.
+     * @param shellType Hardware shell to boot.
+     * @throws vrtd::Error on error.
+     */
+    void resetSequence(const Device& device, ShellType shellType) const;
+
+    /**
+     * @internal Set vrtd's in-memory shell/JTAG state for a device.
+     *
+     * @param device    Device target.
+     * @param shellType Hardware shell believed to be booted.
+     * @param jtag      Whether the device was booted from JTAG.
+     * @throws vrtd::Error on error.
+     */
+    void setShellState(const Device& device, ShellType shellType, bool jtag) const;
+
+    /**
      * @internal Perform a design writer transfer using an input FD.
      *
      * @param device   Device owning the design writer.
      * @param input_fd Input file descriptor to transfer from.
+     * @param requiredShell Hardware shell required by the design.
      * @throws vrtd::Error on error.
      */
-    void designWrite(const Device& device, int input_fd) const;
+    void designWrite(const Device& device, int input_fd,
+                     ShellType requiredShell) const;
 
     /**
      * @internal Perform a design writer transfer using a file path.
      *
      * @param device Device owning the design writer.
      * @param path   Input file path to transfer from.
+     * @param requiredShell Hardware shell required by the design.
      * @throws vrtd::Error on error.
      */
-    void designWriteFile(const Device& device, std::string_view path) const;
+    void designWriteFile(const Device& device, std::string_view path,
+                         ShellType requiredShell) const;
 
     /**
      * @internal Program a PDI into cfgmem using an input FD.

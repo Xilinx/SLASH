@@ -6,7 +6,7 @@
 Wire Protocol
 ################
 
-On-wire protocol definitions shared between the vrtd daemon and its clients.
+On-wire protocol definitions shared between the vrtd daemon and its clients:
 
-.. doxygenfile:: vrtd/wire.h
-   :project: libvrtd
+.. literalinclude:: ../../../vrt/vrtd/include/vrtd/wire.h
+   :language: c

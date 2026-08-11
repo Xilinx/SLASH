@@ -19,7 +19,7 @@
 # ##################################################################################################
 
 from __future__ import annotations
-from typing import Dict, List
+from typing import Dict, List, Optional
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
@@ -59,7 +59,8 @@ def build_axilite_address_context(
     *,
     addr_space: str = "S_AXILITE_INI",
     base_offset: int = 0x0202_0000_0000,   # your example
-    min_align: int = 0x0000_0100           # 256Bx alignment
+    min_align: int = 0x0000_0100,          # 256Bx alignment
+    extra_slaves: Optional[List[dict]] = None,
 ) -> dict:
     """
     Returns:
@@ -100,5 +101,40 @@ def build_axilite_address_context(
                 "addr_space": addr_space,
             })
             next_off += _align_up(rg, align)
+
+    # Append non-kernel AXI-Lite slaves (e.g. the debug hub). A slave may pin a
+    # fixed offset (the debug hub must match slash_base.tcl); otherwise it is
+    # bump-allocated after the kernels like everything else.
+    for slave in (extra_slaves or []):
+        rg = int(slave["range"])
+        align = max(min_align, rg)
+        off = slave.get("offset")
+        if off is None:                                  # bump-allocate
+            next_off = _align_up(next_off, align)
+            off = next_off
+            next_off += _align_up(rg, align)
+        else:                                            # fixed offset
+            off = int(off)
+            if off % align:
+                raise ValueError(
+                    f"AXI-Lite slave '{slave['inst']}' fixed offset {off:#x} "
+                    f"is not aligned to {align:#x}"
+                )
+            for it in items:                             # guard vs existing windows
+                if off < it["offset"] + it["range"] and it["offset"] < off + rg:
+                    raise ValueError(
+                        f"AXI-Lite slave '{slave['inst']}' fixed window "
+                        f"[{off:#x}, {off + rg:#x}) overlaps "
+                        f"{it['inst']}/{it['busif']} "
+                        f"[{it['offset']:#x}, {it['offset'] + it['range']:#x})"
+                    )
+        items.append({
+            "inst": slave["inst"],
+            "busif": slave["busif"],
+            "segment": slave["segment"],
+            "offset": off,
+            "range": rg,
+            "addr_space": slave.get("addr_space", addr_space),
+        })
 
     return {"axilite_addr": items}

@@ -780,6 +780,31 @@ int auth_request_device_hotplug_op(
 }
 
 /**
+ * @brief Authorize a set_shell_state request.
+ *
+ * Requires: query + pcie-hotplug permission on the target device.
+ *
+ * @param client    The requesting client.
+ * @param req_body  The request payload.
+ * @return 1 if authorized, 0 if denied, <0 on internal error.
+ */
+int auth_request_set_shell_state(
+    struct client *client,
+    const struct vrtd_req_set_shell_state *req_body
+)
+{
+    assert(client != NULL);
+    assert(req_body != NULL);
+
+    int ret = ensure_role(client);
+    PROPAGATE_ERROR(ret);
+
+    return auth_check_device_permission(
+        client, req_body->dev_number, AUTH_SUBSYSTEM_PCIE_HOTPLUG, "set_shell_state"
+    );
+}
+
+/**
  * @brief Authorize a clock_op request (read/modify device clock settings).
  *
  * Requires: query + clock permission on the target device.

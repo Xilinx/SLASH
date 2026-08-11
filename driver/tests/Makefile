@@ -7,11 +7,11 @@ CC       ?= gcc
 CFLAGS   ?= -Wall -Werror -O2
 CFLAGS   += -I../libslash/include
 
-TESTS    := test_slash_qdma
+TESTS    := test_slash_ctldev test_slash_hotplug test_slash_qdma
 
 all: $(TESTS)
 
-%: %.c kselftest.h kselftest_harness.h ../libslash/include/slash/uapi/slash_interface.h
+%: %.c kselftest.h kselftest_harness.h slash_test_helpers.h ../libslash/include/slash/uapi/slash_interface.h
 	$(CC) $(CFLAGS) -o $@ $<
 
 run: $(TESTS)

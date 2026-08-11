@@ -266,7 +266,7 @@ proc add_dcmac_inst {} {
 }
 set current_file [file normalize [info script]]
 set current_dir [file normalize ${current_file}]
-set dcmac_base [file normalize [file join $current_dir .. .. .. dcmac]]
+set dcmac_base [file normalize [file join $current_dir .. .. .. .. dcmac]]
 
 # Absolute paths (normalized)
 set ::slash_dcmac_tcl  [file join $dcmac_base tcl dcmac.tcl]

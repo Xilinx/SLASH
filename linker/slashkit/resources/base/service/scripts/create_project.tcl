@@ -18,62 +18,54 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
-# Usage:
-#   vivado -mode batch -source $script -tclargs [project_name] [iprepos] [action] [jobs]
-# 
-# Arguments:
-#   project_name   Name of the Vivado project.
-#                  Default: user
-# 
-#   iprepos        Path to the IP repository directory.
-# 
-#   action         What to do. One of:
-#                    create  – create the project only
-#                    build   – run synthesis and implementation only
-#                    all     – create then build  (default)
-# 
-#   jobs           Number of parallel jobs for implementation.
-#                  Default: 14
-
 set src_dir [file dirname [file normalize [info script]]]
 set cwd     [pwd]
-set default_iprepos [file normalize [file join $src_dir ".." "iprepo"]]
 
-set project_name "user"
-set iprepos $default_iprepos
-set action "all"
+# Shell build-ID constants injected into the static-region GPIO register
+# (top.tcl reads these globals). Set from the git commit at build time via
+# SLASH_BUILD_ID_LO/HI; default to 0 so manual/interactive runs still work.
+set ::build_id_lo [expr {[info exists ::env(SLASH_BUILD_ID_LO)] ? $::env(SLASH_BUILD_ID_LO) : 0}]
+set ::build_id_hi [expr {[info exists ::env(SLASH_BUILD_ID_HI)] ? $::env(SLASH_BUILD_ID_HI) : 0}]
+
+# Optional parallel job count via -tclargs: an integer in the trailing
+# position. Popped off first so the positional parsing below is unaffected by
+# whether the caller passed it.
 set jobs "14"
+set args $argv
+if {[llength $args] > 0} {
+  set last_arg [lindex $args end]
+  if {[string is integer -strict $last_arg]} {
+    set jobs $last_arg
+    set args [lrange $args 0 end-1]
+  }
+}
 
-if {[llength $argv] > 0} {
-  set project_name [lindex $argv 0]
-  set remaining_args [lrange $argv 1 end]
+if {[llength $args] > 0} {
+  set project_name [lindex $args 0]
+}
 
-  if {[llength $remaining_args] > 0} {
-    set arg [lindex $remaining_args end]
-    if {[string is integer -strict $arg]} {
-      set jobs $arg
-      set remaining_args [lrange $remaining_args 0 end-1]
+# Optional IP repository path(s) via -tclargs; defaults to ../../common/iprepo
+set default_iprepos [file normalize [file join $src_dir ".." ".." "common" "iprepo"]]
+set iprepos $default_iprepos
+
+# Optional action via -tclargs: create | build | all (default: all)
+set action "all"
+
+if {[llength $args] >= 2} {
+  set arg1 [lindex $args 1]
+  if {[llength $args] == 2} {
+    if {[lsearch -exact {create build all} $arg1] >= 0} {
+      set action $arg1
+    } else {
+      set iprepos $arg1
     }
+  } else {
+    set iprepos $arg1
   }
+}
 
-  if {[llength $remaining_args] > 0} {
-    set arg [lindex $remaining_args end]
-    if {[lsearch -exact {create build all} $arg] >= 0} {
-      set action $arg
-      set remaining_args [lrange $remaining_args 0 end-1]
-    }
-  }
-
-  if {[llength $remaining_args] > 0} {
-    set iprepos [lindex $remaining_args end]
-    set remaining_args [lrange $remaining_args 0 end-1]
-  }
-
-  if {[llength $remaining_args] > 0} {
-    error "Too many arguments provided via -tclargs: $remaining_args"
-  }
-} else {
-  puts "INFO: No project_name provided via -tclargs; defaulting to '$project_name'."
+if {[llength $args] >= 3} {
+  set action [lindex $args 2]
 }
 
 set do_create 0
@@ -97,7 +89,9 @@ puts "BUILD DIR:      $cwd"
 
 proc safe_source {tcl_path} {
   puts "INFO: Sourcing $tcl_path ..."
-  catch {source $tcl_path} result
+  set result [ source $tcl_path ]
+  puts "INFO: Finished sourcing $tcl_path"
+
   if {[string is integer -strict $result] && $result != 0} {
     puts "EXIT: '$tcl_path' returned $result"
     exit 1
@@ -109,23 +103,21 @@ if {![file exists $proj_exists]} {
   if {!$do_create} {
     error "Project not found at $proj_exists. Run with action 'create' first."
   }
-  if {[lsearch -exact $iprepos $default_iprepos] == -1} {
-    lappend iprepos $default_iprepos
-  }
+  lappend iprepos $default_iprepos
   puts "INFO: Creating new project '$design_name' in '$cwd' ..."
   create_project $design_name $cwd -part xcv80-lsva4737-2MHP-e-S -force
   set_property ip_repo_paths $iprepos [current_project]
   update_ip_catalog
 
   # Base shell / containers
-  safe_source [file normalize [file join $src_dir "slash_base.tcl"]]
-  safe_source [file normalize [file join $src_dir "service_layer.tcl"]]
-  safe_source [file normalize [file join $src_dir "top.tcl"]]
-  safe_source [file normalize [file join $src_dir "enable_dfx_bdc.tcl"]]
+  source [file normalize [file join $src_dir "slash_base.tcl"]]
+  source [file normalize [file join $src_dir "service_layer.tcl"]]
+  source [file normalize [file join $src_dir "top.tcl"]]
+  source [file normalize [file join $src_dir "enable_dfx_bdc.tcl"]]
 
   # Wrapper / XDC / build
-  safe_source [file normalize [file join $src_dir "make_wrapper.tcl"]]
-  safe_source [file normalize [file join $src_dir "add_constraints.tcl"]]
+  source [file normalize [file join $src_dir ".." ".." "common" "scripts" "make_wrapper.tcl"]]
+  source [file normalize [file join $src_dir "add_constraints.tcl"]]
 } else {
   puts "INFO: Project already exists; opening '$proj_exists'."
   open_project [file normalize [file join $cwd "slash.xpr"]]
@@ -139,7 +131,7 @@ if {![file exists $proj_exists]} {
 }
 
 if {$do_build} {
-  safe_source [file normalize [file join $src_dir "build_project.tcl"]]
+  source [file normalize [file join $src_dir "build_project.tcl"]]
   build_project $project_name $jobs
   puts "INFO: Project build complete."
 } elseif {$do_create} {

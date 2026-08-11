@@ -48,7 +48,42 @@
 namespace {
 
 constexpr uint8_t StaticShellBootDevice = 0;
-constexpr uint32_t StaticShellPartition = 0;
+
+bool shellTypeAll(const std::string& shellType) {
+    return shellType == "all";
+}
+
+std::string effectiveShellType(const WriteStaticShell::Options& options) {
+    if (!options.shellType.empty()) {
+        return options.shellType;
+    }
+    if (options.flash && options.pdiPath.empty()) {
+        return "all";
+    }
+    return "service";
+}
+
+vrtd::ShellType parseShellType(const std::string& shellType) {
+    if (shellType == "service") {
+        return vrtd::ShellType::Service;
+    }
+    if (shellType == "compute") {
+        return vrtd::ShellType::Compute;
+    }
+
+    throw std::invalid_argument("shell-type must be one of: service, compute");
+}
+
+uint32_t shellPartition(vrtd::ShellType shellType) {
+    switch (shellType) {
+    case vrtd::ShellType::Service:
+        return 0;
+    case vrtd::ShellType::Compute:
+        return 1;
+    default:
+        throw std::invalid_argument("shell-type must be one of: service, compute");
+    }
+}
 
 const char* cfgmemPhaseName(vrtd::CfgmemProgramPhase phase) {
     switch (phase) {
@@ -99,19 +134,31 @@ public:
         lastPercent = percent;
         lastState = status.state;
 
-        std::cerr << '\r';
-        std::cerr << cfgmemPhaseName(status.phase);
+        /* Only the download percentage animates in place; every other phase
+         * transition gets its own line. */
         if (status.phase == vrtd::CfgmemProgramPhase::DownloadingPdi) {
-            std::cerr << ": " << percent << "%";
+            std::cerr << '\r' << cfgmemPhaseName(status.phase) << ": " << percent << "%";
             if (status.bytesTotal != 0) {
                 std::cerr << " (" << status.bytesWritten << "/" << status.bytesTotal << " bytes)";
             }
+            /* \r only rewinds; erase to end of line so a shorter update
+             * doesn't inherit the tail of a longer one. */
+            std::cerr << "\033[K" << std::flush;
+            lineOpen = true;
+        } else {
+            if (lineOpen) {
+                std::cerr << '\n';
+                lineOpen = false;
+            }
+            std::cerr << cfgmemPhaseName(status.phase) << '\n';
         }
-        std::cerr << std::flush;
     }
 
-    void endProgress() const {
-        std::cerr << '\n';
+    void endProgress() {
+        if (lineOpen) {
+            std::cerr << '\n';
+            lineOpen = false;
+        }
     }
 
     void done(const std::string& message) const {
@@ -125,6 +172,7 @@ private:
     vrtd::CfgmemProgramPhase lastPhase = vrtd::CfgmemProgramPhase::Queued;
     uint32_t lastPercent = UINT32_MAX;
     vrtd::CfgmemProgramState lastState = vrtd::CfgmemProgramState::Queued;
+    bool lineOpen = false;  ///< True while an in-place download line awaits its newline.
 };
 
 bool fileExists(const std::string& path) {
@@ -154,8 +202,9 @@ std::string shellQuote(const std::string& text) {
     return quoted;
 }
 
-std::string resolveStaticShellPdi(bool nofpt) {
+std::string resolveStaticShellPdi(bool nofpt, const std::string& shellType) {
     std::string command = "python3 -m slashkit static-shell-path";
+    command += " --shell-type " + shellQuote(shellType);
     if (nofpt) {
         command += " --nofpt";
     }
@@ -194,7 +243,9 @@ std::string resolveStaticShellPdi(bool nofpt) {
     return path;
 }
 
-std::string resolvePdiPath(const WriteStaticShell::Options& options, bool nofpt) {
+std::string resolvePdiPath(const WriteStaticShell::Options& options,
+                           bool nofpt,
+                           const std::string& shellType) {
     if (!options.pdiPath.empty()) {
         if (!fileExists(options.pdiPath)) {
             throw std::runtime_error("PDI path does not exist: " + options.pdiPath);
@@ -202,7 +253,7 @@ std::string resolvePdiPath(const WriteStaticShell::Options& options, bool nofpt)
         return options.pdiPath;
     }
 
-    return resolveStaticShellPdi(nofpt);
+    return resolveStaticShellPdi(nofpt, shellType);
 }
 
 std::string resolveVersalFlashTcl() {
@@ -268,6 +319,8 @@ void validateOptions(const WriteStaticShell::Options& options) {
         throw std::invalid_argument("either --flash or --jtag must be specified");
     }
 
+    const std::string shellType = effectiveShellType(options);
+
     if (options.flash) {
         if (options.bdf.empty()) {
             throw std::invalid_argument("-d/--device is required for --flash");
@@ -281,9 +334,15 @@ void validateOptions(const WriteStaticShell::Options& options) {
         if (!options.xsdbTargetId.empty()) {
             throw std::invalid_argument("--xsdb-target-id is only valid with --jtag");
         }
+        if (shellTypeAll(shellType) && !options.pdiPath.empty()) {
+            throw std::invalid_argument("--shell-type all cannot be used with --pdi");
+        }
         return;
     }
 
+    if (shellTypeAll(shellType)) {
+        throw std::invalid_argument("--shell-type all is only valid with --flash without --pdi");
+    }
     if (options.noRemoveDevice && !options.bdf.empty()) {
         throw std::invalid_argument("--no-remove-device cannot be used with -d/--device");
     }
@@ -295,26 +354,45 @@ void validateOptions(const WriteStaticShell::Options& options) {
 
 int runFlashMode(const WriteStaticShell::Options& options) {
     StatusReporter reporter;
+    const std::string shellType = effectiveShellType(options);
     reporter.stage("Resolving device address");
     const std::string bdf = resolveBoardBdf(options.bdf, "write-static-shell");
-    reporter.stage("Resolving PDI path");
-    const std::string pdiPath = resolvePdiPath(options, false);
 
     reporter.stage("Connecting to VRTD");
     vrtd::Session session;
-    reporter.stage("Resolving VRTD device");
-    auto device = session.getDeviceByBdf(bdf);
-    reporter.stage("Submitting flash program");
-    session.cfgmemProgramFileProgress(
-        device,
-        pdiPath,
-        StaticShellBootDevice,
-        StaticShellPartition,
-        [&](const vrtd::CfgmemProgramStatus& status) {
-            reporter.progress(status);
+
+    const std::vector<std::string> shells =
+        shellTypeAll(shellType) ? std::vector<std::string>{"service", "compute"}
+                                : std::vector<std::string>{shellType};
+
+    for (const auto& shell : shells) {
+        const vrtd::ShellType parsedShell = parseShellType(shell);
+        const uint32_t partition = shellPartition(parsedShell);
+        reporter.stage("Resolving " + shell + " PDI path");
+        const std::string pdiPath = resolvePdiPath(options, false, shell);
+
+        reporter.stage("Resolving VRTD device");
+        auto device = session.getDeviceByBdf(bdf);
+        reporter.stage("Submitting " + shell + " flash program");
+        try {
+            session.cfgmemProgramFileProgress(
+                device,
+                pdiPath,
+                StaticShellBootDevice,
+                partition,
+                [&](const vrtd::CfgmemProgramStatus& status) {
+                    reporter.progress(status);
+                }
+            );
+        } catch (...) {
+            /* Close the open progress line so the error message that unwinds
+             * to main() starts on its own line instead of after "Failed". */
+            reporter.endProgress();
+            throw;
         }
-    );
-    reporter.endProgress();
+        reporter.endProgress();
+    }
+
     reporter.done("Flash programming complete");
 
     return 0;
@@ -341,8 +419,10 @@ void rethrowXsdbAndRescanErrors(std::exception_ptr xsdbError,
 
 int runJtagMode(const WriteStaticShell::Options& options) {
     StatusReporter reporter;
+    const std::string effectiveShell = effectiveShellType(options);
+    const vrtd::ShellType shellType = parseShellType(effectiveShell);
     reporter.stage("Resolving PDI path");
-    const std::string pdiPath = resolvePdiPath(options, true);
+    const std::string pdiPath = resolvePdiPath(options, true, effectiveShell);
     reporter.stage("Resolving xsdb Tcl script");
     const std::string tclPath = resolveVersalFlashTcl();
     if (!fileExists(tclPath)) {
@@ -351,9 +431,10 @@ int runJtagMode(const WriteStaticShell::Options& options) {
 
     reporter.stage("Connecting to VRTD");
     vrtd::Session session;
+    std::string bdf;
     if (!options.noRemoveDevice) {
         reporter.stage("Resolving device address");
-        const std::string bdf = resolveBoardBdf(options.bdf, "write-static-shell");
+        bdf = resolveBoardBdf(options.bdf, "write-static-shell");
         reporter.stage("Resolving VRTD device");
         auto device = session.getDeviceByBdf(bdf);
         reporter.stage("Removing PCIe functions");
@@ -380,12 +461,22 @@ int runJtagMode(const WriteStaticShell::Options& options) {
         std::rethrow_exception(xsdbError);
     }
 
+    if (!options.noRemoveDevice) {
+        reporter.stage("Recording JTAG shell state");
+        auto device = session.getDeviceByBdf(bdf);
+        device.setShellState(shellType, true);
+    }
+
     reporter.done("JTAG programming complete");
 
     std::cerr
         << "The board is now booted from the JTAG-loaded image.\n"
         << "The next 'v80-smi reset' will boot the board from flash.\n"
         << "To reset the board in JTAG mode, re-run 'v80-smi write-static-shell --jtag'.\n";
+    if (options.noRemoveDevice) {
+        std::cerr
+            << "VRTD shell/JTAG state was not updated because --no-remove-device was used.\n";
+    }
 
     return 0;
 }

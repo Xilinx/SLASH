@@ -32,6 +32,10 @@
  *     FPGA design.
  *
  * Both functions share vendor ID 0x10EE (AMD/Xilinx).
+ *
+ * For backward compatibility the driver also binds the legacy device IDs
+ * used by pre-compute-platform designs (PF1 0x50B5, PF2 0x50B6) and the
+ * AVED/V80P QDMA function (0x50BD).  New designs should use 0x50C1/0x50C2.
  */
 
 #ifndef SLASH_CONFIG_H
@@ -43,6 +47,8 @@
 #define SLASH_PCIE_VENDOR_ID 0x10EE
 /** PCI device ID for the V80 SLASH control function. */
 #define SLASH_PCIE_DEVICE_ID 0x50C2
+/** Legacy PCI device ID for the control function (pre-compute-platform designs). */
+#define SLASH_PCIE_DEVICE_ID_LEGACY 0x50B6
 /** Physical function number for the control/BAR-access interface. */
 #define SLASH_PCIE_PF 2
 
@@ -52,6 +58,10 @@
 #define SLASH_QDMA_PCI_VENDOR_ID 0x10EE
 /** PCI device ID for the V80 SLASH QDMA function. */
 #define SLASH_QDMA_PCI_DEVICE_ID 0x50C1
+/** Legacy PCI device ID for the QDMA function (pre-compute-platform designs). */
+#define SLASH_QDMA_PCI_DEVICE_ID_LEGACY 0x50B5
+/** PCI device ID for the V80P/AVED QDMA function. */
+#define SLASH_AVED_QDMA_PCI_DEVICE_ID 0x50BD
 /** Physical function number for the QDMA DMA engine. */
 #define SLASH_QDMA_PF 1
 
@@ -64,20 +74,31 @@
 /** PCI driver name for the PF1 QDMA function. */
 #define SLASH_QDMA_DRV_NAME SLASH_NAME "_qdma"
 
+/** Maximum number of distinct board BDFs tracked until module unload. */
+#define SLASH_MAX_CARDS 16
+/** Shared character-device range: hotplug plus CTL and QDMA per card. */
+#define SLASH_CHRDEV_MINORS (1 + 2 * SLASH_MAX_CARDS)
+
+#define SLASH_HOTPLUG_MINOR 0
+#define SLASH_CTLDEV_MINOR(card) (2 * (card) + 1)
+#define SLASH_QDMA_MINOR(card) (2 * (card) + 2)
+/** Recover the board slot from any non-hotplug CTL or QDMA minor. */
+#define SLASH_CARD_FROM_MINOR(minor) (((minor) - 1) / 2)
+
 /**
- * Name format for control misc devices.
- * Uses pci_name() (e.g. "0000:03:00.2") — appears in /sys/class/misc.
+ * Sysfs name format for control character devices.
+ * Uses pci_name() (e.g. "0000:03:00.2") — appears in /sys/class/slash.
  */
 #define SLASH_CTLDEV_NAME_FMT "slash_ctl_%s"
 /**
- * Node name format for control misc devices.
- * Uses an incrementing counter — appears as /dev/slash_ctl0, etc.
+ * Node name format for control character devices.
+ * Uses the board's stable slot — appears as /dev/slash_ctl0, etc.
  */
 #define SLASH_CTLDEV_NODENAME_FMT "slash_ctl%d"
 
-/** Name format for QDMA control misc devices (/sys/class/misc). */
+/** Sysfs name format for QDMA control devices (/sys/class/slash). */
 #define SLASH_QDMA_CTLDEV_NAME_FMT "slash_qdma_ctl_%s"
-/** Node name format for QDMA control misc devices (/dev/). */
+/** Stable board-slot node name format for QDMA control devices (/dev/). */
 #define SLASH_QDMA_CTLDEV_NODENAME_FMT "slash_qdma_ctl%d"
 
 /*
@@ -85,8 +106,7 @@
  * For production, prefer a udev rule to set permissions instead of
  * changing these constants.
  */
-#define SLASH_CTLDEV_MODE 0600
-#define SLASH_CTLDEV_QDMA_MODE 0600
+#define SLASH_CHRDEV_MODE 0600
 
 /*
  * Override the kernel's pr_fmt to prefix every pr_info/pr_err/pr_dbg

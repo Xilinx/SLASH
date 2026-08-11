@@ -407,6 +407,7 @@ enum vrtd_ret vrtd_buffer_close(
  * @param fd         Connected vrtd socket file descriptor.
  * @param dev        Device index (0‑based).
  * @param input_fd   Input file descriptor to read from.
+ * @param required_shell Shell required by the design (enum vrtd_shell_type).
  *
  * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress;
  *         otherwise a #vrtd_ret error code.
@@ -415,7 +416,8 @@ enum vrtd_ret vrtd_buffer_close(
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,
-    int input_fd
+    int input_fd,
+    uint8_t required_shell
 );
 
 /**
@@ -427,6 +429,7 @@ enum vrtd_ret vrtd_design_write(
  * @param fd         Connected vrtd socket file descriptor.
  * @param dev        Device index (0‑based).
  * @param path       Path to the input file to transfer.
+ * @param required_shell Shell required by the design (enum vrtd_shell_type).
  *
  * @return #VRTD_RET_OK on success; #VRTD_RET_BUSY if a transfer is in progress;
  *         otherwise a #vrtd_ret error code.
@@ -435,7 +438,8 @@ enum vrtd_ret vrtd_design_write(
 enum vrtd_ret vrtd_design_write_file(
     int fd,
     uint32_t dev,
-    const char *path
+    const char *path,
+    uint8_t required_shell
 );
 
 /**
@@ -576,6 +580,19 @@ enum vrtd_ret vrtd_device_hotplug_hotplug(
     int fd,
     uint32_t dev,
     uint8_t function
+);
+
+enum vrtd_ret vrtd_device_reset_sequence(
+    int fd,
+    uint32_t dev,
+    uint8_t shell_type
+);
+
+enum vrtd_ret vrtd_set_shell_state(
+    int fd,
+    uint32_t dev,
+    uint8_t shell_type,
+    uint8_t jtag
 );
 
 /**

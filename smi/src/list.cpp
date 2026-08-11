@@ -27,8 +27,10 @@
 
 #include "list.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <filesystem>
 #include <fstream>
@@ -37,6 +39,7 @@
 
 #include <vrtd/session.hpp>
 
+#include "shell_build_id.hpp"
 #include "utils.hpp"
 
 /// Root sysfs directory that contains one symlink per PCI device.
@@ -57,6 +60,17 @@ constexpr unsigned int SLASH_PF1_DEVICE_ID{0x50C1};
 
 /// PCI device ID for the V80 control function (PF2).
 constexpr unsigned int SLASH_PF2_DEVICE_ID{0x50C2};
+
+/// Legacy PCI device ID for PF1, accepted as a fallback for
+/// pre-compute-platform bitstreams.
+constexpr unsigned int SLASH_PF1_DEVICE_ID_LEGACY{0x50B5};
+
+/// PCI device ID for the V80P/AVED QDMA function.
+constexpr unsigned int SLASH_PF1_DEVICE_ID_AVED{0x50BD};
+
+/// Legacy PCI device ID for PF2, accepted as a fallback for
+/// pre-compute-platform bitstreams.
+constexpr unsigned int SLASH_PF2_DEVICE_ID_LEGACY{0x50B6};
 
 /// Expected driver for PF0 (AMI management function).
 constexpr char PF0_EXPECTED_DRIVER[] = "ami";
@@ -125,16 +139,16 @@ struct PfStatus {
     std::string reason;      ///< Empty when ok; describes the failure otherwise.
 };
 
-/// Checks whether a given PCI physical function exists, has the expected
-/// device ID, and has the expected driver bound.
+/// Checks whether a given PCI physical function exists, reports one of the
+/// accepted device IDs, and has the expected driver bound.
 ///
-/// @param bdf              Full BDF string, e.g. "0000:03:00.1".
-/// @param pfNumber         PF index (0, 1, or 2).
-/// @param expectedDeviceId PCI device ID this PF should report.
-/// @param expectedDriver   Kernel driver name that should be bound.
+/// @param bdf               Full BDF string, e.g. "0000:03:00.1".
+/// @param pfNumber          PF index (0, 1, or 2).
+/// @param expectedDeviceIds PCI device IDs this PF may report (current or legacy).
+/// @param expectedDriver    Kernel driver name that should be bound.
 /// @return PfStatus with ok=true if all checks pass, or ok=false with reason.
 static PfStatus checkPf(const std::string& bdf, int pfNumber,
-                         unsigned int expectedDeviceId,
+                         std::initializer_list<unsigned int> expectedDeviceIds,
                          const char* expectedDriver) {
     std::filesystem::path devPath = PCI_DEVICES_PATH / bdf;
 
@@ -143,7 +157,8 @@ static PfStatus checkPf(const std::string& bdf, int pfNumber,
     }
 
     auto deviceId = readNumFile<unsigned int>(devPath / "device");
-    if (deviceId != expectedDeviceId) {
+    if (std::find(expectedDeviceIds.begin(), expectedDeviceIds.end(), deviceId) ==
+        expectedDeviceIds.end()) {
         return {.pfNumber = pfNumber, .bdf = bdf, .ok = false, .reason = "bad device ID"};
     }
 
@@ -392,6 +407,8 @@ struct V80Board {
     PfStatus    pf1;        ///< Status of PF1 (QDMA).
     PfStatus    pf2;        ///< Status of PF2 (control).
     VrtdStatus  vrtd;       ///< Status of VRTD daemon registration.
+    vrtd::ShellType shellType = vrtd::ShellType::Unknown; ///< Shell state reported by VRTD.
+    bool        jtag{};      ///< True if VRTD reports the board as JTAG-booted.
     bool        longPrinting{};  ///< If true, include detailed sysfs info per PF.
 
     /// Detailed sysfs snapshot for each PF (populated only when longPrinting).
@@ -401,6 +418,9 @@ struct V80Board {
 
     /// Sensor readings (populated only when -s/--sensors is given and VRTD is reachable).
     std::vector<vrtd::SensorEntry> sensors;
+
+    /// Shell build ID read from hardware (populated only when longPrinting).
+    std::optional<BuildId> shellBuildId;
 
     /// True when all three PFs and VRTD are ready.
     bool ok() const { return pf0.ok && pf1.ok && pf2.ok && vrtd.ok; }
@@ -434,9 +454,13 @@ static std::vector<V80Board> discoverBoards(bool longPrinting, bool sensors) {
 
         V80Board board{
             .bdfBase = base,
-            .pf0 = checkPf(pf0Dev.bdf, 0, SLASH_DEVICE_ID, PF0_EXPECTED_DRIVER),
-            .pf1 = checkPf(pf1Bdf, 1, SLASH_PF1_DEVICE_ID, PF1_EXPECTED_DRIVER),
-            .pf2 = checkPf(pf2Bdf, 2, SLASH_PF2_DEVICE_ID, PF2_EXPECTED_DRIVER),
+            .pf0 = checkPf(pf0Dev.bdf, 0, {SLASH_DEVICE_ID}, PF0_EXPECTED_DRIVER),
+            .pf1 = checkPf(pf1Bdf, 1,
+                           {SLASH_PF1_DEVICE_ID, SLASH_PF1_DEVICE_ID_LEGACY,
+                            SLASH_PF1_DEVICE_ID_AVED},
+                           PF1_EXPECTED_DRIVER),
+            .pf2 = checkPf(pf2Bdf, 2, {SLASH_PF2_DEVICE_ID, SLASH_PF2_DEVICE_ID_LEGACY},
+                           PF2_EXPECTED_DRIVER),
             .vrtd = checkVrtd(base),
             .longPrinting = longPrinting,
         };
@@ -445,15 +469,28 @@ static std::vector<V80Board> discoverBoards(bool longPrinting, bool sensors) {
             board.pf0Device = tryReadDevice(pf0Dev.bdf, true);
             board.pf1Device = tryReadDevice(pf1Bdf, true);
             board.pf2Device = tryReadDevice(pf2Bdf, true);
+
+            // Best-effort: read the shell build ID from hardware. Requires a
+            // usable BAR4 (via vrtd); swallow errors so list still works on
+            // boards without the register or with vrtd down.
+            try {
+                board.shellBuildId = readBuildId(base);
+            } catch (...) {
+                // Leave unset.
+            }
         }
 
-        if (sensors && board.vrtd.ok) {
+        if (board.vrtd.ok) {
             try {
                 vrtd::Session session;
                 auto device = session.getDeviceByBdf(base);
-                board.sensors = device.getSensorInfo();
+                board.shellType = device.getShellType();
+                board.jtag = device.isJtag();
+                if (sensors) {
+                    board.sensors = device.getSensorInfo();
+                }
             } catch (...) {
-                // Sensor query failed — leave sensors empty, don't fail the command.
+                // Runtime state/sensor queries are best-effort for list output.
             }
         }
 
@@ -513,6 +550,23 @@ static void printVrtdStatus(std::ostream& out, const VrtdStatus& vrtd) {
         out << "NOT READY: " << vrtd.reason;
     }
     out << ")";
+}
+
+static const char *shellTypeName(vrtd::ShellType shellType) {
+    switch (shellType) {
+    case vrtd::ShellType::Service: return "service";
+    case vrtd::ShellType::Compute: return "compute";
+    case vrtd::ShellType::Unknown: return "unknown";
+    }
+
+    return "unknown";
+}
+
+static void printShellState(std::ostream& out, vrtd::ShellType shellType, bool jtag) {
+    out << "Shell: " << shellTypeName(shellType);
+    if (jtag) {
+        out << " (JTAG)";
+    }
 }
 
 /// Returns a human-readable name for a sensor type bitmask.
@@ -611,6 +665,10 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
     printPfStatus(out, board.pf2);
     out << " ";
     printVrtdStatus(out, board.vrtd);
+    if (board.vrtd.ok) {
+        out << " ";
+        printShellState(out, board.shellType, board.jtag);
+    }
     out << "\n";
 
     if (board.longPrinting) {
@@ -622,6 +680,20 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
             out << "OK";
         } else {
             out << "NOT READY: " << board.vrtd.reason;
+        }
+        out << "\n";
+        if (board.vrtd.ok) {
+            out << INDENT2;
+            printShellState(out, board.shellType, board.jtag);
+            out << "\n";
+        }
+
+        out << INDENT1 << "Shell build: ";
+        if (board.shellBuildId) {
+            out << board.shellBuildId->commitHex()
+                << (board.shellBuildId->dirty ? " (dirty)" : "");
+        } else {
+            out << "unavailable";
         }
         out << "\n";
     }
@@ -684,8 +756,16 @@ Json::Value toJson(const V80Board& board) {
     vrtdJson["status"] = board.vrtd.ok ? "OK" : "NOT READY";
     if (!board.vrtd.ok) {
         vrtdJson["reason"] = board.vrtd.reason;
+    } else {
+        vrtdJson["shell_type"] = shellTypeName(board.shellType);
+        vrtdJson["jtag"] = board.jtag;
     }
     j["vrtd"] = vrtdJson;
+
+    if (board.shellBuildId) {
+        j["shell_build_commit"] = board.shellBuildId->commitHex();
+        j["shell_build_dirty"] = board.shellBuildId->dirty;
+    }
 
     if (!board.sensors.empty()) {
         Json::Value sensorsJson(Json::arrayValue);

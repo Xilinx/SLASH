@@ -185,9 +185,9 @@ mode programs the flash-image PDI through VRTD cfgmem programming.
 The `--jtag` mode programs the no-FPT PDI over JTAG with `xsdb`.
 
 ```
-v80-smi write-static-shell --flash -d <BDF> [--pdi <file>]
-v80-smi write-static-shell --jtag -d <BDF> [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
-v80-smi write-static-shell --jtag --no-remove-device [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+v80-smi write-static-shell --flash -d <BDF> [--shell-type <all|service|compute>] [--pdi <file>]
+v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
 ```
 
 | Flag              | Description                                          |
@@ -195,12 +195,17 @@ v80-smi write-static-shell --jtag --no-remove-device [--pdi <file>] [--xsdb-targ
 | `--flash`         | Program the flash-image PDI via VRTD cfgmem programming |
 | `--jtag`          | Program the no-FPT PDI over JTAG via `xsdb`          |
 | `-d,--device`     | Board address, required except with `--jtag --no-remove-device` |
+| `--shell-type`    | Shell to program. Flash without `--pdi` defaults to `all`; other modes default to `service` |
 | `--pdi`           | Use this PDI file instead of resolving the installed static shell PDI |
 | `--no-remove-device` | Skip the pre-JTAG PCIe device removal; valid only with `--jtag` |
 | `--bash-source`   | Source a Vivado/Vitis setup script before running `xsdb`; may be repeated and is valid only with `--jtag` |
 | `--xsdb-target-id` | Select the `Versal xcv80` XSDB `target_id`; valid only with `--jtag` |
 
-Both modes resolve their PDI path with `python3 -m slashkit static-shell-path`,
+Flash mode programs the selected boot partition, or both the service and compute
+partitions when `--shell-type all` is used. `all` is valid only with `--flash`
+without `--pdi`, because a single override PDI cannot represent both shells.
+
+Both modes resolve each PDI path with `python3 -m slashkit static-shell-path`,
 so setting `PYTHONPATH` can select an in-repo `slashkit`.  Use `--pdi` to bypass
 that resolution during active development; the file must match the selected
 mode (`--flash` expects a flash-image PDI, `--jtag` expects a no-FPT/JTAG-bootable
@@ -558,7 +563,19 @@ rp1-ping: submitted seq=1, polling...
 PASS: slot[0] = 0xdeadbeef, cq_write_idx=1, state=1
 ```
 
-Both `rp1-*` commands require RP1 firmware to be loaded onto R5-1 and
+### debug rp1-trace-ping
+
+Run the same one-node `SIGNAL` probe with RP1 tracing enabled, then print the
+completion-queue entries and trace records in chronological order.
+
+```
+v80-smi debug rp1-trace-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
+```
+
+Takes the same options as `debug rp1-dump`. It exits non-zero if RP1 is not
+ready, the graph times out, or the sentinel signal is not produced.
+
+All three `rp1-*` commands require RP1 firmware to be loaded onto R5-1 and
 reporting `RP1_STATE_READY`; see
 [`linker/slashkit/resources/aved/rp1/ARCHITECTURE.md`](../linker/slashkit/resources/aved/rp1/ARCHITECTURE.md)
 for the on-wire protocol they probe.
@@ -608,7 +625,7 @@ smi/
     debug/mem_poke.cpp/hpp  Raw device memory read/write command
     debug/clockwiz.cpp/hpp  Clock read/set debug command
     debug/hotplug.cpp/hpp   PCIe hotplug debug command
-    debug/rp1_probe.cpp/hpp RP1 firmware bring-up probes (rp1-dump, rp1-ping)
+    debug/rp1_probe.cpp/hpp RP1 firmware bring-up probes (dump, ping, trace-ping)
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
   resources/

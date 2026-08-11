@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -110,6 +111,17 @@ std::string makeExecFromBinaryDirCommand(const std::string& execPath) {
         return shellQuote(execPath);
     }
     return "cd " + shellQuote(dir) + " && exec ./" + shellQuote(file);
+}
+
+vrtd::ShellType toVrtdShellType(ShellType shellType) {
+    switch (shellType) {
+    case ShellType::SERVICE:
+        return vrtd::ShellType::Service;
+    case ShellType::COMPUTE:
+        return vrtd::ShellType::Compute;
+    default:
+        throw std::runtime_error("Unknown vbin shell type");
+    }
 }
 
 bool parseEmuArgIndex(const std::string& argName, std::size_t& outIdx) {
@@ -236,8 +248,14 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     this->programType = programType;
     this->zmqServer = std::make_shared<ZmqServer>();
     this->platform = vrtbin.getPlatform();
+    this->requiredShell = vrtbin.getShellType();
     if (platform == Platform::HARDWARE) {
-        vrtdSession = std::make_shared<vrtd::Session>();
+        const char *vrtdSocket = std::getenv("VRTD_SOCKET");
+        if (vrtdSocket != nullptr && vrtdSocket[0] != '\0') {
+            vrtdSession = std::make_shared<vrtd::Session>(vrtdSocket);
+        } else {
+            vrtdSession = std::make_shared<vrtd::Session>();
+        }
         vrtdDevice = vrtdSession->getDeviceByBdf(bdfFull);
         if (program) {
             programDevice();
@@ -317,6 +335,7 @@ void Device::parseSystemMap() {
     parser.parseXML();
     clockFreq = parser.getClockFrequency();
     this->platform = parser.getPlatform();
+    this->requiredShell = parser.getShellType();
     kernels = parser.getKernels();
 
     std::optional<vrtd::Bar> barHandle = std::nullopt;
@@ -374,7 +393,7 @@ void Device::programDevice() {
     for (const auto& pdi : pdiPaths) {
         utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                            "Programming PDI via vrtd design writer {}", pdi);
-        getVrtdDevice().designWriteFile(pdi);
+        getVrtdDevice().designWriteFile(pdi, toVrtdShellType(requiredShell));
     }
 }
 

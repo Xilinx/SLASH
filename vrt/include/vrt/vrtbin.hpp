@@ -53,6 +53,7 @@ class Vrtbin {
     std::string simulationExecPath;                                 ///< Path to the simulation executable
     std::string utilizationReportPath;                              ///< Path to utilization report (if present)
     Platform platform;                                              ///< Platform type
+    ShellType shellType;                                            ///< Required hardware shell type
     /**
      * @brief Copies a file from source to destination.
      * @param source The source file path.
@@ -125,6 +126,12 @@ class Vrtbin {
      * @return The platform type.
      */
     Platform getPlatform() const;
+
+    /**
+     * @brief Gets the shell type required by the vbin.
+     * @return The required shell type.
+     */
+    ShellType getShellType() const;
 
     /**
      * @brief Gets the path to the system map last loaded on a bdf.

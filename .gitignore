@@ -3,6 +3,7 @@
 /cmake-build-debug/
 /cmake-build-release/
 **/build_*
+**/build-*/
 # Ignore CMake generated files
 CMakeFiles/
 CMakeCache.txt
@@ -41,7 +42,11 @@ Thumbs.db
 # Ignore IDE specific files
 .vscode/
 .idea/
+.cursor/
 *.iml
+
+# Ignore local git worktrees
+.worktrees/
 
 # Ignore test binaries
 /tests/*.exe
@@ -78,6 +83,11 @@ __pycache__/
 # VBIN build directories
 *.prj
 
+# Root design build outputs
+/linker/install.prj.compute/
+/linker/slashkit/resources/static_shell/
+/linker/slashkit/resources/static_shell_compute/
+
 # Python virtual environment
 .venv
 
@@ -93,3 +103,10 @@ __pycache__/
 # Personal/HSA-iteration scripts (not part of the released stack)
 /scripts/hsa/
 **/build-host/
+
+# Claude Code files
+/CLAUDE.md
+/.claude/
+
+# Kernel compatibility probe scratch files
+/driver/kcompat/.scratch/

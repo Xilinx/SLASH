@@ -18,13 +18,14 @@
  * PCI driver for the SLASH control function (PF2).
  *
  * This driver binds to PCI device 10EE:50C2 (the V80 SLASH control
- * function).  On probe it creates a control device (slash_ctldev) that
+ * function), or the legacy 10EE:50B6 used by pre-compute-platform
+ * designs.  On probe it creates a control device (slash_ctldev) that
  * exposes BAR information and dma-buf-backed BAR mappings to userspace,
  * and registers the device with the hotplug subsystem so that it can
  * be removed/reset/rescanned during FPGA reconfiguration.
  *
- * PF1 (the QDMA function, device 10EE:50C1) is handled by a separate
- * PCI driver registered in slash_qdma.c.
+ * PF1 (the QDMA function, device 10EE:50C1, legacy 10EE:50B5, or AVED
+ * 10EE:50BD) is handled by a separate PCI driver in slash_qdma.c.
  */
 
 #include "slash_pcie.h"
@@ -39,9 +40,10 @@
 static int slash_pcie_probe(struct pci_dev *pdev, const struct pci_device_id *id);
 static void slash_pcie_remove(struct pci_dev *pdev);
 
-/* Match only the SLASH control function (PF2, device 0x50C2). */
+/* Match the SLASH control function (PF2): new 0x50C2, or legacy 0x50B6. */
 static const struct pci_device_id slash_pcie_ids[] = {
     {PCI_DEVICE(SLASH_PCIE_VENDOR_ID, SLASH_PCIE_DEVICE_ID)},
+    {PCI_DEVICE(SLASH_PCIE_VENDOR_ID, SLASH_PCIE_DEVICE_ID_LEGACY)},
     {0,}
 };
 MODULE_DEVICE_TABLE(pci, slash_pcie_ids);

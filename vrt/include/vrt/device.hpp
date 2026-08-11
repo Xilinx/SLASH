@@ -107,6 +107,7 @@ class Device {
     std::map<std::string, Kernel> kernels;                      ///< Map of kernel names to Kernel objects
     Allocator* allocator = nullptr;                             ///< Allocator object
     Platform platform{};                                        ///< Platform information
+    ShellType requiredShell = ShellType::SERVICE;               ///< Hardware shell required by the vbin
     std::shared_ptr<ZmqServer> zmqServer;                       ///< ZeroMQ server object
     std::vector<QdmaConnection> qdmaConnections;                ///< Vector of QDMA connections
     std::vector<QdmaIntf*> qdmaIntfs;                           ///< Vector of QDMA interfaces for streaming

@@ -253,7 +253,7 @@ vrt/
       execution.hpp            Direct executable handle (write/launch/wait/read)
       authoring/               Typed values, regions, FPGA/image handles
       core/                    Compiler value internals and validation
-      crossdevice/             Cross-device bridge routing (BridgeRouter, CpuFpgaBridge)
+      crossdevice/             Cross-device bridge runtime (IBridge, CpuFpgaBridge)
       detail/                  Private authoring and executable assembly contracts
       device/                  Direct queue backends: CpuDevice, FpgaDevice, GpuDevice
         fpga/                  RP1 programs, packet lowering, BAR access, submission

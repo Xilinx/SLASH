@@ -23,3 +23,4 @@ Task-oriented recipes for common operations.
    use-mock-mode
    migrate-from-xrt
    use-rtl-kernels
+   debug-with-ila

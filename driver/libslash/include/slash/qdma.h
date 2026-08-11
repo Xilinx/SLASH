@@ -17,7 +17,7 @@
  *
  * Userspace API for slash QDMA (Queue-based DMA) devices.
  *
- * A QDMA device is a separate misc character device created for PF1,
+ * A QDMA device is a separate character device created for PF1,
  * while the control device (ctldev) is created for PF2.  Each PCI
  * function gets at most one of each.  Device nodes appear at
  * /dev/slash_qdma_ctl0, /dev/slash_qdma_ctl1, etc.

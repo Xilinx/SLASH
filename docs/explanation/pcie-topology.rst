@@ -53,6 +53,13 @@ Physical Functions
 
 All three PFs share vendor ID ``0x10EE`` (AMD/Xilinx).
 
+.. note::
+
+   ``0x50C1`` (PF1) and ``0x50C2`` (PF2) are the current device IDs. For
+   backward compatibility the ``slash`` driver and ``v80-smi`` also accept the
+   legacy IDs ``0x50B5`` (PF1) and ``0x50B6`` (PF2) — plus the AVED/V80P QDMA
+   ID ``0x50BD`` — so cards still carrying an older bitstream continue to work.
+
 BDF Addressing
 ==============
 

@@ -171,7 +171,9 @@ static ssize_t qdma_fallback_subxfer(int qpair_fd,
         off_t want = (off_t)(x->dev_addr + x->length);
 
         if (fstat(qpair_fd, &st) == 0 && st.st_size < want) {
-            (void)ftruncate(qpair_fd, want);
+            if (ftruncate(qpair_fd, want) != 0) {
+                return -1;
+            }
         }
     }
 

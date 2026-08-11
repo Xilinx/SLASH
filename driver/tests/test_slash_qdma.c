@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /*
- * Basic QDMA queue-pair lifecycle test.
+ * QDMA control device (/dev/slash_qdma_ctl<N>) ABI tests.
  *
  * Covers QPAIR_ADD / Q_OP / QPAIR_GET_FD / INFO, the kernel-owned buffer fd
  * (BUF_CREATE + mmap), and the per-qpair anon-inode transfer fd
@@ -10,21 +10,12 @@
  */
 
 #include "kselftest_harness.h"
+#include "slash_test_helpers.h"
 
-#include <errno.h>
-#include <fcntl.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <stdio.h>
+#include <sys/mman.h>
 
-#include <sys/ioctl.h>
-
-#include <slash/uapi/slash_interface.h>
-
-#define QDMA_CTL_DEV   "/dev/slash_qdma_ctl0"
-#define TRANSFER_SIZE  4096
-#define DDR_BASE_ADDRESS 0x60000000000ULL
+#define TRANSFER_SIZE 4096
 
 /* ---------- helpers ---------- */
 
@@ -33,20 +24,8 @@ static uint64_t get_dma_addr(void)
 	const char *val = getenv("SLASH_TEST_DMA_ADDR");
 
 	if (val)
-		return strtoull(val, NULL, DDR_BASE_ADDRESS);
+		return strtoull(val, NULL, 0);
 	return 0;
-}
-
-static int qpair_op(int fd, uint32_t qid, uint32_t op)
-{
-	struct slash_qdma_qpair_op req;
-
-	memset(&req, 0, sizeof(req));
-	req.size = sizeof(req);
-	req.qid  = qid;
-	req.op   = op;
-
-	return ioctl(fd, SLASH_QDMA_IOCTL_Q_OP, &req);
 }
 
 static void fill_pattern(uint8_t *buf, size_t len)
@@ -126,14 +105,14 @@ FIXTURE(qdma)
 FIXTURE_SETUP(qdma)
 {
 	self->ctl_fd = -1;
-	self->io_fd  = -1;
-	self->qpair_added   = 0;
+	self->io_fd = -1;
+	self->qpair_added = 0;
 	self->qpair_started = 0;
 
-	if (access(QDMA_CTL_DEV, F_OK) != 0)
-		SKIP(return, "QDMA device not found (%s)", QDMA_CTL_DEV);
+	if (access(SLASH_TEST_QDMA_DEV, F_OK) != 0)
+		SKIP(return, "QDMA device not found (%s)", SLASH_TEST_QDMA_DEV);
 
-	self->ctl_fd = open(QDMA_CTL_DEV, O_RDWR);
+	self->ctl_fd = open(SLASH_TEST_QDMA_DEV, O_RDWR);
 	ASSERT_GE(self->ctl_fd, 0);
 }
 
@@ -143,16 +122,32 @@ FIXTURE_TEARDOWN(qdma)
 		close(self->io_fd);
 
 	if (self->qpair_started)
-		qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_STOP);
+		slash_qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_STOP);
 
 	if (self->qpair_added)
-		qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_DEL);
+		slash_qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_DEL);
 
 	if (self->ctl_fd >= 0)
 		close(self->ctl_fd);
 }
 
-/* ---------- tests ---------- */
+/* Bring up a default MM qpair (H2C | C2H) and an I/O fd on the fixture. */
+static void bring_up_qpair(struct __test_metadata *_metadata,
+						   FIXTURE_DATA(qdma) * self, uint32_t dir_mask)
+{
+	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 0 /* MM */, dir_mask,
+								 &self->qid));
+	self->qpair_added = 1;
+
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+								SLASH_QDMA_QUEUE_OP_START));
+	self->qpair_started = 1;
+
+	self->io_fd = slash_qpair_get_fd(self->ctl_fd, self->qid, O_CLOEXEC);
+	ASSERT_GE(self->io_fd, 0);
+}
+
+/* ---------- happy-path tests ---------- */
 
 TEST_F(qdma, query_info)
 {
@@ -160,44 +155,58 @@ TEST_F(qdma, query_info)
 
 	memset(&info, 0, sizeof(info));
 	info.size = sizeof(info);
+	ASSERT_EQ(0, ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info));
+	EXPECT_TRUE(slash_looks_like_bdf(info.bdf))
+	TH_LOG("bad QDMA BDF '%s'", info.bdf);
+	EXPECT_EQ('1', info.bdf[11])
+	TH_LOG("QDMA INFO must report the full PF1 BDF, got '%s'", info.bdf);
+}
 
-	EXPECT_GE(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info), 0);
+TEST_F(qdma, device_node_identity_matches_sysfs_and_fd)
+{
+	struct slash_test_node_identity identity;
+	struct slash_qdma_info info;
+	char sysfs_name[64];
+	struct stat fd_stat;
+
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	ASSERT_EQ(0, ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info));
+
+	snprintf(sysfs_name, sizeof(sysfs_name),
+			 SLASH_TEST_QDMA_SYSFS_PREFIX "%s", info.bdf);
+	ASSERT_EQ(0, slash_test_read_node_identity(sysfs_name, &identity))
+	TH_LOG("sysfs dev/uevent or /dev node disagree for %s/%s",
+		   SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
+	EXPECT_TRUE(slash_test_validate_qdma_node(&identity))
+	TH_LOG("QDMA node %s has invalid minor/name (%u:%u)",
+		   identity.devpath, identity.major, identity.minor);
+
+	ASSERT_EQ(0, fstat(self->ctl_fd, &fd_stat));
+	EXPECT_EQ(identity.dev, fd_stat.st_rdev)
+	TH_LOG("opened fd %s does not match %s/%s",
+		   SLASH_TEST_QDMA_DEV, SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
 }
 
 TEST_F(qdma, qpair_lifecycle)
 {
-	struct slash_qdma_qpair_add add;
-	struct slash_qdma_qpair_fd_request fd_req;
-
-	/* Add queue pair */
-	memset(&add, 0, sizeof(add));
-	add.size     = sizeof(add);
-	add.mode     = 0;   /* MM mode */
-	add.dir_mask = 0x3; /* H2C | C2H */
-
-	ASSERT_GE(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &add), 0);
-	self->qid = add.qid;
+	// Direction 0b11 -> host-to-card and card-to-host
+	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 0, 0b11, &self->qid));
 	self->qpair_added = 1;
 
-	/* Start queue pair */
-	ASSERT_GE(qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_START), 0);
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+								SLASH_QDMA_QUEUE_OP_START));
 	self->qpair_started = 1;
 
-	/* Get I/O fd */
-	memset(&fd_req, 0, sizeof(fd_req));
-	fd_req.size  = sizeof(fd_req);
-	fd_req.qid   = self->qid;
-	fd_req.flags = O_CLOEXEC;
-
-	self->io_fd = ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &fd_req);
+	self->io_fd = slash_qpair_get_fd(self->ctl_fd, self->qid, O_CLOEXEC);
 	ASSERT_GE(self->io_fd, 0);
 
-	/* Stop queue pair */
-	ASSERT_GE(qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_STOP), 0);
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+								SLASH_QDMA_QUEUE_OP_STOP));
 	self->qpair_started = 0;
 
-	/* Delete queue pair */
-	ASSERT_GE(qpair_op(self->ctl_fd, self->qid, SLASH_QDMA_QUEUE_OP_DEL), 0);
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+								SLASH_QDMA_QUEUE_OP_DEL));
 	self->qpair_added = 0;
 }
 
@@ -208,11 +217,7 @@ TEST_F(qdma, write_read_verify)
 	uint8_t *write_buf, *read_buf;
 	long ret;
 
-	/* Add + start queue pair */
-	memset(&add, 0, sizeof(add));
-	add.size     = sizeof(add);
-	add.mode     = 0;
-	add.dir_mask = 0x3;
+	bring_up_qpair(_metadata, self, 0x3);
 
 	write_fd = qdma_buf_create(self->ctl_fd, TRANSFER_SIZE, NULL, NULL);
 	ASSERT_GE(write_fd, 0);
@@ -235,7 +240,6 @@ TEST_F(qdma, write_read_verify)
 				TRANSFER_SIZE, SLASH_QDMA_XFER_C2H);
 	ASSERT_EQ(TRANSFER_SIZE, ret);
 
-	/* Verify */
 	EXPECT_EQ(0, memcmp(write_buf, read_buf, TRANSFER_SIZE));
 
 	munmap(write_buf, TRANSFER_SIZE);
@@ -331,13 +335,6 @@ TEST_F(qdma, qpair_add_invalid_dir_mask_zero)
 	EXPECT_EQ(-EINVAL, slash_qpair_add(self->ctl_fd, 0, 0x0, &qid));
 }
 
-TEST_F(qdma, qpair_add_invalid_dir_mask_cmpt)
-{
-	uint32_t qid;
-
-	EXPECT_EQ(-EOPNOTSUPP, slash_qpair_add(self->ctl_fd, 0, 0x4, &qid));
-}
-
 TEST_F(qdma, qpair_add_invalid_dir_mask_high_bits)
 {
 	uint32_t qid;
@@ -345,12 +342,23 @@ TEST_F(qdma, qpair_add_invalid_dir_mask_high_bits)
 	EXPECT_EQ(-EINVAL, slash_qpair_add(self->ctl_fd, 0, 0x8, &qid));
 }
 
-TEST_F(qdma, qpair_add_invalid_mode_st)
+TEST_F(qdma, qpair_lifecycle_streaming_with_completion)
 {
-	uint32_t qid;
+	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 1 /* ST */, 0x7,
+				    &self->qid));
+	self->qpair_added = 1;
 
-	EXPECT_EQ(-EOPNOTSUPP, slash_qpair_add(self->ctl_fd, 1 /* ST */,
-										   0x3, &qid));
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+				    SLASH_QDMA_QUEUE_OP_START));
+	self->qpair_started = 1;
+
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+				    SLASH_QDMA_QUEUE_OP_STOP));
+	self->qpair_started = 0;
+
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+				    SLASH_QDMA_QUEUE_OP_DEL));
+	self->qpair_added = 0;
 }
 
 TEST_F(qdma, qpair_add_invalid_mode_other)
@@ -696,8 +704,8 @@ TEST_F(qdma, transfer_ddr)
 
 /* ---------- ABI size-versioning tests ----------
  *
- * QDMA_INFO is a pure-output ioctl: any user_size is accepted (including
- * 0); output is truncated to min(user_size, sizeof(struct)).
+ * QDMA_INFO requires its leading size field and truncates output to
+ * min(user_size, sizeof(struct)).
  *
  * QPAIR_ADD, Q_OP, and QPAIR_GET_FD are input-bearing ioctls and reject
  * under-sized user structs with -EINVAL before acting on zero-filled

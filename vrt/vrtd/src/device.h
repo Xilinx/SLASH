@@ -38,6 +38,7 @@
 
 #include <slash/ctldev.h>
 #include <slash/qdma.h>
+#include <vrtd/wire.h>
 
 #include "array.h"
 #include "buffer.h"
@@ -53,7 +54,7 @@ struct device_memory_map;
  * drivers, DMA buffers, and the HBM/DDR memory map allocator.
  */
 struct device {
-    /** @brief Sysfs path of this device (e.g. "/sys/bus/pci/devices/0000:03:00.0").
+    /** @brief Stable control character-device path (e.g. "/dev/slash_ctl0").
      *  Heap-allocated, owning. */
     char *path; /* owning */
     /** @brief libslash control device handle for ioctl operations (owning). */
@@ -76,6 +77,10 @@ struct device {
     struct buffer_ptr_array buffers;
     /** @brief PCI identity (vendor/device ID, BDF address) reported to clients. */
     struct vrtd_pci_info pci_info;
+    /** @brief Shell that vrtd believes is currently booted. In-memory only. */
+    enum vrtd_shell_type current_shell;
+    /** @brief Whether vrtd believes this device was booted from a JTAG-loaded image. */
+    bool jtag;
 };
 
 /**
@@ -101,29 +106,14 @@ DECLARE_OWNING_PTR_ARRAY(device_ptr_array, struct device *, cleanup_device);
 /**
  * @brief Discover all SLASH FPGA devices on the system and open them.
  *
- * Enumerates PCI devices via sysfs, opens libslash control and QDMA handles,
- * maps BARs, and initializes per-device subsystems (design writer, clock
- * driver, memory allocator).
+ * Enumerates SLASH control character devices, opens libslash control and QDMA
+ * handles, maps BARs, and initializes per-device subsystems (design writer,
+ * clock driver, memory allocator).
  *
  * @param[out] devices Array to populate with discovered device pointers.
  *                     The array takes ownership of all allocated devices.
  * @return 0 on success, -1 on error (partially discovered devices are cleaned up).
  */
 int devices_discover_and_open(struct device_ptr_array *devices);
-
-/**
- * @brief Find the current /dev/slash_ctlN path for a PF2 device by its full BDF.
- *
- * The /dev node suffix is assigned by an incrementing kernel counter and changes
- * after each hotplug remove+rescan cycle.  This function resolves the current
- * path by reading the stable sysfs uevent file at
- * /sys/class/misc/slash_ctl_<bdf>/uevent.
- *
- * @param bdf       Full PCI BDF including function number (e.g. "0000:61:00.2").
- * @param out_path  On success, receives a heap-allocated /dev/ path string, or
- *                  NULL if the device is not yet registered.  Caller must free.
- * @return 0 on success (device found or absent), -1 on I/O or allocation error.
- */
-int find_slash_ctl_dev_path_by_bdf(const char *bdf, char **out_path);
 
 #endif // VRTD_DEVICE_H

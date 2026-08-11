@@ -168,7 +168,8 @@ local IP repository before building:
 
 1. Download the SMBus IP from https://www.xilinx.com/member/v80.html
    (AMD account required).
-2. Copy the downloaded IP directory into ``linker/slashkit/resources/base/iprepo/``
+2. Copy the downloaded IP directory into
+   ``linker/slashkit/resources/base/common/iprepo/``
    so that Vivado can locate it during synthesis.
 
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for
@@ -386,6 +387,9 @@ Each V80 board exposes three PCI functions:
      - ``slash_ctl``
      - BAR MMIO access (register reads/writes)
 
+The legacy device IDs ``0x50B5`` (PF1) and ``0x50B6`` (PF2) are still accepted
+as a fallback for cards carrying a pre-compute-platform bitstream.
+
 For boards already visible over PCIe, check that all three functions appear
 with their drivers bound:
 
@@ -450,7 +454,7 @@ operations — SLASH reads from flash but never writes to it during regular use.
 No system restart is required after either step.
 
 A. Write a Temporary Image via JTAG Boot
----------------------------------------
+----------------------------------------
 
 This step loads the no-FPT static-shell PDI over JTAG. The image is temporary:
 it lets the board enumerate over PCIe so that step B can write the permanent
