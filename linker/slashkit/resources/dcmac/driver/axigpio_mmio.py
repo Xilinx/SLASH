@@ -61,7 +61,7 @@ def main(args):
         value = (2**32) - 1
 
     offset0 = get_ip_offset(0x204_0000, args.dcmac)
-    obj = AxiGpioMMIO(args.dev, offset0)
+    obj = AxiGpioMMIO(args.dev, base_offset=offset0)
     obj.write(0, value)
     print(f'GPIO1: 0x{obj.base_address:X}, value={obj.read(0)}')
     obj.write(1, value)
@@ -69,7 +69,7 @@ def main(args):
     del obj
 
     offset1 = get_ip_offset(0x204_0100, args.dcmac)
-    obj = AxiGpioMMIO(args.dev, offset1)
+    obj = AxiGpioMMIO(args.dev, base_offset=offset1)
     obj.write(0, value)
     print(f'GPIO1: 0x{obj.base_address:X}, value={obj.read(0)}')
     obj.write(1, value)
@@ -77,7 +77,7 @@ def main(args):
     del obj
 
     offset2 = get_ip_offset(0x204_0300, args.dcmac)
-    obj = AxiGpioMMIO(args.dev, offset2)
+    obj = AxiGpioMMIO(args.dev, base_offset=offset2)
     obj.write(0, value)
     print(f'GPIO1: 0x{obj.base_address:X}, value={obj.read(0)}')
     obj.write(1, value)
