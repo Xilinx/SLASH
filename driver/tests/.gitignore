@@ -1,3 +1,4 @@
 test_*
 !test_*.c
 !test_module.sh
+coverage.*
