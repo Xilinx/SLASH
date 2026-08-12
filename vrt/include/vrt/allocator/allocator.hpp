@@ -207,36 +207,33 @@ protected:
     static constexpr size_t kMax = MAX_K;
     static constexpr size_t kNumBuckets = MAX_K - MIN_K + 1;
     static constexpr size_t kToIndex(size_t k) { return k - MIN_K; }
-    static size_t sizeToIndex(size_t size, const char* /*tooSmallError*/) {
+    static size_t sizeToIndex(size_t size) {
         // Requests at or below the minimum block size round up to the smallest
         // bucket: a buddy allocator's minimum block is its allocation floor, so
         // tiny buffers (e.g. a handful of elements) should consume one smallest
-        // block rather than be rejected.  Also avoids __builtin_clzll(0) UB for
-        // size <= 1.
+        // block rather than be rejected. This also avoids size - 1 underflow for
+        // zero and __builtin_clzll(0) undefined behavior for one.
         if (size <= (size_t(1) << MIN_K)) {
             return 0;
         }
         size_t k = 64 - __builtin_clzll((unsigned long long)(size - 1));
-        if (k < MIN_K) {
-            return 0;
-        }
         return kToIndex(k);
     }
 
     std::array<std::vector<UntypedBuffer>, kNumBuckets> freeList;
 
-    void seed(const UntypedBuffer& whole, const char* tooSmallError, const char* tooLargeError) {
+    void seed(const UntypedBuffer& whole, const char* tooLargeError) {
         // Seed the free list with the full superblock as a single buddy.
-        size_t index = sizeToIndex(whole.getSize(), tooSmallError);
+        size_t index = sizeToIndex(whole.getSize());
         if (index >= kNumBuckets) {
             throw std::runtime_error(tooLargeError);
         }
         freeList[index].push_back(whole);
     }
 
-    UntypedBuffer allocate(uint64_t size, const char* tooSmallError) {
+    UntypedBuffer allocate(uint64_t size) {
         // Round size to a bucket index (power-of-two) and search for a free buddy.
-        size_t index = sizeToIndex(size, tooSmallError);
+        size_t index = sizeToIndex(size);
         if (index >= kNumBuckets) {
             throw std::bad_alloc();
         }
@@ -264,9 +261,9 @@ protected:
         throw std::bad_alloc();
     }
 
-    void deallocate(const UntypedBuffer& whole, UntypedBuffer buffer, const char* tooSmallError, const char* ownershipError) {
+    void deallocate(const UntypedBuffer& whole, UntypedBuffer buffer, const char* ownershipError) {
         // Compute the buddy bucket for this size class.
-        size_t index = sizeToIndex(buffer.getSize(), tooSmallError);
+        size_t index = sizeToIndex(buffer.getSize());
         if (index >= kNumBuckets) {
             throw std::runtime_error("Invalid buffer size for deallocation");
         }
@@ -311,9 +308,9 @@ protected:
         freeList[i].emplace_back(whole, size, offset);
     }
 
-    bool isFree(const UntypedBuffer& whole, const char* tooSmallError) const {
+    bool isFree(const UntypedBuffer& whole) const {
         // Simplified check: rely on the full-size bucket as the indicator.
-        size_t index = sizeToIndex(whole.getSize(), tooSmallError);
+        size_t index = sizeToIndex(whole.getSize());
         assert(index < kNumBuckets);
         return freeList[index].size() == 1;
     }

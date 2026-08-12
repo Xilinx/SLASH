@@ -190,7 +190,6 @@ UntypedBuffer *SmallBlock::getUntypedBuffer() const noexcept {
 LargeBlockSuperblock::LargeBlockSuperblock(vrtd::Device& device, BufferAllocType type, BufferAllocDir dir, uint64_t size, HBMRegion region)
     : LargeBlock(device, type, dir, size, region) {
     Buddy::seed(*getUntypedBuffer(),
-                "Size too small for LargeBlockSuperblock",
                 "LargeBlockSuperblock size exceeds maximum bucket size");
 }
 
@@ -203,23 +202,21 @@ LargeBlockSuperblock::~LargeBlockSuperblock() {
 }
 
 UntypedBuffer LargeBlockSuperblock::allocate(uint64_t size) {
-    return Buddy::allocate(size, "Size too small for LargeBlockSuperblock");
+    return Buddy::allocate(size);
 }
 
 void LargeBlockSuperblock::deallocate(UntypedBuffer buffer) {
     Buddy::deallocate(*getUntypedBuffer(), buffer,
-                      "Size too small for LargeBlockSuperblock",
                       "Buffer does not belong to this LargeBlockSuperblock");
 }
 
 bool LargeBlockSuperblock::isFree() const {
-    return Buddy::isFree(*getUntypedBuffer(), "Size too small for LargeBlockSuperblock");
+    return Buddy::isFree(*getUntypedBuffer());
 }
 
 MediumBlockSuperblock::MediumBlockSuperblock(LargeBlockSuperblock *backingSuperblock, UntypedBuffer untypedBuffer)
     : MediumBlock(backingSuperblock, untypedBuffer) {
     Buddy::seed(*getUntypedBuffer(),
-                "Size too small for MediumBlockSuperblock",
                 "MediumBlockSuperblock size exceeds maximum bucket size");
 }
 
@@ -232,17 +229,16 @@ MediumBlockSuperblock::~MediumBlockSuperblock() {
 }
 
 UntypedBuffer MediumBlockSuperblock::allocate(uint64_t size) {
-    return Buddy::allocate(size, "Size too small for MediumBlockSuperblock");
+    return Buddy::allocate(size);
 }
 
 void MediumBlockSuperblock::deallocate(UntypedBuffer buffer) {
     Buddy::deallocate(*getUntypedBuffer(), buffer,
-                      "Size too small for MediumBlockSuperblock",
                       "Buffer does not belong to this MediumBlockSuperblock");
 }
 
 bool MediumBlockSuperblock::isFree() const {
-    return Buddy::isFree(*getUntypedBuffer(), "Size too small for MediumBlockSuperblock");
+    return Buddy::isFree(*getUntypedBuffer());
 }
 
 Allocator::Allocator() = default;
