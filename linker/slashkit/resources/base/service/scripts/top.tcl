@@ -2699,7 +2699,7 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/M01_AXI]
 
   set_property -dict [ list \
-   CONFIG.APERTURES {{0x202_0000_0000 0x800_0000}} \
+   CONFIG.APERTURES {{0x202_0000_0000 0x100_0000}} \
    CONFIG.CATEGORY {pl} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/M04_INI]
 
