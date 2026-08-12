@@ -21,6 +21,7 @@
 #include "ancillary.h"
 #include <vrtd/wire.h>
 
+#include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <string.h>
@@ -149,75 +150,52 @@ size_t vrtd_response_expected_fds(uint16_t opcode, bool *owned)
     return count;
 }
 
+/*
+ * Indexed by opcode rather than switched on it, so the compiler sizes the table
+ * from the enumerator values.  Zero means no entry, since no reply body is
+ * empty.
+ */
+static const size_t response_sizes[] = {
+    [VRTD_REQ_GET_NUM_DEVICES] = sizeof(struct vrtd_resp_get_num_devices),
+    [VRTD_REQ_GET_DEVICE_INFO] = sizeof(struct vrtd_resp_get_device_info),
+    [VRTD_REQ_GET_BAR_INFO] = sizeof(struct vrtd_resp_get_bar_info),
+    [VRTD_REQ_GET_BAR_FD] = sizeof(struct vrtd_resp_get_bar_fd),
+    [VRTD_REQ_QDMA_GET_INFO] = sizeof(struct vrtd_resp_qdma_get_info),
+    [VRTD_REQ_QDMA_QPAIR_ADD] = sizeof(struct vrtd_resp_qdma_qpair_add),
+    [VRTD_REQ_QDMA_QPAIR_OP] = sizeof(struct vrtd_resp_qdma_qpair_op),
+    [VRTD_REQ_QDMA_QPAIR_GET_FD] = sizeof(struct vrtd_resp_qdma_qpair_get_fd),
+    [VRTD_REQ_DESIGN_WRITE] = sizeof(struct vrtd_resp_design_write),
+    [VRTD_REQ_CLOCK_OP] = sizeof(struct vrtd_resp_clock_op),
+    [VRTD_REQ_BUFFER_OPEN] = sizeof(struct vrtd_resp_buffer_open),
+    [VRTD_REQ_BUFFER_CLOSE] = sizeof(struct vrtd_resp_buffer_close),
+    [VRTD_REQ_GET_DEVICE_BY_BDF] = sizeof(struct vrtd_resp_get_device_by_bdf),
+    [VRTD_REQ_DEVICE_HOTPLUG_OP] = sizeof(struct vrtd_resp_device_hotplug_op),
+    [VRTD_REQ_GET_SENSOR_INFO] = SIZE_MAX,
+    [VRTD_REQ_BUFFER_OPEN_RAW] = sizeof(struct vrtd_resp_buffer_open_raw),
+    [VRTD_REQ_CFGMEM_PROGRAM] = sizeof(struct vrtd_resp_cfgmem_program),
+    [VRTD_REQ_CFGMEM_PROGRAM_START] =
+        sizeof(struct vrtd_resp_cfgmem_program_start),
+    [VRTD_REQ_CFGMEM_PROGRAM_STATUS] =
+        sizeof(struct vrtd_resp_cfgmem_program_status),
+    [VRTD_REQ_SET_SHELL_STATE] = sizeof(struct vrtd_resp_set_shell_state),
+};
+
+/*
+ * An opcode declared after VRTD_OPCODE_COUNT still answers here, because the
+ * table is keyed on the name, but it falls outside every walk the count bounds
+ * and so goes unchecked.  Indexing by the opcode makes the table outgrow the
+ * count, so that mistake fails the build rather than passing the suite.
+ */
+static_assert(sizeof(response_sizes) / sizeof(response_sizes[0]) ==
+                  VRTD_OPCODE_COUNT,
+              "declare new opcodes above VRTD_OPCODE_COUNT");
+
 bool vrtd_response_expected_size(uint16_t opcode, size_t *expected_size)
 {
-    if (expected_size == NULL)
+    if (expected_size == NULL || opcode >= VRTD_OPCODE_COUNT ||
+        response_sizes[opcode] == 0)
         return false;
 
-    switch (opcode) {
-    case VRTD_REQ_GET_NUM_DEVICES:
-        *expected_size = sizeof(struct vrtd_resp_get_num_devices);
-        break;
-    case VRTD_REQ_GET_DEVICE_INFO:
-        *expected_size = sizeof(struct vrtd_resp_get_device_info);
-        break;
-    case VRTD_REQ_GET_DEVICE_BY_BDF:
-        *expected_size = sizeof(struct vrtd_resp_get_device_by_bdf);
-        break;
-    case VRTD_REQ_GET_BAR_INFO:
-        *expected_size = sizeof(struct vrtd_resp_get_bar_info);
-        break;
-    case VRTD_REQ_GET_BAR_FD:
-        *expected_size = sizeof(struct vrtd_resp_get_bar_fd);
-        break;
-    case VRTD_REQ_QDMA_GET_INFO:
-        *expected_size = sizeof(struct vrtd_resp_qdma_get_info);
-        break;
-    case VRTD_REQ_QDMA_QPAIR_ADD:
-        *expected_size = sizeof(struct vrtd_resp_qdma_qpair_add);
-        break;
-    case VRTD_REQ_QDMA_QPAIR_OP:
-        *expected_size = sizeof(struct vrtd_resp_qdma_qpair_op);
-        break;
-    case VRTD_REQ_QDMA_QPAIR_GET_FD:
-        *expected_size = sizeof(struct vrtd_resp_qdma_qpair_get_fd);
-        break;
-    case VRTD_REQ_BUFFER_OPEN:
-        *expected_size = sizeof(struct vrtd_resp_buffer_open);
-        break;
-    case VRTD_REQ_BUFFER_CLOSE:
-        *expected_size = sizeof(struct vrtd_resp_buffer_close);
-        break;
-    case VRTD_REQ_BUFFER_OPEN_RAW:
-        *expected_size = sizeof(struct vrtd_resp_buffer_open_raw);
-        break;
-    case VRTD_REQ_DESIGN_WRITE:
-        *expected_size = sizeof(struct vrtd_resp_design_write);
-        break;
-    case VRTD_REQ_CFGMEM_PROGRAM:
-        *expected_size = sizeof(struct vrtd_resp_cfgmem_program);
-        break;
-    case VRTD_REQ_CFGMEM_PROGRAM_START:
-        *expected_size = sizeof(struct vrtd_resp_cfgmem_program_start);
-        break;
-    case VRTD_REQ_CFGMEM_PROGRAM_STATUS:
-        *expected_size = sizeof(struct vrtd_resp_cfgmem_program_status);
-        break;
-    case VRTD_REQ_DEVICE_HOTPLUG_OP:
-        *expected_size = sizeof(struct vrtd_resp_device_hotplug_op);
-        break;
-    case VRTD_REQ_CLOCK_OP:
-        *expected_size = sizeof(struct vrtd_resp_clock_op);
-        break;
-    case VRTD_REQ_GET_SENSOR_INFO:
-        *expected_size = SIZE_MAX;
-        break;
-    case VRTD_REQ_SET_SHELL_STATE:
-        *expected_size = sizeof(struct vrtd_resp_set_shell_state);
-        break;
-    default:
-        return false;
-    }
-
+    *expected_size = response_sizes[opcode];
     return true;
 }
