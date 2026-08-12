@@ -218,7 +218,7 @@ def _copy_rp1_sources_to_aved(aved_dir: Path) -> None:
     _copy_rp1_resource_tree(rp1_resources, rp1_dest_dir)
 
 
-def _add_init_files(path: Path):
+def _add_init_files(path: Path) -> None:
     """Make every installed artifact directory importable as package data."""
     (path / "__init__.py").touch()
     for sub_path in path.iterdir():
@@ -302,7 +302,7 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
         raise FileNotFoundError(
             f"Expected AVED nofpt PDI not found: {aved_nofpt_pdi}")
 
-    logger.info("AVED firmware build complete. Generated %s", aved_pdi)
+    logger.info("AVED fallback complete. Generated %s", aved_pdi)
     return aved_pdi, aved_nofpt_pdi
 
 

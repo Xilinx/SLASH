@@ -32,16 +32,22 @@ VADD_OUT_OFFSET  = 0x20
 VADD_SIZE_OFFSET = 0x28
 
 
+def read_int32(buffer, index):
+    """Read an int32 element, returning zero for missing or partial data."""
+    byte_index = index * 4
+    if byte_index + 4 > len(buffer):
+        return 0
+    return struct.unpack_from("<i", buffer, byte_index)[0]
+
+
 def run_vadd(buffers, in1_key, in2_key, out_key, size):
     """Add two int32 buffers and store the result."""
-    in1_bytes = buffers.get(in1_key, b"\x00" * (size * 4))
-    in2_bytes = buffers.get(in2_key, b"\x00" * (size * 4))
-
-    n = min(size, len(in1_bytes) // 4, len(in2_bytes) // 4)
-    in1 = struct.unpack_from(f"<{n}i", in1_bytes)
-    in2 = struct.unpack_from(f"<{n}i", in2_bytes)
+    in1_bytes = buffers.get(in1_key, b"")
+    in2_bytes = buffers.get(in2_key, b"")
+    in1 = [read_int32(in1_bytes, index) for index in range(size)]
+    in2 = [read_int32(in2_bytes, index) for index in range(size)]
     out = [a + b for a, b in zip(in1, in2)]
-    buffers[out_key] = struct.pack(f"<{n}i", *out)
+    buffers[out_key] = struct.pack(f"<{size}i", *out)
 
 
 def reconstruct_64bit(registers, base, offset):
@@ -52,8 +58,10 @@ def reconstruct_64bit(registers, base, offset):
 
 
 def main():
+    """Serve the VRT emulation and simulation test protocol."""
     context = zmq.Context()
     socket = context.socket(zmq.REP)
+    socket.setsockopt(zmq.LINGER, 0)
     socket.bind("tcp://*:5555")
 
     buffers = {}
@@ -105,9 +113,15 @@ def main():
                     size = message.get("size", 0)
                     data = [0] * size
                 socket.send_string(json.dumps(data))
+            elif "addr" in message:
+                val = registers.get(int(message["addr"]), 0)
+                socket.send_string(json.dumps(val))
+            elif message.get("function") == "vadd" and message.get("arg") == "size":
+                val = registers.get(VADD_BASE + VADD_SIZE_OFFSET, 0)
+                socket.send_string(json.dumps(val))
             else:
-                address = int(message.get("addr", message.get("name", "")))
-                val = registers.get(address, 0)
+                address = message.get("name")
+                val = registers.get(int(address), 0) if address else 0
                 socket.send_string(json.dumps(val))
 
         elif command == "read_register":

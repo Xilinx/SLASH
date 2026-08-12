@@ -86,14 +86,11 @@ static int slash_hotplug_copy_request(unsigned long arg, struct slash_hotplug_de
     pr_debug("slash_hotplug: copy_request: size=%u bdf='%.*s'\n",
              req->size, (int)(SLASH_HOTPLUG_BDF_LEN - 1), req->bdf);
 
-    if (req->size && req->size < sizeof(*req)) {
+    if (req->size < sizeof(*req)) {
         pr_err("slash_hotplug: request size %u too small (expected %zu)\n",
                req->size, sizeof(*req));
         return -EINVAL;
     }
-
-    if (!req->size)
-        req->size = sizeof(*req);
 
     /* Defend against unterminated strings from userspace. */
     req->bdf[SLASH_HOTPLUG_BDF_LEN - 1] = '\0';

@@ -621,20 +621,9 @@ TEST_F(hotplug, toggle_sbr_no_upstream_bridge)
  * ABI size-versioning tests
  *
  * REMOVE, TOGGLE_SBR, and HOTPLUG share slash_hotplug_copy_request,
- * which accepts size zero for legacy callers and rejects nonzero sizes below
- * sizeof(struct) with -EINVAL. Non-destructive: no real device is touched.
+ * which rejects any size < sizeof(struct) with -EINVAL. Non-destructive:
+ * no real device is touched.
  * ==================================================================== */
-
-TEST_F(hotplug, zero_size_uses_legacy_request_layout)
-{
-	struct slash_hotplug_device_request req;
-
-	memset(&req, 0, sizeof(req));
-	strncpy(req.bdf, "ffff:ff:1f.7", sizeof(req.bdf) - 1);
-
-	EXPECT_EQ(-1, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE, &req));
-	EXPECT_EQ(ENODEV, errno);
-}
 
 TEST_F(hotplug, remove_size_below_struct_returns_einval)
 {
