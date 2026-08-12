@@ -63,9 +63,6 @@ endif()
 # --- Stub VBIN generation ---
 set(STUB_VBIN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stub_vbin)
 
-add_executable(vrt_stub_server fixtures/stub_vbin/vrt_stub_server.cpp)
-target_link_libraries(vrt_stub_server PRIVATE JsonCpp::JsonCpp PkgConfig::PC_ZMQ)
-
 set(STUB_EMU_VBIN ${CMAKE_CURRENT_BINARY_DIR}/stub_emu.vbin)
 add_custom_command(
   OUTPUT ${STUB_EMU_VBIN}
@@ -78,16 +75,15 @@ add_custom_command(
     ${STUB_VBIN_DIR}/emu_manifest.json
     ${CMAKE_CURRENT_BINARY_DIR}/stub_emu_staging/emu_manifest.json
   COMMAND ${CMAKE_COMMAND} -E copy
-    $<TARGET_FILE:vrt_stub_server>
+    ${STUB_VBIN_DIR}/vrt_stub_server.py
     ${CMAKE_CURRENT_BINARY_DIR}/stub_emu_staging/vpp_emu
   COMMAND chmod +x ${CMAKE_CURRENT_BINARY_DIR}/stub_emu_staging/vpp_emu
   COMMAND tar cf ${STUB_EMU_VBIN}
     -C ${CMAKE_CURRENT_BINARY_DIR}/stub_emu_staging .
   DEPENDS
-    vrt_stub_server
     ${STUB_VBIN_DIR}/system_map_emu.xml
     ${STUB_VBIN_DIR}/emu_manifest.json
-    ${STUB_VBIN_DIR}/vrt_stub_server.cpp
+    ${STUB_VBIN_DIR}/vrt_stub_server.py
   COMMENT "Creating emulation stub VBIN"
 )
 
@@ -100,15 +96,14 @@ add_custom_command(
     ${STUB_VBIN_DIR}/system_map_sim.xml
     ${CMAKE_CURRENT_BINARY_DIR}/stub_sim_staging/system_map.xml
   COMMAND ${CMAKE_COMMAND} -E copy
-    $<TARGET_FILE:vrt_stub_server>
+    ${STUB_VBIN_DIR}/vrt_stub_server.py
     ${CMAKE_CURRENT_BINARY_DIR}/stub_sim_staging/vpp_sim
   COMMAND chmod +x ${CMAKE_CURRENT_BINARY_DIR}/stub_sim_staging/vpp_sim
   COMMAND tar cf ${STUB_SIM_VBIN}
     -C ${CMAKE_CURRENT_BINARY_DIR}/stub_sim_staging .
   DEPENDS
-    vrt_stub_server
     ${STUB_VBIN_DIR}/system_map_sim.xml
-    ${STUB_VBIN_DIR}/vrt_stub_server.cpp
+    ${STUB_VBIN_DIR}/vrt_stub_server.py
   COMMENT "Creating simulation stub VBIN"
 )
 
