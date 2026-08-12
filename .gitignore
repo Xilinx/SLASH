@@ -70,6 +70,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Kernel module kcompat probe scratch (driver/kcompat/probe.sh)
+driver/kcompat/.scratch/
+
 # Build files for package
 /pbuild/
 /rpmbuild/
@@ -97,16 +100,11 @@ __pycache__/
 # Generated graph/render demo artifacts
 /render_demo_out/
 
-# Project-local scratch directory
+# Project-local scratch space
 /tmp/
-
-# Personal/HSA-iteration scripts (not part of the released stack)
-/scripts/hsa/
+tmp/
 **/build-host/
 
 # Claude Code files
 /CLAUDE.md
 /.claude/
-
-# Kernel compatibility probe scratch files
-/driver/kcompat/.scratch/

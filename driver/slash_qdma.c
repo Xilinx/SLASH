@@ -67,6 +67,7 @@
 #include <linux/pci.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
+#include <linux/stddef.h>
 #include <linux/uaccess.h>
 #include <linux/xarray.h>
 #include <linux/anon_inodes.h>
@@ -2750,6 +2751,7 @@ static int slash_qdma_ioctl_buf_create_w(struct slash_qdma_dev *qdma_dev,
 
     return fd;
 }
+
 /**
  * struct slash_qdma_xfer_req - Runtime state for one sub-transfer submission.
  * @qreq:           libqdma request (built by slash_qdma_xfer_prep()).

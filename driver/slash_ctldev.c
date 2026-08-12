@@ -34,7 +34,6 @@
 
 #include "slash_ctldev.h"
 
-#include <linux/atomic.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/minmax.h>
@@ -42,7 +41,6 @@
 #include <linux/stddef.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
-#include <linux/version.h>
 
 #include "slash.h"
 #include "slash_chrdev.h"
@@ -68,8 +66,16 @@
 #define SLASH_IOCTL_BAR_FD_RESPONSE_SIZE \
     (offsetof(struct slash_ioctl_bar_fd_request, length) + SLASH_FIELD_SIZE(struct slash_ioctl_bar_fd_request, length))
 
+/*
+ * GET_DEVICE_INFO is pure output: there are no input fields beyond `size`
+ * itself, so the smallest meaningful user_size is the size field on its
+ * own. A caller passing size==0 has either forgotten to initialise the
+ * struct or claimed an incoherent "my struct has zero bytes" — either way
+ * the kernel rejects with -EINVAL rather than silently writing 0 bytes
+ * back.
+ */
 #define SLASH_IOCTL_DEVICE_INFO_MIN_SIZE \
-    (offsetof(struct slash_ioctl_device_info, size) + SLASH_FIELD_SIZE(struct slash_ioctl_device_info, size))
+    SLASH_FIELD_SIZE(struct slash_ioctl_device_info, size)
 
 static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *ctldev);
 static int slash_ctldev_create_bar_dmabufs(struct slash_ctldev *ctldev);
@@ -187,6 +193,7 @@ static int slash_ctldev_set_bar_info(struct pci_dev *pdev, struct slash_ctldev *
         ctldev->bars[i].len    = pci_resource_len(pdev, i);
         flags                  = pci_resource_flags(pdev, i);
         ctldev->bars[i].mmio   = ((flags & IORESOURCE_MEM) != 0);
+
 
         dev_info(&pdev->dev,
                 "Found BAR%d: 0x%pa - 0x%pa (size: %pa) %s\n",
@@ -560,9 +567,7 @@ static long slash_ctldev_ioctl(struct slash_ctldev *ctldev, unsigned int op,
         }
 
         if (user_size < SLASH_IOCTL_DEVICE_INFO_MIN_SIZE) {
-            dev_warn(&pdev->dev,
-                     "ctldev: SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO size too small (%u)\n",
-                     user_size);
+            dev_warn(&pdev->dev, "ctldev: SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO size too small (%u)\n", user_size);
             return -EINVAL;
         }
 

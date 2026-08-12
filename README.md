@@ -268,6 +268,7 @@ This ensures the buffer allocation always matches the linker configuration.
 | 03 | Controlling multiple V80s | Uses vrtbin from example 00 |
 | 04 | Frequency targets | |
 | 05 | Memory performance test | Instantiates maximum number of kernels |
+| 06 | Network interface test | Drives two network interfaces |
 
 [`examples/graph/`](examples/graph/) has a separate set of `vrt::graph` API
 examples (CPU+FPGA graphs, loops, conditionals, multi-image reprogramming).

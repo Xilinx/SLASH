@@ -14,7 +14,7 @@ hardware, write the static shell, and validate memory integrity and bandwidth.
 | `reset`    | Hardware-reset a V80 board                        |
 | `write-static-shell` | Write the static SLASH shell to a V80 board |
 | `validate` | Reset board and test memory integrity + bandwidth |
-| `debug`    | Low-level BAR, memory, clock, and RP1 debug utilities |
+| `debug`    | Low-level BAR, memory, clock, hotplug, and RP1 debug utilities |
 
 ## Building
 
