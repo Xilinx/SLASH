@@ -171,6 +171,7 @@ OUTPUT=$(timeout 10 "${QEMU_BIN}" \
     -serial null \
     -display none \
     -nographic \
+    -monitor none \
     -m 4096 \
     -hw-dtb "${DT_FILE}" \
     -device loader,file="${ELF}",cpu-num=${R5_CPU_NUM} \
@@ -186,7 +187,7 @@ OUTPUT=$(timeout 10 "${QEMU_BIN}" \
     # Non-zero exit from semihosting SYS_EXIT is normal; check output below.
 }
 
-# Strip QEMU monitor prompt and banner from output
+# Normalize output from older QEMU builds that still emit monitor text.
 OUTPUT=$(echo "${OUTPUT}" | sed 's/^(qemu) //' | grep -v '^QEMU .* monitor')
 
 echo "${OUTPUT}"

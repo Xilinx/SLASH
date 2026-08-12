@@ -30,8 +30,8 @@
  * The duplicated rodata across TUs is a handful of bytes.
  * ---------------------------------------------------------------------- */
 
-#define SEMI_SYS_WRITE0  0x04
-#define SEMI_SYS_EXIT    0x18
+#define SEMI_SYS_WRITE0         0x04
+#define SEMI_SYS_EXIT_EXTENDED  0x20
 
 static inline int semi_call(int op, void *arg)
 {
@@ -49,7 +49,7 @@ static inline void semi_puts(const char *s)
 static inline void semi_exit(int code)
 {
     uint32_t args[2] = { 0x20026, (uint32_t)code };
-    semi_call(SEMI_SYS_EXIT, args);
+    semi_call(SEMI_SYS_EXIT_EXTENDED, args);
 }
 
 static inline void semi_print_u32(uint32_t v)
