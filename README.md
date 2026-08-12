@@ -116,10 +116,18 @@ sudo apt install cmake pkg-config ninja-build \
 
 **Submodules:**
 
-SLASH depends on [AVED](https://github.com/Xilinx/AVED) and [QDMA](https://github.com/Xilinx/dma_ip_drivers):
+SLASH depends on [AVED](https://github.com/Xilinx/AVED) and
+[QDMA](https://github.com/Xilinx/dma_ip_drivers):
 
 ```bash
-git submodule update --init --recursive
+git submodule update --init submodules/AVED submodules/qdma_drv
+```
+
+The optional RP1 firmware test additionally requires Xilinx QEMU and its
+device trees:
+
+```bash
+git submodule update --init submodules/xilinx-qemu submodules/qemu-devicetrees
 ```
 
 ## Quick Start

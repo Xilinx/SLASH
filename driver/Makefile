@@ -190,7 +190,7 @@ libqdma-patches:
 	else lq="$(PWD)/$(LIBQDMA_FALLBACK)"; fi; \
 	if [ ! -d "$$lq" ]; then \
 		echo "slash: ERROR libqdma sources not found at $$lq" >&2; \
-		echo "slash:       run 'git submodule update --init --recursive' first" >&2; \
+		echo "slash:       run 'git submodule update --init submodules/qdma_drv' first" >&2; \
 		exit 1; \
 	fi; \
 	command -v patch >/dev/null 2>&1 || { \
