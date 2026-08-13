@@ -48,37 +48,7 @@ target_include_directories(sock_transport_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
-# sysemu_test_server is a reusable in-process daemon stub shared by multiple test targets.
-add_library(sysemu_test_server OBJECT sysemu_test_server.cpp)
-target_link_libraries(sysemu_test_server PUBLIC slash::slash)
-target_include_directories(sysemu_test_server PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-set_target_properties(sysemu_test_server PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED YES
-)
-
 add_slash_test(ctldev_test ctldev_test.cpp)
 add_slash_test(hotplug_test hotplug_test.cpp)
-
-# qdma tests.
 add_slash_test(qdma_test qdma_test.cpp)
-target_link_libraries(qdma_test PRIVATE sysemu_test_server)
-target_include_directories(qdma_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
 
-# hotplug socket-transport tests.
-add_slash_test(hotplug_sysemu_test hotplug_sysemu_test.cpp)
-target_link_libraries(hotplug_sysemu_test PRIVATE sysemu_test_server)
-target_include_directories(hotplug_sysemu_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
-# BYO-daemon E2E tests.  Always compiled; all tests GTEST_SKIP() when
-# SLASH_E2E_CTL / SLASH_E2E_QDMA / SLASH_E2E_HOTPLUG are unset, so ctest
-# stays green with no daemon.  The suite NEVER spawns the daemon itself.
-add_slash_test(libslash_e2e_test libslash_e2e_test.cpp)

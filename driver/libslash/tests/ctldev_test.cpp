@@ -32,10 +32,6 @@ extern "C" {
 }
 
 static constexpr uint64_t MOCK_BAR_SIZE = 64ULL * 1024ULL * 1024ULL;
-static constexpr const char *DRIVER_CTLDEV_PATH = "/dev/slash_ctl0";
-static constexpr const char *SYSEMU_CTLDEV_PATH =
-    "/run/slash_sysemu/slash_ctl0";
-static constexpr const char *MOCK_CTLDEV_PATH = "@mock";
 
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
 
@@ -113,21 +109,21 @@ class CtldevTest : public ::testing::TestWithParam<LibSlashBackend> {
         backend = GetParam();
         switch (backend) {
         case LibSlashBackend::DRIVER:
-            dev_ = slash_ctldev_open(DRIVER_CTLDEV_PATH);
+            dev_ = slash_ctldev_open(SLASH_DRIVER_CTLDEV_PATH);
             if (!dev_) {
-                GTEST_SKIP() << DRIVER_CTLDEV_PATH << " not available ("
+                GTEST_SKIP() << SLASH_DRIVER_CTLDEV_PATH << " not available ("
                              << strerror(errno) << ")";
             }
             break;
         case LibSlashBackend::SYSEMU:
-            dev_ = slash_ctldev_open(SYSEMU_CTLDEV_PATH);
+            dev_ = slash_ctldev_open(SLASH_SYSEMU_CTLDEV_PATH);
             if (!dev_) {
-                GTEST_SKIP() << SYSEMU_CTLDEV_PATH << " not available ("
+                GTEST_SKIP() << SLASH_SYSEMU_CTLDEV_PATH << " not available ("
                              << strerror(errno) << ")";
             }
             break;
         case LibSlashBackend::MOCK:
-            dev_ = slash_ctldev_open(MOCK_CTLDEV_PATH);
+            dev_ = slash_ctldev_open("@mock");
             if (!dev_) {
                 GTEST_FAIL()
                     << "Mock support not available (" << strerror(errno) << ")";

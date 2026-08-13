@@ -88,7 +88,7 @@ struct slash_ioctl_bar_info {
 #define SLASH_IOCTL_BAR_INFO_MIN_SIZE \
     offsetof(struct slash_ioctl_bar_info, usable)
 #define SLASH_IOCTL_BAR_INFO_RESPONSE_SIZE \
-    sizeof(slash_ioctl_bar_info)
+    sizeof(struct slash_ioctl_bar_info)
 
 /**
  * @brief Obtain a file descriptor for a BAR.

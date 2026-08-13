@@ -28,3 +28,15 @@ enum class LibSlashBackend {
     SYSEMU,
     MOCK,
 };
+
+static constexpr const char *SLASH_DRIVER_HOTPLUG_PATH = "/dev/slash_hotplug";
+static constexpr const char *SLASH_SYSEMU_HOTPLUG_PATH = "/run/slash_sysemu/slash_hotplug";
+static constexpr const char *SLASH_DRIVER_CTLDEV_PATH = "/dev/slash_ctl0";
+static constexpr const char *SLASH_SYSEMU_CTLDEV_PATH =
+    "/run/slash_sysemu/slash_ctl0";
+static constexpr const char *SLASH_DRIVER_QDMA_PATH = "/dev/slash_qdma_ctl0";
+static constexpr const char *SLASH_SYSEMU_QDMA_PATH =
+    "/run/slash_sysemu/slash_qdma_ctl0";
+ 
+static constexpr uint64_t DDR_BASE_ADDRESS = 0x60000000000ULL;
+static constexpr uint64_t HBM_BASE_ADDRESS = 0x4000000000ULL;
