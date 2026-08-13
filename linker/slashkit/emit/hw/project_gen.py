@@ -52,7 +52,6 @@ _RP1_REQUIRED_RESOURCES = (
     "config/rp1_platform_config.h.in",
     "include/slash/uapi/rp1_protocol.h",
     "tools/generate_platform_config.py",
-    "tools/generate_r5_bsp.tcl",
 )
 
 

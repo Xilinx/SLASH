@@ -21,6 +21,28 @@ BSP_TEXT = """
 #define XPAR_CPU_CORTEXR5_0_CPU_CLK_FREQ_HZ 600000000U
 """
 
+# Empyro emits IPI properties under source-scoped channel names and leaves the
+# selected processor frequency in the generated SDT overlay.
+EMPYRO_BSP_TEXT = """
+#define XPAR_XIPIPSU_NUM_INSTANCES 2
+#define XPAR_XIPIPSU_0_BASEADDR 0xff380000
+#define XPAR_XIPIPSU_0_IPI_BITMASK 0x80
+#define XPAR_XIPIPSU_0_IPI_BUF_INDEX 0x7
+#define XPAR_XIPIPSU_0_CH0_IPI_BITMASK 0x20
+#define XPAR_XIPIPSU_0_CH0_IPI_BUF_INDEX 0x5
+#define XPAR_XIPIPSU_0_CH4_IPI_BITMASK 0x2
+#define XPAR_XIPIPSU_0_CH4_IPI_BUF_INDEX 0x1
+#define XPAR_XIPIPSU_1_BASEADDR 0xff3a0000
+#define XPAR_XIPIPSU_1_IPI_BITMASK 0x200
+#define XPAR_XIPIPSU_1_IPI_BUF_INDEX 0xffff
+"""
+
+EMPYRO_SDT_TEXT = """
+&psv_cortexr5_1 {
+    xlnx,cpu-clk-freq-hz = <800000000>;
+};
+"""
+
 
 def test_rp1_platform_config_is_derived_from_bsp(tmp_path):
     rp1_root = resources.files("slashkit.resources.aved").joinpath("rp1")
@@ -58,6 +80,48 @@ def test_rp1_platform_config_is_derived_from_bsp(tmp_path):
     assert "RP1_PDI_IPI_RESPONSE_BASE     0xFF3F0E60u" in generated
     assert "RP1_PDI_IPI_TRIGGER_REG       0xFF380000u" in generated
     assert "RP1_PDI_IPI_OBSERVATION_REG   0xFF380004u" in generated
+
+
+def test_rp1_platform_config_is_derived_from_empyro_metadata(tmp_path):
+    """Empyro BSP and SDT spellings produce the same physical contract."""
+    rp1_root = resources.files("slashkit.resources.aved").joinpath("rp1")
+    metadata = tmp_path / "metadata"
+    xparameters = metadata / "rp1_bsp" / "include" / "xparameters.h"
+    sdt = metadata / "versal_sdt" / "pcw.dtsi"
+    output = tmp_path / "rp1_platform_config.h"
+    xparameters.parent.mkdir(parents=True)
+    sdt.parent.mkdir(parents=True)
+    xparameters.write_text(EMPYRO_BSP_TEXT, encoding="utf-8")
+    sdt.write_text(EMPYRO_SDT_TEXT, encoding="utf-8")
+
+    with ExitStack() as stack:
+        generator = stack.enter_context(resources.as_file(
+            rp1_root.joinpath("tools", "generate_platform_config.py")))
+        template = stack.enter_context(resources.as_file(
+            rp1_root.joinpath("config", "rp1_platform_config.h.in")))
+        subprocess.run(
+            [
+                sys.executable,
+                str(generator),
+                "--bsp-metadata",
+                str(metadata),
+                "--template",
+                str(template),
+                "--output",
+                str(output),
+            ],
+            check=True,
+        )
+
+    generated = output.read_text(encoding="utf-8")
+    assert "RP1_R5_FREQ_HZ                800000000u" in generated
+    assert "RP1_PDI_IPI_SOURCE_BASE       0xFF380000u" in generated
+    assert "RP1_PDI_IPI_SOURCE_MASK       0x00000080u" in generated
+    assert "RP1_PDI_IPI_SOURCE_BUF_INDEX  0x00000007u" in generated
+    assert "RP1_PDI_IPI_TARGET_MASK       0x00000002u" in generated
+    assert "RP1_PDI_IPI_TARGET_BUF_INDEX  0x00000001u" in generated
+    assert "RP1_PDI_IPI_REQUEST_BASE      0xFF3F0E40u" in generated
+    assert "RP1_PDI_IPI_RESPONSE_BASE     0xFF3F0E60u" in generated
 
 
 def test_rp1_platform_config_accepts_identical_exported_bsp_copies(tmp_path):

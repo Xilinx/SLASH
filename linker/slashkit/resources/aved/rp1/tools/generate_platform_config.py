@@ -14,6 +14,8 @@ from pathlib import Path
 DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)\s+(.+?)\s*$")
 IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
 INTEGER_RE = re.compile(r"^(0[xX][0-9A-Fa-f]+|\d+)(?:[uUlL]+)?$")
+PMC_IPI_TARGET_MASK = 0x2
+PMC_IPI_TARGET_BUFFER_INDEX = 1
 
 
 class MetadataError(RuntimeError):
@@ -50,6 +52,15 @@ def resolve(defines: dict[str, str], name: str, seen: set[str] | None = None) ->
     raise MetadataError(f"{name} has unsupported value {defines[name]!r}")
 
 
+def resolve_any(defines: dict[str, str], names: tuple[str, ...]) -> int:
+    """Resolve the first available spelling of one generated BSP property."""
+    for name in names:
+        if name in defines:
+            return resolve(defines, name)
+    raise MetadataError(
+        f"missing BSP macro; expected one of {', '.join(names)}")
+
+
 # Vitis may mirror one generated header through several export directories.
 # Accept multiple candidates only when byte-identical; different contents mean
 # processor ownership is ambiguous and choosing the shortest path is unsafe.
@@ -57,10 +68,7 @@ def find_xparameters(root: Path) -> Path:
     candidates: list[Path] = []
     for path in root.rglob("xparameters.h"):
         defines = parse_defines(path)
-        if "XPAR_XIPIPSU_NUM_INSTANCES" in defines and any(
-            "CPU_CLK_FREQ_HZ" in name and "CORTEXR5" in name
-            for name in defines
-        ):
+        if "XPAR_XIPIPSU_NUM_INSTANCES" in defines:
             candidates.append(path)
     if len(candidates) > 1:
         contents = {
@@ -88,12 +96,12 @@ def source_instance(
     instances: list[tuple[int, int, int, int]] = []
     for index in range(count):
         prefix = f"XPAR_XIPIPSU_{index}"
-        try:
-            base = resolve(defines, f"{prefix}_BASE_ADDRESS")
-        except MetadataError:
-            base = resolve(defines, f"{prefix}_BASEADDR")
-        mask = resolve(defines, f"{prefix}_BIT_MASK")
-        buffer_index = resolve(defines, f"{prefix}_BUFFER_INDEX")
+        base = resolve_any(
+            defines, (f"{prefix}_BASE_ADDRESS", f"{prefix}_BASEADDR"))
+        mask = resolve_any(
+            defines, (f"{prefix}_BIT_MASK", f"{prefix}_IPI_BITMASK"))
+        buffer_index = resolve_any(
+            defines, (f"{prefix}_BUFFER_INDEX", f"{prefix}_IPI_BUF_INDEX"))
         if buffer_index <= 7:
             instances.append((index, base, mask, buffer_index))
 
@@ -111,43 +119,79 @@ def source_instance(
 
 # Resolve the PMC channel in two independent views: its target mask names the
 # trigger bit, while the matching buffered index names its message-RAM column.
-# Requiring both to be unique catches incomplete or mixed BSP metadata.
-def pmc_target(defines: dict[str, str]) -> tuple[int, int]:
+# XSCT emits semantic PMC aliases; Empyro emits source-scoped channel fields,
+# where the Versal PMC agent has its architected mask/index pair.
+def pmc_target(defines: dict[str, str], source_index: int) -> tuple[int, int]:
     target_names = [
         name
         for name in defines
         if re.fullmatch(r"XPAR_XIPIPS_TARGET_.*PMC_0_CH0_MASK", name)
     ]
     target_masks = {resolve(defines, name) for name in target_names}
-    if len(target_masks) != 1:
-        rendered = ", ".join(target_names) or "none"
-        raise MetadataError(
-            "could not identify one buffered PMC channel-0 target mask; "
-            f"candidates: {rendered}"
-        )
-    target_mask = target_masks.pop()
+    if len(target_masks) == 1:
+        target_mask = target_masks.pop()
+        target_indices: set[int] = set()
+        for name in defines:
+            if not name.endswith("_BUFFER_INDEX") or "PMC" not in name:
+                continue
+            if "NOBUF" in name:
+                continue
+            peer = name[: -len("_BUFFER_INDEX")] + "_BIT_MASK"
+            if peer not in defines:
+                continue
+            index = resolve(defines, name)
+            if index <= 7 and resolve(defines, peer) == target_mask:
+                target_indices.add(index)
+        if len(target_indices) == 1:
+            return target_mask, target_indices.pop()
 
-    target_indices: set[int] = set()
+    prefix = f"XPAR_XIPIPSU_{source_index}_CH"
+    empyro_targets: set[tuple[int, int]] = set()
     for name in defines:
-        if not name.endswith("_BUFFER_INDEX") or "PMC" not in name:
+        if not name.startswith(prefix) or not name.endswith("_IPI_BITMASK"):
             continue
-        if "NOBUF" in name:
+        index_name = name[: -len("_IPI_BITMASK")] + "_IPI_BUF_INDEX"
+        if index_name not in defines:
             continue
-        peer = name[: -len("_BUFFER_INDEX")] + "_BIT_MASK"
-        if peer not in defines:
-            continue
-        index = resolve(defines, name)
-        if index <= 7 and resolve(defines, peer) == target_mask:
-            target_indices.add(index)
-    if len(target_indices) != 1:
+        target = (resolve(defines, name), resolve(defines, index_name))
+        if target == (PMC_IPI_TARGET_MASK, PMC_IPI_TARGET_BUFFER_INDEX):
+            empyro_targets.add(target)
+    if len(empyro_targets) == 1:
+        return empyro_targets.pop()
+
+    rendered = ", ".join(target_names) or "none"
+    raise MetadataError(
+        "could not identify one buffered PMC channel; "
+        f"semantic candidates: {rendered}"
+    )
+
+
+def sdt_r5_frequency(root: Path, processor: str) -> int:
+    """Return the processor clock generated into the platform's SDT overlay."""
+    node_re = re.compile(
+        rf"&{re.escape(processor)}\s*\{{(?P<body>.*?)\}};", re.DOTALL)
+    clock_re = re.compile(
+        r"xlnx,cpu-clk-freq-hz\s*=\s*<\s*(0[xX][0-9A-Fa-f]+|\d+)\s*>;"
+    )
+    values: set[int] = set()
+    for path in root.rglob("*.dts*"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for node in node_re.finditer(text):
+            clock = clock_re.search(node.group("body"))
+            if clock:
+                values.add(int(clock.group(1), 0))
+    if len(values) != 1:
         raise MetadataError(
-            "could not identify one buffered PMC target buffer index "
-            f"for mask 0x{target_mask:08X}"
-        )
-    return target_mask, target_indices.pop()
+            f"could not derive one {processor} frequency from SDT metadata")
+    return values.pop()
 
 
-def r5_frequency(defines: dict[str, str], override: int | None) -> int:
+def r5_frequency(
+    defines: dict[str, str],
+    override: int | None,
+    metadata_root: Path | None,
+    processor: str,
+) -> int:
     if override is not None:
         return override
     values = {
@@ -155,12 +199,14 @@ def r5_frequency(defines: dict[str, str], override: int | None) -> int:
         for name in defines
         if "CORTEXR5" in name and name.endswith("_CPU_CLK_FREQ_HZ")
     }
-    if len(values) != 1:
-        raise MetadataError(
-            "could not derive one Cortex-R5 CPU frequency; "
-            "pass --r5-frequency only for BSPs lacking the canonical macro"
-        )
-    return values.pop()
+    if len(values) == 1:
+        return values.pop()
+    if metadata_root is not None:
+        return sdt_r5_frequency(metadata_root, processor)
+    raise MetadataError(
+        "could not derive one Cortex-R5 CPU frequency; "
+        "pass --r5-frequency only for BSPs lacking generated SDT metadata"
+    )
 
 
 def message_ram_base(source_base: int, override: int | None) -> int:
@@ -222,11 +268,12 @@ def main() -> int:
         else find_xparameters(args.bsp_metadata)
     )
     defines = parse_defines(xparameters)
-    _, source_base, source_mask, source_index = source_instance(
+    source_number, source_base, source_mask, source_index = source_instance(
         defines, args.source_instance
     )
-    target_mask, target_index = pmc_target(defines)
-    frequency = r5_frequency(defines, args.r5_frequency)
+    target_mask, target_index = pmc_target(defines, source_number)
+    frequency = r5_frequency(
+        defines, args.r5_frequency, args.bsp_metadata, args.processor)
     message_base = message_ram_base(source_base, args.message_ram_base)
 
     if source_mask == 0 or target_mask == 0 or frequency == 0:

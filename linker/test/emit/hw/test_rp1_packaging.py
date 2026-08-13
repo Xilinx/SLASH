@@ -62,10 +62,13 @@ def test_rp1_package_resources_stage_without_generated_dirs(tmp_path):
         "config/rp1_platform_config.h.in",
         "include/slash/uapi/rp1_protocol.h",
         "tools/generate_platform_config.py",
-        "tools/generate_r5_bsp.tcl",
     )
     assert all(root.joinpath(*name.split("/")).is_file()
                for name in required)
+    build_script = root.joinpath("build-rp1.sh").read_text()
+    assert "sdtgen set_dt_param" in build_script
+    assert "empyro create_bsp" in build_script
+    assert "xsct" not in build_script
     _assert_no_generated_dirs(root)
 
     aved_dir = tmp_path / "AVED"

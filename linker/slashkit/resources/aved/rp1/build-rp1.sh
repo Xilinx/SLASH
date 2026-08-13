@@ -36,13 +36,37 @@ if [[ -z $platform_header ]]; then
     if [[ -n ${RP1_BSP_XPARAMETERS:-} ]]; then
         generator_args+=(--xparameters "$RP1_BSP_XPARAMETERS")
     elif [[ -n ${XSA:-} ]]; then
-        if ! command -v xsct >/dev/null 2>&1; then
-            echo "ERROR: xsct is required to derive the R5_1 BSP from XSA=$XSA" >&2
+        bsp_dir="$build_dir/r5-bsp-metadata"
+        sdt_dir="$bsp_dir/versal_sdt"
+        rm -rf "$bsp_dir"
+        mkdir -p "$bsp_dir"
+
+        for tool in sdtgen empyro; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+                echo "ERROR: $tool is required to derive the R5_1 BSP from XSA=$XSA" >&2
+                exit 1
+            fi
+        done
+        if [[ -z ${XILINX_VITIS:-} ]]; then
+            echo "ERROR: XILINX_VITIS must name the sourced Vitis installation" >&2
             exit 1
         fi
-        bsp_dir="$build_dir/r5-bsp-metadata"
-        rm -rf "$bsp_dir"
-        xsct "$root/tools/generate_r5_bsp.tcl" "$XSA" "$bsp_dir"
+
+        # Match AMC's headless SDT/Empyro flow, but select the standalone
+        # domain owned by R5-1 so xparameters.h describes RP1's physical IPI.
+        (
+            cd "$bsp_dir"
+            sdtgen -eval \
+                "sdtgen set_dt_param -xsa {$XSA} -dir {$sdt_dir}; generate_sdt"
+            empyro repo -st "$XILINX_VITIS/data/embeddedsw"
+            empyro create_bsp \
+                -t empty_application \
+                -w rp1_bsp \
+                -s "$sdt_dir/system-top.dts" \
+                -p psv_cortexr5_1 \
+                -o standalone
+            empyro build_bsp -d rp1_bsp
+        )
         generator_args+=(--bsp-metadata "$bsp_dir")
     else
         echo "ERROR: hardware RP1 build needs XSA, RP1_BSP_XPARAMETERS, or" >&2
