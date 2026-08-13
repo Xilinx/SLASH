@@ -1874,9 +1874,14 @@ proc create_root_design { parentCell } {
   set smartconnect_5 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_5 ]
   set_property -dict [list \
     CONFIG.NUM_CLKS {1} \
-    CONFIG.NUM_MI {10} \
+    CONFIG.NUM_MI {11} \
     CONFIG.NUM_SI {1} \
   ] $smartconnect_5
+
+  # Create instance: axi_dbg_hub_0, and set properties
+  # Debug hub: exposes the debug packet network (axis_ila cores) over AXI so the
+  # host debug path (S_AXILITE_INI -> smartconnect_5) can reach the ILAs.
+  set axi_dbg_hub_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dbg_hub:2.0 axi_dbg_hub_0 ]
 
 
   # Create instance: axi_noc_0, and set properties
@@ -2943,6 +2948,7 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net smartconnect_5_M07_AXI [get_bd_intf_pins smartconnect_5/M07_AXI] [get_bd_intf_pins ddr_bandwidth_73/s_axi_control]
   connect_bd_intf_net -intf_net smartconnect_5_M08_AXI [get_bd_intf_pins smartconnect_5/M08_AXI] [get_bd_intf_pins ddr_bandwidth_74/s_axi_control]
   connect_bd_intf_net -intf_net smartconnect_5_M09_AXI [get_bd_intf_pins smartconnect_5/M09_AXI] [get_bd_intf_pins ddr_bandwidth_75/s_axi_control]
+  connect_bd_intf_net -intf_net smartconnect_5_M10_AXI [get_bd_intf_pins smartconnect_5/M10_AXI] [get_bd_intf_pins axi_dbg_hub_0/S_AXI]
   connect_bd_intf_net -intf_net traffic_virt_4_m_axi_gmem0 [get_bd_intf_pins axi_noc_1/S00_AXI] [get_bd_intf_pins traffic_virt_4/m_axi_gmem0]
 
   # Create port connections
@@ -3047,6 +3053,7 @@ proc create_root_design { parentCell } {
   [get_bd_pins smartconnect_3/aclk] \
   [get_bd_pins smartconnect_4/aclk] \
   [get_bd_pins smartconnect_5/aclk] \
+  [get_bd_pins axi_dbg_hub_0/aclk] \
   [get_bd_pins hbm_sc_00/aclk] \
   [get_bd_pins hbm_sc_01/aclk] \
   [get_bd_pins hbm_sc_02/aclk] \
@@ -3137,6 +3144,7 @@ proc create_root_design { parentCell } {
   [get_bd_pins smartconnect_3/aresetn] \
   [get_bd_pins smartconnect_4/aresetn] \
   [get_bd_pins smartconnect_5/aresetn] \
+  [get_bd_pins axi_dbg_hub_0/aresetn] \
   [get_bd_pins ddr_bandwidth_64/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_65/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_66/ap_rst_n] \
@@ -3525,6 +3533,7 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020200080000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_8/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200090000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs hbm_bandwidth_9/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200580000 -range 0x00010000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs traffic_virt_4/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x020200600000 -range 0x00200000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs axi_dbg_hub_0/S_AXI_DBG_HUB/Mem0] -force
 
   set_property USAGE memory [get_bd_addr_segs HBM_AXI_00/Reg]
   set_property USAGE memory [get_bd_addr_segs HBM_AXI_01/Reg]

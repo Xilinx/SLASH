@@ -81,6 +81,7 @@ package_linker:
         slashkit/resources/static_shell_compute/amd_v80_gen5x8_25.1.pdi \
         slashkit/resources/static_shell_compute/amd_v80_gen5x8_25.1_nofpt.pdi \
         slashkit/resources/static_shell_compute/static_shell_slash.dcp \
+        slashkit/resources/static_shell_compute/debug_nets.ltx \
         slashkit/resources/static_shell_compute/slash_base/slash_base.bd
       do
         test -e "$path"

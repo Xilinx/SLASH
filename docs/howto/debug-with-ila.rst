@@ -37,7 +37,10 @@ loaded in order — the full (base) file first, then the partial (user-region) f
 Full probe file (base shell)
    ``debug_nets.ltx`` describes the static shell's debug network. It is generated
    once when the static shell is built and ships inside the installed ``slashkit``
-   package at ``slashkit/resources/static_shell/debug_nets.ltx``.
+   package. Both static shells instantiate the debug hub, so pick the file matching
+   the shell you built against — ``slashkit/resources/static_shell/debug_nets.ltx``
+   for the service shell, ``slashkit/resources/static_shell_compute/debug_nets.ltx``
+   for the compute shell.
 
 Partial probe file (user region)
    ``top_i_slash_slash_<project>_inst_0_hw_probes.ltx`` describes the ILAs in your
