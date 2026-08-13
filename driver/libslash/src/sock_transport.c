@@ -82,15 +82,6 @@ static void close_fd_array(int *fds, size_t count)
     }
 }
 
-/*
- * set_enodev - set errno to ENODEV and return SLASH_SOCK_TRANSPORT_ERR.
- * Centralises the "transport failure" return path.
- */
-static int32_t set_enodev(void)
-{
-    errno = ENODEV;
-    return SLASH_SOCK_TRANSPORT_ERR;
-}
 
 /* -------------------------------------------------------------------------
  * slash_sock_connect
@@ -213,16 +204,13 @@ int32_t slash_sock_request(int fd,
 
     /* Basic argument validation. */
     if (arg_len > SLASH_SOCK_MAX_PAYLOAD_BYTES) {
-        errno = EMSGSIZE;
-        return SLASH_SOCK_TRANSPORT_ERR;
+        return -EINVAL;
     }
     if (n_send_fds > SLASH_SOCK_MAX_FDS_PER_MSG) {
-        errno = EMSGSIZE;
-        return SLASH_SOCK_TRANSPORT_ERR;
+        return -EINVAL;
     }
     if (seq == NULL) {
-        errno = EINVAL;
-        return SLASH_SOCK_TRANSPORT_ERR;
+        return -EINVAL;
     }
 
     /* -----------------------------------------------------------------
@@ -260,7 +248,7 @@ int32_t slash_sock_request(int fd,
 
     sent = sendmsg(fd, &send_msg, MSG_NOSIGNAL);
     if (sent < 0) {
-        return set_enodev();
+        return -ENODEV;
     }
 
     /* -----------------------------------------------------------------
@@ -307,24 +295,24 @@ int32_t slash_sock_request(int fd,
     /* Now check recv errors: close any received fds before returning. */
     if (n < 0) {
         close_fd_array(recv_fd_tmp, n_fds_received);
-        return set_enodev();
+        return -ENODEV;
     }
     if (n == 0) {
         /* Peer closed. */
         close_fd_array(recv_fd_tmp, n_fds_received);
-        return set_enodev();
+        return -ENODEV;
     }
     if (recv_msg.msg_flags & MSG_TRUNC) {
         close_fd_array(recv_fd_tmp, n_fds_received);
-        return set_enodev();
+        return -ENODEV;
     }
     if (recv_msg.msg_flags & MSG_CTRUNC) {
         close_fd_array(recv_fd_tmp, n_fds_received);
-        return set_enodev();
+        return -ENODEV;
     }
     if ((size_t)n < sizeof(struct slash_sysemu_socket_header)) {
         close_fd_array(recv_fd_tmp, n_fds_received);
-        return set_enodev();
+        return -ENODEV;
     }
 
     /* Deserialise the response header. */
@@ -334,7 +322,7 @@ int32_t slash_sock_request(int fd,
     if (resp_hdr.sequence_id != req_hdr.sequence_id ||
         resp_hdr.ioctl_op    != req_hdr.ioctl_op) {
         close_fd_array(recv_fd_tmp, n_fds_received);
-        return set_enodev();
+        return -ENODEV;
     }
 
     /* Copy the response arg bytes back into the caller's buffer. */

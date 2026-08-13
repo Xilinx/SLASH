@@ -84,28 +84,19 @@ struct slash_qdma *slash_qdma_open(const char *path) {
 
     if (is_mock) {
         qdma->fd = slash_mock_sock_create(SLASH_MOCK_SOCK_ENDPOINT_QDMA);
-        if (qdma->fd < 0) {
-            free(qdma);
-            return NULL;
-        }
         qdma->transport = SLASH_TRANSPORT_SOCKET;
-        qdma->seq       = 0;
     } else if (is_sock) {
         qdma->fd = slash_sock_connect(path);
-        if (qdma->fd < 0) {
-            free(qdma);
-            return NULL;
-        }
         qdma->transport = SLASH_TRANSPORT_SOCKET;
-        qdma->seq       = 0;
     } else {
         qdma->fd = open(path, O_RDWR);
-        if (qdma->fd < 0) {
-            free(qdma);
-            return NULL;
-        }
         qdma->transport = SLASH_TRANSPORT_IOCTL;
-        qdma->seq       = 0;
+    }
+    qdma->seq = 0;
+
+    if (qdma->fd < 0) {
+        free(qdma);
+        return NULL;
     }
 
     return qdma;
@@ -140,7 +131,6 @@ int slash_qdma_info_read(struct slash_qdma *qdma,
                          struct slash_qdma_info *info) {
     struct slash_qdma_info tmp;
     int32_t rv;
-    int ret;
 
     if (qdma == NULL || info == NULL) {
         errno = EINVAL;
@@ -154,18 +144,15 @@ int slash_qdma_info_read(struct slash_qdma *qdma,
         rv =
             slash_sock_request(qdma->fd, (uint32_t)SLASH_QDMA_IOCTL_INFO, &tmp,
                                sizeof(tmp), NULL, 0, NULL, 0, NULL, &qdma->seq);
-        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-            return -1;
-        }
-        if (rv < 0) {
-            errno = (int)-rv;
-            return -1;
-        }
+    } else if (qdma->transport == SLASH_TRANSPORT_IOCTL) {
+        rv = ioctl(qdma->fd, SLASH_QDMA_IOCTL_INFO, &tmp);
     } else {
-        ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_INFO, &tmp);
-        if (ret < 0) {
-            return -1;
-        }
+        rv = -EINVAL;
+    }
+
+    if (rv < 0) {
+        errno = (int)-rv;
+        return -1;
     }
 
     /* Copy the kernel-filled result back to the caller. */
@@ -190,7 +177,6 @@ int slash_qdma_qpair_add(struct slash_qdma *qdma,
                          struct slash_qdma_qpair_add *req) {
     struct slash_qdma_qpair_add tmp;
     int32_t rv;
-    int ret;
 
     if (qdma == NULL || req == NULL) {
         errno = EINVAL;
@@ -211,18 +197,15 @@ int slash_qdma_qpair_add(struct slash_qdma *qdma,
         rv = slash_sock_request(qdma->fd, (uint32_t)SLASH_QDMA_IOCTL_QPAIR_ADD,
                                 &tmp, sizeof(tmp), NULL, 0, NULL, 0, NULL,
                                 &qdma->seq);
-        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-            return -1;
-        }
-        if (rv < 0) {
-            errno = (int)-rv;
-            return -1;
-        }
+    } else if (qdma->transport == SLASH_TRANSPORT_IOCTL) {
+        rv = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &tmp);
     } else {
-        ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_ADD, &tmp);
-        if (ret < 0) {
-            return -1;
-        }
+        rv = -EINVAL;
+    }
+
+    if (rv < 0) {
+        errno = (int)-rv;
+        return -1;
     }
 
     /* Write back — kernel will have filled in qid and other fields. */
@@ -240,7 +223,6 @@ static int slash_qdma_qpair_op(struct slash_qdma *qdma, uint32_t qid,
                                uint32_t op) {
     struct slash_qdma_qpair_op req;
     int32_t rv;
-    int ret;
 
     if (qdma == NULL) {
         errno = EINVAL;
@@ -256,18 +238,15 @@ static int slash_qdma_qpair_op(struct slash_qdma *qdma, uint32_t qid,
         rv =
             slash_sock_request(qdma->fd, (uint32_t)SLASH_QDMA_IOCTL_Q_OP, &req,
                                sizeof(req), NULL, 0, NULL, 0, NULL, &qdma->seq);
-        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-            return -1;
-        }
-        if (rv < 0) {
-            errno = (int)-rv;
-            return -1;
-        }
+    } else if (qdma->transport == SLASH_TRANSPORT_IOCTL) {
+        rv = ioctl(qdma->fd, SLASH_QDMA_IOCTL_Q_OP, &req);
     } else {
-        ret = ioctl(qdma->fd, SLASH_QDMA_IOCTL_Q_OP, &req);
-        if (ret < 0) {
-            return -1;
-        }
+        rv = -EINVAL;
+    }
+
+    if (rv < 0) {
+        errno = (int)-rv;
+        return -1;
     }
 
     return 0;
@@ -289,8 +268,7 @@ int slash_qdma_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flags) {
     struct slash_qdma_qpair_fd_request req;
     int recv_fd;
     size_t n_recv;
-    int32_t rv;
-    int fd;
+    int rv;
 
     if (qdma == NULL) {
         errno = EINVAL;
@@ -308,9 +286,6 @@ int slash_qdma_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flags) {
         rv = slash_sock_request(
             qdma->fd, (uint32_t)SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req,
             sizeof(req), NULL, 0, &recv_fd, 1, &n_recv, &qdma->seq);
-        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-            return -1;
-        }
         if (rv < 0) {
             errno = (int)-rv;
             if (recv_fd >= 0) {
@@ -325,12 +300,16 @@ int slash_qdma_qpair_get_fd(struct slash_qdma *qdma, uint32_t qid, int flags) {
         }
         /* recv_fd is the anonymous XFER socket fd. */
         return recv_fd;
-    } else {
-        fd = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req);
-        if (fd < 0) {
+    } else if (qdma->transport == SLASH_TRANSPORT_IOCTL) {
+        rv = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req);
+        if (rv < 0) {
+            errno = -rv;
             return -1;
         }
-        return fd;
+        return rv;
+    } else {
+        errno = EINVAL;
+        return -1;
     }
 }
 
@@ -339,9 +318,8 @@ int slash_qdma_qpair_get_fd_multi(struct slash_qdma *qdma, const uint32_t *qids,
     struct slash_qdma_qpair_fd_request req;
     int recv_fd;
     size_t n_recv;
-    int32_t rv;
+    int rv;
     uint32_t i;
-    int fd;
 
     if (qdma == NULL || qids == NULL || qpair_count == 0 ||
         qpair_count > SLASH_QDMA_FD_MAX_QPAIRS) {
@@ -364,9 +342,6 @@ int slash_qdma_qpair_get_fd_multi(struct slash_qdma *qdma, const uint32_t *qids,
         rv = slash_sock_request(
             qdma->fd, (uint32_t)SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req,
             sizeof(req), NULL, 0, &recv_fd, 1, &n_recv, &qdma->seq);
-        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-            return -1;
-        }
         if (rv < 0) {
             errno = (int)-rv;
             if (recv_fd >= 0) {
@@ -380,13 +355,17 @@ int slash_qdma_qpair_get_fd_multi(struct slash_qdma *qdma, const uint32_t *qids,
             return -1;
         }
         return recv_fd;
-    } else {
-        fd = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req);
-        if (fd < 0) {
+    } else if (qdma->transport == SLASH_TRANSPORT_IOCTL) {
+        rv = ioctl(qdma->fd, SLASH_QDMA_IOCTL_QPAIR_GET_FD, &req);
+        if (rv < 0) {
+            errno = -rv;
             return -1;
         }
 
-        return fd;
+        return rv;
+    } else {
+        errno = -EINVAL;
+        return -1;
     }
 }
 
@@ -412,13 +391,10 @@ static int qdma_buffer_mmap(struct slash_qdma_buffer *buf) {
     return 0;
 }
 
-/*
- * Create a buffer via BUF_CREATE over a socket fd (CTL or XFER socket).
- * The daemon returns a memfd via SCM_RIGHTS and fills in granule/transfer_hint.
- */
-static int qdma_buffer_create_on_sock(int sock_fd, uint64_t length,
-                                      uint32_t *seq,
-                                      struct slash_qdma_buffer *buf_out) {
+static int qdma_buffer_create_impl(int transport_fd,
+                                   enum slash_transport transport,
+                                   uint64_t length, uint32_t *seq,
+                                   struct slash_qdma_buffer *buf_out) {
     struct slash_qdma_buf_create req;
     int recv_fd;
     size_t n_recv;
@@ -430,24 +406,32 @@ static int qdma_buffer_create_on_sock(int sock_fd, uint64_t length,
     req.flags = O_CLOEXEC;
     req.length = length;
 
-    recv_fd = -1;
-    n_recv = 0;
-    rv =
-        slash_sock_request(sock_fd, (uint32_t)SLASH_QDMA_IOCTL_BUF_CREATE, &req,
-                           sizeof(req), NULL, 0, &recv_fd, 1, &n_recv, seq);
-    if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-        return -1; /* errno already ENODEV */
-    }
-    if (rv < 0) {
-        errno = (int)-rv;
-        if (recv_fd >= 0) {
-            close(recv_fd);
-            recv_fd = -1;
+    if (transport == SLASH_TRANSPORT_SOCKET) {
+        recv_fd = -1;
+        n_recv = 0;
+        rv = slash_sock_request(
+            transport_fd, (uint32_t)SLASH_QDMA_IOCTL_BUF_CREATE, &req,
+            sizeof(req), NULL, 0, &recv_fd, 1, &n_recv, seq);
+        if (rv < 0) {
+            errno = (int)-rv;
+            if (recv_fd >= 0) {
+                close(recv_fd);
+                recv_fd = -1;
+            }
+            return -1;
         }
-        return -1;
-    }
-    if (n_recv < 1 || recv_fd < 0) {
-        errno = ENODEV;
+        if (n_recv < 1 || recv_fd < 0) {
+            errno = ENODEV;
+            return -1;
+        }
+    } else if (transport == SLASH_TRANSPORT_IOCTL) {
+        recv_fd = ioctl(transport_fd, SLASH_QDMA_IOCTL_BUF_CREATE, &req);
+        if (recv_fd < 0) {
+            errno = -recv_fd;
+            return -1;
+        }
+    } else {
+        errno = -EINVAL;
         return -1;
     }
 
@@ -468,43 +452,6 @@ static int qdma_buffer_create_on_sock(int sock_fd, uint64_t length,
     return 0;
 }
 
-/*
- * Create a kernel buffer via the BUF_CREATE ioctl on @ioctl_fd (control fd or
- * queue-pair fd), then mmap it.
- */
-static int qdma_buffer_create_on_device(int ioctl_fd, uint64_t length,
-                                        struct slash_qdma_buffer *buf_out) {
-    struct slash_qdma_buf_create req;
-    int fd;
-    int saved_errno;
-
-    memset(&req, 0, sizeof(req));
-    req.size = sizeof(req);
-    req.flags = O_CLOEXEC;
-    req.length = length;
-
-    fd = ioctl(ioctl_fd, SLASH_QDMA_IOCTL_BUF_CREATE, &req);
-    if (fd < 0) {
-        return -1;
-    }
-
-    buf_out->fd = fd;
-    buf_out->length = length;
-    buf_out->granule = req.granule ? req.granule : 4096;
-    buf_out->transfer_hint = (enum slash_qdma_transfer_hint)req.transfer_hint;
-    buf_out->addr = NULL;
-
-    if (qdma_buffer_mmap(buf_out) != 0) {
-        saved_errno = errno;
-        (void)close(fd);
-        buf_out->fd = -1;
-        errno = saved_errno;
-        return -1;
-    }
-
-    return 0;
-}
-
 int slash_qdma_buffer_create(struct slash_qdma *qdma, uint64_t length,
                              struct slash_qdma_buffer *buf_out) {
     if (qdma == NULL || buf_out == NULL || length == 0) {
@@ -512,17 +459,14 @@ int slash_qdma_buffer_create(struct slash_qdma *qdma, uint64_t length,
         return -1;
     }
 
-    if (qdma->transport == SLASH_TRANSPORT_SOCKET) {
-        return qdma_buffer_create_on_sock(qdma->fd, length, &qdma->seq,
-                                          buf_out);
-    } else {
-        return qdma_buffer_create_on_device(qdma->fd, length, buf_out);
-    }
+    return qdma_buffer_create_impl(qdma->fd, qdma->transport, length,
+                                   &qdma->seq, buf_out);
 }
 
 int slash_qdma_qpair_buffer_create(int qpair_fd, uint64_t length,
                                    struct slash_qdma_buffer *buf_out) {
     int is_sock;
+    enum slash_transport transport;
 
     if (qpair_fd < 0 || buf_out == NULL || length == 0) {
         errno = EINVAL;
@@ -533,22 +477,10 @@ int slash_qdma_qpair_buffer_create(int qpair_fd, uint64_t length,
     if (is_sock < 0) {
         return -1;
     }
+    transport = is_sock ? SLASH_TRANSPORT_SOCKET : SLASH_TRANSPORT_IOCTL;
 
-    if (is_sock) {
-        /*
-         * qpair_fd is an XFER socket (received from the daemon via
-         * QPAIR_GET_FD).  BUF_CREATE on the XFER socket returns a memfd.
-         */
-        return qdma_buffer_create_on_sock(qpair_fd, length, &qdma_raw_fd_seq,
-                                          buf_out);
-    } else {
-        /*
-         * Non-socket path: ioctl on char device or @mock memfd.
-         * The ENOTTY fallback inside qdma_buffer_create_on_device handles
-         * @mock.
-         */
-        return qdma_buffer_create_on_device(qpair_fd, length, buf_out);
-    }
+    return qdma_buffer_create_impl(qpair_fd, transport, length,
+                                   &qdma_raw_fd_seq, buf_out);
 }
 
 int slash_qdma_buffer_destroy(struct slash_qdma_buffer *buf) {
@@ -642,9 +574,6 @@ ssize_t slash_qdma_qpair_transfer_batch(int qpair_fd,
         rv = slash_sock_request(
             qpair_fd, (uint32_t)SLASH_QDMA_QPAIR_IOCTL_TRANSFER, &req,
             sizeof(req), fd_list, n_fds, NULL, 0, NULL, &qdma_raw_fd_seq);
-        if (rv == SLASH_SOCK_TRANSPORT_ERR) {
-            return -1;
-        }
         if (rv < 0) {
             errno = (int)-rv;
             return -1;
@@ -656,6 +585,7 @@ ssize_t slash_qdma_qpair_transfer_batch(int qpair_fd,
         /* Non-socket ioctl path. */
         ret = ioctl(qpair_fd, SLASH_QDMA_QPAIR_IOCTL_TRANSFER, &req);
         if (ret < 0) {
+            rv = -ret;
             return -1;
         }
         return (ssize_t)ret;

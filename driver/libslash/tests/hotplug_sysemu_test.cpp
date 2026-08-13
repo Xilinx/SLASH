@@ -115,13 +115,13 @@ TEST_F(HotplugSysemuTest, RemoveRecordsBdf)
 TEST_F(HotplugSysemuTest, RemoveNullBdfSendsToDaemon)
 {
     /* NULL bdf is allowed — empty bdf field sent; server records empty string. */
-    ASSERT_EQ(slash_hotplug_remove(hp_, nullptr), 0);
+    ASSERT_EQ(slash_hotplug_remove(hp_, nullptr), 0) << strerror(errno);
     EXPECT_EQ(srv_.last_hotplug_bdf, "");
 }
 
 TEST_F(HotplugSysemuTest, RemoveEmptyBdfSendsToDaemon)
 {
-    ASSERT_EQ(slash_hotplug_remove(hp_, ""), 0);
+    ASSERT_EQ(slash_hotplug_remove(hp_, ""), 0) << strerror(errno);
     EXPECT_EQ(srv_.last_hotplug_bdf, "");
 }
 
@@ -157,7 +157,7 @@ TEST_F(HotplugSysemuTest, ToggleSbrRecordsBdf)
 
 TEST_F(HotplugSysemuTest, ToggleSbrNullBdfSendsToDaemon)
 {
-    ASSERT_EQ(slash_hotplug_toggle_sbr(hp_, nullptr), 0);
+    ASSERT_EQ(slash_hotplug_toggle_sbr(hp_, nullptr), 0) << strerror(errno);
     EXPECT_EQ(srv_.last_hotplug_bdf, "");
 }
 
@@ -190,7 +190,7 @@ TEST_F(HotplugSysemuTest, HotplugRecordsBdf)
 
 TEST_F(HotplugSysemuTest, HotplugNullBdfSendsToDaemon)
 {
-    ASSERT_EQ(slash_hotplug_hotplug(hp_, nullptr), 0);
+    ASSERT_EQ(slash_hotplug_hotplug(hp_, nullptr), 0) << strerror(errno);
     EXPECT_EQ(srv_.last_hotplug_bdf, "");
 }
 

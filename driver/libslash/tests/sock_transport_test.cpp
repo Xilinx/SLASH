@@ -583,8 +583,7 @@ TEST(SockTransportErrTest, PeerCloseBeforeReply)
 
     server_thread.join();
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(ENODEV, errno);
+    EXPECT_EQ(-ENODEV, ret);
 }
 
 TEST(SockTransportErrTest, PeerCloseBeforeSend)
@@ -601,8 +600,7 @@ TEST(SockTransportErrTest, PeerCloseBeforeSend)
         nullptr, 0, nullptr,
         &seq);
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(ENODEV, errno);
+    EXPECT_EQ(-ENODEV, ret);
 }
 
 TEST(SockTransportErrTest, SequenceIdMismatch)
@@ -629,8 +627,7 @@ TEST(SockTransportErrTest, SequenceIdMismatch)
 
     server_thread.join();
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(ENODEV, errno);
+    EXPECT_EQ(-ENODEV, ret);
 }
 
 TEST(SockTransportErrTest, IoctlOpMismatch)
@@ -657,8 +654,7 @@ TEST(SockTransportErrTest, IoctlOpMismatch)
 
     server_thread.join();
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(ENODEV, errno);
+    EXPECT_EQ(-ENODEV, ret);
 }
 
 TEST(SockTransportErrTest, TruncatedResponseClosesReceivedFds)
@@ -703,8 +699,7 @@ TEST(SockTransportErrTest, TruncatedResponseClosesReceivedFds)
 
     server_thread.join();
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(ENODEV, errno);
+    EXPECT_EQ(-ENODEV, ret);
 }
 
 /* -------------------------------------------------------------------------
@@ -747,8 +742,7 @@ TEST(SockTransportLeakTest, NoFdLeakOnSeqMismatchWithReceivedFds)
     server_thread.join();
     close(server_memfd);
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(ENODEV, errno);
+    EXPECT_EQ(-ENODEV, ret);
     EXPECT_EQ(0u, n_recv);  /* nothing handed to caller */
 
     /* fd count must be back to baseline (server_memfd is one of the extra ones
@@ -782,7 +776,7 @@ TEST(SockTransportLeakTest, NoFdLeakOnPeerClose)
 
     server_thread.join();
 
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
+    EXPECT_EQ(-ENODEV, ret);
 
     /* Fd count should not have grown (beyond the pair we already have). */
     int final_fds = count_open_fds();
@@ -914,8 +908,7 @@ TEST(SockTransportRequestTest, NullSeqReturnsTransportErr)
     int32_t ret = slash_sock_request(sp.client(), 0, nullptr, 0,
                                      nullptr, 0, nullptr, 0, nullptr,
                                      nullptr /* seq is NULL */);
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(EINVAL, errno);
+    EXPECT_EQ(-EINVAL, ret);
 }
 
 TEST(SockTransportRequestTest, OversizedArgLenReturnsTransportErr)
@@ -928,8 +921,7 @@ TEST(SockTransportRequestTest, OversizedArgLenReturnsTransportErr)
     int32_t ret = slash_sock_request(sp.client(), 0,
                                      nullptr, SLASH_SOCK_MAX_PAYLOAD_BYTES + 1,
                                      nullptr, 0, nullptr, 0, nullptr, &seq);
-    EXPECT_EQ(SLASH_SOCK_TRANSPORT_ERR, ret);
-    EXPECT_EQ(EMSGSIZE, errno);
+    EXPECT_EQ(-EINVAL, ret);
 }
 
 /* -------------------------------------------------------------------------
@@ -1049,11 +1041,7 @@ TEST(SockTransportErrTest, MsgCtruncClosesReceivedFds)
      * If not (kernel didn't truncate), the test is still valid: it verifies
      * no leaks on success.
      */
-    if (ret == SLASH_SOCK_TRANSPORT_ERR) {
-        EXPECT_EQ(ENODEV, errno);
-        /* n_recv is 0 — no fds handed to caller. */
-        EXPECT_EQ(0u, n_recv);
-    }
+    EXPECT_EQ(-ENODEV, ret);
     /* Either way, the fd count must not have grown. */
     int final_fds = count_open_fds();
     EXPECT_LE(final_fds, baseline_fds + 2 /* sp fds */)

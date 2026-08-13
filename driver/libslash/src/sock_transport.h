@@ -46,19 +46,8 @@
 
 #include <slash/uapi/slash_sysemu.h>
 
-#include <stdint.h>
 #include <stddef.h>
-
-/*
- * Sentinel returned by slash_sock_request on any transport or protocol
- * failure.  errno is always set to ENODEV in this case.
- *
- * Using INT32_MIN (0x80000000) is safe because:
- *   - valid daemon return values fit in int32_t but are never INT32_MIN
- *     (they are either 0, positive byte counts, or small negative errnos)
- *   - the value is distinct from every real errno magnitude
- */
-#define SLASH_SOCK_TRANSPORT_ERR ((int32_t)(-2147483647 - 1)) /* INT32_MIN */
+#include <stdint.h>
 
 /*
  * Maximum payload bytes (excluding the 16-byte header) accepted per datagram.
@@ -111,7 +100,7 @@ int slash_path_is_socket(const char *path);
 int slash_fd_is_socket(int fd);
 
 /**
- * slash_sock_request - execute one request/response exchange.
+ * Execute a control operation over a UNIX domain socket.
  *
  * Builds a datagram from the header and @arg bytes, sends it with one
  * sendmsg(2) (SCM_RIGHTS for @send_fds, MSG_NOSIGNAL), then receives the
@@ -123,12 +112,13 @@ int slash_fd_is_socket(int fd);
  *   - response sequence_id != request sequence_id => transport failure
  *   - response ioctl_op    != request ioctl_op    => transport failure
  *
- * On success, the response arg bytes are copied back into @arg and any
- * received FDs are stored in @recv_fds[0..n-1] with *n_recv_fds set.
+ * On transport success, the response arg bytes are copied back into @arg, any
+ * received FDs are stored in @recv_fds[0..n-1] with *n_recv_fds set, and the
+ * return value from the daemon is returned.
  *
- * On ANY transport or protocol failure errno is set to ENODEV and
- * SLASH_SOCK_TRANSPORT_ERR is returned.  Any FDs received before the error
- * was detected are closed; no fd leaks.
+ * If @ref arg_len, @ref n_send_fds, or @ref seq is invalid, -EINVAL is returned.
+ * On ANY transport or protocol failure -ENODEV is returend.  Any FDs
+ * received before the error was detected are closed; no fd leaks.
  *
  * @param fd           Connected SEQPACKET socket.
  * @param ioctl_op     IOCTL command number for this request.
@@ -142,20 +132,14 @@ int slash_fd_is_socket(int fd);
  * @param n_recv_fds   Out: number of fds written into @recv_fds.
  * @param seq          In/out sequence counter.  *seq is used as the request
  *                     sequence_id and incremented on success.
- * @return             Daemon's header.return_value cast to int32_t (may be a
- *                     negative errno the daemon set), or SLASH_SOCK_TRANSPORT_ERR
- *                     with errno=ENODEV on any transport/protocol failure.
+ * @return             Daemon's header.return_value cast to int32_t, may be a
+ *                     negative errno if the daemon or this wrapper have
+ *                     encountered an error.
  */
-int32_t slash_sock_request(int fd,
-                           uint32_t ioctl_op,
-                           void *arg,
-                           size_t arg_len,
-                           const int *send_fds,
-                           size_t n_send_fds,
-                           int *recv_fds,
-                           size_t recv_fd_cap,
-                           size_t *n_recv_fds,
-                           uint32_t *seq);
+int32_t slash_sock_request(int fd, uint32_t ioctl_op, void *arg, size_t arg_len,
+                           const int *send_fds, size_t n_send_fds,
+                           int *recv_fds, size_t recv_fd_cap,
+                           size_t *n_recv_fds, uint32_t *seq);
 
 /**
  * slash_sock_rewrite_fd_index - client side of collect_fds_and_rewrite.
@@ -174,9 +158,7 @@ int32_t slash_sock_request(int fd,
  * @param fd        The actual fd to append.
  * @return          0 on success, -1 with errno=EMSGSIZE if the cap is reached.
  */
-int slash_sock_rewrite_fd_index(int *fd_list,
-                                size_t *fd_count,
-                                int *field,
+int slash_sock_rewrite_fd_index(int *fd_list, size_t *fd_count, int *field,
                                 int fd);
 
 #ifdef __cplusplus
