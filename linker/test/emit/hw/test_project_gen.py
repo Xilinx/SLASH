@@ -26,6 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from slashkit.core import launcher
 from slashkit.core.command_config import ShellType
 from slashkit.emit.hw import project_gen, tcl_gen
 
@@ -165,9 +166,8 @@ def test_no_preload_when_libudev_absent(monkeypatch):
     assert "LD_PRELOAD" not in env
 
 
-def test_service_networking_reuses_common_ip_repository(monkeypatch, tmp_path):
-    """Building slash and service-layer RMs exports common IP only once."""
-    config = SimpleNamespace(
+def _rm_config(tmp_path):
+    return SimpleNamespace(
         build_dir=tmp_path,
         ip_repository=tmp_path / "iprepo",
         kernels=[],
@@ -177,26 +177,59 @@ def test_service_networking_reuses_common_ip_repository(monkeypatch, tmp_path):
         n_jobs=1,
         vivado_bin=Path("/usr/bin/true"),
     )
+
+
+def _stub_rm_build(monkeypatch, tmp_path, on_run):
+    """Neuter everything an RM build touches except the tool invocation itself."""
+    def run_vivado(argv, **kwargs):
+        on_run(argv, kwargs)
+        images = tmp_path / "images"
+        (images / "top_i_slash_slash_test_inst_0_partial.pdi").touch()
+        (images / "top_i_service_layer_service_layer_test_inst_0_partial.pdi").touch()
+
+    monkeypatch.setattr(
+        project_gen.resources,
+        "path",
+        lambda _package, name: nullcontext(tmp_path / name),
+    )
+    # The RM build reaches the tool through launcher.run_tool, so that is where
+    # the interception has to happen.
+    monkeypatch.setattr(launcher.subprocess, "run", run_vivado)
+
+
+def test_service_networking_reuses_common_ip_repository(monkeypatch, tmp_path):
+    """Building slash and service-layer RMs exports common IP only once."""
+    config = _rm_config(tmp_path)
     export_calls = []
 
     def export_once(_package, out_dir):
         export_calls.append(out_dir)
         out_dir.mkdir()
 
-    def run_vivado(*_args, **_kwargs):
-        images = tmp_path / "images"
-        (images / "top_i_slash_slash_test_inst_0_partial.pdi").touch()
-        (images / "top_i_service_layer_service_layer_test_inst_0_partial.pdi").touch()
-
     monkeypatch.setattr(project_gen, "export_package", export_once)
-    monkeypatch.setattr(
-        project_gen.resources,
-        "path",
-        lambda _package, name: nullcontext(tmp_path / name),
-    )
-    monkeypatch.setattr(project_gen.subprocess, "run", run_vivado)
+    _stub_rm_build(monkeypatch, tmp_path, lambda _argv, _kwargs: None)
 
     project_gen.build_slash_rm(config)
     project_gen.build_service_layer_rm(config)
 
     assert export_calls == [config.ip_repository / "slash_base"]
+
+
+def test_rm_builds_are_offloaded_under_distinct_task_kinds(monkeypatch, tmp_path):
+    """One `slashkit link` runs both RMs, so they must be distinguishable."""
+    monkeypatch.setenv(launcher.LAUNCHER_ENV, "submit")
+    config = _rm_config(tmp_path)
+    seen = []
+
+    monkeypatch.setattr(project_gen, "export_package",
+                        lambda _package, out_dir: out_dir.mkdir())
+    _stub_rm_build(monkeypatch, tmp_path,
+                   lambda argv, kwargs: seen.append((argv[0], kwargs["env"])))
+
+    project_gen.build_slash_rm(config)
+    project_gen.build_service_layer_rm(config)
+
+    assert [prefix for prefix, _ in seen] == ["submit", "submit"]
+    assert [env["SLASH_BUILD_TASK"] for _, env in seen] == [
+        launcher.TASK_RM_SLASH, launcher.TASK_RM_SERVICE_LAYER]
+    assert all(env["SLASH_TOOL_CWD"] == str(tmp_path) for _, env in seen)

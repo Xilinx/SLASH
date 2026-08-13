@@ -26,7 +26,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 # Include BuildHLS so that find_package(SlashTools) provides everything
 include("${CMAKE_CURRENT_LIST_DIR}/BuildHLS.cmake")
 
-find_package(Vivado REQUIRED)
+# With a launcher set there is no local Vivado to find: the name is resolved on
+# the execution host after its settings script runs, which is the same
+# relaxation slashkit makes for --vivado. Requiring one here would make a
+# machine with no tools installed unable to even configure.
+if(SLASH_TOOL_LAUNCHER)
+  set(VIVADO_BINARY vivado)
+  message(STATUS "SlashTools: launcher set, Vivado resolved on the execution host")
+else()
+  find_package(Vivado REQUIRED)
+endif()
 
 # --- Locate the SLASH linker ---
 # Two modes:

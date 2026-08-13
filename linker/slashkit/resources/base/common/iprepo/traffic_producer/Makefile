@@ -18,11 +18,16 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
+# Set SLASH_TOOL_LAUNCHER to run the tools on a compute farm instead of here;
+# see docs/howto/offload-builds-to-a-cluster.rst. Empty runs them locally.
+# --work_dir is relative, so the launcher is told which directory to use.
+LAUNCH := $(if $(SLASH_TOOL_LAUNCHER),env SLASH_BUILD_TASK=hls SLASH_TOOL_CWD=$(CURDIR) $(SLASH_TOOL_LAUNCHER))
+
 all: ip/traffic_producer.zip
 
 ip/traffic_producer.zip: $(wildcard *.cpp) $(wildcard *.cfg)
-	v++ -c --mode hls --config traffic_producer.cfg --work_dir ip
-	vitis-run --mode hls --package --config traffic_producer.cfg --work_dir ip
+	$(LAUNCH) v++ -c --mode hls --config traffic_producer.cfg --work_dir ip
+	$(LAUNCH) vitis-run --mode hls --package --config traffic_producer.cfg --work_dir ip
 
 .PHONY: clean
 clean:
