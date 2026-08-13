@@ -19,8 +19,8 @@
 #define _GNU_SOURCE
 
 #include "mock_sock.h"
-#include "mock_sock_qdma.h"
 #include "mock_sock_ctldev.h"
+#include "mock_sock_qdma.h"
 
 #include <slash/uapi/slash_sysemu.h>
 
@@ -270,6 +270,12 @@ static void *mock_sock_server_main(void *arg) {
                 input_fds, n_input_fds, &output_fds, &n_output_fds);
             break;
 
+        case SLASH_MOCK_SOCK_ENDPOINT_CTLDEV:
+            msg_hdr->return_value = slash_mock_sock_ctldev_dispatch(
+                state->endpoint_state, msg_hdr->ioctl_op, msg_arg, msg_arg_size,
+                input_fds, n_input_fds, &output_fds, &n_output_fds);
+            break;
+
         default:
             /* This endpoint is not implemented yet */
             msg_hdr->return_value = -ENOSYS;
@@ -306,6 +312,11 @@ cleanup:
     case SLASH_MOCK_SOCK_ENDPOINT_QPAIR:
         slash_mock_sock_qpair_release_state(state->endpoint_state);
         free(state->endpoint_state);
+        break;
+    case SLASH_MOCK_SOCK_ENDPOINT_CTLDEV:
+        slash_mock_sock_ctldev_release_state(state->endpoint_state);
+        free(state->endpoint_state);
+        break;
     default:
     }
     free(state);

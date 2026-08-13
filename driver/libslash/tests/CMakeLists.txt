@@ -38,16 +38,15 @@ macro(add_slash_test test_name test_source)
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES
   )
+  target_include_directories(${test_name} PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/../src
+  )
   gtest_discover_tests(${test_name})
   add_dependencies(unit_tests ${test_name})
 endmacro()
 
 # sock_transport_test needs the private src/ include directory for sock_transport.h.
 add_slash_test(sock_transport_test sock_transport_test.cpp)
-target_include_directories(sock_transport_test PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-)
-
 add_slash_test(ctldev_test ctldev_test.cpp)
 add_slash_test(hotplug_test hotplug_test.cpp)
 add_slash_test(qdma_test qdma_test.cpp)

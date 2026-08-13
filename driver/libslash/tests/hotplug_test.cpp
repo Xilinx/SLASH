@@ -82,7 +82,15 @@ class HotplugTest : public ::testing::TestWithParam<LibSlashBackend> {
 
     void SetUp() override {
         backend = GetParam();
-        if (backend == LibSlashBackend::DRIVER) {
+        if (backend == LibSlashBackend::IMPLICIT_DRIVER) {
+            hp_ = slash_hotplug_open(NULL);
+            if (!hp_) {
+                GTEST_SKIP() << SLASH_DRIVER_HOTPLUG_PATH
+                             << " not available (errno=" << errno << ")";
+            }
+            ctldev_path = SLASH_DRIVER_CTLDEV_PATH;
+            qdma_path = SLASH_DRIVER_QDMA_PATH;
+        } else if (backend == LibSlashBackend::DRIVER) {
             hp_ = slash_hotplug_open(SLASH_DRIVER_HOTPLUG_PATH);
             if (!hp_) {
                 GTEST_SKIP() << SLASH_DRIVER_HOTPLUG_PATH
@@ -307,6 +315,16 @@ class HotplugTest : public ::testing::TestWithParam<LibSlashBackend> {
     }
 };
 
+/* Error case: Unknown transport */
+
+TEST_P(HotplugTest, RescanHandlesUnknownTransport) {
+    enum slash_transport old_transport = hp_->transport;
+    hp_->transport = (enum slash_transport) - 1;
+    EXPECT_EQ(slash_hotplug_rescan(hp_), -1);
+    EXPECT_EQ(errno, EINVAL);
+    hp_->transport = old_transport;
+}
+
 /* Just run a rescan without removing any prior devices. */
 TEST_P(HotplugTest, RescanSucceeds) {
     EXPECT_EQ(slash_hotplug_rescan(hp_), 0)
@@ -458,10 +476,13 @@ TEST_P(HotplugTest, DeviceMemoryPersistsAcrossPf1RemoveRescan) {
 }
 
 INSTANTIATE_TEST_SUITE_P(HotplugTest, HotplugTest,
-                         testing::Values(LibSlashBackend::DRIVER,
+                         testing::Values(LibSlashBackend::IMPLICIT_DRIVER,
+                            LibSlashBackend::DRIVER,
                                          LibSlashBackend::SYSEMU),
                          [](auto info) {
                              switch (info.param) {
+                             case LibSlashBackend::IMPLICIT_DRIVER:
+                                 return "implicit_driver";
                              case LibSlashBackend::DRIVER:
                                  return "driver";
                              case LibSlashBackend::SYSEMU:

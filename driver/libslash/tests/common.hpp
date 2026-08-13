@@ -24,6 +24,8 @@
 #include <gtest/gtest.h>
 
 enum class LibSlashBackend {
+    // Only relevant for hotplug, where no path equates to the driver.
+    IMPLICIT_DRIVER,
     DRIVER,
     SYSEMU,
     MOCK,

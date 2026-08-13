@@ -219,6 +219,51 @@ class ParametrizedQdmaTest : public ::testing::TestWithParam<LibSlashBackend> {
     struct slash_qdma *qdma_ = nullptr;
 };
 
+/* Error case: Unknown transport */
+
+TEST_P(ParametrizedQdmaTest, QdmaInfoReadHandlesUnknownTransport) {
+    enum slash_transport old_transport = qdma_->transport;
+    qdma_->transport = (enum slash_transport) - 1;
+    struct slash_qdma_info info;
+    EXPECT_EQ(slash_qdma_info_read(qdma_, &info), -1);
+    EXPECT_EQ(errno, EINVAL);
+    qdma_->transport = old_transport;
+}
+
+TEST_P(ParametrizedQdmaTest, QdmaQpairAddHandlesUnknownTransport) {
+    enum slash_transport old_transport = qdma_->transport;
+    qdma_->transport = (enum slash_transport) - 1;
+    struct slash_qdma_qpair_add req;
+    EXPECT_EQ(slash_qdma_qpair_add(qdma_, &req), -1);
+    EXPECT_EQ(errno, EINVAL);
+    qdma_->transport = old_transport;
+}
+
+TEST_P(ParametrizedQdmaTest, QdmaQpairOpHandlesUnknownTransport) {
+    enum slash_transport old_transport = qdma_->transport;
+    qdma_->transport = (enum slash_transport) - 1;
+    EXPECT_EQ(slash_qdma_qpair_start(qdma_, 0), -1);
+    EXPECT_EQ(errno, EINVAL);
+    qdma_->transport = old_transport;
+}
+
+TEST_P(ParametrizedQdmaTest, QdmaQpairGetFdHandlesUnknownTransport) {
+    enum slash_transport old_transport = qdma_->transport;
+    qdma_->transport = (enum slash_transport) - 1;
+    EXPECT_EQ(slash_qdma_qpair_get_fd(qdma_, 0, 0), -1);
+    EXPECT_EQ(errno, EINVAL);
+    qdma_->transport = old_transport;
+}
+
+TEST_P(ParametrizedQdmaTest, QdmaQpairGetFdMultiHandlesUnknownTransport) {
+    enum slash_transport old_transport = qdma_->transport;
+    qdma_->transport = (enum slash_transport) - 1;
+    uint32_t qids[2];
+    EXPECT_EQ(slash_qdma_qpair_get_fd_multi(qdma_, qids, 2, 0), -1);
+    EXPECT_EQ(errno, EINVAL);
+    qdma_->transport = old_transport;
+}
+
 TEST_P(ParametrizedQdmaTest, TransportMatchesParameter) {
     struct stat st{};
     switch (backend) {

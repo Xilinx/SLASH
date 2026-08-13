@@ -57,6 +57,7 @@ struct slash_ctldev *slash_ctldev_open(const char *path) {
 
     ctldev = calloc(1, sizeof(*ctldev));
     if (ctldev == NULL) {
+        errno = ENOMEM;
         return NULL;
     }
 
@@ -65,6 +66,7 @@ struct slash_ctldev *slash_ctldev_open(const char *path) {
         is_sock = slash_path_is_socket(path);
         if (is_sock < 0) {
             free(ctldev);
+            /* With the error from slash_path_is_socket. */
             return NULL;
         }
     }
@@ -82,6 +84,7 @@ struct slash_ctldev *slash_ctldev_open(const char *path) {
     ctldev->seq = 0;
 
     if (ctldev->fd < 0) {
+        /* With the errno from open/slash_mock_sock_create/slash_sock_connect */
         goto err_free_ctldev;
     }
 
@@ -103,6 +106,7 @@ int slash_ctldev_close(struct slash_ctldev *ctldev) {
 
     ret = 0;
     if (ctldev->fd >= 0 && close(ctldev->fd) != 0) {
+        /* With the errno from close */
         ret = -1;
     }
 

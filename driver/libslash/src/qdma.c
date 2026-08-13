@@ -70,6 +70,7 @@ struct slash_qdma *slash_qdma_open(const char *path) {
 
     qdma = calloc(1, sizeof(*qdma));
     if (qdma == NULL) {
+        errno = ENOMEM;
         return NULL;
     }
 
@@ -78,6 +79,7 @@ struct slash_qdma *slash_qdma_open(const char *path) {
         is_sock = slash_path_is_socket(path);
         if (is_sock < 0) {
             free(qdma);
+            /* With the errno from slash_path_is_socket. */
             return NULL;
         }
     }
@@ -96,6 +98,7 @@ struct slash_qdma *slash_qdma_open(const char *path) {
 
     if (qdma->fd < 0) {
         free(qdma);
+        /* With the ernno from slash_mock_sock_create/slash_sock_connect/open */
         return NULL;
     }
 
@@ -112,6 +115,7 @@ int slash_qdma_close(struct slash_qdma *qdma) {
 
     ret = 0;
     if (qdma->fd >= 0 && close(qdma->fd) != 0) {
+        /* With the errno from close */
         ret = -1;
     }
 
@@ -364,7 +368,7 @@ int slash_qdma_qpair_get_fd_multi(struct slash_qdma *qdma, const uint32_t *qids,
 
         return rv;
     } else {
-        errno = -EINVAL;
+        errno = EINVAL;
         return -1;
     }
 }

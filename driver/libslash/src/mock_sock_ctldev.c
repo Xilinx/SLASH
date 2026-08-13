@@ -18,8 +18,6 @@
 
 #define _GNU_SOURCE
 
-#define BAR_LENGTH (1ull << 17)
-
 #include "mock_sock_ctldev.h"
 #include "mock_sock.h"
 
@@ -48,7 +46,7 @@ int slash_mock_sock_ctldev_init_state(
             rv = errno;
             goto cleanup;
         }
-        if (ftruncate(bar_fd[i_bar], BAR_LENGTH) == -1) {
+        if (ftruncate(bar_fd[i_bar], LIBSLASH_MOCK_SOCK_BAR_SIZE) == -1) {
             rv = errno;
             goto cleanup;
         }
@@ -102,7 +100,7 @@ static int ctldev_ioctl_get_bar_info(void *arg, size_t arg_size) {
     bar_info.usable = (bar_info.bar_number % 2) == 0;
     bar_info.in_use = 0;
     bar_info.start_address = 0;
-    bar_info.length = BAR_LENGTH;
+    bar_info.length = LIBSLASH_MOCK_SOCK_BAR_SIZE;
 
     memcpy(arg, &bar_info, bar_info.size);
     return 0;
@@ -164,7 +162,7 @@ ctldev_ioctl_bar_fd_request(struct slash_mock_sock_ctldev_state *state,
     }
     *n_output_fds = 1;
 
-    fd_request.length = BAR_LENGTH;
+    fd_request.length = LIBSLASH_MOCK_SOCK_BAR_SIZE;
     memcpy(arg, &fd_request, fd_request.size);
 
     return 0;

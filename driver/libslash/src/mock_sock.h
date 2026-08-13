@@ -27,9 +27,7 @@
 enum slash_mock_sock_endpoint {
     SLASH_MOCK_SOCK_ENDPOINT_QDMA,
     SLASH_MOCK_SOCK_ENDPOINT_CTLDEV,
-    SLASH_MOCK_SOCK_ENDPOINT_HOTPLUG,
     /* Endpoints that can not be directly created by users */
-    SLASH_MOCK_SOCK_ENDPOINT_BAR,
     SLASH_MOCK_SOCK_ENDPOINT_QPAIR,
 };
 

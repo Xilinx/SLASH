@@ -23,6 +23,7 @@
 struct slash_mock_sock_ctldev_state {
     int bar_fd[3];
 };
+#define LIBSLASH_MOCK_SOCK_BAR_SIZE (4ULL * 1024ULL * 1024ULL)
 
 int slash_mock_sock_ctldev_init_state(
     struct slash_mock_sock_ctldev_state *state);

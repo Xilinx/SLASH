@@ -128,6 +128,7 @@ struct slash_hotplug *slash_hotplug_open(const char *path) {
 
     hotplug = calloc(1, sizeof(*hotplug));
     if (hotplug == NULL) {
+        errno = ENOMEM;
         return NULL;
     }
     hotplug->seq = 0;
@@ -135,6 +136,7 @@ struct slash_hotplug *slash_hotplug_open(const char *path) {
     is_sock = slash_path_is_socket(open_path);
     if (is_sock < 0) {
         free(hotplug);
+        /* With the errno from slash_path_is_socket */
         return NULL;
     }
 
@@ -148,6 +150,7 @@ struct slash_hotplug *slash_hotplug_open(const char *path) {
 
     if (hotplug->fd < 0) {
         free(hotplug);
+        /* With the errno from slash_sock_connect/open */
         return NULL;
     }
 
@@ -164,6 +167,7 @@ int slash_hotplug_close(struct slash_hotplug *hotplug) {
 
     ret = 0;
     if (hotplug->fd >= 0 && close(hotplug->fd) != 0) {
+        /* With the errno from close */
         ret = -1;
     }
 

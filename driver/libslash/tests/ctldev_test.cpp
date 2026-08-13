@@ -28,10 +28,9 @@
 #include <cstring>
 
 extern "C" {
+#include <mock_sock_ctldev.h>
 #include <slash/ctldev.h>
 }
-
-static constexpr uint64_t MOCK_BAR_SIZE = 64ULL * 1024ULL * 1024ULL;
 
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
 
@@ -128,6 +127,7 @@ class CtldevTest : public ::testing::TestWithParam<LibSlashBackend> {
                 GTEST_FAIL()
                     << "Mock support not available (" << strerror(errno) << ")";
             }
+            break;
         default:
             GTEST_FAIL() << "Unknown backend!";
         }
@@ -146,16 +146,47 @@ class CtldevTest : public ::testing::TestWithParam<LibSlashBackend> {
     struct slash_ctldev *dev_ = nullptr;
 };
 
+/* Error case: Unknown transport */
+
+TEST_P(CtldevTest, DeviceInfoReadHandlesUnknownTransport) {
+    enum slash_transport old_transport = dev_->transport;
+    dev_->transport = (enum slash_transport) - 1;
+    struct slash_ioctl_device_info *info = slash_device_info_read(dev_);
+    EXPECT_EQ(info, nullptr);
+    EXPECT_EQ(errno, EINVAL);
+    dev_->transport = old_transport;
+}
+
+TEST_P(CtldevTest, BarInfoReadHandlesUnknownTransport) {
+    enum slash_transport old_transport = dev_->transport;
+    dev_->transport = (enum slash_transport) - 1;
+    struct slash_ioctl_bar_info *info = slash_bar_info_read(dev_, 0);
+    EXPECT_EQ(info, nullptr);
+    EXPECT_EQ(errno, EINVAL);
+    dev_->transport = old_transport;
+}
+
+TEST_P(CtldevTest, BarFileOpenHandlesUnknownTransport) {
+    enum slash_transport old_transport = dev_->transport;
+    dev_->transport = (enum slash_transport) - 1;
+    struct slash_bar_file *info = slash_bar_file_open(dev_, 0, 0);
+    EXPECT_EQ(info, nullptr);
+    EXPECT_EQ(errno, EINVAL);
+    dev_->transport = old_transport;
+}
+
+/* Happy paths */
+
 TEST_P(CtldevTest, DeviceInfoBdfNonEmpty) {
     struct slash_ioctl_device_info *info = slash_device_info_read(dev_);
-    ASSERT_NE(info, nullptr);
-    EXPECT_EQ(info->vendor_id,           0x10EEu);
-    EXPECT_EQ(info->device_id,           0x50B6u);
+    ASSERT_NE(info, nullptr) << strerror(errno);
+    EXPECT_EQ(info->vendor_id, 0x10EEu);
+    EXPECT_EQ(info->device_id, 0x50B6u);
     EXPECT_EQ(info->subsystem_vendor_id, 0x10EEu);
     EXPECT_EQ(info->subsystem_device_id, 0x000eu);
     EXPECT_GT(strlen(info->bdf), 0u);
     if (backend == LibSlashBackend::MOCK) {
-        EXPECT_STREQ(info->bdf, "0000:00:00.1"); // TODO: Insert correct BDF
+        EXPECT_STREQ(info->bdf, "0000:61:00.2"); // TODO: Insert correct BDF
     }
     slash_device_info_free(info);
 }
@@ -167,7 +198,7 @@ TEST_P(CtldevTest, EvenBarsUsable) {
         if (bar % 2 == 0) {
             EXPECT_GT(info->usable, 0) << "Bar " << bar << " unusable";
             if (backend == LibSlashBackend::MOCK && bar == 0) {
-                EXPECT_EQ(info->length, MOCK_BAR_SIZE);
+                EXPECT_EQ(info->length, LIBSLASH_MOCK_SOCK_BAR_SIZE);
             } else {
                 EXPECT_GT(info->length, 0u);
             }
@@ -255,19 +286,19 @@ TEST_P(CtldevTest, BarFileSyncFlocks) {
     EXPECT_EQ(slash_bar_file_close(bar), 0);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    CtldevTest, CtldevTest,
-    testing::Values(LibSlashBackend::DRIVER,
-                    LibSlashBackend::SYSEMU), //, LibSlashBackend::MOCK),
-    [](auto info) {
-        switch (info.param) {
-        case LibSlashBackend::DRIVER:
-            return "driver";
-        case LibSlashBackend::SYSEMU:
-            return "sysemu";
-        case LibSlashBackend::MOCK:
-            return "mock";
-        default:
-            return "unknown";
-        }
-    });
+INSTANTIATE_TEST_SUITE_P(CtldevTest, CtldevTest,
+                         testing::Values(LibSlashBackend::DRIVER,
+                                         LibSlashBackend::SYSEMU,
+                                         LibSlashBackend::MOCK),
+                         [](auto info) {
+                             switch (info.param) {
+                             case LibSlashBackend::DRIVER:
+                                 return "driver";
+                             case LibSlashBackend::SYSEMU:
+                                 return "sysemu";
+                             case LibSlashBackend::MOCK:
+                                 return "mock";
+                             default:
+                                 return "unknown";
+                             }
+                         });
