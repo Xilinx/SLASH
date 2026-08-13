@@ -1,0 +1,85 @@
+# ##################################################################################################
+#  The MIT License (MIT)
+#  Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+#  and associated documentation files (the "Software"), to deal in the Software without restriction,
+#  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+#  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
+#
+#  The above copyright notice and this permission notice shall be included in all copies or
+#  substantial portions of the Software.
+#
+#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+#  NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+#  DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# ##################################################################################################
+
+cmake_minimum_required(VERSION 3.20)
+project(edge_detection LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(VRT_USE_REPO  "Build VRT (and its deps) from the repo tree instead of installed packages" OFF)
+option(BUILD_KERNELS "Build the HLS kernels and link the vbin (requires Vivado)" ON)
+
+if(VRT_USE_REPO)
+  get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../.." REALPATH)
+  if(BUILD_KERNELS)
+    list(APPEND CMAKE_MODULE_PATH "${REPO_ROOT}/cmake")
+    include(SlashTools)
+  endif()
+  set(VRT_INCLUDE_VRTD ON CACHE BOOL "Build vrtd from the repo tree" FORCE)
+  set(VRTD_INCLUDE_LIBSLASH ON CACHE BOOL "Build libslash from the repo tree" FORCE)
+  add_subdirectory(${REPO_ROOT}/vrt ${CMAKE_CURRENT_BINARY_DIR}/vrt)
+  set(_VRT_TARGET vrt)
+else()
+  find_package(vrt REQUIRED CONFIG)
+  if(BUILD_KERNELS)
+    find_package(SlashTools REQUIRED)
+  endif()
+  set(_VRT_TARGET vrt::vrt)
+endif()
+
+if(BUILD_KERNELS)
+  set(DEVICE "xcv80-lsva4737-2MHP-e-S" CACHE STRING "Target device")
+
+  # All three kernels are compiled from the same hls/ directory and packed
+  # into a single vbin image -- fewer images means fewer reprogram steps at
+  # runtime, and the linker can share unused PL resources across kernels.
+  build_hls_dir(
+    TARGET      hls_edges
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
+    DEVICE      "${DEVICE}"
+    KERNELS     edges_kernel
+    OUT_KERNELS _KERNELS_EDGES
+  )
+  build_hls_dir(
+    TARGET      hls_level
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
+    DEVICE      "${DEVICE}"
+    KERNELS     level_kernel
+    OUT_KERNELS _KERNELS_LEVEL
+  )
+  build_hls_dir(
+    TARGET      hls_normalize
+    ROOT        "${CMAKE_CURRENT_SOURCE_DIR}/hls"
+    DEVICE      "${DEVICE}"
+    KERNELS     normalize_kernel
+    OUT_KERNELS _KERNELS_NORMALIZE
+  )
+
+  add_vbin(
+    TARGET    edge_detection_hw
+    PLATFORM  hw
+    CFG       "${CMAKE_CURRENT_SOURCE_DIR}/config.cfg"
+    KERNELS   ${_KERNELS_EDGES} ${_KERNELS_LEVEL} ${_KERNELS_NORMALIZE}
+  )
+endif()
+
+add_executable(${PROJECT_NAME} 01_edge_detection.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE ${_VRT_TARGET})

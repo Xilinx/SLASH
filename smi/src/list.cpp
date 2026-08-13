@@ -65,6 +65,9 @@ constexpr unsigned int SLASH_PF2_DEVICE_ID{0x50C2};
 /// pre-compute-platform bitstreams.
 constexpr unsigned int SLASH_PF1_DEVICE_ID_LEGACY{0x50B5};
 
+/// PCI device ID for the V80P/AVED QDMA function.
+constexpr unsigned int SLASH_PF1_DEVICE_ID_AVED{0x50BD};
+
 /// Legacy PCI device ID for PF2, accepted as a fallback for
 /// pre-compute-platform bitstreams.
 constexpr unsigned int SLASH_PF2_DEVICE_ID_LEGACY{0x50B6};
@@ -452,7 +455,9 @@ static std::vector<V80Board> discoverBoards(bool longPrinting, bool sensors) {
         V80Board board{
             .bdfBase = base,
             .pf0 = checkPf(pf0Dev.bdf, 0, {SLASH_DEVICE_ID}, PF0_EXPECTED_DRIVER),
-            .pf1 = checkPf(pf1Bdf, 1, {SLASH_PF1_DEVICE_ID, SLASH_PF1_DEVICE_ID_LEGACY},
+            .pf1 = checkPf(pf1Bdf, 1,
+                           {SLASH_PF1_DEVICE_ID, SLASH_PF1_DEVICE_ID_LEGACY,
+                            SLASH_PF1_DEVICE_ID_AVED},
                            PF1_EXPECTED_DRIVER),
             .pf2 = checkPf(pf2Bdf, 2, {SLASH_PF2_DEVICE_ID, SLASH_PF2_DEVICE_ID_LEGACY},
                            PF2_EXPECTED_DRIVER),

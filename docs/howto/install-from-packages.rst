@@ -264,7 +264,7 @@ operations — SLASH reads from flash but never writes to it during regular use.
 No system restart is required after either step.
 
 A. Write a Temporary Image via JTAG Boot
----------------------------------------
+----------------------------------------
 
 This step loads the no-FPT static-shell PDI over JTAG. The image is temporary:
 it lets the board enumerate over PCIe so that step B can write the permanent

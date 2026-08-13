@@ -14,7 +14,7 @@ hardware, write the static shell, and validate memory integrity and bandwidth.
 | `reset`    | Hardware-reset a V80 board                        |
 | `write-static-shell` | Write the static SLASH shell to a V80 board |
 | `validate` | Reset board and test memory integrity + bandwidth |
-| `debug`    | Low-level BAR, memory, clock, and hotplug debug utilities |
+| `debug`    | Low-level BAR, memory, clock, hotplug, and RP1 debug utilities |
 
 ## Building
 
@@ -185,9 +185,9 @@ mode programs the flash-image PDI through VRTD cfgmem programming.
 The `--jtag` mode programs the no-FPT PDI over JTAG with `xsdb`.
 
 ```
-v80-smi write-static-shell --flash -d <BDF> [--pdi <file>]
-v80-smi write-static-shell --jtag -d <BDF> [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
-v80-smi write-static-shell --jtag --no-remove-device [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+v80-smi write-static-shell --flash -d <BDF> [--shell-type <all|service|compute>] [--pdi <file>]
+v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
 ```
 
 | Flag              | Description                                          |
@@ -195,12 +195,17 @@ v80-smi write-static-shell --jtag --no-remove-device [--pdi <file>] [--xsdb-targ
 | `--flash`         | Program the flash-image PDI via VRTD cfgmem programming |
 | `--jtag`          | Program the no-FPT PDI over JTAG via `xsdb`          |
 | `-d,--device`     | Board address, required except with `--jtag --no-remove-device` |
+| `--shell-type`    | Shell to program. Flash without `--pdi` defaults to `all`; other modes default to `service` |
 | `--pdi`           | Use this PDI file instead of resolving the installed static shell PDI |
 | `--no-remove-device` | Skip the pre-JTAG PCIe device removal; valid only with `--jtag` |
 | `--bash-source`   | Source a Vivado/Vitis setup script before running `xsdb`; may be repeated and is valid only with `--jtag` |
 | `--xsdb-target-id` | Select the `Versal xcv80` XSDB `target_id`; valid only with `--jtag` |
 
-Both modes resolve their PDI path with `python3 -m slashkit static-shell-path`,
+Flash mode programs the selected boot partition, or both the service and compute
+partitions when `--shell-type all` is used. `all` is valid only with `--flash`
+without `--pdi`, because a single override PDI cannot represent both shells.
+
+Both modes resolve each PDI path with `python3 -m slashkit static-shell-path`,
 so setting `PYTHONPATH` can select an in-repo `slashkit`.  Use `--pdi` to bypass
 that resolution during active development; the file must match the selected
 mode (`--flash` expects a flash-image PDI, `--jtag` expects a no-FPT/JTAG-bootable
@@ -494,6 +499,87 @@ $ v80-smi debug hotplug-op -d 03:00 --op remove --function 2
 hotplug_op=remove bdf=0000:03:00 function=2
 ```
 
+### debug rp1-dump
+
+Read the RP1 control block (BAR-mapped, at its default DDR offset within
+the host-visible window) and sample `heartbeat` twice, 500ms apart, to
+report basic liveness.
+
+```
+v80-smi debug rp1-dump -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
+```
+
+
+
+| Flag              | Description                                          |
+|-------------------|------------------------------------------------------|
+| `-d,--device`     | Board address (required), e.g. `03:00` or `0000:03:00` |
+| `-b,--bar`        | BAR that maps the RP1 DDR window (default `4`)       |
+| `--ctrl-offset`   | Host BAR offset of the RP1 control block (default `0x4000000`; `0x...` for hex) |
+
+Prints `magic`, `version`, `node_count`, `cq_size`, the node/CQ/arg-buffer/
+signal-array base addresses, trace configuration, the protocol-v4 capability
+mask and each named capability, required/missing capabilities, the generated
+platform/IPI identity, `graph_seq`/`graph_done_seq`, both CQ cursors,
+`rp1_state`, `rp1_error_code`, `rp1_current_node`, all latched terminal-error
+fields, and `heartbeat`, then the protocol-compatibility and liveness verdicts.
+It exits non-zero if `magic` isn't `RP1_CTRL_MAGIC` ("SQR1"), the protocol
+version/capability contract is incompatible, or the generated platform/IPI
+identity is zero.
+
+`rp1-dump` is read-only: it does not submit a graph, alter CQ cursors, or issue
+a PDI load. This makes it safe for before/after snapshots around the no-reset
+graph hardware acceptance sequence.
+
+Example:
+
+```console
+$ v80-smi debug rp1-dump -d 03:00
+RP1 control block @ R5 0x30000000 (BAR4 + 0x4000000):
+  magic            = 0x53515231 (SQR1)
+  ...
+Liveness: heartbeat advanced 128841 -> 129091 (running)
+```
+
+### debug rp1-ping
+
+Submit a one-node `SIGNAL` graph to RP1 and verify it completes end-to-end:
+programs the control block if needed, submits the graph, polls
+`graph_done_seq`, and checks the signal slot the node was expected to write.
+
+```
+v80-smi debug rp1-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
+```
+
+Takes the same `-d`, `-b`, and `--ctrl-offset` flags as `debug rp1-dump`.
+Exits non-zero and dumps the control block on timeout, firmware-not-ready,
+or a signal-slot mismatch.
+
+Example:
+
+```console
+$ v80-smi debug rp1-ping -d 03:00
+rp1-ping: submitted seq=1, polling...
+PASS: slot[0] = 0xdeadbeef, cq_write_idx=1, state=1
+```
+
+### debug rp1-trace-ping
+
+Run the same one-node `SIGNAL` probe with RP1 tracing enabled, then print the
+completion-queue entries and trace records in chronological order.
+
+```
+v80-smi debug rp1-trace-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
+```
+
+Takes the same options as `debug rp1-dump`. It exits non-zero if RP1 is not
+ready, the graph times out, or the sentinel signal is not produced.
+
+All three `rp1-*` commands require RP1 firmware to be loaded onto R5-1 and
+reporting `RP1_STATE_READY`; see
+[`linker/slashkit/resources/aved/rp1/ARCHITECTURE.md`](../linker/slashkit/resources/aved/rp1/ARCHITECTURE.md)
+for the on-wire protocol they probe.
+
 ## Device addressing
 
 All commands that accept a `-d,--device` option support four BDF
@@ -539,6 +625,7 @@ smi/
     debug/mem_poke.cpp/hpp  Raw device memory read/write command
     debug/clockwiz.cpp/hpp  Clock read/set debug command
     debug/hotplug.cpp/hpp   PCIe hotplug debug command
+    debug/rp1_probe.cpp/hpp RP1 firmware bring-up probes (dump, ping, trace-ping)
     bdf.hpp           BDF address parser
     utils.hpp         Formatting and output utilities
   resources/

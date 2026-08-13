@@ -4,3 +4,9 @@
 [submodule "AVED"]
 	path = submodules/AVED
 	url = https://github.com/Xilinx/AVED.git
+[submodule "submodules/xilinx-qemu"]
+	path = submodules/xilinx-qemu
+	url = https://github.com/Xilinx/qemu.git
+[submodule "submodules/qemu-devicetrees"]
+	path = submodules/qemu-devicetrees
+	url = https://github.com/Xilinx/qemu-devicetrees.git

@@ -28,7 +28,7 @@ from unittest import mock
 import pytest
 
 from slashkit.core import command_config
-from slashkit.core.command_config import LinkerConfiguration
+from slashkit.core.command_config import InstallerConfiguration, LinkerConfiguration
 
 _FIXTURE_COMPONENT = (
     Path(__file__).resolve().parents[1]
@@ -67,6 +67,55 @@ def _write_cfg(tmp_path: Path, body: str) -> Path:
     cfg = tmp_path / "config.cfg"
     cfg.write_text(textwrap.dedent(body))
     return cfg
+
+
+def test_installer_parser_keeps_stage_and_shell_type(tmp_path):
+    """The merged installer exposes independent stage and shell selectors."""
+    parser = argparse.ArgumentParser()
+    InstallerConfiguration.populate_argument_parser(parser)
+
+    args = parser.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path),
+            "--stage",
+            "rp1-firmware",
+            "--shell-type",
+            "compute",
+        ]
+    )
+
+    assert args.stage == "rp1-firmware"
+    assert args.shell_type == "compute"
+
+
+def test_base_shell_stage_preserves_existing_build_directory(tmp_path):
+    """A base-shell rerun reuses its AVED checkout and implementation state."""
+    vivado = tmp_path / "vivado"
+    vivado.write_text("#!/bin/sh\n")
+    build_dir = tmp_path / "install.prj"
+    build_dir.mkdir()
+    marker = build_dir / "keep"
+    marker.touch()
+    out_dir = tmp_path / "resources"
+    out_dir.mkdir()
+
+    config = InstallerConfiguration(
+        argparse.Namespace(
+            vivado=vivado,
+            jobs=8,
+            ignore_timing_failure=False,
+            stage="base-shell",
+            build_dir=build_dir,
+            aved_repo="unused",
+            aved_ref="unused",
+            shell_type="service",
+            out_dir=out_dir,
+        )
+    )
+
+    assert config.build_dir == build_dir.resolve()
+    assert marker.exists()
 
 
 def test_config_cfg_pre_synth_reaches_pre_synth_tcls(tmp_path):

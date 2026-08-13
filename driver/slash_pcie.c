@@ -24,8 +24,8 @@
  * and registers the device with the hotplug subsystem so that it can
  * be removed/reset/rescanned during FPGA reconfiguration.
  *
- * PF1 (the QDMA function, device 10EE:50C1, or legacy 10EE:50B5) is
- * handled by a separate PCI driver registered in slash_qdma.c.
+ * PF1 (the QDMA function, device 10EE:50C1, legacy 10EE:50B5, or AVED
+ * 10EE:50BD) is handled by a separate PCI driver in slash_qdma.c.
  */
 
 #include "slash_pcie.h"

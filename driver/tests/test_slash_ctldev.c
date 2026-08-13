@@ -51,7 +51,9 @@ TEST_F(ctldev, get_device_info_happy)
 	EXPECT_TRUE(slash_looks_like_bdf(info.bdf))
 	TH_LOG("bad BDF '%s'", info.bdf);
 	EXPECT_EQ(SLASH_TEST_VENDOR_ID, info.vendor_id);
-	EXPECT_EQ(SLASH_TEST_PF2_DEV_ID, info.device_id);
+	EXPECT_TRUE(info.device_id == SLASH_TEST_PF2_DEV_ID ||
+		    info.device_id == SLASH_TEST_PF2_DEV_ID_LEGACY)
+	TH_LOG("unexpected PF2 device ID 0x%04x", info.device_id);
 	/* The function digit of the BDF must be '2' (PF2). */
 	EXPECT_EQ('2', info.bdf[11]);
 }

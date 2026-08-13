@@ -19,3 +19,11 @@ exclude = ["test*"]
 
 [tool.setuptools.package-data]
 "slashkit" = ["resources/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = [
+    "**/__pycache__/*",
+    "**/*.pyc",
+    "**/build/**/*",
+    "**/build-*/**/*",
+]
