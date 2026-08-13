@@ -66,6 +66,17 @@ The V80 RunTime library. VRT is the primary API surface:
 VRT transparently selects the correct back-end (PCIe BAR, ZeroMQ, or Verilog
 register map) based on the platform encoded in the vrtbin's ``system_map.xml``.
 
+Graph API
+---------
+
+The ``vrt::graph`` API is an optional higher-level layer inside libvrt for
+applications that are easier to describe as a graph of kernels, buffers,
+scalars, loops, and conditionals than as a manual sequence of kernel launches.
+It compiles the authored graph into per-device execution plans and inserts
+cross-device transfers where graph tokens move between devices. See
+:doc:`/explanation/graph-api-architecture` for the graph compiler, device, and
+bridge architecture.
+
 libvrtd++ and libvrtd
 ---------------------
 

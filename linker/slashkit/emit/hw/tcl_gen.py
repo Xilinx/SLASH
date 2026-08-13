@@ -243,6 +243,11 @@ def generate_tcl(config: LinkerConfiguration) -> None:
 
     # Early error: VIRT targets are not supported on the compute shell.
     if config.shell_type == ShellType.COMPUTE:
+        if getattr(cfg.debug, "nets", None):
+            raise ValueError(
+                "[debug] requires shell=service "
+                "(compute shell has no AXI debug hub)."
+            )
         for inst in instances.values():
             for port, tgt in inst.params.get("mem_sp", {}).items():
                 if str(tgt.get("domain", "")).upper() == "VIRT":

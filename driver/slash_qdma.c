@@ -1665,9 +1665,8 @@ static void slash_qdma_ioctl_info(struct slash_qdma_dev *qdma_dev,
  * @uarg:     User-space pointer to a slash_qdma_qpair_add struct.
  *
  * Validates userspace inputs:
- *   - @dir_mask must be non-zero, contain only known bits, and not include CMPT
- *     (completion queues are not yet supported).
- *   - @mode must be MM; streaming mode (ST) is not yet supported.
+ *   - @dir_mask must contain only valid direction bits and be non-zero.
+ *   - @mode must be MM or ST.
  *   - Ring size indices must be in [0, 15] (CSR table range).
  *   - @aperture_size must be zero (linear addressing) or a power-of-two
  *     libqdma keyhole aperture.
@@ -1704,19 +1703,13 @@ static int slash_qdma_ioctl_qpair_add_w(struct slash_qdma_dev *qdma_dev,
     if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
-    /* Completion queues are not yet supported. */
-    if (req.dir_mask & SLASH_QDMA_DIR_CMPT)
-        return -EOPNOTSUPP;
-
     /* Validate direction mask: must be non-zero and contain only known bits. */
     dir_mask = req.dir_mask & SLASH_QDMA_DIR_MASK;
     if (!dir_mask || dir_mask != req.dir_mask)
         return -EINVAL;
 
-    /* Streaming mode is not yet supported; only memory-mapped mode is accepted. */
-    if (req.mode == QDMA_Q_MODE_ST)
-        return -EOPNOTSUPP;
-    if (req.mode != QDMA_Q_MODE_MM)
+    /* Only memory-mapped and streaming modes are supported. */
+    if (req.mode != QDMA_Q_MODE_MM && req.mode != QDMA_Q_MODE_ST)
         return -EINVAL;
 
     /*

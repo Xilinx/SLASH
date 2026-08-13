@@ -63,7 +63,18 @@ required on the build machine, not on every target:
       .. code-block:: bash
 
          sudo apt install \
-           build-essential cmake ninja-build pkg-config rsync \
+           build-essential cmake ninja-build pkg-config rsync git dkms \
+           debhelper dpkg-dev apt-utils \
+           python3 python3-pip \
+           libcli11-dev libinih-dev libjsoncpp-dev \
+           libsystemd-dev libxml2-dev libzmq3-dev zlib1g-dev
+
+   .. tab-item:: Ubuntu 24.04+
+
+      .. code-block:: bash
+
+         sudo apt install \
+           build-essential cmake ninja-build pkg-config rsync git dkms dh-dkms \
            debhelper dpkg-dev apt-utils \
            python3 python3-pip \
            libcli11-dev libinih-dev libjsoncpp-dev \
@@ -85,7 +96,7 @@ required on the build machine, not on every target:
       .. code-block:: bash
 
          sudo dnf install \
-           gcc gcc-c++ cmake make ninja-build pkg-config rsync \
+           gcc gcc-c++ cmake make ninja-build pkg-config rsync git dkms \
            rpm-build createrepo_c systemd-rpm-macros \
            python3.11 python3.11-pip \
            cli11-devel cppzmq-devel inih-devel jsoncpp-devel \
@@ -97,7 +108,7 @@ required on the build machine, not on every target:
       .. code-block:: bash
 
          sudo dnf install \
-           gcc gcc-c++ cmake make ninja-build pkg-config rsync \
+           gcc gcc-c++ cmake make ninja-build pkg-config rsync git dkms \
            rpm-build createrepo_c systemd-rpm-macros \
            python3 python3-pip \
            cli11-devel cppzmq-devel inih-devel jsoncpp-devel \
@@ -443,7 +454,7 @@ operations — SLASH reads from flash but never writes to it during regular use.
 No system restart is required after either step.
 
 A. Write a Temporary Image via JTAG Boot
----------------------------------------
+----------------------------------------
 
 This step loads the no-FPT static-shell PDI over JTAG. The image is temporary:
 it lets the board enumerate over PCIe so that step B can write the permanent

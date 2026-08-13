@@ -21,11 +21,23 @@
 set src_dir [file dirname [file normalize [info script]]]
 set cwd     [pwd]
 
-if {[llength $argv] < 1} {
+# Optional parallel job count via -tclargs: an integer in the trailing
+# position. Pop it before parsing the project, repository, and action.
+set jobs "14"
+set args $argv
+if {[llength $args] > 0} {
+  set last_arg [lindex $args end]
+  if {[string is integer -strict $last_arg]} {
+    set jobs $last_arg
+    set args [lrange $args 0 end-1]
+  }
+}
+
+if {[llength $args] < 1} {
   puts "INFO: No project_name provided via -tclargs; defaulting to 'user'."
   set project_name "user"
 } else {
-  set project_name [lindex $argv 0]
+  set project_name [lindex $args 0]
 }
 
 # Optional IP repository path(s) via -tclargs; defaults to ../../common/iprepo
@@ -35,9 +47,9 @@ set iprepos $default_iprepos
 # Optional action via -tclargs: create | build | all (default: all)
 set action "all"
 
-if {[llength $argv] >= 2} {
-  set arg1 [lindex $argv 1]
-  if {[llength $argv] == 2} {
+if {[llength $args] >= 2} {
+  set arg1 [lindex $args 1]
+  if {[llength $args] == 2} {
     if {[lsearch -exact {create build all} $arg1] >= 0} {
       set action $arg1
     } else {
@@ -48,8 +60,8 @@ if {[llength $argv] >= 2} {
   }
 }
 
-if {[llength $argv] >= 3} {
-  set action [lindex $argv 2]
+if {[llength $args] >= 3} {
+  set action [lindex $args 2]
 }
 
 set do_create 0
@@ -104,7 +116,7 @@ if {![file exists $proj_exists]} {
 
 if {$do_build} {
   source [file normalize [file join $src_dir "build_project.tcl"]]
-  build_project $project_name
+  build_project $project_name $jobs
   puts "INFO: Project build complete."
 } elseif {$do_create} {
   puts "INFO: Project creation complete (build skipped)."

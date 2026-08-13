@@ -17,6 +17,8 @@ Prerequisites
 - **C compiler** with C11 support
 - **Linux kernel headers** (for the kernel module)
 - **pkg-config**
+- **git**
+- **dkms** (for kernel module packaging)
 
 Library dependencies:
 
@@ -27,11 +29,21 @@ Library dependencies:
 - **libsystemd** — vrtd daemon integration
 - **inih** — INI configuration parsing (vrtd)
 
-On Debian/Ubuntu:
+On Ubuntu 22.04:
 
 .. code-block:: bash
 
-   sudo apt install cmake pkg-config ninja-build \
+   sudo apt install cmake pkg-config ninja-build git dkms \
+     libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
+     libsystemd-dev libinih-dev libcli11-dev \
+     linux-headers-$(uname -r) \
+     python3
+
+On Ubuntu 24.04+:
+
+.. code-block:: bash
+
+   sudo apt install cmake pkg-config ninja-build git dkms dh-dkms \
      libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
      libsystemd-dev libinih-dev libcli11-dev \
      linux-headers-$(uname -r) \

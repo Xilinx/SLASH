@@ -12,6 +12,7 @@ dispatch, and streaming DMA.
 | `Buffer<T>`        | `vrt/buffer.hpp`          | Typed device memory with host sync       |
 | `StreamingBuffer<T>` | `vrt/streaming_buffer.hpp` | QDMA streaming I/O for kernel ports    |
 | `Vrtbin`           | `vrt/vrtbin.hpp`          | Archive extraction and metadata lookup   |
+| `vrt::graph::Graph` | `vrt/graph/graph.hpp`    | Higher-level graph API — see "Graph API" below |
 
 ## Building
 
@@ -148,6 +149,52 @@ kernel.start(size, buf);
 kernel.wait();
 ```
 
+## Graph API
+
+`vrt::graph` is a higher-level, optional layer for applications that are
+easier to describe as a graph of kernels, buffers, and scalars than as a
+manual sequence of `Kernel`/`Buffer` calls. Kernels can be placed on the CPU
+or on an FPGA device; FPGA-side kernel dispatch, reprogram (`PDI_LOAD`),
+loop, and conditional nodes can run autonomously on RP1 (an on-die ARM
+Cortex-R5 command processor) with no host round-trip once the graph is
+submitted.
+
+```cpp
+#include <vrt/graph/graph.hpp>
+
+using namespace vrt::graph;
+
+Graph graph = Graph::withDefaults();
+auto fpga  = graph.addFpga({.bdf = bdf, .images = {{"image", vbinPath}}});
+auto image = fpga.image("image");
+auto myKernel = image.kernel("my_kernel_0")
+                    .scalarIn<uint64_t>("n").in<int32_t>("in").out<int32_t>("out");
+
+GraphScalar n = graph.scalarInput<uint64_t>("n");
+GraphBuffer input = graph.input<int32_t>("input", n);
+GraphBuffer output = graph.output<int32_t>("output", n);
+GraphNode load = graph.addReprogram({.image = image});
+graph.addKernelCall({
+    .kernel = myKernel,
+    .inputScalars = {{"n", n}},
+    .inputs = {{"in", input}},
+    .outputs = {{"out", output}},
+    .after = {load},
+});
+
+Execution exec = graph.compile();
+exec.writeScalar(n, static_cast<uint64_t>(elementCount));
+exec.write(input, inputData);
+exec.run();
+exec.read(output, outputData);
+```
+
+See [`examples/graph/`](../examples/graph/) for complete, runnable examples
+(CPU+FPGA graphs, loops, conditionals, multi-image reprogramming) and the
+published "Graph API" tutorial and architecture pages. Compiler developers
+should start with the
+[`VRT Graph Compiler Developer Handbook`](src/graph/COMPILER_HANDBOOK.md).
+
 ## Platform support
 
 VRT transparently supports three execution platforms, selected by the
@@ -164,9 +211,13 @@ platform with `device.getPlatform()`.
 
 ## API documentation
 
-Doxygen HTML and PDF documentation can be generated from the
-[doc/](doc/) directory.  See [doc/README.md](doc/README.md) for
-instructions.
+Full API reference (VRT, `vrt::graph`, and the rest of the stack) is
+generated from Doxygen comments and published at
+[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/). There is no
+standalone local HTML/PDF target: `docs/conf.py` runs Doxygen against
+[`doc/Doxyfile`](doc/Doxyfile) (XML output only) as part of the top-level
+Sphinx build in `docs/`, and Breathe renders that XML into the published
+pages.
 
 ## Project layout
 
@@ -197,6 +248,17 @@ vrt/
       logger.hpp              Logging facility
       platform.hpp            Platform enum
       zmq_server.hpp          ZeroMQ IPC server
+    graph/
+      graph.hpp                Opaque typed graph authoring API
+      execution.hpp            Direct executable handle (write/launch/wait/read)
+      authoring/               Typed values, regions, FPGA/image handles
+      core/                    Compiler value internals and validation
+      crossdevice/             Cross-device bridge runtime (IBridge, CpuFpgaBridge)
+      detail/                  Private authoring and executable assembly contracts
+      device/                  Direct queue backends: CpuDevice, FpgaDevice, GpuDevice
+        fpga/                  RP1 programs, packet lowering, BAR access, submission
+      ir/                      Authored, resolved, placed, routed, scheduled IR
+      render/                  Compiler-stage Graphviz projections
   src/
     device.cpp                Device implementation
     kernel.cpp                Kernel implementation
@@ -207,9 +269,9 @@ vrt/
     qdma/                     QDMA subsystem implementation
     register/                 Register access implementation
     utils/                    Utility implementations
+    graph/                    Implementation for everything under include/vrt/graph/
   doc/
-    Doxyfile                  Doxygen configuration
-    Makefile                  Documentation build
+    Doxyfile                  Doxygen configuration (XML output for docs/conf.py + Breathe)
   vrtd/                       V80 runtime daemon (see vrtd/README.md)
 ```
 

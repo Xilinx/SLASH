@@ -172,3 +172,5 @@ Next Steps
   platforms.
 - :doc:`/explanation/vrtbin-format` — what is inside a vrtbin archive.
 - :doc:`your-first-kernel` — write and build your own HLS kernel.
+- :doc:`graph-api` — compose CPU, FPGA, and GPU kernels into a single
+  dataflow graph.

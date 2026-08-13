@@ -37,7 +37,7 @@ TEST(CtldevOpenTest, NullPath) {
     errno = 0;
     struct slash_ctldev *dev = slash_ctldev_open(nullptr);
     EXPECT_EQ(dev, nullptr);
-    EXPECT_EQ(errno, EFAULT);
+    EXPECT_EQ(errno, EINVAL);
 }
 
 TEST(CtldevCloseTest, NullHandle) {

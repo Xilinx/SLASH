@@ -159,21 +159,23 @@ Write the installed static SLASH shell PDI to a V80 board.
 
 .. code-block:: text
 
-   v80-smi write-static-shell --flash -d <BDF> [--pdi <file>]
-   v80-smi write-static-shell --jtag -d <BDF> [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
-   v80-smi write-static-shell --jtag --no-remove-device [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+   v80-smi write-static-shell --flash -d <BDF> [--shell-type <all|service|compute>] [--pdi <file>]
+   v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+   v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
 
 Modes:
 
-* ``--flash`` resolves ``amd_v80_gen5x8_25.1.pdi`` via
-  ``python3 -m slashkit static-shell-path`` and programs it through the VRTD
-  cfgmem programming command.
+* ``--flash`` resolves the selected shell PDI via
+  ``python3 -m slashkit static-shell-path`` and programs its boot partition
+  through the VRTD cfgmem command. Without ``--pdi`` or ``--shell-type``, it
+  programs both the service and compute partitions.
 * ``--jtag`` resolves ``amd_v80_gen5x8_25.1_nofpt.pdi`` the same way,
   optionally sources Vivado/Vitis setup scripts, and runs ``xsdb`` with the
   installed ``versal_flash_pdi.tcl`` script.
 * ``--pdi`` bypasses static-shell path resolution for active development. The
   file must match the selected mode: use a flash-image PDI with ``--flash`` and
-  a no-FPT/JTAG-bootable PDI with ``--jtag``.
+  a no-FPT/JTAG-bootable PDI with ``--jtag``. It cannot be combined with
+  ``--shell-type all``.
 
 .. option:: --flash
 
@@ -186,6 +188,12 @@ Modes:
 .. option:: -d, --device <BDF>
 
    Board address. Required except with ``--jtag --no-remove-device``.
+
+.. option:: --shell-type <all|service|compute>
+
+   Shell partition to program. ``all`` is valid only with ``--flash`` and no
+   ``--pdi``. Flash mode without a PDI override defaults to ``all``; JTAG mode
+   and commands with ``--pdi`` default to ``service``.
 
 .. option:: --pdi <file>
 

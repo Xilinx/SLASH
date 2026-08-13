@@ -6,11 +6,12 @@
 Examples
 ##########
 
-SLASH includes six example projects demonstrating different VRT features.
+SLASH includes classic VRT examples plus Graph API examples demonstrating
+heterogeneous graph execution.
 
 .. list-table::
    :header-rows: 1
-   :widths: 5 20 40
+   :widths: 12 28 60
 
    * - ID
      - Name
@@ -33,6 +34,19 @@ SLASH includes six example projects demonstrating different VRT features.
    * - 05
      - perf
      - HBM/DDR memory performance benchmarking
+   * - graph/00
+     - multi_image_pipeline
+     - End-to-end CPU + FPGA graph with two exclusive-image vbins, one-call
+       FPGA bring-up, chained reprogram nodes, an in-place CPU kernel, and a
+       fixed-count loop carrying state.
+   * - graph/01
+     - edge_detection
+     - Basic Graph API authoring: CPU/FPGA kernels, buffers, scalars, and a
+       single reprogram gating three kernels in one vbin image.
+   * - graph/02
+     - sharpen_loop
+     - Loops and conditionals: a fixed-count FPGA loop carrying state, running
+       alongside a CPU reduction, followed by a post-loop conditional.
 
 Each example includes a ``CMakeLists.txt`` with targets for hardware (``hw``), emulation (``emu``),
 and simulation (``sim``) flows. See ``examples/README.md`` in the repository for build
