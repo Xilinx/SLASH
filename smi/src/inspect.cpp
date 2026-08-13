@@ -392,7 +392,8 @@ std::ostream& operator<<(std::ostream& out, const VbinData& vbin) {
 
     if (vbin.shellBuildId) {
         out << INDENT1 << "Shell build commit: " << vbin.shellBuildId->commitHex()
-            << (vbin.shellBuildId->dirty ? " (dirty)" : "") << "\n";
+            << (vbin.shellBuildId->dirty ? " (dirty)" : "") << "\n"
+            << INDENT1 << "Shell variant: " << vbin.shellBuildId->shellName() << "\n";
     }
 
     if (vbin.utilization) {
@@ -415,6 +416,7 @@ Json::Value toJson(const VbinData& vbin) {
     if (vbin.shellBuildId) {
         j["shell_build_commit"] = vbin.shellBuildId->commitHex();
         j["shell_build_dirty"] = vbin.shellBuildId->dirty;
+        j["shell_build_variant"] = vbin.shellBuildId->shellName();
     }
 
     if (vbin.utilization) {

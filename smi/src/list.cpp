@@ -686,7 +686,8 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
         out << INDENT1 << "Shell build: ";
         if (board.shellBuildId) {
             out << board.shellBuildId->commitHex()
-                << (board.shellBuildId->dirty ? " (dirty)" : "");
+                << (board.shellBuildId->dirty ? " (dirty)" : "")
+                << " (" << board.shellBuildId->shellName() << ")";
         } else {
             out << "unavailable";
         }
@@ -760,6 +761,7 @@ Json::Value toJson(const V80Board& board) {
     if (board.shellBuildId) {
         j["shell_build_commit"] = board.shellBuildId->commitHex();
         j["shell_build_dirty"] = board.shellBuildId->dirty;
+        j["shell_build_variant"] = board.shellBuildId->shellName();
     }
 
     if (!board.sensors.empty()) {

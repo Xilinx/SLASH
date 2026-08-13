@@ -231,21 +231,31 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
     return aved_pdi, aved_nofpt_pdi
 
 
-def _compute_build_id_env() -> Dict[str, str]:
+# Shell-variant flag carried in bit[28] of the build-ID high word. Lets the
+# host tell which shell is physically loaded by reading the register, rather
+# than relying on the shell state vrtd tracks in software.
+_BUILD_ID_SHELL_BIT = {
+    ShellType.SERVICE: 0x00000000,
+    ShellType.COMPUTE: 0x10000000,
+}
+
+
+def _compute_build_id_env(shell_type: ShellType) -> Dict[str, str]:
     """
     Derive the shell build-ID constants from the git commit of the SLASH source
     tree and return them as environment variables consumed by create_project.tcl.
 
-    Encoding (60-bit hash + dirty), split across two 32-bit GPIO channels.
-    The 60 hash bits are the top 60 bits of the SHA-1 (bits[159:100]), so the
-    value starts with the commit's GitHub short hash:
+    Encoding (60-bit hash + shell type + dirty), split across two 32-bit GPIO
+    channels. The 60 hash bits are the top 60 bits of the SHA-1
+    (bits[159:100]), so the value starts with the commit's GitHub short hash:
       - SLASH_BUILD_ID_LO = low 32 bits of the 60-bit window
-      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], bits[30:28] reserved,
-        dirty flag in bit[31]
+      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], shell type in bit[28]
+        (0 = service, 1 = compute), bits[30:29] reserved, dirty flag in bit[31]
 
     Falls back to hash 0 with the dirty bit set when git information is
     unavailable (e.g. building from an exported tarball, not a git checkout).
     """
+    shell_bit = _BUILD_ID_SHELL_BIT[shell_type]
     repo_dir = Path(__file__).resolve().parents[3]
 
     def _git(*args: str) -> Optional[str]:
@@ -261,7 +271,10 @@ def _compute_build_id_env() -> Dict[str, str]:
     sha = _git("rev-parse", "HEAD")
     if sha is None:
         logger.warning("Not a git checkout; shell build-ID will be 0 (dirty).")
-        return {"SLASH_BUILD_ID_LO": "0x0", "SLASH_BUILD_ID_HI": "0x80000000"}
+        return {
+            "SLASH_BUILD_ID_LO": "0x0",
+            "SLASH_BUILD_ID_HI": f"0x{0x80000000 | shell_bit:08x}",
+        }
 
     # `git diff --quiet` exits non-zero when the working tree has changes.
     dirty = subprocess.run(
@@ -271,11 +284,12 @@ def _compute_build_id_env() -> Dict[str, str]:
     sha_int = int(sha, 16) >> 100  # keep the top 60 bits (first 15 hex chars)
     lo = sha_int & 0xFFFFFFFF
     hi = (sha_int >> 32) & 0x0FFFFFFF
+    hi |= shell_bit
     if dirty:
         hi |= 0x80000000
 
-    logger.info("Shell build-ID: commit %s%s",
-                sha[:14], " (dirty)" if dirty else "")
+    logger.info("Shell build-ID: commit %s%s (%s shell)",
+                sha[:14], " (dirty)" if dirty else "", shell_type.value)
     return {"SLASH_BUILD_ID_LO": f"0x{lo:08x}", "SLASH_BUILD_ID_HI": f"0x{hi:08x}"}
 
 
@@ -311,7 +325,7 @@ def create_build_project(
         cmd.append(str(config.n_jobs))
 
         env = _environment_with_udev_ld_preload()
-        env.update(_compute_build_id_env())
+        env.update(_compute_build_id_env(ShellType.SERVICE))
 
         subprocess.run(cmd, cwd=str(config.build_dir), check=True,
                        env=env)
@@ -346,13 +360,14 @@ def create_build_project_compute(
         if action:
             cmd.append(action)
 
-        # No SLASH_BUILD_ID_* here: the compute shell has no build-ID GPIO and
-        # its create_project.tcl never reads those globals.
+        env = _environment_with_udev_ld_preload()
+        env.update(_compute_build_id_env(ShellType.COMPUTE))
+
         subprocess.run(
             cmd,
             cwd=str(config.build_dir),
             check=True,
-            env=_environment_with_udev_ld_preload(),
+            env=env,
         )
 
 
