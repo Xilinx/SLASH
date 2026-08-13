@@ -44,7 +44,7 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 # source top_script.tcl
 
 
-# The design that will be created by this Tcl script contains the following 
+# The design that will be created by this Tcl script contains the following
 # block design container source references:
 # slash_base, slash_vadd, service_layer, service_layer_vadd
 
@@ -106,7 +106,7 @@ if { ${design_name} eq "" } {
    set errMsg "Design <$design_name> already exists in your project, please set the variable <design_name> to another value."
    set nRet 1
 } elseif { [get_files -quiet ${design_name}.bd] ne "" } {
-   # USE CASES: 
+   # USE CASES:
    #    6) Current opened design, has components, but diff names, design_name exists in project.
    #    7) No opened design, design_name exists in project.
 
@@ -140,7 +140,7 @@ set bCheckIPsPassed 1
 ##################################################################
 set bCheckIPs 1
 if { $bCheckIPs == 1 } {
-   set list_check_ips "\ 
+   set list_check_ips "\
 xilinx.com:ip:clk_wizard:1.0\
 xilinx.com:ip:proc_sys_reset:5.0\
 xilinx.com:ip:axi_noc:1.1\
@@ -190,7 +190,7 @@ set map_bdc_missing(DFX) ""
 set map_bdc_missing(BDC) ""
 
 if { $bCheckSources == 1 } {
-   set list_check_srcs "\ 
+   set list_check_srcs "\
 slash_base \
 service_layer \
 "
@@ -372,6 +372,8 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
 
   create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 m_axi_pcie_mgmt_pdi_reset
 
+  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M00_INI
+
 
   # Create pins
   create_bd_pin -dir I -type clk clk_pcie
@@ -395,7 +397,7 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   set rpu_sc [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 rpu_sc ]
   set_property -dict [list \
     CONFIG.NUM_CLKS {1} \
-    CONFIG.NUM_MI {2} \
+    CONFIG.NUM_MI {3} \
     CONFIG.NUM_SI {1} \
   ] $rpu_sc
 
@@ -454,7 +456,28 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   # Create instance: gcq_m2r, and set properties
   set gcq_m2r [ create_bd_cell -type ip -vlnv xilinx.com:ip:cmd_queue:2.0 gcq_m2r ]
 
+  # Create instance: axi_noc_0, and set properties
+  set axi_noc_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc:1.1 axi_noc_0 ]
+  set_property -dict [list \
+    CONFIG.NUM_MI {0} \
+    CONFIG.NUM_NMI {1} \
+  ] $axi_noc_0
+
+
+  set_property -dict [ list \
+   CONFIG.CONNECTIONS {M00_INI {read_bw {5} write_bw {5}}} \
+   CONFIG.DEST_IDS {} \
+   CONFIG.REMAPS {M00_INI {{0x8800_0000 0x202_0000_0000 0x8000000}}} \
+   CONFIG.NOC_PARAMS {} \
+   CONFIG.CATEGORY {pl} \
+ ] [get_bd_intf_pins /static_region/aved/base_logic/axi_noc_0/S00_AXI]
+
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
+ ] [get_bd_pins /static_region/aved/base_logic/axi_noc_0/aclk0]
+
   # Create interface connections
+  connect_bd_intf_net -intf_net Conn1 [get_bd_intf_pins axi_noc_0/M00_INI] [get_bd_intf_pins M00_INI]
   connect_bd_intf_net -intf_net axi_smbus_rpu_SMBUS [get_bd_intf_pins axi_smbus_rpu/SMBUS] [get_bd_intf_pins smbus_rpu]
   connect_bd_intf_net -intf_net pcie_cfg_ext_1 [get_bd_intf_pins pcie_cfg_ext] [get_bd_intf_pins hw_discovery/s_pcie4_cfg_ext]
   connect_bd_intf_net -intf_net pcie_slr0_mgmt_sc_M00_AXI [get_bd_intf_pins pcie_slr0_mgmt_sc/M00_AXI] [get_bd_intf_pins hw_discovery/s_axi_ctrl_pf0]
@@ -463,6 +486,7 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   connect_bd_intf_net -intf_net pcie_slr0_mgmt_sc_M03_AXI [get_bd_intf_pins pcie_slr0_mgmt_sc/M03_AXI] [get_bd_intf_pins m_axi_pcie_mgmt_pdi_reset]
   connect_bd_intf_net -intf_net rpu_sc_M00_AXI [get_bd_intf_pins rpu_sc/M00_AXI] [get_bd_intf_pins gcq_m2r/S01_AXI]
   connect_bd_intf_net -intf_net rpu_sc_M01_AXI [get_bd_intf_pins axi_smbus_rpu/S_AXI] [get_bd_intf_pins rpu_sc/M01_AXI]
+  connect_bd_intf_net -intf_net rpu_sc_M02_AXI [get_bd_intf_pins axi_noc_0/S00_AXI] [get_bd_intf_pins rpu_sc/M02_AXI]
   connect_bd_intf_net -intf_net s_axi_pcie_mgmt_slr0_1 [get_bd_intf_pins s_axi_pcie_mgmt_slr0] [get_bd_intf_pins pcie_slr0_mgmt_sc/S00_AXI]
   connect_bd_intf_net -intf_net s_axi_rpu_1 [get_bd_intf_pins s_axi_rpu] [get_bd_intf_pins rpu_sc/S00_AXI]
 
@@ -477,7 +501,8 @@ proc create_hier_cell_base_logic { parentCell nameHier } {
   [get_bd_pins hw_discovery/aclk_ctrl] \
   [get_bd_pins uuid_rom/S_AXI_ACLK] \
   [get_bd_pins gcq_m2r/aclk] \
-  [get_bd_pins axi_smbus_rpu/s_axi_aclk]
+  [get_bd_pins axi_smbus_rpu/s_axi_aclk] \
+  [get_bd_pins axi_noc_0/aclk0]
   connect_bd_net -net gcq_m2r_irq_sq  [get_bd_pins gcq_m2r/irq_sq] \
   [get_bd_pins irq_gcq_m2r]
   connect_bd_net -net resetn_pcie_periph_1  [get_bd_pins resetn_pcie_periph] \
@@ -1555,6 +1580,8 @@ proc create_hier_cell_aved { parentCell nameHier } {
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 NOC_CPM_PCIE_0
 
+  create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:inimm_rtl:1.0 M00_INI
+
 
   # Create pins
   create_bd_pin -dir O -type clk pl0_ref_clk
@@ -1640,7 +1667,7 @@ proc create_hier_cell_aved { parentCell nameHier } {
       CPM_PCIE1_PF1_BAR2_QDMA_SIZE {4} \
       CPM_PCIE1_PF1_BAR2_QDMA_TYPE {AXI_Bridge_Master} \
       CPM_PCIE1_PF1_BASE_CLASS_VALUE {12} \
-      CPM_PCIE1_PF1_CFG_DEV_ID {50b5} \
+      CPM_PCIE1_PF1_CFG_DEV_ID {50c1} \
       CPM_PCIE1_PF1_CFG_SUBSYS_ID {000e} \
       CPM_PCIE1_PF1_CFG_SUBSYS_VEND_ID {10EE} \
       CPM_PCIE1_PF1_MSIX_CAP_TABLE_OFFSET {50000} \
@@ -1661,12 +1688,14 @@ proc create_hier_cell_aved { parentCell nameHier } {
       CPM_PCIE1_PF2_BAR3_QDMA_SIZE {4} \
       CPM_PCIE1_PF2_BAR4_QDMA_64BIT {1} \
       CPM_PCIE1_PF2_BAR4_QDMA_ENABLED {1} \
+      CPM_PCIE1_PF2_BAR4_QDMA_PREFETCHABLE {1} \
       CPM_PCIE1_PF2_BAR4_QDMA_SCALE {Megabytes} \
-      CPM_PCIE1_PF2_BAR4_QDMA_SIZE {1} \
+      CPM_PCIE1_PF2_BAR4_QDMA_SIZE {128} \
       CPM_PCIE1_PF2_BASE_CLASS_VALUE {12} \
-      CPM_PCIE1_PF2_CFG_DEV_ID {50b6} \
+      CPM_PCIE1_PF2_CFG_DEV_ID {50c2} \
       CPM_PCIE1_PF2_CFG_SUBSYS_ID {000e} \
       CPM_PCIE1_PF2_CFG_SUBSYS_VEND_ID {10EE} \
+      CPM_PCIE1_PF2_EXPANSION_ROM_QDMA_ENABLED {0} \
       CPM_PCIE1_PF2_PCIEBAR2AXIBAR_QDMA_0 {0x0000020200000000} \
       CPM_PCIE1_PF2_PCIEBAR2AXIBAR_QDMA_2 {0x0000020300000000} \
       CPM_PCIE1_PF2_PCIEBAR2AXIBAR_QDMA_4 {0x0000020400000000} \
@@ -1836,6 +1865,7 @@ proc create_hier_cell_aved { parentCell nameHier } {
   connect_bd_intf_net -intf_net Conn8 [get_bd_intf_pins base_logic/s_axi_pcie_mgmt_slr0] [get_bd_intf_pins s_axi_pcie_mgmt_slr0]
   connect_bd_intf_net -intf_net NOC_CPM_PCIE_0_1 [get_bd_intf_pins NOC_CPM_PCIE_0] [get_bd_intf_pins cips/NOC_CPM_PCIE_0]
   connect_bd_intf_net -intf_net NOC_PMC_AXI_0_1 [get_bd_intf_pins NOC_PMC_AXI_0] [get_bd_intf_pins cips/NOC_PMC_AXI_0]
+  connect_bd_intf_net -intf_net base_logic_M00_INI [get_bd_intf_pins M00_INI] [get_bd_intf_pins base_logic/M00_INI]
   connect_bd_intf_net -intf_net base_logic_m_axi_pcie_mgmt_pdi_reset [get_bd_intf_pins base_logic/m_axi_pcie_mgmt_pdi_reset] [get_bd_intf_pins clock_reset/s_axi_pcie_mgmt_pdi_reset]
   connect_bd_intf_net -intf_net cips_M_AXI_LPD [get_bd_intf_pins cips/M_AXI_LPD] [get_bd_intf_pins base_logic/s_axi_rpu]
   connect_bd_intf_net -intf_net cips_pcie1_cfg_ext [get_bd_intf_pins cips/pcie1_cfg_ext] [get_bd_intf_pins base_logic/pcie_cfg_ext]
@@ -2135,6 +2165,8 @@ proc create_hier_cell_noc { parentCell nameHier } {
 
   create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 HBM62_AXI
 
+  create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:inimm_rtl:1.0 S24_INI1
+
 
   # Create pins
   create_bd_pin -dir I -type clk aclk0
@@ -2201,7 +2233,7 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
     CONFIG.NUM_HBM_BLI {64} \
     CONFIG.NUM_MI {2} \
     CONFIG.NUM_NMI {7} \
-    CONFIG.NUM_NSI {24} \
+    CONFIG.NUM_NSI {25} \
     CONFIG.NUM_SI {4} \
     CONFIG.SI_SIDEBAND_PINS { ,0,0,0} \
   ] $axi_noc_cips
@@ -2667,7 +2699,7 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/M01_AXI]
 
   set_property -dict [ list \
-   CONFIG.APERTURES {{0x202_0000_0000 0x800_0000}} \
+   CONFIG.APERTURES {{0x202_0000_0000 0x100_0000}} \
    CONFIG.CATEGORY {pl} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/M04_INI]
 
@@ -2812,6 +2844,10 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
   set_property -dict [ list \
    CONFIG.CONNECTIONS {M03_INI {read_bw {50} write_bw {50}}} \
  ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/S23_INI]
+
+  set_property -dict [ list \
+   CONFIG.CONNECTIONS {M04_INI {read_bw {5} write_bw {5} initial_boot {false}}} \
+ ] [get_bd_intf_pins /static_region/noc/axi_noc_cips/S24_INI]
 
   set_property -dict [ list \
    CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
@@ -2984,6 +3020,7 @@ HBM_PC0_WRITE_RATE 25.000 HBM_PC1_WRITE_RATE 25.000 HBM_PC0_PHY_ACTIVE ENABLED H
   connect_bd_intf_net -intf_net Conn102 [get_bd_intf_pins axi_noc_cips/S23_INI] [get_bd_intf_pins S23_INI1]
   connect_bd_intf_net -intf_net Conn103 [get_bd_intf_pins axi_noc_cips/M05_INI] [get_bd_intf_pins M05_INI]
   connect_bd_intf_net -intf_net Conn104 [get_bd_intf_pins axi_noc_cips/M04_INI] [get_bd_intf_pins M04_INI]
+  connect_bd_intf_net -intf_net Conn105 [get_bd_intf_pins axi_noc_cips/S24_INI] [get_bd_intf_pins S24_INI1]
   connect_bd_intf_net -intf_net axi_noc_cips_M00_INI [get_bd_intf_pins axi_noc_cips/M00_INI] [get_bd_intf_pins axi_noc_mc_ddr4_0/S00_INI]
   connect_bd_intf_net -intf_net axi_noc_cips_M01_AXI [get_bd_intf_pins M02_AXI] [get_bd_intf_pins axi_noc_cips/M01_AXI]
   connect_bd_intf_net -intf_net axi_noc_cips_M01_INI [get_bd_intf_pins axi_noc_cips/M01_INI] [get_bd_intf_pins axi_noc_mc_ddr4_0/S01_INI]
@@ -3972,6 +4009,7 @@ PRESENT 0} RID {WIDTH 0 PRESENT 0} RDATA {WIDTH 256 PRESENT 1} RRESP {WIDTH 2 PR
   connect_bd_intf_net -intf_net S21_INI1_1 [get_bd_intf_pins S21_INI] [get_bd_intf_pins noc/S21_INI1]
   connect_bd_intf_net -intf_net S22_INI1_1 [get_bd_intf_pins S22_INI] [get_bd_intf_pins noc/S22_INI1]
   connect_bd_intf_net -intf_net S23_INI1_1 [get_bd_intf_pins S23_INI] [get_bd_intf_pins noc/S23_INI1]
+  connect_bd_intf_net -intf_net aved_M00_INI [get_bd_intf_pins aved/M00_INI] [get_bd_intf_pins noc/S24_INI1]
   connect_bd_intf_net -intf_net axi_noc_1_M00_AXI [get_bd_intf_pins axi_noc_1/M00_AXI] [get_bd_intf_pins aved/NOC_CPM_PCIE_0]
   connect_bd_intf_net -intf_net dfx_decoupler_0_s_intf_0 [get_bd_intf_pins dfx_decoupler_0/s_intf_0] [get_bd_intf_pins noc/HBM00_AXI]
   connect_bd_intf_net -intf_net dfx_decoupler_0_s_intf_1 [get_bd_intf_pins dfx_decoupler_0/s_intf_1] [get_bd_intf_pins noc/HBM01_AXI]
@@ -5253,7 +5291,96 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020101001000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/base_logic/uuid_rom/S_AXI/reg0] -force
   assign_bd_address -offset 0x00000000 -range 0x80000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/LPD_AXI_NOC_0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
   assign_bd_address -offset 0x80044000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs static_region/aved/base_logic/axi_smbus_rpu/S_AXI/Reg] -force
+  assign_bd_address -offset 0x88480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88490000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/ddr_bandwidth_65/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x884A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/ddr_bandwidth_66/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x884B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/ddr_bandwidth_67/s_axi_control/Reg] -force
   assign_bd_address -offset 0x80010000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs static_region/aved/base_logic/gcq_m2r/S01_AXI/S01_AXI_Reg] -force
+  assign_bd_address -offset 0x88000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_0/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x880A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_10/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x880B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_11/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x880C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_12/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x880D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_13/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x880E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_14/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x880F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_15/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88100000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_16/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88110000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_17/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88120000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_18/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88130000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_19/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_1/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88140000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_20/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88150000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_21/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88160000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_22/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88170000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_23/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88180000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_24/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88190000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_25/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x881A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_26/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x881B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_27/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x881C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_28/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x881D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_29/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_2/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x881E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_30/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x881F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_31/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88200000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_32/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88210000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_33/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88220000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_34/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88230000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_35/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88240000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_36/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88250000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_37/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88260000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_38/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88270000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_39/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88030000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_3/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88280000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_40/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88290000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_41/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x882A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_42/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x882B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_43/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x882C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_44/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x882D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_45/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x882E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_46/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x882F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_47/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88300000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_48/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88310000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_49/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88040000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_4/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88320000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_50/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88330000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_51/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88340000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_52/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88350000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_53/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88360000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_54/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88370000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_55/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88380000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_56/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88390000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_57/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x883A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_58/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x883B0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_59/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88050000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_5/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x883C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_60/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x883D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_61/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x883E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_62/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x883F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_63/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88400000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_64/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88410000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_65/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88420000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_66/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88430000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_67/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88440000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_68/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88450000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_69/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88060000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_6/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88460000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_70/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88470000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_71/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88070000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_7/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88080000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_8/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88090000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/hbm_bandwidth_9/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x884C0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_0/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x884D0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_1/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x884E0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_2/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88500000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_3/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x884F0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_4/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88510000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_5/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88530000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_6/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88520000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_producer_7/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88540000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_virt_0/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88550000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_virt_1/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88560000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_virt_2/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88570000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_virt_3/s_axi_control/Reg] -force
+  assign_bd_address -offset 0x88580000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/M_AXI_LPD] [get_bd_addr_segs slash/traffic_virt_4/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200600000 -range 0x00200000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/PMC_NOC_AXI_0] [get_bd_addr_segs slash/axi_dbg_hub_0/S_AXI_DBG_HUB/Mem0] -force
   assign_bd_address -offset 0x050080000000 -range 0x80000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/PMC_NOC_AXI_0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_0/S00_INI/C0_DDR_CH1] -force
   assign_bd_address -offset 0x00000000 -range 0x80000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/PMC_NOC_AXI_0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_0/S00_INI/C0_DDR_LOW0] -force
@@ -5300,8 +5427,15 @@ proc create_root_design { parentCell } {
   exclude_bd_addr_seg -offset 0x000100F20000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_cpm_fun]
   exclude_bd_addr_seg -offset 0x000100F00000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_cpm_rom]
   exclude_bd_addr_seg -offset 0x000100B80000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_atm]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_cti1b]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_cti1c]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_cti1d]
   exclude_bd_addr_seg -offset 0x000100B70000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_stm]
   exclude_bd_addr_seg -offset 0x000100980000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_lpd_atm]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_lpd_cti]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_pmc_cti]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_r50_cti]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_r51_cti]
   exclude_bd_addr_seg -offset 0xFC000000 -range 0x01000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_cpm]
   exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_crf_0]
   exclude_bd_addr_seg -offset 0xFF5E0000 -range 0x00300000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_crl_0]
@@ -5410,8 +5544,15 @@ proc create_root_design { parentCell } {
   exclude_bd_addr_seg -offset 0x000100F20000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_cpm_fun]
   exclude_bd_addr_seg -offset 0x000100F00000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_cpm_rom]
   exclude_bd_addr_seg -offset 0x000100B80000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_atm]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_cti1b]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_cti1c]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_cti1d]
   exclude_bd_addr_seg -offset 0x000100B70000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_fpd_stm]
   exclude_bd_addr_seg -offset 0x000100980000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_lpd_atm]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_lpd_cti]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_pmc_cti]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_r50_cti]
+  exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_coresight_r51_cti]
   exclude_bd_addr_seg -offset 0xFC000000 -range 0x01000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_cpm]
   exclude_bd_addr_seg -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_crf_0]
   exclude_bd_addr_seg -offset 0xFF5E0000 -range 0x00300000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_crl_0]
@@ -5505,5 +5646,3 @@ proc create_root_design { parentCell } {
 ##################################################################
 
 create_root_design ""
-
-

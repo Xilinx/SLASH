@@ -24,6 +24,7 @@
 #include <vrt/kernel.hpp>
 #include <vrt/streaming_buffer.hpp>
 #include <vrt/utils/platform.hpp>
+#include <vrt/utils/zmq_server.hpp>
 
 #include <filesystem>
 #include <thread>
@@ -126,6 +127,16 @@ TEST_P(DeviceTest, KernelRead) {
     auto kernel = device.getKernel("vadd");
     uint32_t val = kernel.read(0x10);
     EXPECT_EQ(val, 0u);
+}
+
+TEST_P(DeviceTest, StubFetchesScalarByFunctionArgument) {
+    constexpr uint64_t sizeAddress = 0x10000 + 0x28;
+    constexpr uint32_t sizeValue = 17;
+    vrt::ZmqServer client;
+
+    client.sendScalar(sizeAddress, sizeValue);
+
+    EXPECT_EQ(client.fetchScalar("vadd", "size"), sizeValue);
 }
 
 TEST_P(DeviceTest, BufferDDRConstruction) {

@@ -38,6 +38,13 @@ pushd ${FW_DIR}
   # Takes in fpt.json and produces fpt.bin
 popd
 
+# Step RP1 FW
+RP1_DIR=$(realpath ./../../fw/RP1)
+pushd ${RP1_DIR}
+  XSA="$XSA" bash ./build-rp1.sh
+  cp -a ${RP1_DIR}/build/rp1.elf ${HW_DIR}/build
+popd
+
 # Step FPT
 pushd ${FW_DIR}/build
   ../scripts/gen_fpt.py -f ../scripts/fpt.json

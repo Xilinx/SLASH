@@ -18,6 +18,7 @@ management, and memory operations.
    tutorials/user/your-first-kernel
    tutorials/user/buffers-and-memory
    tutorials/user/emulation-and-simulation
+   tutorials/user/graph-api
    tutorials/admin/platform-setup
    tutorials/admin/bootstrap-aved
    tutorials/admin/device-management
@@ -47,6 +48,7 @@ management, and memory operations.
    :caption: Explanation
 
    explanation/architecture
+   explanation/graph-api-architecture
    explanation/memory-model
    explanation/vrtbin-format
    explanation/pcie-topology

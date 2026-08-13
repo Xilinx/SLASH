@@ -7,3 +7,9 @@
 [submodule "submodules/Versal-DCMAC"]
 	path = submodules/Versal-DCMAC
 	url = https://github.com/fpgasystems/Versal-DCMAC
+[submodule "submodules/xilinx-qemu"]
+	path = submodules/xilinx-qemu
+	url = https://github.com/Xilinx/qemu.git
+[submodule "submodules/qemu-devicetrees"]
+	path = submodules/qemu-devicetrees
+	url = https://github.com/Xilinx/qemu-devicetrees.git

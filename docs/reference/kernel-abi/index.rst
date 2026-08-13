@@ -891,7 +891,7 @@ across all sub-transfers is returned as the ``ioctl()`` return value (not as a s
 
 - ``size`` must cover at least ``count`` (the trailing header field) — otherwise ``-EINVAL``
 - ``count`` must be in ``[1, SLASH_QDMA_FD_MAX_QPAIRS]``
-- each sub-transfer's ``qpair_index`` must be ``< `` the number of qpairs the fd owns
+- each sub-transfer's ``qpair_index`` must be ``<`` the number of qpairs the fd owns
 - each ``direction`` must be 1 (H2C) or 2 (C2H) and must be enabled on the selected queue pair
 - each ``buf_fd`` must be a buffer fd (from ``BUF_CREATE``) bound to the same device as this qpair fd
 - each ``buf_offset`` must be aligned to the buffer's page granule; ``length`` is an exact byte count,

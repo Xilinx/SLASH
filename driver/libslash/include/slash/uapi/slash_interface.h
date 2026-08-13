@@ -147,11 +147,11 @@ struct slash_qdma_info {
     __u32 size;          /**< Struct size for ABI versioning. */
 
     /* Kernel to userspace */
-    char bdf[SLASH_PCI_BDF_LEN]; /**< [out] Full PF1 PCI BDF string, NUL-terminated. */
     __u32 qsets_max;     /**< [out] Maximum number of queue sets the hardware supports. */
     __u32 msix_qvecs;    /**< [out] Number of MSI-X vectors available for queues. */
     __u32 vf_max;        /**< [out] Maximum number of virtual functions. */
     __u32 caps;          /**< [out] Capability bitmask. */
+    char bdf[SLASH_PCI_BDF_LEN]; /**< [out] Full PF1 PCI BDF string, NUL-terminated. */
 };
 
 /**
@@ -172,12 +172,12 @@ enum slash_qdma_mm_channel {
  *
  * \@mode must be one of:
  *   - QDMA_Q_MODE_MM (0) — AXI Memory Mapped mode.
- *   - QDMA_Q_MODE_ST (1) — AXI Streaming mode (not yet supported; returns -EOPNOTSUPP).
+ *   - QDMA_Q_MODE_ST (1) — AXI Streaming mode.
  *
  * \@dir_mask selects which directions to enable:
  *   - bit 0 (0x1) — H2C  (Host-to-Card).
  *   - bit 1 (0x2) — C2H  (Card-to-Host).
- *   - bit 2 (0x4) — CMPT (Completion queue; not yet supported, returns -EOPNOTSUPP).
+ *   - bit 2 (0x4) — CMPT (Completion queue).
  *
  * The ring size fields are hardware CSR table indices (valid range
  * 0–15), not byte or descriptor counts.  Each index selects a
@@ -365,8 +365,17 @@ struct slash_qdma_transfer {
     struct slash_qdma_subxfer xfers[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Sub-transfers. */
 };
 
-/** Query QDMA subsystem capabilities. */
-#define SLASH_QDMA_IOCTL_INFO          _IOWR('v', 0x50, struct slash_qdma_info)
+/**
+ * Encoded size of the original slash_qdma_info ABI.
+ *
+ * The ioctl number must retain this size as fields are appended; the leading
+ * size member carries the caller's actual structure size.
+ */
+#define SLASH_QDMA_INFO_IOCTL_SIZE (5U * sizeof(__u32))
+
+/** Query QDMA subsystem capabilities without changing the original ioctl number. */
+#define SLASH_QDMA_IOCTL_INFO \
+    _IOC(_IOC_READ | _IOC_WRITE, 'v', 0x50, SLASH_QDMA_INFO_IOCTL_SIZE)
 
 /** Allocate a new queue pair; returns assigned qid. */
 #define SLASH_QDMA_IOCTL_QPAIR_ADD     _IOWR('v', 0x51, struct slash_qdma_qpair_add)
