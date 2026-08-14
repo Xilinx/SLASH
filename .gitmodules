@@ -6,7 +6,7 @@
 	url = https://github.com/Xilinx/AVED.git
 [submodule "submodules/Versal-DCMAC"]
 	path = submodules/Versal-DCMAC
-	url = https://github.com/fpgasystems/Versal-DCMAC
+	url = https://github.com/fpgasystems/Versal-DCMAC.git
 [submodule "submodules/xilinx-qemu"]
 	path = submodules/xilinx-qemu
 	url = https://github.com/Xilinx/qemu.git

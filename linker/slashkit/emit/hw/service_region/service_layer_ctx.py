@@ -22,9 +22,47 @@ from __future__ import annotations
 from typing import Set, Dict, Any, List
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 
+# Source checkout only: the submodule lives outside the slashkit package, so it is
+# never present in an installed wheel/deb. Packaged installs carry a staged copy
+# under slashkit/resources/dcmac/versal instead - see stage_versal_dcmac().
 _SLASH_ROOT = Path(__file__).resolve().parents[5]
 _DCMAC_VERSAL = _SLASH_ROOT / "submodules" / "Versal-DCMAC"
+
+# Subdirectories of Versal-DCMAC the build needs; the rest (example/, images/)
+# is not staged.
+_VERSAL_DCMAC_DIRS = ("hdl", "tcl")
+
+_VERSAL_DCMAC_MISSING = (
+    "Versal-DCMAC sources not found (looked for a staged copy at {staged} and "
+    "for the submodule at {submodule}). From a source checkout, run:\n"
+    "    git submodule update --init submodules/Versal-DCMAC"
+)
+
+
+def stage_versal_dcmac(dest: Path) -> Path:
+    """
+    Make the Versal-DCMAC sources available at *dest*, so the generated build
+    directory is self-contained and independent of where slashkit is installed.
+
+    Two situations:
+      - packaged install: export_package() has already copied the staged tree
+        from slashkit/resources/dcmac/versal into *dest*, so this is a no-op;
+      - source checkout: copy hdl/ and tcl/ out of submodules/Versal-DCMAC.
+
+    Raises FileNotFoundError with the submodule init command if neither exists.
+    """
+    if (dest / "tcl" / "dcmac.tcl").is_file():
+        return dest
+
+    if not (_DCMAC_VERSAL / "tcl" / "dcmac.tcl").is_file():
+        raise FileNotFoundError(_VERSAL_DCMAC_MISSING.format(
+            staged=dest, submodule=_DCMAC_VERSAL))
+
+    for name in _VERSAL_DCMAC_DIRS:
+        shutil.copytree(_DCMAC_VERSAL / name, dest / name, dirs_exist_ok=True)
+    return dest
 
 
 @dataclass(frozen=True)
@@ -53,30 +91,12 @@ def build_service_layer_context(net) -> dict:
 
 def dcmac_paths(dcmac_dir: Path) -> Dict[str, Any]:
     """
-    Resolve absolute paths for service-layer DCMAC assets.
-
+    Resolve the service-layer DCMAC asset paths, all of them inside the build
+    directory *dcmac_dir* so the emitted Tcl never points back at the checkout.
     """
-    dcmac_tcl = dcmac_dir / "tcl" / "slash_wrapper.tcl"
-    versal_dcmac_tcl = _DCMAC_VERSAL / "tcl" / "dcmac.tcl"
-    versal_dcmac_hdl = _DCMAC_VERSAL / "hdl"
-
-    # add/remove files as needed
-    hdl_files = [
-        "axis_seg_to_unseg_converter.v",
-        "axis_to_dcmac_seg.sv",
-        "axis_to_dcmac_seg_wrapper.v",
-        "clock_utils.v",
-        "dcmac200g_ctl_port.v",
-        "dcmac_reset_ctrl.sv",
-        "dcmac_reset_ctrl_wrapper.v",
-    ]
-
     return {
-        "dcmac_tcl":          str(dcmac_tcl),
-        "versal_dcmac_root":  str(_DCMAC_VERSAL),
-        "versal_dcmac_tcl":   str(versal_dcmac_tcl),
-        "dcmac_hdl_dir":      str(versal_dcmac_hdl),
-        "dcmac_hdl_files":    [str(versal_dcmac_hdl / f) for f in hdl_files],
+        "dcmac_tcl":          str(dcmac_dir / "tcl" / "slash_wrapper.tcl"),
+        "versal_dcmac_root":  str(dcmac_dir / "versal"),
     }
 
 

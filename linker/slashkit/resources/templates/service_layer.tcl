@@ -1117,11 +1117,11 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 # ===== Service Layer (generated) =====
 # create_service_layer ""
 
-source [file normalize "{{ dcmac_tcl }}"]
-slash_setup_dcmac [file normalize "{{ versal_dcmac_root }}"]
-
 # --- Drive DCMAC creation based on config ---
 {% if needs_dcmac %}
+  source [file normalize "{{ dcmac_tcl }}"]
+  slash_setup_dcmac [file normalize "{{ versal_dcmac_root }}"]
+
   set ::DCMAC0_ENABLED   {{ dc_enable_0 }}
   set ::DCMAC1_ENABLED   {{ dc_enable_1 }}
   set ::DUAL_QSFP_DCMAC0 {{ dual_qsfp_0 }}

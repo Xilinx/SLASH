@@ -116,11 +116,12 @@ sudo apt install cmake pkg-config ninja-build \
 
 **Submodules:**
 
-SLASH depends on [AVED](https://github.com/Xilinx/AVED) and
-[QDMA](https://github.com/Xilinx/dma_ip_drivers):
+SLASH depends on [AVED](https://github.com/Xilinx/AVED),
+[QDMA](https://github.com/Xilinx/dma_ip_drivers) and, for the Ethernet-capable
+service shell, [Versal-DCMAC](https://github.com/fpgasystems/Versal-DCMAC):
 
 ```bash
-git submodule update --init submodules/AVED submodules/qdma_drv
+git submodule update --init submodules/AVED submodules/qdma_drv submodules/Versal-DCMAC
 ```
 
 The optional RP1 firmware test additionally requires Xilinx QEMU and its

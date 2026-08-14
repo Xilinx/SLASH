@@ -19,6 +19,17 @@ Prerequisites
 - A V80 with two QSFP56 cages externally wired to DCMAC0 port 0 (``eth_0``) and
   DCMAC1 port 0 (``eth_2``).
 - Vivado and Vitis HLS **2025.1** or newer, sourced in your shell.
+- Building from a source checkout, the ``Versal-DCMAC`` submodule, which
+  supplies the DCMAC block design and its RTL:
+
+  .. code-block:: bash
+
+     git submodule update --init submodules/Versal-DCMAC
+
+  Linking a design with ``eth_*`` enabled stops with this command if the
+  submodule is missing, rather than failing later inside Vivado. Installing
+  SLASH from a package (deb/rpm/wheel) needs no submodule: the sources are
+  staged into the package when it is built.
 - Familiarity with HLS kernel basics.
   See :doc:`/tutorials/user/your-first-kernel`.
 
@@ -174,8 +185,31 @@ Python driver shipped with the linker resources:
 
    linker/slashkit/resources/dcmac/driver/network_end2end_test.py
 
-It initializes both DCMACs, checks ``link_up``, and (with ``--udp``) configures
-MAC/IP addresses and the socket table before generating traffic.
+It checks ``link_up`` on both ports, reports the per-port statistics counters,
+and (with ``--udp``) configures MAC/IP addresses and the socket table before
+generating traffic.
+
+Bring-up itself needs no host involvement. Each DCMAC hierarchy contains a
+``dcmac_reset_ctrl`` state machine that sequences the GT and core resets out of
+the shell reset, so there is no software initialization step to run first, and
+a link that stays down points at the cable, the optics or the far end rather
+than at a missing step.
+
+Troubleshooting
+===============
+
+**"Versal-DCMAC sources not found"** when linking — the submodule is not checked
+out. Run the ``git submodule update`` command from the prerequisites.
+
+**Link never comes up** — check that the cable runs between cages 0 and 2. Cages
+1 and 3 are the second cage of the same two DCMAC instances (dual-cage support
+is untested, see :doc:`/explanation/dcmac`), not separate ports. Confirm the far
+end is configured for 200GAUI-4 with RS(544) FEC.
+
+**Statistics read back as zero** — confirm the DCMAC control window is reachable
+over the BAR: ``eth_0`` at ``0x0203_0200_0000`` and ``eth_2`` at
+``0x0203_0300_0000``, 256 KiB each. If it is not, the design was linked against a
+static shell built without Ethernet support.
 
 Next Steps
 ==========

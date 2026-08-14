@@ -14,7 +14,6 @@ interfaces IP, MAC addresses as well as the UDP socket table.
 """
 
 DCMAC_BASEADDR = 0x200_0000
-TRAFFICGEN_BASEADDR = 0x400_2000
 NL_BASEADDR = 0x400_0000
 
 
@@ -29,7 +28,6 @@ def main(args):
         print('Link not detected in at least one of the DCMACs')
         return
 
-    # reset TX first then RX
     if args.udp:
         """Basic network layer config"""
         nl0 = NetworkLayer(args.dev, base_offset=get_ip_offset(NL_BASEADDR, 0))

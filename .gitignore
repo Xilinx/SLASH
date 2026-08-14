@@ -91,6 +91,9 @@ driver/kcompat/.scratch/
 /linker/slashkit/resources/static_shell/
 /linker/slashkit/resources/static_shell_compute/
 
+# Versal-DCMAC sources staged into the package tree by scripts/stage-versal-dcmac.sh
+/linker/slashkit/resources/dcmac/versal/
+
 # Python virtual environment
 .venv
 

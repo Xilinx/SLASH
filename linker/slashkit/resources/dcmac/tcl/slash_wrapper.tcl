@@ -4,7 +4,35 @@
 #
 ######################################################################################
 
-proc slash_setup_dcmac { versal_dcmac_root } {
+# Directory holding this file, captured at source time: either
+# <build_dir>/dcmac/tcl (generated designs) or
+# <slashkit>/resources/dcmac/tcl (static shell, sourced in place).
+set ::slash_dcmac_tcl_dir [file dirname [file normalize [info script]]]
+
+# Locate the Versal-DCMAC sources without depending on the caller's cwd:
+#   1. ../versal next to this file - the copy staged by the linker into the
+#      build directory, and the copy shipped inside a slashkit package;
+#   2. <repo>/submodules/Versal-DCMAC - a source checkout with the submodule
+#      initialised (only reachable when running from resources/ in place).
+# Mirrors stage_versal_dcmac() in emit/hw/service_region/service_layer_ctx.py.
+proc slash_resolve_versal_dcmac_root {} {
+    set candidates [list \
+        [file normalize [file join $::slash_dcmac_tcl_dir .. versal]] \
+        [file normalize [file join $::slash_dcmac_tcl_dir .. .. .. .. .. submodules Versal-DCMAC]]]
+    foreach root $candidates {
+        if { [file isfile [file join $root tcl dcmac.tcl]] } {
+            return $root
+        }
+    }
+    error "Versal-DCMAC sources not found (looked in: [join $candidates {, }]).\
+           From a source checkout, run:\n\
+           \    git submodule update --init submodules/Versal-DCMAC"
+}
+
+proc slash_setup_dcmac { {versal_dcmac_root ""} } {
+    if { $versal_dcmac_root eq "" } {
+        set versal_dcmac_root [slash_resolve_versal_dcmac_root]
+    }
     set hdl_dir [file join $versal_dcmac_root hdl]
     foreach f {
         axis_seg_to_unseg_converter.v

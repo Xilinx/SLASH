@@ -385,6 +385,9 @@ def generate_tcl(config: LinkerConfiguration) -> None:
 
         dcmac_dir = config.build_dir / "dcmac"
         export_package("slashkit.resources.dcmac", dcmac_dir)
+        if svc_ctx["needs_dcmac"]:
+            # Only Ethernet-enabled designs need the Versal-DCMAC sources.
+            stage_versal_dcmac(dcmac_dir / "versal")
         svc_ctx.update(dcmac_paths(dcmac_dir))
 
         svc_out = config.build_dir / "service_layer.tcl"

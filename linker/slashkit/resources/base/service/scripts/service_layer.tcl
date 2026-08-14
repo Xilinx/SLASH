@@ -57,9 +57,10 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 
 # The design that will be created by this Tcl script contains the following 
 # module references:
-# dcmac_syncer_reset, dcmac_syncer_reset, clock_to_clock_bus, clock_to_serdes, clock_to_clock_bus, clock_to_serdes, clock_to_serdes, dcmac200g_ctl_port, clock_to_clock_bus, clock_to_serdes, axis_seg_to_unseg_converter, axis_unseg_to_seg_converter, dcmac_syncer_reset, dcmac_syncer_reset, clock_to_clock_bus, clock_to_serdes, clock_to_clock_bus, clock_to_serdes, clock_to_serdes, dcmac200g_ctl_port, clock_to_clock_bus, clock_to_serdes, axis_seg_to_unseg_converter, axis_unseg_to_seg_converter
+# axis_seg_to_unseg_converter, axis_to_dcmac_seg_wrapper, clk_to_alt_serdes_clk, clk_to_flexif_clk, clk_to_serdes_clk, clk_to_ts_clk, dcmac200g_ctl_port, dcmac_reset_ctrl_wrapper
 
-# Please add the sources of those modules before sourcing this Tcl script.
+# Those modules come from the Versal-DCMAC submodule and are added to the
+# project by slash_setup_dcmac (resources/dcmac/tcl/slash_wrapper.tcl).
 
 # If there is no project opened, this script will create a
 # project, but make sure you do not have an existing project
@@ -190,31 +191,15 @@ xilinx.com:ip:bufg_gt:1.0\
 ##################################################################
 set bCheckModules 0
 if { $bCheckModules == 1 } {
-   set list_check_mods "\ 
-dcmac_syncer_reset\
-dcmac_syncer_reset\
-clock_to_clock_bus\
-clock_to_serdes\
-clock_to_clock_bus\
-clock_to_serdes\
-clock_to_serdes\
-dcmac200g_ctl_port\
-clock_to_clock_bus\
-clock_to_serdes\
+   set list_check_mods "\
 axis_seg_to_unseg_converter\
-axis_unseg_to_seg_converter\
-dcmac_syncer_reset\
-dcmac_syncer_reset\
-clock_to_clock_bus\
-clock_to_serdes\
-clock_to_clock_bus\
-clock_to_serdes\
-clock_to_serdes\
+axis_to_dcmac_seg_wrapper\
+clk_to_alt_serdes_clk\
+clk_to_flexif_clk\
+clk_to_serdes_clk\
+clk_to_ts_clk\
 dcmac200g_ctl_port\
-clock_to_clock_bus\
-clock_to_serdes\
-axis_seg_to_unseg_converter\
-axis_unseg_to_seg_converter\
+dcmac_reset_ctrl_wrapper\
 "
 
    set list_mods_missing ""
@@ -242,13 +227,14 @@ if { $bCheckIPsPassed != 1 } {
 # DESIGN PROCs
 ##################################################################
 
-set current_file [file normalize [info script]]
-set current_dir [file normalize ${current_file}]
-set versal_dcmac_root  [file normalize [file join $current_dir .. .. .. .. .. .. submodules Versal-DCMAC]]
+# This file is sourced in place from <slashkit>/resources/base/service/scripts,
+# so climb three levels to reach resources/ and pick up the DCMAC wrapper there.
+# slash_setup_dcmac locates the Versal-DCMAC sources itself.
+set current_dir [file dirname [file normalize [info script]]]
 set ::slash_wrapper_tcl [file normalize [file join $current_dir .. .. .. dcmac tcl slash_wrapper.tcl]]
 
 source $::slash_wrapper_tcl
-slash_setup_dcmac $versal_dcmac_root
+slash_setup_dcmac
 
 set ::DCMAC0_ENABLED   1
 set ::DCMAC1_ENABLED   1

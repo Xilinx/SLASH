@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 from default_ip import DefaultIP
-from utils import add_common_args, get_ip_offset
 
 
 class TrafficProducer(DefaultIP):

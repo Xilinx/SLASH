@@ -217,7 +217,7 @@ pushd "${SCRATCH}"
 OLD_PYTHONPATH="${PYTHONPATH:-}"
 export PYTHONPATH="${PWD}/linker${PYTHONPATH:+:${PYTHONPATH}}"
 
-protected git submodule update --init submodules/AVED submodules/qdma_drv submodules/xilinx-qemu submodules/qemu-devicetrees
+protected git submodule update --init submodules/AVED submodules/qdma_drv submodules/Versal-DCMAC submodules/xilinx-qemu submodules/qemu-devicetrees
 
 # Build phase
 

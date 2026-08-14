@@ -119,7 +119,9 @@ co-authored by ETH Zurich (fpgasystems) and AMD and released under the MIT
 license. SLASH checks the repository out at ``submodules/Versal-DCMAC`` and its
 linker references those assets (the reset FSM, segment converters, control-port
 helpers, and the ``bd_dcmac`` TCL procs) via ``dcmac_paths()`` in the
-service-region emitter.
+service-region emitter. In a source checkout the submodule has to be initialized
+explicitly; see :doc:`/howto/use-dcmac`. Packages carry a staged copy, so an
+installed SLASH needs no submodule.
 
 The same reusable design is used by other projects, including ETH Zurich's
 `Coyote <https://github.com/fpgasystems/Coyote>`_ FPGA shell.
