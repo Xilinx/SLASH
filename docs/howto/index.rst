@@ -18,6 +18,7 @@ Task-oriented recipes for common operations.
    use-dcmac
    benchmark-memory
    build-from-source
+   offload-builds-to-a-cluster
    use-cmake-modules
    inspect-vrtbin-metadata
    debug-graph-with-dot

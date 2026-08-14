@@ -34,6 +34,7 @@ from slashkit.core.bd_ports import (
     BlockDesignPorts,
 )
 from slashkit.core.kernel import Kernel, KernelInstance
+from slashkit.core.launcher import tool_launcher
 from slashkit.core.connectivity import ConnectivityConfig
 from slashkit.parser.config_parser import parse_connectivity_file, apply_config_to_instances
 from slashkit.parser.component_parser import parse_component_xml
@@ -78,7 +79,9 @@ class CommandConfiguration(object):
     def populate_argument_parser(cls, ap: argparse.ArgumentParser):
         ap.formatter_class = argparse.RawTextHelpFormatter
         ap.add_argument("--vivado", required=False, type=Path, default=shutil.which("vivado"),
-                        help="Vivado binary to use for linking. If not given, it will be derived from PATH.")
+                        help="Vivado binary to use for linking. If not given, it will be derived from PATH.\n"
+                             "With SLASH_TOOL_LAUNCHER set, a bare name such as 'vivado' is passed through\n"
+                             "unresolved and looked up on the execution host instead.")
         ap.add_argument("--jobs", required=False, type=int, default=8,
                         help="Number of parallel jobs for Vivado runs.")
 
@@ -90,9 +93,17 @@ class CommandConfiguration(object):
             raise ValueError(
                 "Vivado binary not specified and could not be found on PATH.")
 
-        self._vivado_bin = Path(args.vivado).expanduser().resolve()
-        if not self._vivado_bin.is_file():
-            raise FileNotFoundError(self._vivado_bin)
+        vivado_arg = Path(args.vivado)
+        if tool_launcher() and vivado_arg.parent == Path("."):
+            # A bare name plus a launcher: the binary belongs to the execution
+            # host, so resolving it here would only find the wrong one or
+            # nothing at all. Pass it through and let the host's settings
+            # script put it on PATH.
+            self._vivado_bin = vivado_arg
+        else:
+            self._vivado_bin = vivado_arg.expanduser().resolve()
+            if not self._vivado_bin.is_file():
+                raise FileNotFoundError(self._vivado_bin)
 
         # Misc. arguments
         self._n_jobs: int = args.jobs
@@ -255,8 +266,11 @@ class LinkerConfiguration(CommandConfiguration):
             s2 = "_" + s2
         self._project_name: str = s2
 
-        # Resolve the Vitis include directory
-        self._vitis_include_dir = _find_vitis_include()
+        # The Vitis include directory is resolved lazily, by the property
+        # below. Only the emulation flow compiles anything against it, so
+        # looking it up here would make every hardware link require a local
+        # Vitis -- which is exactly what a tool launcher exists to avoid.
+        self._vitis_include_dir: Optional[Path] = None
 
         # =======================
         # Argument interpretation
@@ -354,6 +368,8 @@ class LinkerConfiguration(CommandConfiguration):
 
     @property
     def vitis_include_dir(self) -> Path:
+        if self._vitis_include_dir is None:
+            self._vitis_include_dir = _find_vitis_include()
         return self._vitis_include_dir
 
     @property

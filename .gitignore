@@ -94,6 +94,14 @@ driver/kcompat/.scratch/
 # Versal-DCMAC sources staged into the package tree by scripts/stage-versal-dcmac.sh
 /linker/slashkit/resources/dcmac/versal/
 
+# LSF job scripts, job logs, and smoke-test scratch
+lsf_logs/
+lsf_smoke/
+
+# Cluster configuration: queue names, host selectors and tool paths, all of
+# which describe one particular site. See scripts/lsf/site.conf.example.
+scripts/lsf/site.conf
+
 # Python virtual environment
 .venv
 
@@ -110,4 +118,4 @@ tmp/
 
 # Claude Code files
 /CLAUDE.md
-/.claude/
+.claude/

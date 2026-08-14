@@ -1,0 +1,90 @@
+# Site configuration for scripts/lsf.
+#
+# Copy this to site.conf next to the scripts (it is gitignored), or point
+# SLASH_LSF_SITE_CONF at a copy on shared storage to share one configuration
+# across a team. Every value below is specific to a particular cluster, which
+# is why none of them are baked into the repository.
+#
+# The ":=" form means an already-exported value wins, so a one-off override
+# such as
+#
+#     SLASH_LSF_MEM_MB=120000 slashkit link ...
+#
+# still works -- and beats the per-task values further down, so that the
+# override actually takes effect.
+
+# ---------------------------------------------------------------- cluster ---
+
+# The queue to submit to. Pick one whose limits fit a multi-hour, many-GB job;
+# a default queue is usually not it.
+: "${SLASH_LSF_QUEUE:=<your-queue>}"
+
+# Added as -R "select[ostype==...]". Leave empty to omit the clause entirely.
+# Worth setting if the farm is mixed and the tools only support some of it.
+: "${SLASH_LSF_OSTYPE:=}"
+
+# Sourced on the submit host if bsub is not already on PATH. Leave empty if
+# the LSF commands are always available.
+: "${SLASH_LSF_PROFILE:=}"
+
+# ------------------------------------------------------------------ tools ---
+
+# Sourced on the execution host to put the tools on PATH. This must be the
+# bash flavour: LSF runs the job as a non-interactive script under bash, where
+# settings64.csh fails with "setenv: command not found".
+: "${SLASH_LSF_SETTINGS:=/path/to/Vivado/settings64.sh}"
+
+# The aved and hls tasks need Vitis rather than Vivado. Vitis also supplies
+# bootgen, empyro and the ARM cross compiler, which is what lets the AVED
+# firmware build run on a node with nothing SLASH-specific installed.
+: "${SLASH_LSF_SETTINGS_aved:=/path/to/Vitis/settings64.sh}"
+: "${SLASH_LSF_SETTINGS_hls:=/path/to/Vitis/settings64.sh}"
+
+# ----------------------------------------------------------------- sizing ---
+
+# Site-wide defaults, used by any task without a value of its own.
+: "${SLASH_LSF_MEM_MB:=16000}"
+: "${SLASH_LSF_CORES:=4}"
+: "${SLASH_LSF_WALLTIME:=120}"
+
+# Per-task overrides. The task kinds are static_shell, static_shell_compute,
+# rm_slash, rm_service_layer, bootgen, aved, hls and preflight; anything else
+# falls back to the site-wide values above.
+#
+# These numbers are placeholders. Size them from the MAX MEM line of
+# "bjobs -l <job_id>" after a real run rather than guessing -- see README.md.
+
+: "${SLASH_LSF_MEM_MB_static_shell:=70000}"
+: "${SLASH_LSF_CORES_static_shell:=16}"
+: "${SLASH_LSF_WALLTIME_static_shell:=720}"
+
+: "${SLASH_LSF_MEM_MB_static_shell_compute:=70000}"
+: "${SLASH_LSF_CORES_static_shell_compute:=16}"
+: "${SLASH_LSF_WALLTIME_static_shell_compute:=720}"
+
+: "${SLASH_LSF_MEM_MB_rm_slash:=70000}"
+: "${SLASH_LSF_CORES_rm_slash:=16}"
+: "${SLASH_LSF_WALLTIME_rm_slash:=720}"
+
+: "${SLASH_LSF_MEM_MB_rm_service_layer:=70000}"
+: "${SLASH_LSF_CORES_rm_service_layer:=16}"
+: "${SLASH_LSF_WALLTIME_rm_service_layer:=720}"
+
+: "${SLASH_LSF_MEM_MB_bootgen:=4000}"
+: "${SLASH_LSF_CORES_bootgen:=1}"
+: "${SLASH_LSF_WALLTIME_bootgen:=30}"
+
+: "${SLASH_LSF_MEM_MB_aved:=8000}"
+: "${SLASH_LSF_CORES_aved:=4}"
+: "${SLASH_LSF_WALLTIME_aved:=60}"
+
+: "${SLASH_LSF_MEM_MB_hls:=16000}"
+: "${SLASH_LSF_CORES_hls:=8}"
+: "${SLASH_LSF_WALLTIME_hls:=120}"
+
+# preflight.sh only runs a handful of --version calls, so keep it small and
+# point it at whatever queue turns jobs around quickest.
+: "${SLASH_LSF_QUEUE_preflight:=<your-short-queue>}"
+: "${SLASH_LSF_MEM_MB_preflight:=1000}"
+: "${SLASH_LSF_CORES_preflight:=1}"
+: "${SLASH_LSF_WALLTIME_preflight:=10}"

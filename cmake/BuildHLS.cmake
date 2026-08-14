@@ -20,6 +20,19 @@
 
 include_guard(GLOBAL)
 
+# A command prefix that runs the vendor tools somewhere else -- a compute farm,
+# say. Empty, the default, runs them locally. It has to be read here at
+# configure time rather than by slashkit, because these targets are driven by
+# make. Being a cache entry it is sticky: re-configure with
+# -USLASH_TOOL_LAUNCHER to go back to building locally.
+#
+# Declared at file scope because SlashTools.cmake consults it too, before it
+# calls any function here: with a launcher there is no local Vivado to find.
+if(NOT DEFINED SLASH_TOOL_LAUNCHER)
+  set(SLASH_TOOL_LAUNCHER "$ENV{SLASH_TOOL_LAUNCHER}" CACHE STRING
+    "Command prefix used to run the AMD tools; empty runs them locally")
+endif()
+
 function(build_hls)
   set(oneValueArgs TARGET CPP CFG DEVICE OUT_DIR)
   cmake_parse_arguments(BHL "" "${oneValueArgs}" "" ${ARGN})
@@ -55,23 +68,41 @@ function(build_hls)
   set(_cfg_local "${_build_dir}/${_stem}.cfg")
   file(MAKE_DIRECTORY "${_build_dir}")
 
-  find_program(VPP_EXECUTABLE NAMES v++)
-  if(NOT VPP_EXECUTABLE)
-    message(FATAL_ERROR "build_hls(): v++ not found. Ensure Vitis is installed and v++ is on PATH.")
+  separate_arguments(_launcher UNIX_COMMAND "${SLASH_TOOL_LAUNCHER}")
+
+  if(_launcher)
+    # Nothing to find: the tools belong to the execution host and are only on
+    # PATH once its own settings script has run. `cmake -E env` carries the
+    # hints across without dragging in a shell.
+    set(_vpp v++)
+    set(_vitis_run vitis-run)
+    set(_prefix "${CMAKE_COMMAND}" -E env "SLASH_BUILD_TASK=hls"
+                "SLASH_TOOL_CWD=${_build_dir}" ${_launcher})
+  else()
+    find_program(VPP_EXECUTABLE NAMES v++)
+    if(NOT VPP_EXECUTABLE)
+      message(FATAL_ERROR "build_hls(): v++ not found. Ensure Vitis is installed and v++ is on PATH.")
+    endif()
+
+    find_program(VITIS_RUN_EXECUTABLE NAMES vitis-run)
+    if(NOT VITIS_RUN_EXECUTABLE)
+      message(FATAL_ERROR "build_hls(): vitis-run not found. Ensure Vitis is installed and vitis-run is on PATH.")
+    endif()
+
+    set(_vpp "${VPP_EXECUTABLE}")
+    set(_vitis_run "${VITIS_RUN_EXECUTABLE}")
+    set(_prefix "")
   endif()
 
-  find_program(VITIS_RUN_EXECUTABLE NAMES vitis-run)
-  if(NOT VITIS_RUN_EXECUTABLE)
-    message(FATAL_ERROR "build_hls(): vitis-run not found. Ensure Vitis is installed and vitis-run is on PATH.")
-  endif()
-
+  # The build directory has to be reachable from wherever the tools run, so on
+  # shared storage when a launcher is set -- `--work_dir .` is resolved there.
   add_custom_command(
     OUTPUT "${_component_xml}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_build_dir}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_cpp}" "${_build_dir}/${_stem}.cpp"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${_cfg}" "${_cfg_local}"
-    COMMAND "${VPP_EXECUTABLE}" -c --mode hls --config "${_cfg_local}" --work_dir .
-    COMMAND "${VITIS_RUN_EXECUTABLE}" --mode hls --package --config "${_cfg_local}" --work_dir .
+    COMMAND ${_prefix} "${_vpp}" -c --mode hls --config "${_cfg_local}" --work_dir .
+    COMMAND ${_prefix} "${_vitis_run}" --mode hls --package --config "${_cfg_local}" --work_dir .
     WORKING_DIRECTORY "${_build_dir}"
     DEPENDS "${_cpp}" "${_cfg}"
     COMMENT "HLS build: ${_stem}"

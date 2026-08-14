@@ -26,6 +26,7 @@ import sys
 
 import pytest
 
+from slashkit.core import launcher
 from slashkit.emit.hw import project_gen
 
 
@@ -100,6 +101,10 @@ def test_missing_rp1_package_resources_fail_clearly(monkeypatch):
 
 
 def test_rp1_repack_installs_fpt_and_nofpt_outputs(tmp_path, monkeypatch):
+    # The repack goes through run_tool, which prepends the launcher to the argv
+    # that fake_run below matches on. Pin the local path, or this fails for
+    # anyone who has the variable exported for real builds.
+    monkeypatch.delenv(launcher.LAUNCHER_ENV, raising=False)
     build_dir = tmp_path / "build"
     aved_dir = build_dir / "AVED"
     hw_dir = aved_dir / "hw" / project_gen.AVED_DESIGN_NAME
