@@ -40,6 +40,15 @@ enum class Platform {
     UNKNOWN      ///< Unknown or unspecified platform
 };
 
+/**
+ * @brief Enum for hardware shell variants.
+ */
+enum class ShellType {
+    SERVICE,  ///< Service shell (flash partition 0)
+    COMPUTE,  ///< Compute shell (flash partition 1)
+    UNKNOWN   ///< Unknown or unspecified shell
+};
+
 }  // namespace vrt
 
 #endif  // VRT_PLATFORM_HPP

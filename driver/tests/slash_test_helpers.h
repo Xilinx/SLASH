@@ -40,8 +40,9 @@
 
 /* Documented PCI identity for SLASH cards. */
 #define SLASH_TEST_VENDOR_ID 0x10EE
-#define SLASH_TEST_PF1_DEV_ID 0x50B5 /* QDMA */
-#define SLASH_TEST_PF2_DEV_ID 0x50B6 /* Control */
+#define SLASH_TEST_PF1_DEV_ID 0x50C1 /* QDMA */
+#define SLASH_TEST_PF2_DEV_ID 0x50C2 /* Control */
+#define SLASH_TEST_PF2_DEV_ID_LEGACY 0x50B6 /* Legacy control */
 
 /*
  * 16 TB NoC interconnect address map regions, from

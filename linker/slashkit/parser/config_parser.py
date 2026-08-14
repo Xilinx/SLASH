@@ -177,6 +177,13 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                     line.split("=", 1)[1].strip()))
             elif line.startswith("sp="):
                 cfg.sps.append(_parse_sp_value(line.split("=", 1)[1].strip()))
+            elif line.startswith("shell="):
+                val = line.split("=", 1)[1].strip().lower()
+                if val not in ("compute", "service"):
+                    raise ValueError(
+                        f"Invalid shell value '{val}' in [connectivity]. Use 'compute' or 'service'."
+                    )
+                cfg.shell = val
 
         elif section == "clock":
             # Accumulate key-value pairs for this clock block

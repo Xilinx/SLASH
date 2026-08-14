@@ -23,9 +23,9 @@
  * to provide queue-pair-based DMA transfers between host memory and the
  * FPGA fabric.
  *
- * The QDMA subsystem binds to PF1 (PCI device ID 0x50B5, or 0x50BD on
- * AVED/V80P designs), while the control device (slash_ctldev) binds to
- * PF2 (device ID 0x50B6).
+ * The QDMA subsystem binds to PF1 (PCI device ID 0x50C1, or the legacy
+ * 0x50B5 / AVED 0x50BD), while the control device (slash_ctldev) binds to
+ * PF2 (device ID 0x50C2, or the legacy 0x50B6).
  *
  * Queue pair lifecycle:
  *   add -> start -> I/O (via anon_inode fd) -> stop -> del
@@ -700,11 +700,13 @@ static void slash_qdma_ioctl_info(struct slash_qdma_dev *qdma_dev,
 /**
  * slash_qdma_ids - PCI device ID table for the QDMA PF.
  *
- * Matches PF1 QDMA functions on AMD/Xilinx V80 cards, including the
- * AVED/V80P device ID.
+ * Matches the PF1 QDMA function on AMD/Xilinx V80 cards: the current
+ * 0x50C1, the legacy 0x50B5 used by pre-compute-platform designs, and
+ * the AVED/V80P 0x50BD.
  */
 static const struct pci_device_id slash_qdma_ids[] = {
     {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_QDMA_PCI_DEVICE_ID)},
+    {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_QDMA_PCI_DEVICE_ID_LEGACY)},
     {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_AVED_QDMA_PCI_DEVICE_ID)},
     {0,}
 };
@@ -1641,9 +1643,8 @@ static void slash_qdma_ioctl_info(struct slash_qdma_dev *qdma_dev,
  * @uarg:     User-space pointer to a slash_qdma_qpair_add struct.
  *
  * Validates userspace inputs:
- *   - @dir_mask must be non-zero, contain only known bits, and not include CMPT
- *     (completion queues are not yet supported).
- *   - @mode must be MM; streaming mode (ST) is not yet supported.
+ *   - @dir_mask must contain only valid direction bits and be non-zero.
+ *   - @mode must be MM or ST.
  *   - Ring size indices must be in [0, 15] (CSR table range).
  *   - @aperture_size must be zero (linear addressing) or a power-of-two
  *     libqdma keyhole aperture.
@@ -1680,19 +1681,13 @@ static int slash_qdma_ioctl_qpair_add_w(struct slash_qdma_dev *qdma_dev,
     if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
-    /* Completion queues are not yet supported. */
-    if (req.dir_mask & SLASH_QDMA_DIR_CMPT)
-        return -EOPNOTSUPP;
-
     /* Validate direction mask: must be non-zero and contain only known bits. */
     dir_mask = req.dir_mask & SLASH_QDMA_DIR_MASK;
     if (!dir_mask || dir_mask != req.dir_mask)
         return -EINVAL;
 
-    /* Streaming mode is not yet supported; only memory-mapped mode is accepted. */
-    if (req.mode == QDMA_Q_MODE_ST)
-        return -EOPNOTSUPP;
-    if (req.mode != QDMA_Q_MODE_MM)
+    /* Only memory-mapped and streaming modes are supported. */
+    if (req.mode != QDMA_Q_MODE_MM && req.mode != QDMA_Q_MODE_ST)
         return -EINVAL;
 
     /*

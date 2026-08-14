@@ -18,3 +18,6 @@ on Alveo V80 cards.
    streaming-buffer
    vrtbin
    enums
+   graph
+   graph-devices
+   graph-render

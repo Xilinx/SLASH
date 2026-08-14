@@ -77,6 +77,9 @@ bool parseBoolInt(const std::string& text, bool defaultValue = false) {
 
 XMLParser::XMLParser(const std::string& file_path) {
     this->filename = file_path;
+    this->clockFrequency = 0;
+    this->platform = Platform::UNKNOWN;
+    this->shellType = ShellType::SERVICE;
     this->document = xmlReadFile(this->filename.c_str(), NULL, 0);
     if (this->document == nullptr) {
         throw std::runtime_error("Failed to parse XML file: " + file_path);
@@ -173,6 +176,15 @@ void XMLParser::parseXML() {
                 throw std::runtime_error("Unknown platform type");
             }
         } else if (kernelNode->type == XML_ELEMENT_NODE &&
+                   xmlStrcmp(kernelNode->name, BAD_CAST "ShellType") == 0) {
+            std::string shellType_ = getNodeContent(kernelNode);
+            this->shellType = (shellType_ == "service") ? ShellType::SERVICE
+                              : (shellType_ == "compute") ? ShellType::COMPUTE
+                                                          : ShellType::UNKNOWN;
+            if (this->shellType == ShellType::UNKNOWN) {
+                throw std::runtime_error("Unknown shell type");
+            }
+        } else if (kernelNode->type == XML_ELEMENT_NODE &&
                    xmlStrcmp(kernelNode->name, BAD_CAST "Qdma") == 0) {
             std::string kernelName, qdmaStream, syncTypeStr;
             uint32_t qid;
@@ -200,6 +212,8 @@ std::map<std::string, Kernel> XMLParser::getKernels() { return kernels; }
 uint64_t XMLParser::getClockFrequency() { return this->clockFrequency; }
 
 Platform XMLParser::getPlatform() { return this->platform; }
+
+ShellType XMLParser::getShellType() { return this->shellType; }
 
 std::vector<QdmaConnection> XMLParser::getQdmaConnections() { return this->qdmaConnections; }
 

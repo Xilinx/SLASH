@@ -25,7 +25,31 @@
 
 #include <vrtd/session.hpp>
 
+#include <algorithm>
+#include <cctype>
+#include <stdexcept>
+#include <string_view>
+
 #include "bdf.hpp"
+
+namespace {
+
+vrtd::ShellType parseShellType(std::string_view text) {
+    std::string normalized(text);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (normalized == "service") {
+        return vrtd::ShellType::Service;
+    }
+    if (normalized == "compute") {
+        return vrtd::ShellType::Compute;
+    }
+
+    throw std::invalid_argument("shell-type must be one of: service, compute");
+}
+
+}  // namespace
 
 int Reset::run(const Options& options) {
     std::string bdf = resolveBoardBdf(options.bdf, "reset");
@@ -33,7 +57,7 @@ int Reset::run(const Options& options) {
     // We use vrtd manually here, since vrt does not implement reset operations.
     vrtd::Session session;
     auto device = session.getDeviceByBdf(bdf);
-    device.hotplugOp(vrtd::HotplugOp::ResetSequence);
+    device.resetSequence(parseShellType(options.shellType));
 
     return 0;
 }

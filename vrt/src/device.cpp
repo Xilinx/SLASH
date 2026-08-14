@@ -119,6 +119,17 @@ std::string makeExecFromBinaryDirCommand(const std::string& execPath) {
     return "cd " + shellQuote(dir) + " && exec ./" + shellQuote(file) + " " + socket_path;
 }
 
+vrtd::ShellType toVrtdShellType(ShellType shellType) {
+    switch (shellType) {
+    case ShellType::SERVICE:
+        return vrtd::ShellType::Service;
+    case ShellType::COMPUTE:
+        return vrtd::ShellType::Compute;
+    default:
+        throw std::runtime_error("Unknown vbin shell type");
+    }
+}
+
 bool parseEmuArgIndex(const std::string& argName, std::size_t& outIdx) {
     if (argName.size() < 4 || argName.rfind("arg", 0) != 0) {
         return false;
@@ -242,6 +253,7 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     this->pdiPaths = this->vrtbin.getPdiPaths();
     this->programType = programType;
     this->platform = vrtbin.getPlatform();
+    this->requiredShell = vrtbin.getShellType();
     if (platform == Platform::HARDWARE) {
         const char *vrtdSocket = std::getenv("VRTD_SOCKET");
         if (vrtdSocket != nullptr && vrtdSocket[0] != '\0') {
@@ -340,6 +352,7 @@ void Device::parseSystemMap() {
     parser.parseXML();
     clockFreq = parser.getClockFrequency();
     this->platform = parser.getPlatform();
+    this->requiredShell = parser.getShellType();
     kernels = parser.getKernels();
 
     std::optional<vrtd::Bar> barHandle = std::nullopt;
@@ -397,7 +410,7 @@ void Device::programDevice() {
     for (const auto& pdi : pdiPaths) {
         utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
                            "Programming PDI via vrtd design writer {}", pdi);
-        getVrtdDevice().designWriteFile(pdi);
+        getVrtdDevice().designWriteFile(pdi, toVrtdShellType(requiredShell));
     }
 }
 

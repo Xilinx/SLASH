@@ -25,10 +25,15 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
-make -C linker/slashkit/resources/base/iprepo
+make -C linker/slashkit/resources/base/common/iprepo
 
 pushd linker
-python3 -m slashkit install --out-dir slashkit/resources
+INSTALL_ARGS=(install --out-dir slashkit/resources)
+if [[ -n "${SLASH_ROOT_DESIGN_STAGE:-}" ]]; then
+    INSTALL_ARGS+=(--stage "${SLASH_ROOT_DESIGN_STAGE}")
+fi
+python3 -m slashkit "${INSTALL_ARGS[@]}" --shell-type service --build-dir install.prj
+python3 -m slashkit "${INSTALL_ARGS[@]}" --shell-type compute --build-dir install.prj.compute
 popd
 
 # Vivado IP/synth logs capture the full environment (including RPM_BUILD_ROOT

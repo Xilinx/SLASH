@@ -276,6 +276,21 @@ int auth_request_device_hotplug_op(
 );
 
 /**
+ * @brief Authorize a SET_SHELL_STATE request.
+ *
+ * Checks that the client's role has the @c pcie_hotplug permission
+ * for the specified device.
+ *
+ * @param client   The requesting client.
+ * @param req_body The parsed request body containing the target device index.
+ * @return 0 if authorized, non-zero if denied.
+ */
+int auth_request_set_shell_state(
+    struct client *client,
+    const struct vrtd_req_set_shell_state *req_body
+);
+
+/**
  * @brief Authorize a CLOCK_OP request (get/set clock frequency).
  *
  * Checks that the client's role permits clock control operations

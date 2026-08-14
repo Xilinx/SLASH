@@ -38,7 +38,13 @@ from slashkit.emit.sim.project_gen import create_sim_project, build_sim_project
 from slashkit.emit.emu.project_gen import build_emu_project, package_emu_artifacts
 
 from slashkit.emit.metadata.prog_image import build_vbin
-from slashkit.core.command_config import LinkerConfiguration, Platform, InstallerConfiguration, CommandConfiguration
+from slashkit.core.command_config import (
+    LinkerConfiguration,
+    Platform,
+    InstallerConfiguration,
+    CommandConfiguration,
+    ShellType,
+)
 
 
 def _format_duration(seconds: float) -> str:
@@ -132,11 +138,10 @@ def link(config: LinkerConfiguration) -> None:
         build_emu_project(config)
     else:
         run_with_profiling("build_slash", lambda: build_slash_rm(config))
-        # Only build a service layer if ethernet is enabled
-        # Will be changed once more service layers become available
-        if config.networking_enabled:
-            run_with_profiling("build_service_layer",
-                               lambda: build_service_layer_rm(config))
+        if config.shell_type == ShellType.SERVICE and config.networking_enabled:
+            run_with_profiling(
+                "build_service_layer", lambda: build_service_layer_rm(config)
+            )
 
     if config.platform == Platform.SIMULATION:
         pass
@@ -150,8 +155,9 @@ def link(config: LinkerConfiguration) -> None:
 def static_shell_path(args) -> None:
     file_name = "amd_v80_gen5x8_25.1_nofpt.pdi" if args.nofpt else \
         "amd_v80_gen5x8_25.1.pdi"
-    traversable = resources.files(
-        "slashkit.resources.static_shell") / file_name
+    package = "slashkit.resources.static_shell_compute" \
+        if args.shell_type == "compute" else "slashkit.resources.static_shell"
+    traversable = resources.files(package) / file_name
 
     with resources.as_file(traversable) as path:
         if not path.is_file():
@@ -196,6 +202,9 @@ def main():
     static_shell_path_parser.add_argument(
         "--nofpt", action="store_true",
         help="Print the no-FPT PDI path used for JTAG programming")
+    static_shell_path_parser.add_argument(
+        "--shell-type", choices=("service", "compute"), default="service",
+        help="Shell type to resolve (default: service)")
     static_shell_path_parser.set_defaults(
         config_class=None, operation=static_shell_path)
 

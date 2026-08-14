@@ -341,13 +341,6 @@ TEST_F(qdma, qpair_add_invalid_dir_mask_zero)
 	EXPECT_EQ(-EINVAL, slash_qpair_add(self->ctl_fd, 0, 0x0, &qid));
 }
 
-TEST_F(qdma, qpair_add_invalid_dir_mask_cmpt)
-{
-	uint32_t qid;
-
-	EXPECT_EQ(-EOPNOTSUPP, slash_qpair_add(self->ctl_fd, 0, 0x4, &qid));
-}
-
 TEST_F(qdma, qpair_add_invalid_dir_mask_high_bits)
 {
 	uint32_t qid;
@@ -355,12 +348,23 @@ TEST_F(qdma, qpair_add_invalid_dir_mask_high_bits)
 	EXPECT_EQ(-EINVAL, slash_qpair_add(self->ctl_fd, 0, 0x8, &qid));
 }
 
-TEST_F(qdma, qpair_add_invalid_mode_st)
+TEST_F(qdma, qpair_lifecycle_streaming_with_completion)
 {
-	uint32_t qid;
+	ASSERT_EQ(0, slash_qpair_add(self->ctl_fd, 1 /* ST */, 0x7,
+				    &self->qid));
+	self->qpair_added = 1;
 
-	EXPECT_EQ(-EOPNOTSUPP, slash_qpair_add(self->ctl_fd, 1 /* ST */,
-										   0x3, &qid));
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+				    SLASH_QDMA_QUEUE_OP_START));
+	self->qpair_started = 1;
+
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+				    SLASH_QDMA_QUEUE_OP_STOP));
+	self->qpair_started = 0;
+
+	ASSERT_EQ(0, slash_qpair_op(self->ctl_fd, self->qid,
+				    SLASH_QDMA_QUEUE_OP_DEL));
+	self->qpair_added = 0;
 }
 
 TEST_F(qdma, qpair_add_invalid_mode_other)
@@ -706,8 +710,8 @@ TEST_F(qdma, transfer_ddr)
 
 /* ---------- ABI size-versioning tests ----------
  *
- * QDMA_INFO is a pure-output ioctl: any user_size is accepted (including
- * 0); output is truncated to min(user_size, sizeof(struct)).
+ * QDMA_INFO requires its leading size field and truncates output to
+ * min(user_size, sizeof(struct)).
  *
  * QPAIR_ADD, Q_OP, and QPAIR_GET_FD are input-bearing ioctls and reject
  * under-sized user structs with -EINVAL before acting on zero-filled

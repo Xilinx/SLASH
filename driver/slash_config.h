@@ -23,15 +23,19 @@
  *
  * The SLASH design exposes two PCI physical functions per card:
  *
- *   - **PF1** (device 0x50B5, or 0x50BD on AVED/V80P designs) — QDMA
- *     function.  Hosts the Xilinx QDMA IP used for high-throughput DMA
- *     transfers between host memory and the FPGA fabric.
+ *   - **PF1** (device 0x50C1) — QDMA function.  Hosts the Xilinx QDMA
+ *     IP used for high-throughput DMA transfers between host memory and
+ *     the FPGA fabric.
  *
- *   - **PF2** (device 0x50B6) — Control function.  Exposes PCI BARs
+ *   - **PF2** (device 0x50C2) — Control function.  Exposes PCI BARs
  *     that the host can mmap for register-level MMIO access to the
  *     FPGA design.
  *
  * Both functions share vendor ID 0x10EE (AMD/Xilinx).
+ *
+ * For backward compatibility the driver also binds the legacy device IDs
+ * used by pre-compute-platform designs (PF1 0x50B5, PF2 0x50B6) and the
+ * AVED/V80P QDMA function (0x50BD).  New designs should use 0x50C1/0x50C2.
  */
 
 #ifndef SLASH_CONFIG_H
@@ -42,7 +46,9 @@
 /** AMD/Xilinx PCI vendor ID. */
 #define SLASH_PCIE_VENDOR_ID 0x10EE
 /** PCI device ID for the V80 SLASH control function. */
-#define SLASH_PCIE_DEVICE_ID 0x50B6
+#define SLASH_PCIE_DEVICE_ID 0x50C2
+/** Legacy PCI device ID for the control function (pre-compute-platform designs). */
+#define SLASH_PCIE_DEVICE_ID_LEGACY 0x50B6
 /** Physical function number for the control/BAR-access interface. */
 #define SLASH_PCIE_PF 2
 
@@ -51,7 +57,9 @@
 /** AMD/Xilinx PCI vendor ID (same as control function). */
 #define SLASH_QDMA_PCI_VENDOR_ID 0x10EE
 /** PCI device ID for the V80 SLASH QDMA function. */
-#define SLASH_QDMA_PCI_DEVICE_ID 0x50B5
+#define SLASH_QDMA_PCI_DEVICE_ID 0x50C1
+/** Legacy PCI device ID for the QDMA function (pre-compute-platform designs). */
+#define SLASH_QDMA_PCI_DEVICE_ID_LEGACY 0x50B5
 /** PCI device ID for the V80P/AVED QDMA function. */
 #define SLASH_AVED_QDMA_PCI_DEVICE_ID 0x50BD
 /** Physical function number for the QDMA DMA engine. */

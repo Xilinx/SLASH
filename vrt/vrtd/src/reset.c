@@ -84,6 +84,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
@@ -110,6 +111,49 @@ static void reset_emit_progress(
     if (progress_cb != NULL) {
         progress_cb(progress_ctx, phase, 0, 0);
     }
+}
+
+int shell_boot_partition(enum vrtd_shell_type shell, uint32_t *partition_out)
+{
+    PROPAGATE_ERROR_NULL_LOG(partition_out, LOG_ERR, "Internal error: null partition_out");
+
+    switch (shell) {
+    case VRTD_SHELL_SERVICE:
+        *partition_out = 0;
+        return 0;
+    case VRTD_SHELL_COMPUTE:
+        *partition_out = 1;
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+/* Inverse of shell_boot_partition(): the shell a boot partition maps to. */
+static enum vrtd_shell_type shell_from_boot_partition(uint32_t partition)
+{
+    switch (partition) {
+    case 0:
+        return VRTD_SHELL_SERVICE;
+    case 1:
+        return VRTD_SHELL_COMPUTE;
+    default:
+        return VRTD_SHELL_UNKNOWN;
+    }
+}
+
+bool shell_reset_required(enum vrtd_shell_type current_shell, enum vrtd_shell_type required_shell)
+{
+    return current_shell == VRTD_SHELL_UNKNOWN || current_shell != required_shell;
+}
+
+bool shell_switch_blocked_by_jtag(
+    enum vrtd_shell_type current_shell,
+    enum vrtd_shell_type required_shell,
+    bool jtag
+)
+{
+    return jtag && shell_reset_required(current_shell, required_shell);
 }
 
 /**
@@ -146,6 +190,11 @@ uint16_t reset_with_ami_partition_progress(
     char pf2_bdf[VRTD_PCI_BDF_LEN] = {0};
 
     struct ami_device *ami_device = NULL;
+
+    /* Saved now because @device is freed once it is removed below; used after
+     * rediscovery to locate the re-enumerated device and record its shell. */
+    char target_bdf[VRTD_PCI_BDF_LEN] = {0};
+    strncpy(target_bdf, device->pci_info.bdf, sizeof(target_bdf) - 1);
 
     int ret = pci_bdf_set_function(device->pci_info.bdf, 0, pf0_bdf);
     if (ret != 0) {
@@ -439,6 +488,20 @@ uint16_t reset_with_ami_partition_progress(
         return VRTD_RET_INTERNAL_ERROR;
     }
 
+    /*
+     * Record the shell that is now booted so callers (e.g. v80-smi list) can
+     * report it.  Rediscovery creates a fresh device struct with an UNKNOWN
+     * shell, so without this the shell would be lost after every reset.
+     */
+    enum vrtd_shell_type booted_shell = shell_from_boot_partition(partition);
+    for (size_t i = 0; i < devices->len; i++) {
+        struct device *new_device = devices->d[i];
+        if (new_device != NULL && strcmp(new_device->pci_info.bdf, target_bdf) == 0) {
+            new_device->current_shell = booted_shell;
+            break;
+        }
+    }
+
     return VRTD_RET_OK;
 }
 
@@ -451,7 +514,18 @@ uint16_t reset_with_ami_partition(
     return reset_with_ami_partition_progress(device, devices, partition, NULL, NULL);
 }
 
-uint16_t reset_with_ami(struct device *device, struct device_ptr_array *devices)
+uint16_t reset_with_ami(
+    struct device *device,
+    struct device_ptr_array *devices,
+    enum vrtd_shell_type target_shell
+)
 {
-    return reset_with_ami_partition(device, devices, 0);
+    uint32_t boot_partition = 0;
+    if (shell_boot_partition(target_shell, &boot_partition) != 0) {
+        LOG(LOG_ERR, "reset_with_ami: invalid target shell %u", (unsigned int)target_shell);
+        return VRTD_RET_INVALID_ARGUMENT;
+    }
+
+    /* reset_with_ami_partition_progress() records the booted shell for us. */
+    return reset_with_ami_partition(device, devices, boot_partition);
 }

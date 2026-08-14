@@ -33,12 +33,12 @@ may change when the module is unloaded and loaded again.
 
 ``/dev/slash_ctl<N>`` / ``/sys/class/slash/slash_ctl_<BDF>/device``
     Provides BAR enumeration, MMIO access, and PCI device identity. Associated with PF2 (device ID
-    ``10EE:50B6``). Examples: ``/dev/slash_ctl0``, ``/dev/slash_ctl1``,
+    ``10EE:50C2``). Examples: ``/dev/slash_ctl0``, ``/dev/slash_ctl1``,
     ``/sys/class/slash/slash_ctl_0000:61:00.2/device``.
 
 ``/dev/slash_qdma_ctl<N>`` / ``/sys/class/slash/slash_qdma_ctl_<BDF>/device``
     Manages DMA queue pairs for bulk data movement between host and card memory, as well as
-    reconfiguration. Associated with PF1 (device ID ``10EE:50B5``). Examples: ``/dev/slash_qdma_ctl0``,
+    reconfiguration. Associated with PF1 (device ID ``10EE:50C1``). Examples: ``/dev/slash_qdma_ctl0``,
     ``/dev/slash_qdma_ctl1``, ``/sys/class/slash/slash_qdma_ctl_0000:61:00.1/device``.
 
 ``/dev/slash_hotplug`` / ``/sys/class/slash/slash_hotplug``
@@ -111,7 +111,7 @@ matching QDMA control device.
 
 - **Device file name:** ``/dev/slash_ctl<N>`` (e.g. ``/dev/slash_ctl0``)
 - **Sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``/sys/class/slash/slash_ctl_0000:61:00.2``)
-- **Associated PCI function:** PF2, device ID ``10EE:50B6``
+- **Associated PCI function:** PF2, device ID ``10EE:50C2``
 - **Permissions:** ``0600`` (owner read/write)
 - **Creation:** one per card, created when PF2 is probed during module load or PCI rescan
 - **File operations:** ``open``, ``release``, and ``ioctl`` — no ``read``, ``write``, or ``mmap``
@@ -135,7 +135,7 @@ the BAR is present and usable for MMIO, its physical address, and its size.
     struct slash_ioctl_device_info dev_info = { .size = sizeof(dev_info) };
     ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &dev_info);
     /* dev_info.bdf → e.g. "0000:61:00.2" */
-    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50B6 */
+    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50C2 */
 
     /* Enumerate all six BARs */
     for (int i = 0; i < 6; i++) {
@@ -312,7 +312,7 @@ fd with a physical board and with the matching QDMA control device.
         __u32 size;                   /* [in/out] ABI version */
         char  bdf[SLASH_PCI_BDF_LEN]; /* [out] PCI BDF string, NUL-terminated, e.g. "0000:61:00.2" */
         __u16 vendor_id;              /* [out] PCI vendor ID (0x10EE for AMD/Xilinx) */
-        __u16 device_id;              /* [out] PCI device ID (0x50B6 for PF2) */
+        __u16 device_id;              /* [out] PCI device ID (0x50C2 for PF2) */
         __u16 subsystem_vendor_id;    /* [out] PCI subsystem vendor ID */
         __u16 subsystem_device_id;    /* [out] PCI subsystem device ID */
     };
@@ -351,7 +351,7 @@ buffer, buffer offset, device-side physical address, length, and direction.
 
 - **Device file name:** ``/dev/slash_qdma_ctl<N>`` (e.g. ``/dev/slash_qdma_ctl0``)
 - **Sysfs name:** ``slash_qdma_ctl_<PCI-BDF>`` (e.g. ``/sys/class/slash/slash_qdma_ctl_0000:61:00.1``)
-- **Associated PCI function:** PF1, device ID ``10EE:50B5``
+- **Associated PCI function:** PF1, device ID ``10EE:50C1``
 - **Permissions:** ``0600``
 - **Creation:** one per card, created when PF1 is probed
 - **File operations:** ``open``, ``release``, ``ioctl`` on the control fd. DMA I/O is done on
@@ -891,7 +891,7 @@ across all sub-transfers is returned as the ``ioctl()`` return value (not as a s
 
 - ``size`` must cover at least ``count`` (the trailing header field) — otherwise ``-EINVAL``
 - ``count`` must be in ``[1, SLASH_QDMA_FD_MAX_QPAIRS]``
-- each sub-transfer's ``qpair_index`` must be ``< `` the number of qpairs the fd owns
+- each sub-transfer's ``qpair_index`` must be ``<`` the number of qpairs the fd owns
 - each ``direction`` must be 1 (H2C) or 2 (C2H) and must be enabled on the selected queue pair
 - each ``buf_fd`` must be a buffer fd (from ``BUF_CREATE``) bound to the same device as this qpair fd
 - each ``buf_offset`` must be aligned to the buffer's page granule; ``length`` is an exact byte count,

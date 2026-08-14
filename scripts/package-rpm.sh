@@ -45,7 +45,9 @@ if [[ -d "${ARTIFACTS_DIR}" ]] && [[ -t 0 ]] && [[ "${NONINTERACTIVE}" -eq 0 ]];
     [[ -d "${ARTIFACTS_DIR}" ]] && echo "  ${ARTIFACTS_DIR}  (built .rpm packages)" >&2
     [[ -d pbuild ]]             && echo "  pbuild/  (CMake build tree)" >&2
     echo "  linker/install.prj" >&2
+    echo "  linker/install.prj.compute" >&2
     echo "  linker/slashkit/resources/static_shell" >&2
+    echo "  linker/slashkit/resources/static_shell_compute" >&2
     echo "This includes the static shell, which can take several hours to rebuild." >&2
     read -r -p "Overwrite existing build and start from scratch? [y/N] " _answer </dev/tty
     case "${_answer}" in
@@ -65,10 +67,10 @@ if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
         _prereq_ok=0
     fi
 
-    if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' >/dev/null 2>&1; then
-        echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/iprepo/." >&2
+    if ! compgen -G 'linker/slashkit/resources/base/common/iprepo/smbus*/' >/dev/null 2>&1; then
+        echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/common/iprepo/." >&2
         echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
-        echo "directory into linker/slashkit/resources/base/iprepo/ before building." >&2
+        echo "directory into linker/slashkit/resources/base/common/iprepo/ before building." >&2
         echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
         _prereq_ok=0
     fi

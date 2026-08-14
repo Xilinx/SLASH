@@ -47,6 +47,7 @@ class XMLParser {
     std::map<std::string, Kernel> kernels;        ///< Map of kernel names to Kernel objects.
     uint64_t clockFrequency;                      ///< The clock frequency of the device.
     Platform platform;                            ///< The platform of the device.
+    ShellType shellType;                          ///< The required hardware shell type.
     std::vector<QdmaConnection> qdmaConnections;  ///< Vector of QDMA connections.
 
    public:
@@ -85,6 +86,12 @@ class XMLParser {
      * @return The platform of the device.
      */
     Platform getPlatform();
+
+    /**
+     * @brief Gets the shell type required by the design.
+     * @return The shell type required by the design.
+     */
+    ShellType getShellType();
 
     /**
      * @brief Gets the vector of QDMA connections.

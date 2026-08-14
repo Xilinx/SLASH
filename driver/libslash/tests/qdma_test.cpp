@@ -25,6 +25,7 @@
 
 #include <cctype>
 #include <cerrno>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <dirent.h>
@@ -63,6 +64,16 @@ static int count_open_fds() {
 }
 
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
+
+TEST(QdmaAbiTest, InfoPreservesOriginalPrefix) {
+    EXPECT_EQ(offsetof(struct slash_qdma_info, qsets_max), sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, msix_qvecs), 2 * sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, vf_max), 3 * sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, caps), 4 * sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, bdf), 5 * sizeof(__u32));
+    EXPECT_EQ(_IOC_SIZE(SLASH_QDMA_IOCTL_INFO),
+              offsetof(struct slash_qdma_info, bdf));
+}
 
 TEST(QdmaNullTest, Open) {
     errno = 0;

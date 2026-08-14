@@ -76,6 +76,7 @@ Schema
 
    <SystemMap>
      <Platform>Hardware</Platform>
+     <ShellType>service</ShellType>
      <ClockFrequency>250000000</ClockFrequency>
 
      <ServiceLayer>
@@ -114,6 +115,12 @@ Key elements:
 ``<Platform>``
    One of ``Hardware``, ``Emulation``, or ``Simulation``. VRT maps this to
    the ``vrt::Platform`` enum and selects the appropriate back-end.
+
+``<ShellType>``
+   Hardware shell required by the design. Hardware vbins use ``service`` or
+   ``compute``. VRT passes this to ``vrtd`` before programming so the daemon
+   can reset the board to the matching boot partition when needed. Legacy
+   vbins without this element are treated as ``service``.
 
 ``<ClockFrequency>``
    Kernel clock frequency in Hz (e.g. ``250000000`` for 250 MHz).
@@ -154,6 +161,37 @@ When you construct ``vrt::Device(bdf, vrtbinPath)``:
 5. **Program** — on hardware, VRT programs the FPGA with the PDI
    bitstream(s) via the vrtd daemon. On emulation/simulation, it launches
    the model executable in a background thread.
+
+.. _graph-api-and-rp1:
+
+Graph API and RP1
+=================
+
+The VRT graph FPGA backend also consumes vbin metadata.  It does not require a
+new manifest file: kernel shape is derived from ``system_map.xml`` and hardware
+PDI files are discovered with the same ``vrt::Vrtbin`` logic used by
+``vrt::Device``.
+
+For RP1 graph execution, each hardware vbin is currently treated as an
+exclusive user-region image.  The graph-facing image spec maps every
+``<Kernel>`` entry to:
+
+* a graph ``KernelDescriptor`` / ``IOTypeMap`` built from
+  ``functional_args``;
+* the host-view base address from ``<BaseAddress>``;
+* the RP1/R5-visible AXI-Lite base address:
+
+  .. code-block:: text
+
+     r5_addr = 0x88000000 + (system_map_base - 0x020200000000)
+
+Graph authors explicitly request image swaps with a reprogram node.  In the
+RP1 backend this lowers to ``RP1_OP_PDI_LOAD`` using the selected vbin's PDI
+bytes staged into RP1-visible DDR.  No partial-region coexistence metadata is
+modeled yet; at most one vbin image is active per FPGA device.
+
+See :doc:`/explanation/graph-api-architecture` for how this image metadata fits
+into Graph compilation, device plans, and FPGA control-flow lowering.
 
 Inspecting a Vrtbin
 ===================
