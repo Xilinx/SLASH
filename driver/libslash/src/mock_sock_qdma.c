@@ -18,6 +18,8 @@
 
 #define _GNU_SOURCE
 
+#define MOCK_SOCK_QDMA_DESIGN_BASE 0x0000000102100000ull
+#define MOCK_SOCK_QDMA_DESIGN_END 0x0000000102101000ull
 #define MOCK_SOCK_QDMA_HBM_BASE 0x0000004000000000ull
 #define MOCK_SOCK_QDMA_HBM_END 0x0000004800000000ull
 #define MOCK_SOCK_QDMA_DDR_BASE 0x0000060000000000ull
@@ -62,6 +64,11 @@ int slash_mock_sock_qdma_init_state(struct slash_mock_sock_qdma_state *state) {
 
     state->refcount = 1;
 
+    state->design_keyhole = malloc(4096);
+    if (state->design_keyhole == NULL) {
+        rv = -ENOMEM;
+        goto cleanup;
+    }
     state->hbm_memory = malloc(1ul << 35);
     if (state->hbm_memory == NULL) {
         rv = -ENOMEM;
@@ -76,6 +83,7 @@ int slash_mock_sock_qdma_init_state(struct slash_mock_sock_qdma_state *state) {
     return 0;
 
 cleanup:
+    free(state->design_keyhole);
     free(state->ddr_memory);
     free(state->hbm_memory);
     pthread_mutex_destroy(&state->mutex);
@@ -138,6 +146,7 @@ int slash_mock_sock_qdma_put_state(struct slash_mock_sock_qdma_state *state) {
         pthread_mutex_destroy(&state->mutex);
         free(state->ddr_memory);
         free(state->hbm_memory);
+        free(state->design_keyhole);
         free(state);
     }
     return 0;
@@ -548,9 +557,11 @@ static int qdma_qpair_ioctl_transfer(struct slash_mock_sock_qpair_state *state,
             rv = -EINVAL;
             goto cleanup;
         }
+        size_t qpair_id = state->qpair_ids[subxfer->qpair_index];
+        size_t aperture_size = state->main_state->aperture_size[qpair_id];
+
         /* Is the indexed qpair running? */
-        if (state->main_state->qpairs[state->qpair_ids[subxfer->qpair_index]] !=
-            0b11) {
+        if (state->main_state->qpairs[qpair_id] != 0b11) {
             rv = -ENODEV;
             goto cleanup;
         }
@@ -565,15 +576,26 @@ static int qdma_qpair_ioctl_transfer(struct slash_mock_sock_qpair_state *state,
          * and buf_offset are thus only tested by the actual copy operation.*/
 
         /* Compute the endpoint-side device address. */
-        if (subxfer->dev_addr >= MOCK_SOCK_QDMA_HBM_BASE &&
-            (subxfer->dev_addr + subxfer->length) <= MOCK_SOCK_QDMA_HBM_END) {
+        size_t dev_start = subxfer->dev_addr;
+        size_t dev_end;
+        if (aperture_size > 0 && aperture_size < subxfer->length) {
+            dev_end = subxfer->dev_addr + aperture_size;
+        } else {
+            dev_end = subxfer->dev_addr + subxfer->length;
+        }
+
+        if (dev_start >= MOCK_SOCK_QDMA_DESIGN_BASE &&
+            dev_end <= MOCK_SOCK_QDMA_DESIGN_END) {
+            dev_ptr = state->main_state->design_keyhole +
+                      (dev_start - MOCK_SOCK_QDMA_DESIGN_BASE);
+        } else if (dev_start >= MOCK_SOCK_QDMA_HBM_BASE &&
+                   dev_end <= MOCK_SOCK_QDMA_HBM_END) {
             dev_ptr = state->main_state->hbm_memory +
-                      (subxfer->dev_addr - MOCK_SOCK_QDMA_HBM_BASE);
-        } else if (subxfer->dev_addr >= MOCK_SOCK_QDMA_DDR_BASE &&
-                   (subxfer->dev_addr + subxfer->length) <=
-                       MOCK_SOCK_QDMA_DDR_END) {
+                      (dev_start - MOCK_SOCK_QDMA_HBM_BASE);
+        } else if (dev_start >= MOCK_SOCK_QDMA_DDR_BASE &&
+                   dev_end <= MOCK_SOCK_QDMA_DDR_END) {
             dev_ptr = state->main_state->ddr_memory +
-                      (subxfer->dev_addr - MOCK_SOCK_QDMA_DDR_BASE);
+                      (dev_start - MOCK_SOCK_QDMA_DDR_BASE);
         } else {
             rv = -EINVAL;
             goto cleanup;
@@ -584,12 +606,19 @@ static int qdma_qpair_ioctl_transfer(struct slash_mock_sock_qpair_state *state,
          * dev_ptr. */
         while (subxfer->length > 0) {
             /* Attempt to execute the read or write operation */
+            size_t transfer_size;
+            if (aperture_size > 0 && aperture_size < subxfer->length) {
+                transfer_size = aperture_size;
+            } else {
+                transfer_size = subxfer->length;
+            }
+
             if (subxfer->direction == SLASH_QDMA_XFER_H2C) {
                 n_transferred = pread(input_fds[subxfer->buf_fd], dev_ptr,
-                                      subxfer->length, subxfer->buf_offset);
+                                      transfer_size, subxfer->buf_offset);
             } else if (subxfer->direction == SLASH_QDMA_XFER_C2H) {
                 n_transferred = pwrite(input_fds[subxfer->buf_fd], dev_ptr,
-                                       subxfer->length, subxfer->buf_offset);
+                                       transfer_size, subxfer->buf_offset);
             } else {
                 rv = -EINVAL;
                 goto cleanup;
@@ -616,7 +645,9 @@ static int qdma_qpair_ioctl_transfer(struct slash_mock_sock_qpair_state *state,
             /* The transfer was successful, but not necessarily complete. Update
              * the indices, so that we try again if the transfer was incomplete.
              */
-            dev_ptr += n_transferred;
+            if (aperture_size == 0) {
+                dev_ptr += n_transferred;
+            }
             subxfer->length -= n_transferred;
             subxfer->buf_offset += n_transferred;
             total_transferred += n_transferred;

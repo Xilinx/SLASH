@@ -32,6 +32,7 @@ struct slash_mock_sock_qdma_state {
      * @brief Mutex guarding all following fields
      */
     pthread_mutex_t mutex;
+
     /**
      * @brief The number of active co-owned references to the state.
      *
@@ -39,20 +40,36 @@ struct slash_mock_sock_qdma_state {
      * the state will be torn down and freed.
      */
     int refcount;
-    /** @brief Qpair state bitsets.
+
+    /**
+     * @brief Qpair state bitsets.
      *
      * Bit 0 (0b01): Qpair used.
      * Bit 1 (0b10): Qpair started.
      */
     int qpairs[LIBSLASH_MOCK_SOCK_MAX_QPAIRS];
-    /** @brief The configured aperture of the qpair.
+
+    /**
+     * @brief The configured aperture of the qpair.
      */
-    int aperture_size[LIBSLASH_MOCK_SOCK_MAX_QPAIRS];
-    /** @brief Owned memory arry, simulating the HBM of the card. Exactly 32 GiB
-     * in size. */
+    unsigned int aperture_size[LIBSLASH_MOCK_SOCK_MAX_QPAIRS];
+
+    /**
+     * @brief Owned memory arry, simulating the design writer keyhole. Exactly 4
+     * kiB in size.
+     */
+    char *design_keyhole;
+
+    /**
+     * @brief Owned memory arry, simulating the HBM of the card. Exactly 32 GiB
+     * in size.
+     */
     char *hbm_memory;
-    /** @brief Owned memory arry, simulating the DDR of the card. Exactly 32 GiB
-     * in size. */
+
+    /**
+     * @brief Owned memory arry, simulating the DDR of the card. Exactly 32 GiB
+     * in size.
+     */
     char *ddr_memory;
 };
 

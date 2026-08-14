@@ -493,13 +493,13 @@ TEST_P(ParametrizedQdmaTest, QueueDmaTransfer) {
     ssize_t written =
         slash_qdma_qpair_transfer(queue_fd, src_buf.fd, 0, DDR_BASE_ADDRESS,
                                   XFER_SIZE, SLASH_QDMA_XFER_H2C);
-    EXPECT_EQ(written, static_cast<ssize_t>(XFER_SIZE));
+    EXPECT_EQ(written, static_cast<ssize_t>(XFER_SIZE)) << strerror(errno);
 
     // Read back from DDR (C2H) and verify.
     ssize_t read_bytes =
         slash_qdma_qpair_transfer(queue_fd, dst_buf.fd, 0, DDR_BASE_ADDRESS,
                                   XFER_SIZE, SLASH_QDMA_XFER_C2H);
-    EXPECT_EQ(read_bytes, static_cast<ssize_t>(XFER_SIZE));
+    EXPECT_EQ(read_bytes, static_cast<ssize_t>(XFER_SIZE)) << strerror(errno);
     EXPECT_EQ(std::memcmp(src, dst, XFER_SIZE), 0);
 
     EXPECT_EQ(slash_qdma_buffer_destroy(&src_buf), 0);
@@ -509,6 +509,94 @@ TEST_P(ParametrizedQdmaTest, QueueDmaTransfer) {
 
     EXPECT_EQ(slash_qdma_qpair_stop(qdma_, qid), 0);
     EXPECT_EQ(slash_qdma_qpair_del(qdma_, qid), 0);
+}
+
+TEST_P(ParametrizedQdmaTest, KeyholeTransfer) {
+    static constexpr size_t XFER_SIZE = 4096;
+    static constexpr size_t KEYHOLE_SIZE = 1024;
+
+    uint32_t normal_qid, keyhole_qid;
+    int normal_qfd, keyhole_qfd;
+
+    // Add a Memory-Mapped queue pair with both H2C and C2H enabled.
+    struct slash_qdma_qpair_add req{};
+    req.mode = 0;       /* QDMA_Q_MODE_MM */
+    req.dir_mask = 0x3; /* H2C | C2H */
+    req.h2c_ring_sz = 0;
+    req.c2h_ring_sz = 0;
+    req.cmpt_ring_sz = 0;
+
+    /* First, a normal queue with no aperture size set */
+    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
+    normal_qid = req.qid;
+
+    /* Now, another queue with an aperture size */
+    req.aperture_size = KEYHOLE_SIZE;
+    ASSERT_EQ(slash_qdma_qpair_add(qdma_, &req), 0);
+    keyhole_qid = req.qid;
+
+    /* Start the queues and get file descriptors */
+    ASSERT_EQ(slash_qdma_qpair_start(qdma_, normal_qid), 0);
+    ASSERT_EQ(slash_qdma_qpair_start(qdma_, keyhole_qid), 0);
+
+    normal_qfd = slash_qdma_qpair_get_fd(qdma_, normal_qid, 0);
+    ASSERT_GE(normal_qfd, 0);
+    keyhole_qfd = slash_qdma_qpair_get_fd(qdma_, keyhole_qid, 0);
+    ASSERT_GE(keyhole_qfd, 0);
+
+    /* Create a singular buffer for transfers. */
+    struct slash_qdma_buffer buf{};
+    ASSERT_EQ(slash_qdma_buffer_create(qdma_, XFER_SIZE, &buf), 0);
+    auto *host_mem = static_cast<size_t *>(buf.addr);
+
+    /* First, zero the target region so we can reliably see the effects of the
+     * keyhole operation. */
+    memset(host_mem, 0, XFER_SIZE);
+    ssize_t n_bytes_transferred =
+        slash_qdma_qpair_transfer(normal_qfd, buf.fd, 0, DDR_BASE_ADDRESS,
+                                  XFER_SIZE, SLASH_QDMA_XFER_H2C);
+    ASSERT_EQ(n_bytes_transferred, static_cast<ssize_t>(XFER_SIZE))
+        << strerror(errno);
+
+    /* Now, write a pattern to the host memory which is different for every
+     * position. This way, we can tell that only the last portion is finally
+     * written. */
+    for (size_t i = 0; i < XFER_SIZE / sizeof(size_t); ++i) {
+        host_mem[i] = i;
+    }
+
+    /* Transfer the data with the keyhole qpair. */
+    n_bytes_transferred =
+        slash_qdma_qpair_transfer(keyhole_qfd, buf.fd, 0, DDR_BASE_ADDRESS,
+                                  XFER_SIZE, SLASH_QDMA_XFER_H2C);
+    ASSERT_EQ(n_bytes_transferred, static_cast<ssize_t>(XFER_SIZE))
+        << strerror(errno);
+
+    // Read back the results back using the normal qpair
+    n_bytes_transferred =
+        slash_qdma_qpair_transfer(normal_qfd, buf.fd, 0, DDR_BASE_ADDRESS,
+                                  XFER_SIZE, SLASH_QDMA_XFER_C2H);
+    ASSERT_EQ(n_bytes_transferred, static_cast<ssize_t>(XFER_SIZE))
+        << strerror(errno);
+
+    for (size_t i = 0; i < XFER_SIZE / sizeof(size_t); ++i) {
+        if (i < KEYHOLE_SIZE / sizeof(size_t)) {
+            ASSERT_EQ(host_mem[i],
+                      i + (XFER_SIZE - KEYHOLE_SIZE) / sizeof(size_t));
+        } else {
+            ASSERT_EQ(host_mem[i], 0);
+        }
+    }
+
+    EXPECT_EQ(slash_qdma_buffer_destroy(&buf), 0);
+
+    EXPECT_EQ(close(normal_qfd), 0);
+    EXPECT_EQ(close(keyhole_qfd), 0);
+
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, normal_qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_del(qdma_, normal_qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_stop(qdma_, keyhole_qid), 0);
+    EXPECT_EQ(slash_qdma_qpair_del(qdma_, keyhole_qid), 0);
 }
 
 TEST_P(ParametrizedQdmaTest, BufferCreateZeroLength) {
