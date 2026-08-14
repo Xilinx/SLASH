@@ -217,7 +217,10 @@ pushd "${SCRATCH}"
 OLD_PYTHONPATH="${PYTHONPATH:-}"
 export PYTHONPATH="${PWD}/linker${PYTHONPATH:+:${PYTHONPATH}}"
 
-protected git submodule update --init submodules/AVED submodules/qdma_drv submodules/xilinx-qemu submodules/qemu-devicetrees
+protected git submodule update --init submodules/AVED submodules/qdma_drv
+# The QEMU pair is `update = none` in .gitmodules so that a recursive clone
+# skips QEMU's ROM submodules; --checkout is what opts back in.
+protected git submodule update --init --checkout submodules/xilinx-qemu submodules/qemu-devicetrees
 
 # Build phase
 
