@@ -20,10 +20,16 @@
 
 #define MOCK_SOCK_QDMA_DESIGN_BASE 0x0000000102100000ull
 #define MOCK_SOCK_QDMA_DESIGN_END 0x0000000102101000ull
+#define MOCK_SOCK_QDMA_DESIGN_MAX_SIZE                                         \
+    (MOCK_SOCK_QDMA_DESIGN_END - MOCK_SOCK_QDMA_DESIGN_BASE)
 #define MOCK_SOCK_QDMA_HBM_BASE 0x0000004000000000ull
 #define MOCK_SOCK_QDMA_HBM_END 0x0000004800000000ull
+#define MOCK_SOCK_QDMA_HBM_MAX_SIZE                                            \
+    (MOCK_SOCK_QDMA_HBM_END - MOCK_SOCK_QDMA_HBM_BASE)
 #define MOCK_SOCK_QDMA_DDR_BASE 0x0000060000000000ull
 #define MOCK_SOCK_QDMA_DDR_END 0x0000060800000000ull
+#define MOCK_SOCK_QDMA_DDR_MAX_SIZE                                            \
+    (MOCK_SOCK_QDMA_DDR_END - MOCK_SOCK_QDMA_DDR_BASE)
 
 #include "mock_sock_qdma.h"
 #include "mock_sock.h"
@@ -64,21 +70,23 @@ int slash_mock_sock_qdma_init_state(struct slash_mock_sock_qdma_state *state) {
 
     state->refcount = 1;
 
-    state->design_keyhole = malloc(4096);
+    state->design_keyhole = malloc(MOCK_SOCK_QDMA_DESIGN_MAX_SIZE);
     if (state->design_keyhole == NULL) {
         rv = -ENOMEM;
         goto cleanup;
     }
-    state->hbm_memory = malloc(1ul << 35);
+    state->hbm_memory = malloc(4096);
     if (state->hbm_memory == NULL) {
         rv = -ENOMEM;
         goto cleanup;
     }
-    state->ddr_memory = malloc(1ul << 35);
+    state->hbm_memory_current_size = 4096;
+    state->ddr_memory = malloc(4096);
     if (state->ddr_memory == NULL) {
         rv = -ENOMEM;
         goto cleanup;
     }
+    state->ddr_memory_current_size = 4096;
 
     return 0;
 
@@ -590,12 +598,40 @@ static int qdma_qpair_ioctl_transfer(struct slash_mock_sock_qpair_state *state,
                       (dev_start - MOCK_SOCK_QDMA_DESIGN_BASE);
         } else if (dev_start >= MOCK_SOCK_QDMA_HBM_BASE &&
                    dev_end <= MOCK_SOCK_QDMA_HBM_END) {
-            dev_ptr = state->main_state->hbm_memory +
-                      (dev_start - MOCK_SOCK_QDMA_HBM_BASE);
+            dev_start -= MOCK_SOCK_QDMA_HBM_BASE;
+            dev_end -= MOCK_SOCK_QDMA_HBM_BASE;
+            size_t *buffer_size = state->main_state->hbm_memory_current_size;
+
+            if (dev_end > *buffer_size) {
+                void *new_ptr =
+                    realloc(state->main_state->hbm_memory, dev_end);
+                if (new_ptr == NULL) {
+                    rv = -ENOMEM;
+                    goto cleanup;
+                }
+                state->main_state->hbm_memory = new_ptr;
+                *buffer_size = dev_end;
+            }
+
+            dev_ptr = state->main_state->hbm_memory + dev_start;
         } else if (dev_start >= MOCK_SOCK_QDMA_DDR_BASE &&
                    dev_end <= MOCK_SOCK_QDMA_DDR_END) {
-            dev_ptr = state->main_state->ddr_memory +
-                      (dev_start - MOCK_SOCK_QDMA_DDR_BASE);
+            dev_start -= MOCK_SOCK_QDMA_DDR_BASE;
+            dev_end -= MOCK_SOCK_QDMA_DDR_BASE;
+            size_t *buffer_size = &state->main_state->ddr_memory_current_size;
+
+            if (dev_end > *buffer_size) {
+                void *new_ptr =
+                    realloc(state->main_state->ddr_memory, dev_end);
+                if (new_ptr == NULL) {
+                    rv = -ENOMEM;
+                    goto cleanup;
+                }
+                state->main_state->ddr_memory = new_ptr;
+                *buffer_size = dev_end;
+            }
+            
+            dev_ptr = state->main_state->ddr_memory + dev_start;
         } else {
             rv = -EINVAL;
             goto cleanup;

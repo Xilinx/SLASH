@@ -65,12 +65,14 @@ struct slash_mock_sock_qdma_state {
      * in size.
      */
     char *hbm_memory;
+    size_t hbm_memory_current_size;
 
     /**
      * @brief Owned memory arry, simulating the DDR of the card. Exactly 32 GiB
      * in size.
      */
     char *ddr_memory;
+    size_t ddr_memory_current_size;
 };
 
 /**
