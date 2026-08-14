@@ -34,6 +34,9 @@ heterogeneous graph execution.
    * - 05
      - perf
      - HBM/DDR memory performance benchmarking
+   * - 06
+     - dcmac
+     - 200 Gb/s DCMAC Ethernet loopback between two QSFP56 ports
    * - graph/00
      - multi_image_pipeline
      - End-to-end CPU + FPGA graph with two exclusive-image vbins, one-call

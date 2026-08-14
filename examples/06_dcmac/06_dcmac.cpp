@@ -39,9 +39,9 @@ int main(int argc, char* argv[]) {
         vrt::Device device(bdf, vrtbinFile);
         vrt::Kernel traffic_producer_0(device, "traffic_producer_0");
         vrt::Kernel traffic_producer_1(device, "traffic_producer_1");
-        traffic_producer_0.start(100, 0);
+        traffic_producer_0.start(101, 0);
         traffic_producer_0.wait();
-        traffic_producer_1.start(100, 1);
+        traffic_producer_1.start(85, 1);
         traffic_producer_1.wait();
         device.cleanup();
      } catch (std::exception const& e) {

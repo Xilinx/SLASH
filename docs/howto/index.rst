@@ -15,6 +15,7 @@ Task-oriented recipes for common operations.
    use-multiple-boards
    set-clock-frequency
    chain-streaming-kernels
+   use-dcmac
    benchmark-memory
    build-from-source
    use-cmake-modules
