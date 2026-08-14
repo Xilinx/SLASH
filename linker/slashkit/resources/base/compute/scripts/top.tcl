@@ -2641,7 +2641,7 @@ proc create_hier_cell_static_region { parentCell nameHier } {
     CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
     CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
     CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {360,100.000,100.000,100.000,100.000,100.000,100.000} \
+    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {350,100.000,100.000,100.000,100.000,100.000,100.000} \
     CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
     CONFIG.CLKOUT_USED {true,false,false,false,false,false,false} \
     CONFIG.RESET_TYPE {ACTIVE_LOW} \
