@@ -62,6 +62,16 @@ having the other). All of them ship inside Vitis or the base system;
 ``scripts/lsf/preflight.sh aved`` checks for them in about five seconds,
 which is worth doing before spending an hour finding out.
 
+The interpreter is worth singling out, because presence is not the test.
+RP1's platform-config generator needs Python 3.7 or newer, and an execution
+host can easily be older than the machine you develop on — RHEL 8 still ships
+3.6.8 as ``python3``, where the script dies with a ``SyntaxError`` on its own
+first import rather than anything that names the real problem.
+``build-rp1.sh`` therefore prefers the interpreter Vitis bundles under
+``tps/lnx64/python-*`` over whatever the host calls ``python3``, and the
+preflight probe resolves it the same way, so a node it passes is one that
+script can build on.
+
 That does mean **everything must be on shared storage**: the checkout, the
 build directory, the Python interpreter running SLASH, and the tool
 installation. A path that resolves differently on the two hosts is the most

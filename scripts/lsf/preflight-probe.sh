@@ -111,6 +111,44 @@ if [[ ${#missing_cross[@]} -gt 0 ]]; then
     echo "  than Vitis for this task."
 fi
 
+# For RP1's generator, presence is the wrong question: RHEL 8 ships 3.6.8 as
+# python3, which predates the `from __future__ import annotations` the script
+# opens with. Reporting the tool as found is how a node passed this probe and
+# then failed two hours into the job. Resolve exactly as build-rp1.sh does, so
+# that passing here means that script will find an interpreter too.
+echo
+echo "=== python for RP1 ==="
+rp1_python=""
+for candidate in "${XILINX_VITIS:-}"/tps/lnx64/python-*/bin/python3 \
+                 "$(command -v python3 2>/dev/null)"; do
+    [[ -x $candidate ]] || continue
+    # Vitis's interpreter needs its sibling lib/ on LD_LIBRARY_PATH, having no
+    # RPATH to its own libpython. build-rp1.sh does the same two-step, so a
+    # candidate accepted here is one that script will accept too.
+    for libdir in "" "${candidate%/bin/*}/lib"; do
+        if [[ -n $libdir ]]; then
+            version="$(LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+                "$candidate" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null)"
+        else
+            version="$("$candidate" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null)"
+        fi
+        [[ -n $version ]] || continue
+        case "$version" in
+            3.[0-6].*|2.*) printf '%-22s : %s (%s) TOO OLD\n' "rejected" "$candidate" "$version" ;;
+            *) printf '%-22s : %s (%s)%s\n' "python >= 3.7" "$candidate" "$version" \
+                   "${libdir:+ [needs LD_LIBRARY_PATH]}"
+               rp1_python="$candidate" ;;
+        esac
+        break
+    done
+    [[ -n $rp1_python ]] && break
+done
+if [[ -z "$rp1_python" ]]; then
+    printf '%-22s : MISSING\n' "python >= 3.7"
+    missing+=("python>=3.7")
+    [[ " ${required[*]} " == *" empyro "* ]] && blocking+=("python>=3.7")
+fi
+
 # Nothing SLASH-specific is installed here, so every input has to be reachable
 # over shared storage. A node that cannot see the build directory is the single
 # most common way this setup fails, and it fails deep inside a tool.

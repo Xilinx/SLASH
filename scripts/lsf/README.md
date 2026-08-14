@@ -117,8 +117,11 @@ aborts before submission, naming what to set and where.
 
 `aved` covers both firmware builds — the AMC one and RP1, which `build_all.sh`
 invokes — so it wants the more generous wall time of the two, and a node with
-`ninja`, `sdtgen` and both R5 cross compilers. `preflight.sh aved` checks
-exactly that.
+`ninja`, `sdtgen`, both R5 cross compilers and a Python of at least 3.7.
+`preflight.sh aved` checks exactly that. The Python check is a version check,
+not a presence check: RHEL 8 nodes ship 3.6.8 as `python3`, which is too old
+for RP1's generator, so `build-rp1.sh` prefers the interpreter bundled with
+Vitis and the probe accepts a node only if it can find one the same way.
 
 For a starting point, the SLURM job in `.gitlab-ci.yml` reserves 120 GB, 16
 cores and 12 hours for a static-shell build. Replace the guess with a
