@@ -492,12 +492,22 @@ def _generate_user_clock_xdc(
     # built with -- it does not follow the wizard's runtime DRP reprogramming,
     # so it has to be overridden here rather than trusted.
     #
-    # Overriding at the RM boundary rather than at the MMCM output is the safe
-    # choice, and is sound because that domain contains no static logic:
-    # top_i/slash/user_clk is the only load on the net (verified on both
-    # shells' abstract shells). So the override cannot perturb the signed-off
-    # static timing, and it needs no reference to a static-region hierarchy
-    # path, which would differ between the service and compute shells.
+    # Overriding at the RM boundary rather than at the MMCM output keeps the
+    # signed-off static timing untouched, and needs no reference to a
+    # static-region hierarchy path, which would differ between the service and
+    # compute shells.
+    #
+    # Known limitation: this leaves two clock objects on one physical net --
+    # user_clk at the requested period inside the RM, and the shell's
+    # clkout1_primitive_2 at 200 MHz outside it. A handful of static-side flops
+    # do drive into the RM's clock domain (2 endpoints on 00_axilite), and
+    # Vivado times those crossings against the beat frequency of the two
+    # periods rather than treating them as the same clock: at 250 MHz the
+    # 4 ns / 5 ns pair yields a bogus 1 ns requirement. Both are physically the
+    # same net and run at the same rate once the wizard is reprogrammed, so
+    # those paths are not really failing. Measured cost is under 1 MHz on both
+    # shells, and it is latent at the default -- at 200 MHz the two clocks share
+    # a 5 ns grid and the crossings pass with positive slack.
     constraint = (
         f"create_clock -name user_clk -period {period_ns:.6f}"
         " [get_ports user_clk]\n"

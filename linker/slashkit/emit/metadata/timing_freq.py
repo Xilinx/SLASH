@@ -229,6 +229,40 @@ def _find_timing_report(project_name: str, hw_build_dir: Path) -> Optional[Path]
     return None
 
 
+def _warn_target_not_met(
+    *,
+    requested_hz: int,
+    final_clock_hz: int,
+    wns_ns: float,
+    timing_report: Path,
+) -> None:
+    # The recorded frequency is derated from a run that failed its own target,
+    # and an over-constrained run routes worse than an achievable one. Measured
+    # on 00_axilite: asking 250 MHz where the design closes at 200 MHz pushed
+    # the critical path out by ~1.2-1.3 ns on both shells, so the derated result
+    # (146 MHz service, 161 MHz compute) came out *below* what asking for
+    # 200 MHz delivered (184 MHz and 200 MHz). Raising --clock-hz past what the
+    # design can reach therefore costs frequency rather than gaining it, which
+    # is unintuitive enough to be worth saying out loud rather than only
+    # recording in the log.
+    print(
+        "WARNING: user clock target not met for the reconfigurable module.",
+        file=sys.stderr,
+    )
+    print(f"  Requested:  {requested_hz} Hz", file=sys.stderr)
+    print(f"  Recorded:   {final_clock_hz} Hz (WNS(ns)={wns_ns:.3f})",
+          file=sys.stderr)
+    print(f"  Report:     {timing_report}", file=sys.stderr)
+    print(
+        "  The recorded frequency is derated from a run that missed its target."
+        " An over-constrained\n"
+        "  implementation routes worse than an achievable one, so re-linking"
+        " with a lower --clock-hz\n"
+        "  will often deliver a HIGHER final frequency than this one.",
+        file=sys.stderr,
+    )
+
+
 def apply_timing_frequency_cap(
     *,
     project_name: str,
@@ -305,6 +339,12 @@ def apply_timing_frequency_cap(
     )
 
     if final_clock_hz != user_clock_hz:
+        _warn_target_not_met(
+            requested_hz=user_clock_hz,
+            final_clock_hz=final_clock_hz,
+            wns_ns=wns_ns,
+            timing_report=timing_report,
+        )
         write_system_map_clock_hz(system_map_path, final_clock_hz)
         logger.info("Updated system_map ClockFrequency to %d: %s",
                     final_clock_hz, system_map_path)

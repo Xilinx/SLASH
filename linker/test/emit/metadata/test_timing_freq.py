@@ -104,3 +104,45 @@ def test_missing_report_keeps_target(tmp_path):
 
     assert result == target_hz
     assert timing_freq.read_system_map_clock_hz(system_map) == target_hz
+
+
+def test_missed_target_warns_on_stderr(tmp_path, capsys):
+    # Missing the target is unintuitive enough to warrant more than a log line:
+    # an over-constrained run routes worse, so the derated result can come out
+    # below what a lower --clock-hz would have delivered. Verify the user is
+    # told, and that the message names both frequencies.
+    target_hz = 250_000_000
+    system_map = tmp_path / "system_map.xml"
+    report = tmp_path / "report_timing_proj.txt"
+    _write_system_map(system_map, target_hz)
+    _write_timing_report(report, wns_ns=-1.0)
+
+    timing_freq.apply_timing_frequency_cap(
+        project_name="proj",
+        system_map_path=system_map,
+        timing_report=report,
+    )
+
+    err = capsys.readouterr().err
+    assert "user clock target not met" in err
+    assert str(target_hz) in err
+    assert "200000000" in err
+    assert "--clock-hz" in err
+
+
+def test_met_target_does_not_warn(tmp_path, capsys):
+    # The warning must stay quiet when the design closes, otherwise it becomes
+    # noise that gets filtered out.
+    target_hz = 250_000_000
+    system_map = tmp_path / "system_map.xml"
+    report = tmp_path / "report_timing_proj.txt"
+    _write_system_map(system_map, target_hz)
+    _write_timing_report(report, wns_ns=1.0)
+
+    timing_freq.apply_timing_frequency_cap(
+        project_name="proj",
+        system_map_path=system_map,
+        timing_report=report,
+    )
+
+    assert "target not met" not in capsys.readouterr().err
