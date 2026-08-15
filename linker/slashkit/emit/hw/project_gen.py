@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 from enum import Enum
 from pathlib import Path
 import logging
@@ -40,6 +39,15 @@ from slashkit.core.command_config import (
     ShellType,
 )
 from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm
+from slashkit.core.launcher import (
+    TASK_AVED,
+    TASK_BOOTGEN,
+    TASK_RM_SERVICE_LAYER,
+    TASK_RM_SLASH,
+    TASK_STATIC_SHELL,
+    TASK_STATIC_SHELL_COMPUTE,
+    run_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +142,12 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
     _ensure_boot_device_pcie_in_bif(bif_path)
     logger.info("Running bootgen in %s to generate %s",
                 impl_dir, output_pdi.name)
-    subprocess.run(
+    # bootgen resolves the file paths written inside the BIF against its own
+    # working directory, not against the BIF, so impl_dir is part of the
+    # contract rather than a convenience. run_tool carries it across to the
+    # execution host in SLASH_TOOL_CWD; making the arguments below absolute
+    # would not help, because the paths inside the BIF stay relative.
+    run_tool(
         [
             "bootgen",
             "-arch",
@@ -145,8 +158,8 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
             "-o",
             output_pdi.name,
         ],
-        cwd=str(impl_dir),
-        check=True,
+        task=TASK_BOOTGEN,
+        cwd=impl_dir,
     )
 
     if not output_pdi.exists():
@@ -284,12 +297,16 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
         with resources.path("slashkit.resources.aved", file_name) as in_path:
             _copy_checked(in_path, target_dir / file_name)
 
+    # build_all.sh and the four files staged above all live in the AVED clone,
+    # so offloading this step needs nothing installed on the execution host
+    # beyond a Vitis toolchain. It does need more of the base system than the
+    # other steps (cmake, make, git, python3); see scripts/lsf/README.md.
     logger.info("Running AVED build script in %s", aved_hw_dir)
-    subprocess.run(
+    run_tool(
         ["bash", "build_all.sh"],
-        cwd=str(aved_hw_dir),
+        task=TASK_AVED,
+        cwd=aved_hw_dir,
         env=_clean_cross_build_env(),
-        check=True,
     )
 
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
@@ -305,16 +322,7 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
     return aved_pdi, aved_nofpt_pdi
 
 
-# Shell-variant flag carried in bit[28] of the build-ID high word. Lets the
-# host tell which shell is physically loaded by reading the register, rather
-# than relying on the shell state vrtd tracks in software.
-_BUILD_ID_SHELL_BIT = {
-    ShellType.SERVICE: 0x00000000,
-    ShellType.COMPUTE: 0x10000000,
-}
-
-
-def _compute_build_id_env(shell_type: ShellType) -> Dict[str, str]:
+def _compute_build_id_env() -> Dict[str, str]:
     """
     Derive the shell build-ID constants from the git commit of the SLASH source
     tree and return them as environment variables consumed by create_project.tcl.
@@ -326,10 +334,13 @@ def _compute_build_id_env(shell_type: ShellType) -> Dict[str, str]:
       - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], shell type in bit[28]
         (0 = service, 1 = compute), bits[30:29] reserved, dirty flag in bit[31]
 
+    Bit[28] is left clear here: each shell's create_project.tcl forces it to its
+    own value, so the bit is owned by the design that it describes and stays
+    correct even when the Tcl is run outside this driver.
+
     Falls back to hash 0 with the dirty bit set when git information is
     unavailable (e.g. building from an exported tarball, not a git checkout).
     """
-    shell_bit = _BUILD_ID_SHELL_BIT[shell_type]
     repo_dir = Path(__file__).resolve().parents[3]
 
     def _git(*args: str) -> Optional[str]:
@@ -345,10 +356,7 @@ def _compute_build_id_env(shell_type: ShellType) -> Dict[str, str]:
     sha = _git("rev-parse", "HEAD")
     if sha is None:
         logger.warning("Not a git checkout; shell build-ID will be 0 (dirty).")
-        return {
-            "SLASH_BUILD_ID_LO": "0x0",
-            "SLASH_BUILD_ID_HI": f"0x{0x80000000 | shell_bit:08x}",
-        }
+        return {"SLASH_BUILD_ID_LO": "0x0", "SLASH_BUILD_ID_HI": "0x80000000"}
 
     # `git diff --quiet` exits non-zero when the working tree has changes.
     dirty = subprocess.run(
@@ -358,12 +366,11 @@ def _compute_build_id_env(shell_type: ShellType) -> Dict[str, str]:
     sha_int = int(sha, 16) >> 100  # keep the top 60 bits (first 15 hex chars)
     lo = sha_int & 0xFFFFFFFF
     hi = (sha_int >> 32) & 0x0FFFFFFF
-    hi |= shell_bit
     if dirty:
         hi |= 0x80000000
 
-    logger.info("Shell build-ID: commit %s%s (%s shell)",
-                sha[:14], " (dirty)" if dirty else "", shell_type.value)
+    logger.info("Shell build-ID: commit %s%s",
+                sha[:14], " (dirty)" if dirty else "")
     return {"SLASH_BUILD_ID_LO": f"0x{lo:08x}", "SLASH_BUILD_ID_HI": f"0x{hi:08x}"}
 
 
@@ -379,8 +386,7 @@ def create_build_project(
         if not tcl_path.exists():
             raise FileNotFoundError(
                 f"create_project.tcl not found: {tcl_path}")
-        launcher = shlex.split(os.environ.get("SLASH_VIVADO_LAUNCHER", ""))
-        cmd = launcher + [
+        cmd = [
             str(config.vivado_bin),
             "-mode",
             "batch",
@@ -399,10 +405,12 @@ def create_build_project(
         cmd.append(str(config.n_jobs))
 
         env = _environment_with_udev_ld_preload()
-        env.update(_compute_build_id_env(ShellType.SERVICE))
+        # Computed here, from this checkout, and carried across to wherever the
+        # run happens: an execution host may see a different git tree, or none.
+        env.update(_compute_build_id_env())
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True,
-                       env=env)
+        run_tool(cmd, task=TASK_STATIC_SHELL,
+                 cwd=config.build_dir, env=env)
 
 
 def create_build_project_compute(
@@ -417,8 +425,7 @@ def create_build_project_compute(
             raise FileNotFoundError(
                 f"create_project.tcl not found: {tcl_path}"
             )
-        launcher = shlex.split(os.environ.get("SLASH_VIVADO_LAUNCHER", ""))
-        cmd = launcher + [
+        cmd = [
             str(config.vivado_bin),
             "-mode",
             "batch",
@@ -436,12 +443,14 @@ def create_build_project_compute(
         cmd.append(str(config.n_jobs))
 
         env = _environment_with_udev_ld_preload()
-        env.update(_compute_build_id_env(ShellType.COMPUTE))
+        # Same as the service path: derived from this checkout, not from
+        # whatever tree the execution host happens to see.
+        env.update(_compute_build_id_env())
 
-        subprocess.run(
+        run_tool(
             cmd,
-            cwd=str(config.build_dir),
-            check=True,
+            task=TASK_STATIC_SHELL_COMPUTE,
+            cwd=config.build_dir,
             env=env,
         )
 
@@ -509,7 +518,7 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
         )
 
         cmd = [
-            config.vivado_bin,
+            str(config.vivado_bin),
             "-mode",
             "batch",
             "-nojournal",
@@ -555,8 +564,12 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             )
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True,
-                       env=_environment_with_udev_ld_preload())
+        # Distinct task kinds: a single `slashkit link` runs both RM builds, so
+        # the launcher cannot tell them apart from a per-invocation override.
+        task = (TASK_RM_SLASH if rm_kind == RM_KIND.SLASH_PROJECT
+                else TASK_RM_SERVICE_LAYER)
+        run_tool(cmd, task=task, cwd=config.build_dir,
+                 env=_environment_with_udev_ld_preload())
 
     if rm_kind == RM_KIND.SLASH_PROJECT:
         pdi_out_path = image_out_dir / \
@@ -585,7 +598,9 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
     aved_dir = config.build_dir / "AVED"
     if not aved_dir.exists():
         # Clone AVED early so that errors are caught before the multi-hour
-        # implementation run.
+        # implementation run. Stays local even when the tool steps are
+        # offloaded: this needs network egress, which compute nodes typically
+        # do not have.
         subprocess.run(
             [
                 "git",
@@ -707,18 +722,24 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
     rp1_env = _clean_cross_build_env()
     rp1_env["XSA"] = str(
         aved_build_dir / f"{AVED_DESIGN_NAME}.xsa")
-    subprocess.run(
+    # Tagged as AVED rather than given a kind of its own: this is the same
+    # cross-compile the AVED step already runs -- build_all.sh calls this very
+    # script -- so it wants the same reservation and the same node.
+    run_tool(
         ["bash", "build-rp1.sh"],
-        cwd=str(rp1_dir),
+        task=TASK_AVED,
+        cwd=rp1_dir,
         env=rp1_env,
-        check=True,
     )
     _copy_checked(rp1_dir / "build" / "rp1.elf", aved_build_dir / "rp1.elf")
 
     nofpt_pdi = aved_build_dir / f"{AVED_DESIGN_NAME}_nofpt.pdi"
     logger.info(
         "Repacking %s with existing AMC/FPT and rebuilt RP1", nofpt_pdi.name)
-    subprocess.run(
+    # As in _generate_top_wrapper_pdi_with_bootgen, the paths inside the BIF are
+    # relative, so aved_hw_dir is part of the contract and travels in
+    # SLASH_TOOL_CWD.
+    run_tool(
         [
             "bootgen",
             "-arch",
@@ -729,12 +750,15 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
             "-o",
             str(nofpt_pdi),
         ],
-        cwd=str(aved_hw_dir),
+        task=TASK_BOOTGEN,
+        cwd=aved_hw_dir,
         env=_clean_cross_build_env(),
-        check=True,
     )
 
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
+    # Deliberately local: fpt_pdi_gen.py is plain Python that splices two files
+    # together, with no vendor toolchain behind it. Offloading it would buy a
+    # queue wait and nothing else.
     subprocess.run(
         [
             str(aved_fpt_dir / "fpt_pdi_gen.py"),

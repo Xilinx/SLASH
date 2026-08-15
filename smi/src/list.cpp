@@ -407,7 +407,9 @@ struct V80Board {
     PfStatus    pf1;        ///< Status of PF1 (QDMA).
     PfStatus    pf2;        ///< Status of PF2 (control).
     VrtdStatus  vrtd;       ///< Status of VRTD daemon registration.
-    vrtd::ShellType shellType = vrtd::ShellType::Unknown; ///< Shell state reported by VRTD.
+    /// Shell state VRTD believes is loaded. Only the daemon's own bookkeeping:
+    /// it resets to Unknown when vrtd restarts, so it is not authoritative.
+    vrtd::ShellType shellType = vrtd::ShellType::Unknown;
     bool        jtag{};      ///< True if VRTD reports the board as JTAG-booted.
     bool        longPrinting{};  ///< If true, include detailed sysfs info per PF.
 
@@ -419,7 +421,8 @@ struct V80Board {
     /// Sensor readings (populated only when -s/--sensors is given and VRTD is reachable).
     std::vector<vrtd::SensorEntry> sensors;
 
-    /// Shell build ID read from hardware (populated only when longPrinting).
+    /// Shell build ID read from hardware. Ground truth for the loaded shell
+    /// variant, so it is read whether or not the detailed view was asked for.
     std::optional<BuildId> shellBuildId;
 
     /// True when all three PFs and VRTD are ready.
@@ -469,18 +472,18 @@ static std::vector<V80Board> discoverBoards(bool longPrinting, bool sensors) {
             board.pf0Device = tryReadDevice(pf0Dev.bdf, true);
             board.pf1Device = tryReadDevice(pf1Bdf, true);
             board.pf2Device = tryReadDevice(pf2Bdf, true);
-
-            // Best-effort: read the shell build ID from hardware. Requires a
-            // usable BAR4 (via vrtd); swallow errors so list still works on
-            // boards without the register or with vrtd down.
-            try {
-                board.shellBuildId = readBuildId(base);
-            } catch (...) {
-                // Leave unset.
-            }
         }
 
         if (board.vrtd.ok) {
+            // Best-effort: read the shell build ID from hardware. Requires a
+            // usable BAR4; swallow errors so list still works on boards
+            // without the register.
+            try {
+                board.shellBuildId = readBuildId(base);
+            } catch (...) {
+                // Leave unset; the shell variant then falls back to vrtd's.
+            }
+
             try {
                 vrtd::Session session;
                 auto device = session.getDeviceByBdf(base);
@@ -562,9 +565,20 @@ static const char *shellTypeName(vrtd::ShellType shellType) {
     return "unknown";
 }
 
-static void printShellState(std::ostream& out, vrtd::ShellType shellType, bool jtag) {
-    out << "Shell: " << shellTypeName(shellType);
-    if (jtag) {
+/// Prints which shell is loaded on the board.
+///
+/// The build-ID register is baked into the bitstream, so it is the ground truth
+/// for what is physically on the board. vrtd's tracked state is only what the
+/// daemon believes — Unknown after a restart — so it is used purely as a
+/// fallback, and labelled as such, when the register cannot be read.
+static void printShellState(std::ostream& out, const V80Board& board) {
+    out << "Shell: ";
+    if (board.shellBuildId) {
+        out << board.shellBuildId->shellName();
+    } else {
+        out << shellTypeName(board.shellType) << " (per vrtd)";
+    }
+    if (board.jtag) {
         out << " (JTAG)";
     }
 }
@@ -667,7 +681,7 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
     printVrtdStatus(out, board.vrtd);
     if (board.vrtd.ok) {
         out << " ";
-        printShellState(out, board.shellType, board.jtag);
+        printShellState(out, board);
     }
     out << "\n";
 
@@ -683,16 +697,15 @@ std::ostream& operator<<(std::ostream& out, const V80Board& board) {
         }
         out << "\n";
         if (board.vrtd.ok) {
-            out << INDENT2;
-            printShellState(out, board.shellType, board.jtag);
-            out << "\n";
+            // The daemon's own bookkeeping, shown next to the rest of its
+            // status. The authoritative variant is on the summary line above.
+            out << INDENT2 << "Shell state: " << shellTypeName(board.shellType) << "\n";
         }
 
         out << INDENT1 << "Shell build: ";
         if (board.shellBuildId) {
             out << board.shellBuildId->commitHex()
-                << (board.shellBuildId->dirty ? " (dirty)" : "")
-                << " (" << board.shellBuildId->shellName() << ")";
+                << (board.shellBuildId->dirty ? " (dirty)" : "");
         } else {
             out << "unavailable";
         }
@@ -763,10 +776,16 @@ Json::Value toJson(const V80Board& board) {
     }
     j["vrtd"] = vrtdJson;
 
+    // Mirrors the text output: hardware is authoritative, vrtd is the fallback.
+    // "shell_source" tells consumers which of the two they are looking at.
     if (board.shellBuildId) {
+        j["shell"] = board.shellBuildId->shellName();
+        j["shell_source"] = "hardware";
         j["shell_build_commit"] = board.shellBuildId->commitHex();
         j["shell_build_dirty"] = board.shellBuildId->dirty;
-        j["shell_build_variant"] = board.shellBuildId->shellName();
+    } else if (board.vrtd.ok) {
+        j["shell"] = shellTypeName(board.shellType);
+        j["shell_source"] = "vrtd";
     }
 
     if (!board.sensors.empty()) {

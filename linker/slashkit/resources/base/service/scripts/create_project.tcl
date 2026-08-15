@@ -27,6 +27,11 @@ set cwd     [pwd]
 set ::build_id_lo [expr {[info exists ::env(SLASH_BUILD_ID_LO)] ? $::env(SLASH_BUILD_ID_LO) : 0}]
 set ::build_id_hi [expr {[info exists ::env(SLASH_BUILD_ID_HI)] ? $::env(SLASH_BUILD_ID_HI) : 0}]
 
+# Bit [28] of the high word identifies the shell variant (0 = service). Forced
+# here rather than trusted from the environment so the register still
+# identifies this shell correctly when the script is sourced standalone.
+set ::build_id_hi [format 0x%08x [expr {$::build_id_hi & ~0x10000000}]]
+
 # Optional parallel job count via -tclargs: an integer in the trailing
 # position. Popped off first so the positional parsing below is unaffected by
 # whether the caller passed it.

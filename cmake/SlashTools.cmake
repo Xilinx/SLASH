@@ -26,7 +26,16 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
 # Include BuildHLS so that find_package(SlashTools) provides everything
 include("${CMAKE_CURRENT_LIST_DIR}/BuildHLS.cmake")
 
-find_package(Vivado REQUIRED)
+# With a launcher set there is no local Vivado to find: the name is resolved on
+# the execution host after its settings script runs, which is the same
+# relaxation slashkit makes for --vivado. Requiring one here would make a
+# machine with no tools installed unable to even configure.
+if(SLASH_TOOL_LAUNCHER)
+  set(VIVADO_BINARY vivado)
+  message(STATUS "SlashTools: launcher set, Vivado resolved on the execution host")
+else()
+  find_package(Vivado REQUIRED)
+endif()
 
 # --- Locate the SLASH linker ---
 # Two modes:
@@ -78,6 +87,20 @@ function(add_vbin)
 
     set(SLASH_VBIN_FILE "${CMAKE_CURRENT_BINARY_DIR}/${SLASH_VBIN_TARGET}.vbin")
 
+    # slashkit reads the launcher from the environment, but a -D on the command
+    # line only sets it as a CMake variable. Without this, VIVADO_BINARY above
+    # relaxes to a bare `vivado` for the execution host while slashkit, seeing
+    # no launcher, tries to resolve that name locally and fails -- so the
+    # documented `cmake -DSLASH_TOOL_LAUNCHER=...` route builds HLS kernels
+    # remotely and then cannot link them. BuildHLS.cmake carries it the same
+    # way, for the same reason.
+    if(SLASH_TOOL_LAUNCHER)
+        set(_slash_link_env "${CMAKE_COMMAND}" -E env
+            "SLASH_TOOL_LAUNCHER=${SLASH_TOOL_LAUNCHER}")
+    else()
+        set(_slash_link_env "")
+    endif()
+
     if(_SLASH_TOOLS_USE_REPO)
         # Source-tree mode: invoke the slashkit package as a module from the
         # linker directory so that `import slashkit` resolves to ./slashkit/.
@@ -89,7 +112,7 @@ function(add_vbin)
 
         add_custom_command(
             OUTPUT "${SLASH_VBIN_FILE}"
-            COMMAND "${_py}" "-m" "slashkit" "link"
+            COMMAND ${_slash_link_env} "${_py}" "-m" "slashkit" "link"
                 "-c" "${SLASH_VBIN_CFG}"
                 "-p" "${SLASH_VBIN_PLATFORM}"
                 "-o" "${SLASH_VBIN_FILE}"
@@ -103,7 +126,7 @@ function(add_vbin)
         # Installed mode: invoke the slashkit wrapper
         add_custom_command(
             OUTPUT "${SLASH_VBIN_FILE}"
-            COMMAND "${SLASHKIT_EXECUTABLE}" "link"
+            COMMAND ${_slash_link_env} "${SLASHKIT_EXECUTABLE}" "link"
                 "-c" "${SLASH_VBIN_CFG}"
                 "-p" "${SLASH_VBIN_PLATFORM}"
                 "-o" "${SLASH_VBIN_FILE}"

@@ -60,7 +60,8 @@ if { $list_projs eq "" } {
 }
 
 # Shell build-ID constants for the static-region GPIO register. Normally set by
-# create_project.tcl from the git commit; default to 0 if sourced standalone.
+# create_project.tcl from the git commit; if sourced standalone default to a
+# zero hash with bit [28] clear, which still identifies this as the service shell.
 if { ![info exists ::build_id_lo] } { set ::build_id_lo 0 }
 if { ![info exists ::build_id_hi] } { set ::build_id_hi 0 }
 
@@ -760,7 +761,8 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
 
 
   # Create instance: build_id_hi, and set properties.
-  # Bits [27:0] = next 28 bits of the git SHA-1; bits [30:28] reserved; bit [31] = dirty flag.
+  # Bits [27:0] = next 28 bits of the git SHA-1; bit [28] = shell type (0 = service);
+  # bits [30:29] reserved; bit [31] = dirty flag.
   # Value injected at build time via ::build_id_hi.
   set build_id_hi [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 build_id_hi ]
   set_property -dict [list \

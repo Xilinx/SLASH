@@ -28,7 +28,7 @@ set ::build_id_lo [expr {[info exists ::env(SLASH_BUILD_ID_LO)] ? $::env(SLASH_B
 set ::build_id_hi [expr {[info exists ::env(SLASH_BUILD_ID_HI)] ? $::env(SLASH_BUILD_ID_HI) : 0}]
 
 # Bit [28] of the high word identifies the shell variant (1 = compute). Forced
-# on here rather than trusted from the environment so the register still
+# here rather than trusted from the environment so the register still
 # identifies this shell correctly when the script is sourced standalone.
 set ::build_id_hi [format 0x%08x [expr {$::build_id_hi | 0x10000000}]]
 
