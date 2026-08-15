@@ -7,6 +7,7 @@ devices, and transferring data between host and device memory.
 Key components:
 
 - **VRT** (V80 RunTime) — C++17 API for kernel execution, buffer management, and device control
+- **vrt::graph** — higher-level graph API inside VRT for authoring kernels, buffers, loops, and conditionals as a graph across CPU and FPGA devices, with autonomous FPGA-side execution via the RP1 command processor
 - **v80-smi** — command-line tool for board management, programming, and diagnostics
 - **slashkit** — Python-based linker that packages HLS kernels into deployable *vrtbin* archives
 - **slash** — Linux kernel module and driver stack
@@ -40,6 +41,19 @@ Two additional components sit alongside the stack:
 
 - **v80-smi** — CLI for listing, programming, resetting, and validating V80 boards.
 - **slashkit** — links HLS kernels into *vrtbin* archives for deployment.
+
+### Graph API
+
+`vrt::graph` is an optional higher-level layer inside VRT for applications
+that are easier to describe as a graph of kernels, buffers, scalars, loops,
+and conditionals than as a manual sequence of kernel launches. The compiler
+lowers the authored graph into per-device execution plans; on the FPGA
+device, kernel dispatch, reprogram, loop, and conditional nodes can run
+autonomously on an on-die ARM Cortex-R5 core (RP1) with no host round-trip
+per node. See [`examples/graph/`](examples/graph/) for worked examples, and
+the "Graph API" tutorial and architecture pages on
+[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/) for a full
+introduction.
 
 ## Repository Layout
 
@@ -100,12 +114,30 @@ sudo apt install cmake pkg-config ninja-build \
   linux-headers-$(uname -r)
 ```
 
-**Submodules:**
+**Clone and submodules:**
 
-SLASH depends on [AVED](https://github.com/Xilinx/AVED) and [QDMA](https://github.com/Xilinx/dma_ip_drivers):
+SLASH depends on [AVED](https://github.com/Xilinx/AVED) and
+[QDMA](https://github.com/Xilinx/dma_ip_drivers):
 
 ```bash
-git submodule update --init --recursive
+git clone -b dev https://github.com/Xilinx/SLASH.git
+cd SLASH
+git submodule update --init submodules/AVED submodules/qdma_drv
+```
+
+Do not clone with `--recurse-submodules`. The optional Xilinx QEMU submodule
+brings in QEMU's entire ROM tree as further nested submodules — none of which
+SLASH builds — and at least one of those third-party URLs no longer exists
+upstream, so a recursive clone fails on a repository you do not need. The two
+QEMU submodules are therefore marked `update = none` in `.gitmodules` and a
+recursive clone skips them.
+
+The optional RP1 firmware test additionally requires Xilinx QEMU and its
+device trees. `--checkout` is what opts back in:
+
+```bash
+git submodule update --init --checkout \
+    submodules/xilinx-qemu submodules/qemu-devicetrees
 ```
 
 ## Quick Start
@@ -248,13 +280,16 @@ This ensures the buffer allocation always matches the linker configuration.
 
 | ID | Feature | Notes |
 |----|---------|-------|
-| 0 | Linking, AXI-Lite control | |
-| 1 | Kernels with AXI-MM interfaces | |
-| 2 | Freerunning streaming kernels | |
-| 3 | Controlling multiple V80s | Uses vrtbin from example 00 |
-| 4 | Frequency targets | |
-| 5 | Memory performance test | Instantiates maximum number of kernels |
-| 6 | Network interface test | Drives two network interfaces |
+| 00 | Linking, AXI-Lite control | |
+| 01 | Kernels with AXI-MM interfaces | |
+| 02 | Freerunning streaming kernels | |
+| 03 | Controlling multiple V80s | Uses vrtbin from example 00 |
+| 04 | Frequency targets | |
+| 05 | Memory performance test | Instantiates maximum number of kernels |
+| 06 | Network interface test | Drives two network interfaces |
+
+[`examples/graph/`](examples/graph/) has a separate set of `vrt::graph` API
+examples (CPU+FPGA graphs, loops, conditionals, multi-image reprogramming).
 
 See the [examples README](examples/README.md) for build and run instructions.
 
@@ -266,18 +301,23 @@ Each component has its own README with detailed information:
 - **[libslash](driver/libslash/README.md)** — driver wrapper, device node API, mock mode
 - **[v80-smi](smi/README.md)** — all commands with usage examples
 - **[CMake Modules](cmake/README.md)** — BuildHLS, FindVivado, FindVitis, SlashTools reference
-- **[VRT API Docs](vrt/doc/README.md)** — Doxygen generation instructions
 - **[vrtd Daemon](vrt/vrtd/README.md)** — daemon coding guidelines and standards
 - **[Examples](examples/README.md)** — build recipes and run instructions for all examples
+
+API reference (VRT, `vrt::graph`, libslash, libvrtd, libvrtdpp, vrtd, v80-smi,
+CMake modules) is generated from Doxygen comments and published at
+[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/) — there is no
+standalone local Doxygen target; the Sphinx build in `docs/` invokes Doxygen
+against each component's `doc/Doxyfile` and renders the XML via Breathe.
 
 ## Full Documentation
 
 The complete documentation is published at **[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/)** and covers:
 
-- **Tutorials** — getting started, writing kernels, buffers and memory, emulation/simulation, platform setup, device management, vrtd configuration
+- **Tutorials** — getting started, writing kernels, the graph API, buffers and memory, emulation/simulation, platform setup, device management, vrtd configuration
 - **How-To Guides** — multiple boards, clock frequency, streaming chains, memory benchmarking, building from source, CMake modules, vrtbin inspection, mock mode
-- **API Reference** — VRT, libslash, libvrtd, libvrtdpp, vrtd, v80-smi, CMake modules
-- **Architecture** — stack overview, memory model, PCIe topology, platform modes, vrtbin format
+- **API Reference** — VRT, `vrt::graph` (devices, bridges, rendering), libslash, libvrtd, libvrtdpp, vrtd, v80-smi, CMake modules
+- **Architecture** — stack overview, graph API architecture, memory model, PCIe topology, platform modes, vrtbin format
 
 ## Known Limitations
 

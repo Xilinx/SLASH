@@ -20,7 +20,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cctype>
 #include <cerrno>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
@@ -32,7 +34,33 @@ extern "C" {
 static constexpr const char *REAL_QDMA_PATH = "/dev/slash_qdma_ctl0";
 static constexpr uint64_t DDR_BASE_ADDRESS = 0x60000000000ULL;
 
+static bool isPf1Bdf(const char *bdf) {
+    if (bdf == nullptr || std::strlen(bdf) != 12 || bdf[4] != ':' || bdf[7] != ':' ||
+        bdf[10] != '.' || bdf[11] != '1') {
+        return false;
+    }
+    for (size_t i = 0; i < 12; ++i) {
+        if (i == 4 || i == 7 || i == 10) {
+            continue;
+        }
+        if (!std::isxdigit(static_cast<unsigned char>(bdf[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ─── Null / invalid argument tests (no hardware needed) ──────────────────────
+
+TEST(QdmaAbiTest, InfoPreservesOriginalPrefix) {
+    EXPECT_EQ(offsetof(struct slash_qdma_info, qsets_max), sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, msix_qvecs), 2 * sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, vf_max), 3 * sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, caps), 4 * sizeof(__u32));
+    EXPECT_EQ(offsetof(struct slash_qdma_info, bdf), 5 * sizeof(__u32));
+    EXPECT_EQ(_IOC_SIZE(SLASH_QDMA_IOCTL_INFO),
+              offsetof(struct slash_qdma_info, bdf));
+}
 
 TEST(QdmaNullTest, Open) {
     errno = 0;
@@ -167,7 +195,12 @@ TEST_P(ParametrizedQdmaTest, OpenSucceeds) {
 
 TEST_P(ParametrizedQdmaTest, InfoRead) {
     struct slash_qdma_info info{};
-    EXPECT_EQ(slash_qdma_info_read(qdma_, &info), 0);
+    ASSERT_EQ(slash_qdma_info_read(qdma_, &info), 0);
+    if (mock) {
+        EXPECT_STREQ(info.bdf, "0000:00:00.1");
+    } else {
+        EXPECT_TRUE(isPf1Bdf(info.bdf)) << "invalid PF1 BDF: " << info.bdf;
+    }
 }
 
 TEST_P(ParametrizedQdmaTest, QueueDmaTransfer) {

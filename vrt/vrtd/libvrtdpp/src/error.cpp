@@ -63,6 +63,12 @@ const char *Error::what() const noexcept {
     case VRTD_RET_AUTH_ERROR:
         return "Missing permission";
 
+    case VRTD_RET_BUSY:
+        return "Requested resource is busy";
+
+    case VRTD_RET_SHELL_LOCKED:
+        return "Device is JTAG-booted; refusing automatic shell reset";
+
     default:
         return "Unknown error";
     }

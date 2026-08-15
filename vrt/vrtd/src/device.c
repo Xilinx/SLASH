@@ -20,15 +20,14 @@
 
 /**
  * @file device.c
- * @brief Sysfs-based device discovery and initialization for SLASH FPGA devices.
+ * @brief Character-device discovery and initialization for SLASH FPGA devices.
  *
  * This module implements the device lifecycle for the vrtd daemon. It discovers
  * AMD Alveo V80 (SLASH) devices by globbing /dev/slash_ctl* character device
  * nodes exposed by the kernel driver, then opens each device by:
  *
  *   1. Opening the control device via libslash (slash_ctldev_open).
- *   2. Locating the matching QDMA control device by PCI BDF (bus:device prefix)
- *      via sysfs enumeration under /sys/class/misc/.
+ *   2. Opening the matching QDMA control device with the same stable number.
  *   3. Probing all six PCI BARs and memory-mapping the usable ones.
  *   4. Initializing subsystem drivers: clock driver, design writer, memory map.
  *
@@ -47,11 +46,11 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <glob.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
-#include <stdio.h>
 #include <syslog.h>
 #include <systemd/sd-journal.h>
 
@@ -61,148 +60,52 @@ static bool devices_contains_path(const struct device_ptr_array *devices, const 
 static int device_read_pci_info(struct device *d, struct vrtd_pci_info *out);
 
 /**
- * Find the /dev/ path of the qdma_ctl device sharing the same PCI bus:device
- * as the given BDF. Returns 0 on success (path written to out_path), -1 on
- * failure or no match (out_path set to NULL).
+ * Open the QDMA control device paired with a control-device path.
  *
- * The lookup works by:
- *   1. Extracting the bus:device prefix from ctl_bdf (e.g., "0000:65:00" from
- *      "0000:65:00.1").
- *   2. Globbing /sys/class/misc/slash_qdma_ctl_<prefix>.* to find any QDMA
- *      misc device nodes registered by the kernel driver on the same PCI slot.
- *   3. Reading the uevent file under the matched sysfs entry to extract the
- *      DEVNAME, and prepending "/dev/" to form the full device path.
+ * The kernel assigns matching PF1/PF2 endpoints the same stable board number,
+ * so /dev/slash_ctlN always pairs with /dev/slash_qdma_ctlN.
  *
- * @param ctl_bdf   PCI BDF string of the control device (e.g., "0000:65:00.1").
- * @param out_path  On success, receives a heap-allocated string with the /dev/
- *                  path of the QDMA device. Set to NULL if no match is found
- *                  (which is not an error). Caller must free.
- * @return 0 on success (match found or no match), -1 on I/O or allocation error.
+ * @param ctl_path  Control-device path (e.g., "/dev/slash_ctl0").
+ * @param out       On success, receives the open QDMA handle, or NULL if the
+ *                  paired node is absent. Caller must close.
+ * @return 0 on success (including absence), -1 on malformed path or open error.
  */
-static int find_qdma_dev_path_by_bdf(const char *ctl_bdf, char **out_path)
+static int open_paired_qdma(const char *ctl_path, struct slash_qdma **out)
 {
-    *out_path = NULL;
+    static const char ctl_prefix[] = "/dev/slash_ctl";
+    const char *card;
 
-    char prefix[VRTD_PCI_BDF_LEN];
-    if (pci_bdf_prefix(ctl_bdf, prefix) != 0) {
+    if (ctl_path == NULL || out == NULL) {
+        errno = EINVAL;
         return -1;
     }
 
-    /* Build a glob pattern to match any QDMA misc device on the same PCI slot. */
-    _cleanup_(cleanup_free)
-    char *pattern = NULL;
-    if (asprintf(&pattern, "/sys/class/misc/slash_qdma_ctl_%s.*", prefix) < 0) {
+    *out = NULL;
+    if (strncmp(ctl_path, ctl_prefix, sizeof(ctl_prefix) - 1) != 0) {
+        errno = EINVAL;
         return -1;
     }
 
-    _cleanup_(globfree)
-    glob_t g = {0};
-    int ret = glob(pattern, GLOB_ERR, NULL, &g);
-    if (ret != 0) {
-        return (ret == GLOB_NOMATCH) ? 0 : -1;
-    }
-
-    if (g.gl_pathc > 1) {
-        LOG(
-            LOG_WARNING,
-            "Multiple QDMA devices found for BDF prefix %s; using first match",
-            prefix
-        );
-    }
-
-    const char *entry = g.gl_pathv[0];
-
-    /* Read the uevent file to extract the kernel-assigned DEVNAME. */
-    _cleanup_(cleanup_free)
-    char *uevent_path = NULL;
-    if (asprintf(&uevent_path, "%s/uevent", entry) < 0) {
+    card = ctl_path + sizeof(ctl_prefix) - 1;
+    if (*card == '\0' || strspn(card, "0123456789") != strlen(card)) {
+        errno = EINVAL;
         return -1;
     }
-
-    FILE *f = fopen(uevent_path, "r");
-    if (f == NULL) {
-        return -1;
-    }
-
-    /* Parse uevent line-by-line looking for DEVNAME=<name>. */
-    char line[256];
-    while (fgets(line, sizeof(line), f) != NULL) {
-        static const char devname_key[] = "DEVNAME=";
-        if (strncmp(line, devname_key, sizeof(devname_key) - 1) != 0) {
-            continue;
-        }
-        const char *devname = line + sizeof(devname_key) - 1;
-        size_t len = strlen(devname);
-        /* Strip trailing newline/carriage return characters. */
-        while (len > 0 && (devname[len - 1] == '\n' || devname[len - 1] == '\r')) {
-            len--;
-        }
-        if (asprintf(out_path, "/dev/%.*s", (int)len, devname) < 0) {
-            *out_path = NULL;
-            fclose(f);
-            return -1;
-        }
-        fclose(f);
-        return 0;
-    }
-    fclose(f);
-
-    return 0;
-}
-
-/**
- * Find the /dev/ path of a slash_ctl device by its full PCI BDF string.
- *
- * The slash_ctl misc device is registered by the kernel driver under a
- * stable sysfs name derived from the full PCI BDF (including function number),
- * e.g. /sys/class/misc/slash_ctl_0000:61:00.2.  The corresponding /dev/ node
- * uses an incrementing counter (slash_ctlN) that changes after each hotplug
- * remove+rescan cycle.  This function resolves the current /dev/ path by
- * reading the DEVNAME entry from the stable sysfs uevent file.
- *
- * @param bdf       Full PCI BDF string including function (e.g. "0000:61:00.2").
- * @param out_path  On success, receives a heap-allocated string with the /dev/
- *                  path of the slash_ctl device.  Set to NULL if the device is
- *                  not yet registered (which is not an error).  Caller must free.
- * @return 0 on success (device found or not yet present), -1 on I/O or
- *         allocation error.
- */
-int find_slash_ctl_dev_path_by_bdf(const char *bdf, char **out_path)
-{
-    *out_path = NULL;
 
     _cleanup_(cleanup_free)
-    char *uevent_path = NULL;
-    if (asprintf(&uevent_path, "/sys/class/misc/slash_ctl_%s/uevent", bdf) < 0) {
+    char *qdma_path = NULL;
+    if (asprintf(&qdma_path, "/dev/slash_qdma_ctl%s", card) < 0)
+        return -1;
+
+    *out = slash_qdma_open(qdma_path);
+    if (*out == NULL) {
+        if (errno == ENOENT || errno == ENODEV)
+            return 0;
         return -1;
     }
 
-    FILE *f = fopen(uevent_path, "r");
-    if (f == NULL) {
-        /* Device not yet registered in sysfs — treat as no-match, not an error. */
-        return 0;
-    }
-
-    char line[256];
-    while (fgets(line, sizeof(line), f) != NULL) {
-        static const char devname_key[] = "DEVNAME=";
-        if (strncmp(line, devname_key, sizeof(devname_key) - 1) != 0) {
-            continue;
-        }
-        const char *devname = line + sizeof(devname_key) - 1;
-        size_t len = strlen(devname);
-        while (len > 0 && (devname[len - 1] == '\n' || devname[len - 1] == '\r')) {
-            len--;
-        }
-        if (asprintf(out_path, "/dev/%.*s", (int)len, devname) < 0) {
-            *out_path = NULL;
-            fclose(f);
-            return -1;
-        }
-        fclose(f);
-        return 0;
-    }
-    fclose(f);
+    LOG(LOG_INFO, "Paired control device %s with QDMA device %s",
+        ctl_path, qdma_path);
     return 0;
 }
 
@@ -291,8 +194,8 @@ static int devices_open(struct device_ptr_array *devices, size_t pathc, char **p
  *   3. Initialize the buffer tracking array.
  *   4. Create the device memory map (for BAR-based address translation).
  *   5. Create the clock driver (Xilinx clock wizard access via BAR4).
- *   6. Read PCI info (BDF, vendor/device IDs) via ioctl, then locate and open
- *      the matching QDMA device by PCI BDF prefix.
+ *   6. Read PCI info (BDF, vendor/device IDs) via ioctl, then construct and
+ *      open the matching numbered QDMA path.
  *   7. If QDMA is available, create the design writer (bitstream programming).
  *   8. Probe all six PCI BARs: read bar_info and mmap usable BARs.
  *
@@ -313,6 +216,9 @@ static int device_open(struct device **out, const char *path)
     struct device *d = calloc(1, sizeof *d);
     PROPAGATE_ERROR_NULL_STDC_LOG(d, LOG_ERR, "Failed to allocate memory for device data");
 
+    d->current_shell = VRTD_SHELL_UNKNOWN;
+    d->jtag = false;
+
     d->path = strdup(path);
     PROPAGATE_ERROR_NULL_STDC_LOG(d->path, LOG_ERR, "Failed to allocate memory for device data");
 
@@ -331,51 +237,28 @@ static int device_open(struct device **out, const char *path)
     d->clock_driver = clock_driver_create(d->ctl);
     PROPAGATE_ERROR_NULL_STDC_LOG(d->clock_driver, LOG_ERR, "Error creating clock driver for %s", path);
 
-    /* Step 3: Match the QDMA ctl device by PCI BDF (bus:device prefix). */
+    /* Step 3: Read PCI identity and open the same-numbered QDMA node. */
     {
         struct vrtd_pci_info pci_info = {0};
         int pci_ret = device_read_pci_info(d, &pci_info);
         if (pci_ret != 0) {
             LOG(
                 LOG_WARNING,
-                "Could not read PCI info for %s; skipping QDMA lookup",
+                "Could not read PCI info for %s",
                 d->path
             );
+        }
+
+        int qdma_ret = open_paired_qdma(path, &d->qdma);
+        if (qdma_ret != 0) {
+            LOG(LOG_WARNING, "Error opening QDMA device paired with %s: %m",
+                d->path);
+        } else if (d->qdma != NULL) {
+            /* QDMA available -- create the design writer for bitstream programming. */
+            d->design_writer = design_writer_create(d->qdma);
+            PROPAGATE_ERROR_NULL_STDC_LOG(d->design_writer, LOG_ERR, "Error creating design writer for %s", d->path);
         } else {
-            _cleanup_(cleanup_free)
-            char *qdma_path = NULL;
-            int find_ret = find_qdma_dev_path_by_bdf(pci_info.bdf, &qdma_path);
-            if (find_ret != 0) {
-                LOG(
-                    LOG_WARNING,
-                    "Error searching for QDMA device for BDF %s (%s)",
-                    pci_info.bdf, d->path
-                );
-            } else if (qdma_path != NULL) {
-                d->qdma = slash_qdma_open(qdma_path);
-                if (d->qdma == NULL) {
-                    LOG(
-                        LOG_WARNING,
-                        "Error opening QDMA device %s (for %s): %m",
-                        qdma_path, d->path
-                    );
-                } else {
-                    LOG(
-                        LOG_INFO,
-                        "Matched QDMA device %s for ctldev %s (BDF %s)",
-                        qdma_path, d->path, pci_info.bdf
-                    );
-                    /* QDMA available -- create the design writer for bitstream programming. */
-                    d->design_writer = design_writer_create(d->qdma);
-                    PROPAGATE_ERROR_NULL_STDC_LOG(d->design_writer, LOG_ERR, "Error creating design writer for %s", d->path);
-                }
-            } else {
-                LOG(
-                    LOG_WARNING,
-                    "No QDMA device found for BDF %s (%s)",
-                    pci_info.bdf, d->path
-                );
-            }
+            LOG(LOG_WARNING, "No QDMA device paired with %s", d->path);
         }
     }
 

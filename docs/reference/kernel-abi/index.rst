@@ -17,35 +17,43 @@ usage guide and a formal reference for each ioctl operation. Every ioctl entry f
 structure: a top-level description, the C interface definition, the ioctl direction, preconditions
 on inputs, postconditions on outputs, and return values.
 
-The module uses the Linux ``miscdevice`` framework to create the following device files, which
-allocates dynamic minor numbers under major 10. Userspace discovers device nodes by path, not by
-major/minor number.
+The module allocates one dynamic character-device major and creates a dedicated
+``/sys/class/slash`` class. Device numbers within that major have a fixed layout:
 
-``/dev/slash_ctl<N>`` / ``/sys/class/misc/slash_ctl_<BDF>/device``
+- minor 0 is the global ``slash_hotplug`` device;
+- board ``N`` uses minor ``2*N+1`` for ``slash_ctl<N>`` and minor ``2*N+2`` for
+  ``slash_qdma_ctl<N>``;
+- ``N`` is in the range 0–15, so one loaded module supports at most 16 cards.
+
+PF1 and PF2 are matched by their board BDF (the ``DDDD:BB:SS`` portion) and share the same ``N``.
+The board-to-``N`` assignment is retained while the module is loaded, including across PCI
+remove/rescan cycles. Consequently the class entry name, ``/dev`` path, and device number
+(``dev_t``) return unchanged after a remove/rescan. The major itself is dynamically allocated and
+may change when the module is unloaded and loaded again.
+
+``/dev/slash_ctl<N>`` / ``/sys/class/slash/slash_ctl_<BDF>/device``
     Provides BAR enumeration, MMIO access, and PCI device identity. Associated with PF2 (device ID
-    ``10EE:50B6``). Examples: ``/dev/slash_ctl0``, ``/dev/slash_ctl1``,
-    ``/sys/class/misc/slash_ctl_0000:61:00.2/device``.
+    ``10EE:50C2``). Examples: ``/dev/slash_ctl0``, ``/dev/slash_ctl1``,
+    ``/sys/class/slash/slash_ctl_0000:61:00.2/device``.
 
-``/dev/slash_qdma_ctl<N>`` / ``/sys/class/misc/slash_qdma_ctl_<BDF>/device``
+``/dev/slash_qdma_ctl<N>`` / ``/sys/class/slash/slash_qdma_ctl_<BDF>/device``
     Manages DMA queue pairs for bulk data movement between host and card memory, as well as
-    reconfiguration. Associated with PF1 (device ID ``10EE:50B5``). Examples: ``/dev/slash_qdma_ctl0``,
-    ``/dev/slash_qdma_ctl1``, ``/sys/class/misc/slash_qdma_ctl_0000:61:00.0/device``.
+    reconfiguration. Associated with PF1 (device ID ``10EE:50C1``). Examples: ``/dev/slash_qdma_ctl0``,
+    ``/dev/slash_qdma_ctl1``, ``/sys/class/slash/slash_qdma_ctl_0000:61:00.1/device``.
 
-``/dev/slash_hotplug``
+``/dev/slash_hotplug`` / ``/sys/class/slash/slash_hotplug``
     A single global instance created at module load. Provides privileged control over the PCIe
     lifecycle of SLASH cards (remove, rescan, secondary bus reset).
 
-The kernel module creates one ``slash_ctl`` and ``slash_qdma_ctl`` file for each card during discovery,
-which persist across reconfiguration, but will be removed and readded during a remove+rescan cycle.
-The mapping of one file path to a physical card is therefore not guaranteed across remove+rescan cycles
-and userspace should always verify the BDF identity of the accessed card. Also, suffixes for one card are
-not guaranteed to be identical for ``/dev/slash_ctl<N>`` and ``/dev/slash_qdma_ctl<N>``. For example, 
-the device files ``/dev/slash_ctl0`` and ``/dev/slash_qdma_ctl1`` may reference the same physical card.
+Class entry names use the full function-level BDF, while ``DEVNAME`` in each entry's ``uevent``
+file names the numeric ``/dev`` node. The entry's ``dev`` attribute and the ``st_rdev`` returned
+by ``stat(2)`` on that node contain the same major and minor. Class entries are sysfs device
+objects, not symlinks to ``/dev``.
 
-The files in the ``/sys/class/misc/`` directory are symlinks to the respective files in ``/dev``,
-and the placeholder ``<BDF>`` equates to the full, function-level BDF identifier of the physical
-function. For example, the physical function 2 of board ``0000:61:00`` may be available as
-``/sys/class/misc/slash_ctl_0000:61:00.2``.
+During removal the affected class entry and ``/dev`` node disappear. An fd opened before removal
+continues to refer to the old device instance and never rebinds to the rescanned instance;
+device-specific ioctls on that old fd return ``-ENODEV``. After rescan, new opens through the stable
+path reach the new instance.
 
 Data Conventions
 ================
@@ -58,7 +66,9 @@ Every ioctl argument struct carries a leading ``__u32 size`` field. Callers must
 copies ``min(user_size, kernel_size)`` bytes in. Fields the kernel knows about but the caller's
 older struct does not include are zero-filled. The response is written back for
 ``min(user_size, kernel_size)`` bytes; if ``user_size > kernel_size``, the kernel zero-fills the
-extra tail via ``clear_user()``. This allows the driver and library to evolve independently.
+extra tail via ``clear_user()``. This supports append-only struct extension within a coordinated
+release; it is not a promise that arbitrary kernel-module and userspace-library releases can be
+mixed. ``slash.ko``, libslash, vrtd/VRT, and v80-smi must come from the same SLASH release.
 
 Error Handling
 --------------
@@ -100,11 +110,11 @@ BDF string and vendor/device IDs to correlate the control device with a physical
 matching QDMA control device.
 
 - **Device file name:** ``/dev/slash_ctl<N>`` (e.g. ``/dev/slash_ctl0``)
-- **Sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``/sys/class/misc/slash_ctl_slash_ctl_0000:61:00.2``)
-- **Associated PCI function:** PF2, device ID ``10EE:50B6``
+- **Sysfs name:** ``slash_ctl_<PCI-BDF>`` (e.g., ``/sys/class/slash/slash_ctl_0000:61:00.2``)
+- **Associated PCI function:** PF2, device ID ``10EE:50C2``
 - **Permissions:** ``0600`` (owner read/write)
 - **Creation:** one per card, created when PF2 is probed during module load or PCI rescan
-- **File operations:** ``ioctl`` only — no ``open`` hook, no ``read``, ``write``, or ``mmap``
+- **File operations:** ``open``, ``release``, and ``ioctl`` — no ``read``, ``write``, or ``mmap``
   on this fd itself. MMIO access is through a dma-buf fd returned by an ioctl.
 
 Usage
@@ -125,7 +135,7 @@ the BAR is present and usable for MMIO, its physical address, and its size.
     struct slash_ioctl_device_info dev_info = { .size = sizeof(dev_info) };
     ioctl(ctl_fd, SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &dev_info);
     /* dev_info.bdf → e.g. "0000:61:00.2" */
-    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50B6 */
+    /* dev_info.vendor_id == 0x10EE, dev_info.device_id == 0x50C2 */
 
     /* Enumerate all six BARs */
     for (int i = 0; i < 6; i++) {
@@ -302,7 +312,7 @@ fd with a physical board and with the matching QDMA control device.
         __u32 size;                   /* [in/out] ABI version */
         char  bdf[SLASH_PCI_BDF_LEN]; /* [out] PCI BDF string, NUL-terminated, e.g. "0000:61:00.2" */
         __u16 vendor_id;              /* [out] PCI vendor ID (0x10EE for AMD/Xilinx) */
-        __u16 device_id;              /* [out] PCI device ID (0x50B6 for PF2) */
+        __u16 device_id;              /* [out] PCI device ID (0x50C2 for PF2) */
         __u16 subsystem_vendor_id;    /* [out] PCI subsystem vendor ID */
         __u16 subsystem_device_id;    /* [out] PCI subsystem device ID */
     };
@@ -340,14 +350,15 @@ the transfer channel: host buffers are registered once, and transfer ioctls name
 buffer, buffer offset, device-side physical address, length, and direction.
 
 - **Device file name:** ``/dev/slash_qdma_ctl<N>`` (e.g. ``/dev/slash_qdma_ctl0``)
-- **Sysfs name:** ``slash_qdma_ctl_<PCI-BDF>`` (e.g. ``/sys/class/misc/slash_qdma_ctl_0000:61:00.1``)
-- **Associated PCI function:** PF1, device ID ``10EE:50B5``
+- **Sysfs name:** ``slash_qdma_ctl_<PCI-BDF>`` (e.g. ``/sys/class/slash/slash_qdma_ctl_0000:61:00.1``)
+- **Associated PCI function:** PF1, device ID ``10EE:50C1``
 - **Permissions:** ``0600``
 - **Creation:** one per card, created when PF1 is probed
 - **File operations:** ``open``, ``release``, ``ioctl`` on the control fd. DMA I/O is done on
   per-qpair anon-inode fds returned by an ioctl.
 
-Same stable-``N`` mapping scheme as the control device, using a separate BDF-to-number map.
+The QDMA and control functions use the same board-to-``N`` map, so
+``slash_qdma_ctl<N>`` is always paired with ``slash_ctl<N>``.
 
 Usage
 -----
@@ -510,9 +521,9 @@ flag set) or the QDMA handle is not open.
 ``SLASH_QDMA_IOCTL_INFO``
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Queries QDMA device capabilities. All output fields are currently zero; this ioctl is a placeholder
-for future capability reporting. Callers should issue it during initialization but make no decisions
-based on the returned values in the current implementation.
+Queries the QDMA device's PCI identity and capabilities. ``bdf`` is always the full PF1 BDF and can
+be matched with a control device by comparing the ``DDDD:BB:SS`` board portion. The capability
+fields are reserved for future reporting and are currently zero.
 
 **Interface:**
 
@@ -521,11 +532,12 @@ based on the returned values in the current implementation.
     #define SLASH_QDMA_IOCTL_INFO _IOWR('v', 0x50, struct slash_qdma_info)
 
     struct slash_qdma_info {
-        __u32 size;        /* [in/out] ABI version */
-        __u32 qsets_max;   /* [out] Max queue sets (currently always 0) */
-        __u32 msix_qvecs;  /* [out] MSI-X vectors for queues (currently always 0) */
-        __u32 vf_max;      /* [out] Max VFs (currently always 0) */
-        __u32 caps;        /* [out] Capability bitmask (currently always 0) */
+        __u32 size;                   /* [in/out] ABI version */
+        char  bdf[SLASH_PCI_BDF_LEN]; /* [out] Full PF1 BDF, e.g. "0000:61:00.1" */
+        __u32 qsets_max;              /* [out] Max queue sets (currently 0) */
+        __u32 msix_qvecs;             /* [out] Queue MSI-X vectors (currently 0) */
+        __u32 vf_max;                 /* [out] Max VFs (currently 0) */
+        __u32 caps;                   /* [out] Capability bitmask (currently 0) */
     };
 
 **Direction:** ``_IOWR`` — userspace writes ``size``; the kernel writes back all output fields.
@@ -538,7 +550,9 @@ based on the returned values in the current implementation.
 
 **Postconditions:**
 
-- All output fields are set to 0 in the current implementation.
+- ``bdf`` is a NUL-terminated ``DDDD:BB:SS.1`` string with the full PCI domain.
+- ``qsets_max``, ``msix_qvecs``, ``vf_max``, and ``caps`` are set to 0 in the current
+  implementation.
 - The output is truncated to ``min(size, sizeof(struct))`` bytes. Fields whose tail lies beyond
   the user-supplied ``size`` are not written; the corresponding bytes in the user buffer are left
   untouched.
@@ -877,7 +891,7 @@ across all sub-transfers is returned as the ``ioctl()`` return value (not as a s
 
 - ``size`` must cover at least ``count`` (the trailing header field) — otherwise ``-EINVAL``
 - ``count`` must be in ``[1, SLASH_QDMA_FD_MAX_QPAIRS]``
-- each sub-transfer's ``qpair_index`` must be ``< `` the number of qpairs the fd owns
+- each sub-transfer's ``qpair_index`` must be ``<`` the number of qpairs the fd owns
 - each ``direction`` must be 1 (H2C) or 2 (C2H) and must be enabled on the selected queue pair
 - each ``buf_fd`` must be a buffer fd (from ``BUF_CREATE``) bound to the same device as this qpair fd
 - each ``buf_offset`` must be aligned to the buffer's page granule; ``length`` is an exact byte count,
@@ -910,6 +924,8 @@ remove-and-rescan operation. These operations are used after loading a new FPGA 
 performing a full board reset.
 
 - **Device file name:** ``/dev/slash_hotplug``
+- **Sysfs name:** ``/sys/class/slash/slash_hotplug``
+- **Device number:** the shared SLASH major, minor 0
 - **Permissions:** ``0600``
 - **Creation:** exactly one instance, created at module load, destroyed at module unload
 - **File operations:** ``ioctl`` only (includes 32-bit compat path). No ``open``, ``release``,
@@ -1036,6 +1052,7 @@ callback. The corresponding ``/dev/slash_ctl<N>`` or ``/dev/slash_qdma_ctl<N>`` 
 - Bus mastering is disabled on the device (``pci_clear_master()``).
 - The device is removed from the PCI hierarchy (``pci_stop_and_remove_bus_device()``).
 - The driver's ``.remove`` callback is invoked; associated device nodes disappear.
+- A later rescan recreates the node with the same class name, ``/dev`` path, and ``dev_t``.
 
 **Return values:**
 

@@ -27,8 +27,8 @@ from unittest import mock
 
 import pytest
 
-from slashkit.core import command_config
-from slashkit.core.command_config import LinkerConfiguration
+from slashkit.core import command_config, launcher
+from slashkit.core.command_config import InstallerConfiguration, LinkerConfiguration
 
 _FIXTURE_COMPONENT = (
     Path(__file__).resolve().parents[1]
@@ -36,10 +36,11 @@ _FIXTURE_COMPONENT = (
 )
 
 
-def _make_args(tmp_path: Path, *, config: Path, cli_pre_synth):
-    vivado = tmp_path / "vivado"
-    vivado.write_text("#!/bin/sh\n")
-    vivado.chmod(0o755)
+def _make_args(tmp_path: Path, *, config: Path, cli_pre_synth, vivado=None):
+    if vivado is None:
+        vivado = tmp_path / "vivado"
+        vivado.write_text("#!/bin/sh\n")
+        vivado.chmod(0o755)
     return argparse.Namespace(
         vivado=vivado,
         jobs=8,
@@ -52,10 +53,11 @@ def _make_args(tmp_path: Path, *, config: Path, cli_pre_synth):
     )
 
 
-def _build_config(tmp_path: Path, *, config: Path, cli_pre_synth):
+def _build_config(tmp_path: Path, *, config: Path, cli_pre_synth, vivado=None):
     """Construct a LinkerConfiguration with the heavy, environment-dependent
     lookups stubbed out, so only the pre-synth resolution/merging is exercised."""
-    args = _make_args(tmp_path, config=config, cli_pre_synth=cli_pre_synth)
+    args = _make_args(tmp_path, config=config,
+                      cli_pre_synth=cli_pre_synth, vivado=vivado)
     with mock.patch.object(command_config, "_find_vitis_include",
                            return_value=tmp_path), \
             mock.patch.object(command_config, "apply_config_to_instances",
@@ -67,6 +69,55 @@ def _write_cfg(tmp_path: Path, body: str) -> Path:
     cfg = tmp_path / "config.cfg"
     cfg.write_text(textwrap.dedent(body))
     return cfg
+
+
+def test_installer_parser_keeps_stage_and_shell_type(tmp_path):
+    """The merged installer exposes independent stage and shell selectors."""
+    parser = argparse.ArgumentParser()
+    InstallerConfiguration.populate_argument_parser(parser)
+
+    args = parser.parse_args(
+        [
+            "--out-dir",
+            str(tmp_path),
+            "--stage",
+            "rp1-firmware",
+            "--shell-type",
+            "compute",
+        ]
+    )
+
+    assert args.stage == "rp1-firmware"
+    assert args.shell_type == "compute"
+
+
+def test_base_shell_stage_preserves_existing_build_directory(tmp_path):
+    """A base-shell rerun reuses its AVED checkout and implementation state."""
+    vivado = tmp_path / "vivado"
+    vivado.write_text("#!/bin/sh\n")
+    build_dir = tmp_path / "install.prj"
+    build_dir.mkdir()
+    marker = build_dir / "keep"
+    marker.touch()
+    out_dir = tmp_path / "resources"
+    out_dir.mkdir()
+
+    config = InstallerConfiguration(
+        argparse.Namespace(
+            vivado=vivado,
+            jobs=8,
+            ignore_timing_failure=False,
+            stage="base-shell",
+            build_dir=build_dir,
+            aved_repo="unused",
+            aved_ref="unused",
+            shell_type="service",
+            out_dir=out_dir,
+        )
+    )
+
+    assert config.build_dir == build_dir.resolve()
+    assert marker.exists()
 
 
 def test_config_cfg_pre_synth_reaches_pre_synth_tcls(tmp_path):
@@ -122,3 +173,33 @@ def test_missing_config_cfg_pre_synth_raises(tmp_path):
     """)
     with pytest.raises(FileNotFoundError):
         _build_config(tmp_path, config=cfg, cli_pre_synth=[])
+
+
+def _empty_cfg(tmp_path: Path) -> Path:
+    return _write_cfg(tmp_path, """
+        [connectivity]
+    """)
+
+
+def test_bare_vivado_name_is_passed_through_when_offloading(tmp_path, monkeypatch):
+    """With a launcher, the binary is resolved on the execution host."""
+    monkeypatch.setenv(launcher.LAUNCHER_ENV, "submit")
+    config = _build_config(tmp_path, config=_empty_cfg(tmp_path),
+                           cli_pre_synth=[], vivado="vivado")
+    assert config.vivado_bin == Path("vivado")
+
+
+def test_bare_vivado_name_without_a_launcher_still_fails_fast(tmp_path, monkeypatch):
+    """Running locally, a name that resolves to nothing is an error, as before."""
+    monkeypatch.delenv(launcher.LAUNCHER_ENV, raising=False)
+    with pytest.raises(FileNotFoundError):
+        _build_config(tmp_path, config=_empty_cfg(tmp_path),
+                      cli_pre_synth=[], vivado="no_such_vivado")
+
+
+def test_explicit_vivado_path_is_still_checked_when_offloading(tmp_path, monkeypatch):
+    """The relaxation is only for bare names; a spelled-out path is still verified."""
+    monkeypatch.setenv(launcher.LAUNCHER_ENV, "submit")
+    with pytest.raises(FileNotFoundError):
+        _build_config(tmp_path, config=_empty_cfg(tmp_path), cli_pre_synth=[],
+                      vivado=tmp_path / "bin" / "vivado")

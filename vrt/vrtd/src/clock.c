@@ -167,8 +167,17 @@ static int clock_driver_init(struct clock_driver *clk, struct slash_ctldev *ctl)
         .min_err_hz = CLOCK_DRIVER_DEFAULT_MIN_ERR_HZ,
     };
 
-    /* Open BAR4 which contains the clock wizard register windows. */
+    /*
+     * Open the BAR that holds the clock wizard register windows.
+     *
+     * TEMPORARY. Try BAR4 (service/legacy layout); if it is not
+     * present, fall back to BAR2 (compute-only platform layout). Drop the
+     * fallback once both platforms use the same BAR.
+     */
     clk->bar = slash_bar_file_open(ctl, CLOCK_DRIVER_BAR_NUMBER, O_CLOEXEC);
+    if (clk->bar == NULL) {
+        clk->bar = slash_bar_file_open(ctl, CLOCK_DRIVER_BAR_NUMBER_FALLBACK, O_CLOEXEC);
+    }
     if (clk->bar == NULL) {
         return -1;
     }

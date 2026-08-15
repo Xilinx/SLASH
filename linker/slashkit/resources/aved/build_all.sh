@@ -28,14 +28,29 @@ FW_DIR=$(realpath ./../../fw/AMC)
 XSA=${XSA:-$(realpath ${HW_DIR})/build/${DESIGN}.xsa}
 
 # Step FW
-# Exempt zero-length-bounds from -Werror (submodule MCTP code uses
-# zero-length arrays as flexible-array-member idiom inside a union).
-export CFLAGS="${CFLAGS:-} -Wno-error=zero-length-bounds"
+# Suppress zero-length-bounds (submodule MCTP code uses zero-length arrays as
+# a flexible-array-member idiom inside a union).
+#
+# Spelled -Wno-... rather than -Wno-error=..., because CFLAGS seeds
+# CMAKE_C_FLAGS at the AMC project() call, which happens before the cross
+# compiler is selected and so tests the *host* compiler. GCC gained
+# -Wzero-length-bounds in 10; older host compilers reject -Wno-error= for a
+# warning they do not have, failing that check and with it the whole build,
+# whereas an unknown -Wno- is silently ignored. The cross compiler, which is
+# the one that actually needs the exemption, treats the two the same.
+export CFLAGS="${CFLAGS:-} -Wno-zero-length-bounds"
 
 pushd ${FW_DIR}
  ./scripts/build.sh -os freertos10_xilinx -profile v80 -xsa $XSA
   cp -a ${FW_DIR}/build/amc.elf ${HW_DIR}/build
   # Takes in fpt.json and produces fpt.bin
+popd
+
+# Step RP1 FW
+RP1_DIR=$(realpath ./../../fw/RP1)
+pushd ${RP1_DIR}
+  XSA="$XSA" bash ./build-rp1.sh
+  cp -a ${RP1_DIR}/build/rp1.elf ${HW_DIR}/build
 popd
 
 # Step FPT

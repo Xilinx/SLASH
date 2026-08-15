@@ -75,6 +75,7 @@ def generate_emu_tcl(config: LinkerConfiguration) -> None:
         axilite_ctx.get("axilite_addr", []),
         clock_hz=clock_hz,
         platform="Emulation",
+        shell_type=config.shell_type.value,
         kernel_hls_by_type=kernel_hls_by_type,
         network=getattr(cfg, "network", None),
     )

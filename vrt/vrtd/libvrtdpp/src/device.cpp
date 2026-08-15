@@ -29,13 +29,17 @@ Device::Device(uint32_t num,
                uint16_t deviceId,
                uint16_t subsystemVendorId,
                uint16_t subsystemDeviceId,
+               ShellType shellType,
+               bool jtag,
                std::function<Bar(const Device&, uint8_t)> fGetBar,
                std::function<QdmaQpair(const Device&, const struct slash_qdma_qpair_add&)> fCreateQdmaQpair,
                std::function<Buffer(const Device&, BufferAllocType, uint64_t, uint64_t, BufferAllocDir, MmChannel)> fOpenBuffer,
                std::function<Buffer(const Device&, uint64_t, uint64_t, BufferAllocDir, MmChannel)> fOpenBufferRaw,
                std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
-               std::function<void(const Device&, int)> fDesignWrite,
-               std::function<void(const Device&, std::string_view)> fDesignWriteFile,
+               std::function<void(const Device&, ShellType)> fResetSequence,
+               std::function<void(const Device&, ShellType, bool)> fSetShellState,
+               std::function<void(const Device&, int, ShellType)> fDesignWrite,
+               std::function<void(const Device&, std::string_view, ShellType)> fDesignWriteFile,
                std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
                std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
                std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
@@ -48,11 +52,15 @@ Device::Device(uint32_t num,
     this->deviceId = deviceId;
     this->subsystemVendorId = subsystemVendorId;
     this->subsystemDeviceId = subsystemDeviceId;
+    this->shellType = shellType;
+    this->jtag = jtag;
     this->fGetBar = fGetBar;
     this->fCreateQdmaQpair = fCreateQdmaQpair;
     this->fOpenBuffer = fOpenBuffer;
     this->fOpenBufferRaw = fOpenBufferRaw;
     this->fHotplugOp = fHotplugOp;
+    this->fResetSequence = fResetSequence;
+    this->fSetShellState = fSetShellState;
     this->fDesignWrite = fDesignWrite;
     this->fDesignWriteFile = fDesignWriteFile;
     this->fCfgmemProgram = fCfgmemProgram;
@@ -72,6 +80,14 @@ const std::string& Device::getName() const noexcept {
 
 const std::string& Device::getBdf() const noexcept {
     return bdf;
+}
+
+ShellType Device::getShellType() const noexcept {
+    return shellType;
+}
+
+bool Device::isJtag() const noexcept {
+    return jtag;
 }
 
 uint16_t Device::getVendorId() const noexcept {
@@ -117,12 +133,20 @@ void Device::hotplugOp(HotplugOp op, uint8_t function) const {
     fHotplugOp(*this, op, function);
 }
 
-void Device::designWrite(int input_fd) const {
-    fDesignWrite(*this, input_fd);
+void Device::resetSequence(ShellType shellType) const {
+    fResetSequence(*this, shellType);
 }
 
-void Device::designWriteFile(std::string_view path) const {
-    fDesignWriteFile(*this, path);
+void Device::setShellState(ShellType shellType, bool jtag) const {
+    fSetShellState(*this, shellType, jtag);
+}
+
+void Device::designWrite(int input_fd, ShellType requiredShell) const {
+    fDesignWrite(*this, input_fd, requiredShell);
+}
+
+void Device::designWriteFile(std::string_view path, ShellType requiredShell) const {
+    fDesignWriteFile(*this, path, requiredShell);
 }
 
 void Device::cfgmemProgram(int input_fd, uint8_t bootDevice, uint32_t partition) const {

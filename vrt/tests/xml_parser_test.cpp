@@ -169,6 +169,36 @@ TEST_F(XMLParserTest, ParsePlatformUnknownThrows) {
     EXPECT_THROW(parser.parseXML(), std::runtime_error);
 }
 
+TEST_F(XMLParserTest, ParseShellTypeService) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ShellType>service</ShellType>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    EXPECT_EQ(parser.getShellType(), vrt::ShellType::SERVICE);
+}
+
+TEST_F(XMLParserTest, ParseShellTypeCompute) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ShellType>compute</ShellType>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    EXPECT_EQ(parser.getShellType(), vrt::ShellType::COMPUTE);
+}
+
+TEST_F(XMLParserTest, MissingShellTypeDefaultsToService) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap><Platform>Hardware</Platform></SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    EXPECT_EQ(parser.getShellType(), vrt::ShellType::SERVICE);
+}
+
 TEST_F(XMLParserTest, ParseQdmaConnections) {
     auto path = writeXml(R"(<?xml version="1.0"?>
 <SystemMap>

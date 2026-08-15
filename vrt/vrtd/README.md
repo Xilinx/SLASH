@@ -11,18 +11,28 @@ descriptors out-of-band via `SCM_RIGHTS`.
 vrtd sits between the client libraries and the low-level driver stack:
 
 ```
-libvrtdpp  (C++ RAII wrapper)
-libvrtd    (C wire-protocol client library)
+vrt::graph::FpgaDevice  (RP1 graph backend; lowers scheduled queues
+                         into rp1_node_t packets and submits via BAR4)
+libvrt                 (graph authoring, host-driven kernels, buffers)
+libvrtdpp              (C++ RAII wrapper)
+libvrtd                (C wire-protocol client library)
 ──────── AF_UNIX / SOCK_SEQPACKET ────────
-vrtd       (this daemon)
-libslash   (driver wrapper)
+vrtd                   (this daemon)
+libslash               (driver wrapper)
 Linux kernel module (slash)
 AMD Alveo V80 hardware
 ```
 
+The `vrt::graph::FpgaDevice` consumer (in `vrt/include/vrt/graph/`)
+talks to vrtd via libvrtdpp's `vrtd::BarFile`, mmaps BAR4 + 64 MiB,
+and submits RP1 command-processor graphs through the shared protocol
+header at `driver/libslash/include/slash/uapi/rp1_protocol.h`. See
+`linker/slashkit/resources/aved/rp1/ARCHITECTURE.md` §H for the layering and
+`examples/graph/00_multi_image_pipeline` for an end-to-end demo.
+
 Key responsibilities:
 
-- Sysfs-based automatic device discovery at startup
+- Character-device discovery with stable CTL/QDMA number pairing
 - Per-client DMA buffer management (HBM and DDR) with automatic
   cleanup on disconnect
 - FPGA bitstream programming via the design writer subsystem

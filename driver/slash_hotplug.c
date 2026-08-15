@@ -45,6 +45,7 @@
 #include "slash_hotplug_driver.h"
 
 #include "slash.h"
+#include "slash_chrdev.h"
 
 #include <slash/uapi/slash_hotplug.h>
 
@@ -52,13 +53,17 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/kernel.h>
-#include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 
-#define SLASH_HOTPLUG_MODE 0600
+struct slash_hotplug_device {
+    struct cdev cdev;
+    struct device *device;
+};
+
+static struct slash_hotplug_device slash_hotplug_device;
 
 /**
  * slash_hotplug_copy_request() - Copy and sanitize a hotplug request from userspace.
@@ -371,7 +376,7 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
 
 /**
  * slash_hotplug_ioctl() - Dispatch hotplug ioctl commands.
- * @file: Open file for the hotplug misc device.
+ * @file: Open file for the hotplug character device.
  * @cmd:  ioctl command number.
  * @arg:  Userspace pointer to the request struct (for commands that need one).
  *
@@ -455,41 +460,47 @@ static long slash_hotplug_compat_ioctl(struct file *file, unsigned int cmd, unsi
 }
 #endif
 
+static int slash_hotplug_open(struct inode *inode, struct file *file)
+{
+    struct slash_hotplug_device *hotplug =
+        container_of(inode->i_cdev, struct slash_hotplug_device, cdev);
+
+    file->private_data = hotplug;
+    return 0;
+}
+
 static const struct file_operations slash_hotplug_fops = {
     .owner = THIS_MODULE,
+    .open = slash_hotplug_open,
     .unlocked_ioctl = slash_hotplug_ioctl,
 #ifdef CONFIG_COMPAT
     .compat_ioctl = slash_hotplug_compat_ioctl,
 #endif
 };
 
-static struct miscdevice slash_hotplug_misc = {
-    .minor = MISC_DYNAMIC_MINOR,
-    .name = SLASH_HOTPLUG_DEVICE_NAME,
-    .fops = &slash_hotplug_fops,
-    .mode = SLASH_HOTPLUG_MODE,
-};
-
 int slash_hotplug_init(void)
 {
-    int ret;
+    slash_hotplug_device.device =
+        slash_chrdev_add(&slash_hotplug_device.cdev, &slash_hotplug_fops,
+                         SLASH_HOTPLUG_MINOR, NULL, &slash_hotplug_device,
+                         SLASH_HOTPLUG_DEVICE_NAME);
+    if (IS_ERR(slash_hotplug_device.device)) {
+        int err = PTR_ERR(slash_hotplug_device.device);
 
-    pr_info("slash_hotplug: registering misc device\n");
-
-    ret = misc_register(&slash_hotplug_misc);
-    if (ret) {
-        pr_err("slash_hotplug: misc_register failed: %d\n", ret);
-        return ret;
+        slash_hotplug_device.device = NULL;
+        pr_err("slash_hotplug: character-device registration failed: %d\n",
+               err);
+        return err;
     }
 
-    pr_info("slash_hotplug: misc device registered as /dev/%s (minor %d)\n",
-            slash_hotplug_misc.name, slash_hotplug_misc.minor);
+    pr_info("slash_hotplug: registered /dev/%s\n",
+            SLASH_HOTPLUG_DEVICE_NAME);
     return 0;
 }
 
 void slash_hotplug_exit(void)
 {
-    pr_info("slash_hotplug: deregistering misc device\n");
-    misc_deregister(&slash_hotplug_misc);
-    pr_info("slash_hotplug: misc device unregistered\n");
+    slash_chrdev_del(&slash_hotplug_device.cdev,
+                     slash_hotplug_device.device);
+    slash_hotplug_device.device = NULL;
 }

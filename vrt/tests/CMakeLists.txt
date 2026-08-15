@@ -3,6 +3,11 @@ FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
 )
+# Don't emit install rules for GoogleTest: it's a test-only dependency pulled
+# in via FetchContent. Leaving it on causes its headers/libs/cmake files to
+# land in debian/tmp during the packaging install step and generates a
+# cascade of dh_missing warnings.
+set(INSTALL_GTEST OFF CACHE BOOL "Disable installation of GoogleTest" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 enable_testing()
@@ -14,7 +19,7 @@ add_custom_target(unit_tests)
 macro(add_vrt_test test_name test_source)
   add_executable(${test_name} ${test_source})
   target_link_libraries(${test_name} PRIVATE GTest::gtest_main GTest::gmock vrt::vrt)
-  gtest_discover_tests(${test_name})
+  gtest_discover_tests(${test_name} PROPERTIES RESOURCE_LOCK vrt_zmq_stub)
   add_dependencies(unit_tests ${test_name})
 endmacro()
 
@@ -27,6 +32,33 @@ add_vrt_test(xml_parser_test xml_parser_test.cpp)
 add_vrt_test(utilization_parser_test utilization_parser_test.cpp)
 add_vrt_test(kernel_test kernel_test.cpp)
 add_vrt_test(vrtbin_test vrtbin_test.cpp)
+add_vrt_test(graph_authoring_test graph_authoring_test.cpp)
+add_vrt_test(execution_test execution_test.cpp)
+add_vrt_test(authored_graph_validation_test authored_graph_validation_test.cpp)
+add_vrt_test(graph_compiler_characterization_test graph_compiler_characterization_test.cpp)
+add_vrt_test(graph_pass_test graph_pass_test.cpp)
+add_vrt_test(graph_stage_property_test graph_stage_property_test.cpp)
+add_vrt_test(render_test render_test.cpp)
+add_vrt_test(semaphore_pool_test semaphore_pool_test.cpp)
+add_vrt_test(rp1_bar_window_test rp1_bar_window_test.cpp)
+add_vrt_test(rp1_submitter_test rp1_submitter_test.cpp)
+add_vrt_test(control_lowering_test control_lowering_test.cpp)
+add_vrt_test(cpu_lowering_test cpu_lowering_test.cpp)
+add_vrt_test(fpga_device_test fpga_device_test.cpp)
+add_vrt_test(fpga_vbin_spec_test fpga_vbin_spec_test.cpp)
+
+# --- GPU graph tests (conditional on HIP) ---
+if(VRT_HAS_GPU)
+  add_executable(gpu_graph_test gpu_graph_test.hip)
+  set_source_files_properties(gpu_graph_test.hip PROPERTIES
+    LANGUAGE HIP
+    HIP_ARCHITECTURES "${GPU_ARCH}"
+  )
+  target_link_libraries(gpu_graph_test PRIVATE GTest::gtest_main GTest::gmock vrt::vrt ${HIP_LIB})
+  target_include_directories(gpu_graph_test PRIVATE /opt/rocm/include)
+  gtest_discover_tests(gpu_graph_test)
+  add_dependencies(unit_tests gpu_graph_test)
+endif()
 
 # --- Stub VBIN generation ---
 set(STUB_VBIN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/stub_vbin)

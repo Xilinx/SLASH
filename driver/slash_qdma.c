@@ -23,9 +23,9 @@
  * to provide queue-pair-based DMA transfers between host memory and the
  * FPGA fabric.
  *
- * The QDMA subsystem binds to PF1 (PCI device ID 0x50B5, or 0x50BD on
- * AVED/V80P designs), while the control device (slash_ctldev) binds to
- * PF2 (device ID 0x50B6).
+ * The QDMA subsystem binds to PF1 (PCI device ID 0x50C1, or the legacy
+ * 0x50B5 / AVED 0x50BD), while the control device (slash_ctldev) binds to
+ * PF2 (device ID 0x50C2, or the legacy 0x50B6).
  *
  * Queue pair lifecycle:
  *   add -> start -> I/O (via anon_inode fd) -> stop -> del
@@ -48,6 +48,7 @@
 #include "libqdma_export.h"
 
 #include "slash.h"
+#include "slash_chrdev.h"
 
 #include <asm/cacheflush.h>
 #include <linux/bitops.h>
@@ -61,7 +62,6 @@
 #include <linux/kref.h>
 #include <linux/ktime.h>
 #include <linux/limits.h>
-#include <linux/miscdevice.h>
 #include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
@@ -267,9 +267,10 @@ struct slash_qdma_qpair_entry {
  * @pdev:               The PCI device (PF1) this instance is bound to.
  * @qdma_handle:        Opaque handle returned by qdma_device_open();
  *                      passed to every subsequent libqdma call.
- * @misc:               Miscdevice registered under /dev/slash_qdma_ctlN.
- *                      Userspace opens this to issue queue management ioctls.
- * @ref:                Device-level reference count.  The miscdevice open
+ * @cdev:               Character device embedded for inode-to-device lookup.
+ * @device:             Class device with the BDF-specific sysfs name.
+ * @slot:               Stable board number shared with the matching PF2.
+ * @ref:                Device-level reference count.  The control-device open
  *                      path and each anon_inode fd hold a ref; the device
  *                      structure is freed when the last ref drops.
  * @lock:               Serialises ioctl paths and protects @qpairs,
@@ -281,13 +282,14 @@ struct slash_qdma_qpair_entry {
  *                      teardown.
  * @have_qdma_handle:   True once qdma_device_open() succeeds; false after
  *                      qdma_device_close().  Guards against use-after-close.
- * @is_misc_registered: True while the miscdevice is live.  Prevents double
- *                      deregistration on error paths.
+ * @have_board_slot:    True after the shared board allocator is acquired.
+ * @is_cdev_registered: True while the character device is live.
  * @hw_shutdown:        Set to true during destroy to signal that the HW is
  *                      going away.  Any ioctl arriving after this flag is
  *                      set returns -ENODEV immediately.
  *
- * The three booleans (@have_qdma_handle, @is_misc_registered,
+ * The state booleans (@have_qdma_handle, @have_board_slot,
+ * @is_cdev_registered,
  * @hw_shutdown) track partially-constructed state during probe/remove
  * error paths; outside of create/destroy they should always reflect a
  * fully initialised device.
@@ -296,7 +298,9 @@ struct slash_qdma_dev {
     struct pci_dev *pdev;
     unsigned long qdma_handle;
 
-    struct miscdevice misc;
+    struct cdev cdev;
+    struct device *device;
+    int slot;
     struct kref ref;
     struct mutex lock;
     struct xarray qpairs;
@@ -306,7 +310,8 @@ struct slash_qdma_dev {
      * Assume these are always true outside of create/destroy.
      */
     bool have_qdma_handle;
-    bool is_misc_registered;
+    bool have_board_slot;
+    bool is_cdev_registered;
     bool hw_shutdown;
 };
 
@@ -649,29 +654,22 @@ static int slash_qdma_create_qdma_device(struct pci_dev *pdev, struct slash_qdma
 static void slash_qdma_destroy_qdma_device(struct slash_qdma_dev *device);
 static void slash_qdma_dev_release(struct kref *ref);
 static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *pdev);
-static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
-                                   struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_info_w(struct slash_qdma_dev *qdma_dev,
                                    void __user *uarg);
-static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
-                                         struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_add_w(struct slash_qdma_dev *qdma_dev,
                                          void __user *uarg);
-static int slash_qdma_ioctl_qpair_add(struct miscdevice *misc,
-                                      struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_add(struct slash_qdma_dev *qdma_dev,
                                       struct slash_qdma_qpair_add *req);
-static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
-                                        struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_add_q(struct slash_qdma_dev *qdma_dev,
                                         struct slash_qdma_qpair_add *req,
                                         struct slash_qdma_qpair_entry *entry,
                                         enum queue_type_t qtype);
-static void slash_qdma_ioctl_qpair_rm_q(struct miscdevice *misc,
-                                        struct slash_qdma_dev *qdma_dev,
+static void slash_qdma_ioctl_qpair_rm_q(struct slash_qdma_dev *qdma_dev,
                                         struct slash_qdma_qpair_entry *entry,
                                         enum queue_type_t qtype);
-static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
-                                       struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_op_w(struct slash_qdma_dev *qdma_dev,
                                        void __user *uarg);
-static int slash_qdma_ioctl_qpair_op(struct miscdevice *misc,
-                                     struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_op(struct slash_qdma_dev *qdma_dev,
                                      struct slash_qdma_qpair_op *req);
 static int slash_qdma_ioctl_qpair_op_apply(struct slash_qdma_dev *qdma_dev,
                                            struct slash_qdma_qpair_entry *entry,
@@ -679,11 +677,9 @@ static int slash_qdma_ioctl_qpair_op_apply(struct slash_qdma_dev *qdma_dev,
                                            slash_qdma_queue_cmd_fn fn,
                                            const char *op_name,
                                            bool stop_on_err);
-static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
-                                           struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_get_fd_w(struct slash_qdma_dev *qdma_dev,
                                            void __user *uarg);
-static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
-                                          struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_buf_create_w(struct slash_qdma_dev *qdma_dev,
                                           void __user *uarg);
 static void slash_qdma_buf_release(struct kref *ref);
 static void slash_qdma_buf_put(struct slash_qdma_buf *buf);
@@ -719,18 +715,21 @@ static const struct file_operations slash_qdma_qpair_fops = {
 static int slash_qdma_fop_open(struct inode *inode, struct file *file);
 static int slash_qdma_fop_release(struct inode *inode, struct file *file);
 static long slash_qdma_fop_ioctl(struct file *file, unsigned int op, unsigned long arg);
-static void slash_qdma_ioctl_info(struct miscdevice *misc, struct slash_qdma_dev *qdma_dev, struct slash_qdma_info *qdma_info);
+static void slash_qdma_ioctl_info(struct slash_qdma_dev *qdma_dev,
+                                  struct slash_qdma_info *qdma_info);
 
 
 
 /**
  * slash_qdma_ids - PCI device ID table for the QDMA PF.
  *
- * Matches PF1 QDMA functions on AMD/Xilinx V80 cards, including the
- * AVED/V80P device ID.
+ * Matches the PF1 QDMA function on AMD/Xilinx V80 cards: the current
+ * 0x50C1, the legacy 0x50B5 used by pre-compute-platform designs, and
+ * the AVED/V80P 0x50BD.
  */
 static const struct pci_device_id slash_qdma_ids[] = {
     {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_QDMA_PCI_DEVICE_ID)},
+    {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_QDMA_PCI_DEVICE_ID_LEGACY)},
     {PCI_DEVICE(SLASH_QDMA_PCI_VENDOR_ID, SLASH_AVED_QDMA_PCI_DEVICE_ID)},
     {0,}
 };
@@ -750,9 +749,9 @@ static struct pci_driver slash_qdma_driver = {
 };
 
 /**
- * slash_qdma_fops - File operations for the QDMA control miscdevice.
+ * slash_qdma_fops - File operations for the QDMA control device.
  *
- * The miscdevice (/dev/slash_qdma_ctlN) is the management interface:
+ * /dev/slash_qdma_ctlN is the management interface:
  * userspace opens it and issues ioctls to add/start/stop/delete queue
  * pairs and to obtain per-qpair I/O fds.
  */
@@ -762,129 +761,6 @@ static struct file_operations slash_qdma_fops = {
     .release        = slash_qdma_fop_release,
     .unlocked_ioctl = slash_qdma_fop_ioctl,
 };
-
-/* ─────────────────────────────────────────────────────────────────────
- * BDF-to-device-number map (stable /dev/slash_qdma_ctlN across hotplug)
- * ───────────────────────────────────────────────────────────────────── */
-
-/**
- * struct slash_qdma_id_entry - Stable BDF-to-number mapping entry.
- * @node:    Intrusive list linkage for @slash_qdma_id_map.
- * @bdf:     Full PCI BDF string including function (e.g. "0000:61:00.1").
- * @number:  The /dev/slash_qdma_ctl<N> suffix permanently assigned to this BDF.
- * @in_use:  True while the device is bound to the driver.  Cleared on remove,
- *           set on probe.  A probe that finds @in_use already true indicates
- *           the kernel handed us a device that was never properly unbound —
- *           this should never happen under normal operation.
- *
- * Entries are allocated in probe and intentionally never freed.  They survive
- * hotplug remove+rescan cycles so that a device always gets back the same N.
- */
-struct slash_qdma_id_entry {
-    struct list_head node;
-    char bdf[32]; /* "DDDD:BB:SS.F\0" fits comfortably in 32 bytes */
-    int  number;
-    bool in_use;
-};
-
-/** Persistent BDF-to-number map; entries live for the module's lifetime. */
-static LIST_HEAD(slash_qdma_id_map);
-/** Serialises all accesses to @slash_qdma_id_map and @in_use fields. */
-static DEFINE_MUTEX(slash_qdma_id_map_lock);
-/** Source of new numbers; only incremented when a BDF is seen for the first time. */
-static atomic_t slash_qdma_devcount = ATOMIC_INIT(0);
-
-/**
- * slash_qdma_id_get() - Look up or allocate a stable number for a BDF.
- * @bdf: Full PCI BDF string (e.g. "0000:61:00.1") from pci_name().
- *
- * Called from probe.  Returns the number permanently associated with @bdf,
- * allocating a new one if this BDF is seen for the first time.  Also marks
- * the entry as in_use = true.
- *
- * If an existing entry is found with in_use already set, the device was
- * never properly unbound before probe was called again — this indicates a
- * kernel PCI driver bug.  The function logs a loud error and returns
- * -EBUSY so that probe aborts without touching the device.
- *
- * Return: non-negative stable device number on success, negative errno on
- *         failure (-ENOMEM if allocation fails, -EBUSY if already in use).
- */
-static int slash_qdma_id_get(const char *bdf)
-{
-    struct slash_qdma_id_entry *entry;
-    int number;
-
-    mutex_lock(&slash_qdma_id_map_lock);
-
-    list_for_each_entry(entry, &slash_qdma_id_map, node) {
-        if (strcmp(entry->bdf, bdf) != 0)
-            continue;
-
-        if (entry->in_use) {
-            pr_err("slash_qdma: BUG: probe called for %s but entry is already in_use "
-                   "(number=%d); refusing to bind\n", bdf, entry->number);
-            mutex_unlock(&slash_qdma_id_map_lock);
-            return -EBUSY;
-        }
-
-        entry->in_use = true;
-        number = entry->number;
-        mutex_unlock(&slash_qdma_id_map_lock);
-        pr_info("slash_qdma: reusing number %d for %s\n", number, bdf);
-        return number;
-    }
-
-    /* First time we've seen this BDF — allocate a fresh entry. */
-    entry = kzalloc(sizeof(*entry), GFP_KERNEL);
-    if (!entry) {
-        mutex_unlock(&slash_qdma_id_map_lock);
-        return -ENOMEM;
-    }
-
-    strscpy(entry->bdf, bdf, sizeof(entry->bdf));
-    entry->number = atomic_inc_return(&slash_qdma_devcount) - 1;
-    entry->in_use = true;
-    list_add_tail(&entry->node, &slash_qdma_id_map);
-
-    number = entry->number;
-    mutex_unlock(&slash_qdma_id_map_lock);
-
-    pr_info("slash_qdma: assigned number %d to %s\n", number, bdf);
-    return number;
-}
-
-/**
- * slash_qdma_id_release() - Mark a BDF's entry as no longer in use.
- * @bdf: Full PCI BDF string passed to the matching slash_qdma_id_get() call.
- *
- * Called when the misc device is deregistered (remove path, or probe error
- * unwind after misc_register succeeds).  Clears in_use so that the next probe
- * for the same BDF can reuse the stored number.  The entry itself is not freed.
- *
- * If no entry exists for @bdf (should never happen after a successful probe),
- * the call is a no-op and a warning is logged.
- */
-static void slash_qdma_id_release(const char *bdf)
-{
-    struct slash_qdma_id_entry *entry;
-
-    mutex_lock(&slash_qdma_id_map_lock);
-
-    list_for_each_entry(entry, &slash_qdma_id_map, node) {
-        if (strcmp(entry->bdf, bdf) != 0)
-            continue;
-
-        entry->in_use = false;
-        mutex_unlock(&slash_qdma_id_map_lock);
-        pr_info("slash_qdma: released number %d for %s\n", entry->number, bdf);
-        return;
-    }
-
-    /* Should be unreachable: release without a prior successful id_get. */
-    pr_warn("slash_qdma: WARNING: release called for %s but no entry found\n", bdf);
-    mutex_unlock(&slash_qdma_id_map_lock);
-}
 
 /* ─────────────────────────────────────────────────────────────────────
  * Module init / exit
@@ -1247,7 +1123,7 @@ static int slash_qdma_program_host_profiles(struct slash_qdma_dev *device)
  * the control function handled by slash_ctldev).  Then:
  *   1. Allocates and initialises a slash_qdma_dev structure.
  *   2. Configures and opens the libqdma device via qdma_device_open().
- *   3. Registers the management miscdevice (/dev/slash_qdma_ctlN).
+ *   3. Registers the management character device (/dev/slash_qdma_ctlN).
  *
  * On any failure, the partially-constructed device is torn down and
  * the probe returns the error.
@@ -1259,6 +1135,7 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
     int err;
     struct qdma_dev_conf conf;
     struct slash_qdma_dev *device = NULL;
+    char name[64];
 
     memset(&conf, 0, sizeof(conf));
 
@@ -1297,7 +1174,7 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
     device->have_qdma_handle = true;
 
     /*
-     * Program the CPM5 Host Profiles before exposing the miscdevice, so
+     * Program the CPM5 Host Profiles before exposing the character device, so
      * they exist before userspace can add any queue.  Host ID 0 steers
      * AXI4-MM traffic to NoC Channel 0 and Host ID 1 to NoC Channel 1;
      * the per-queue SW-context host_id (mirrored from mm_channel = qid & 1)
@@ -1310,18 +1187,20 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
         goto err_free;
     }
 
-    /* Register the management miscdevice so userspace can issue ioctls. */
-    err = misc_register(&device->misc);
-    if (err) {
-        dev_err(&pdev->dev, "slash: qdma: could not register misc device: %d", err);
-        /*
-         * is_misc_registered is still false here, so slash_qdma_destroy_qdma_device
-         * will not call misc_deregister or id_release.  Release the id explicitly.
-         */
-        slash_qdma_id_release(pci_name(pdev));
+    snprintf(name, sizeof(name), SLASH_QDMA_CTLDEV_NAME_FMT, pci_name(pdev));
+    device->device =
+        slash_chrdev_add(&device->cdev, &slash_qdma_fops,
+                         SLASH_QDMA_MINOR(device->slot), &pdev->dev,
+                         device, name);
+    if (IS_ERR(device->device)) {
+        err = PTR_ERR(device->device);
+        device->device = NULL;
+        dev_err(&pdev->dev,
+                "slash: qdma: could not register character device: %d",
+                err);
         goto err_free;
     }
-    device->is_misc_registered = true;
+    device->is_cdev_registered = true;
 
     return 0;
 
@@ -1339,7 +1218,7 @@ err_free:
  * @pdev: The PCI device being removed.
  *
  * Tears down all HW queues, closes the libqdma device, deregisters the
- * miscdevice, and drops the device reference.
+ * character device, and drops the device reference.
  */
 static void slash_qdma_remove(struct pci_dev *pdev)
 {
@@ -1361,71 +1240,44 @@ static void slash_qdma_remove(struct pci_dev *pdev)
  * @pdev:    PCI device to bind to.
  * @pdevice: [out] Receives a pointer to the new device on success.
  *
- * Allocates the slash_qdma_dev, initialises its mutex, xarray, kref,
- * and miscdevice fields, and stores it in the PCI drvdata.  A static
- * atomic counter provides unique /dev node numbering across devices.
+ * Allocates the slash_qdma_dev, initialises its mutex, xarray, kref, stable
+ * board slot, and stores it in the PCI drvdata.
  *
  * Return: 0 on success, negative errno on failure.
  */
 static int slash_qdma_create_qdma_device(struct pci_dev *pdev, struct slash_qdma_dev **pdevice)
 {
-    int err;
     struct slash_qdma_dev *device;
-    int id;
+    int err;
 
+    pci_set_drvdata(pdev, NULL);
     device = kzalloc(sizeof(*device), GFP_KERNEL);
-    if (!device) {
+    if (!device)
         return -ENOMEM;
-    }
-    device->pdev = pdev;
+
+    device->pdev = pci_dev_get(pdev);
+    device->slot = -1;
     kref_init(&device->ref);
     mutex_init(&device->lock);
     xa_init_flags(&device->qpairs, XA_FLAGS_ALLOC);
     device->hw_shutdown = false;
     pci_set_drvdata(pdev, device);
 
-    { /* Miscdevice setup */
-        device->misc.minor = MISC_DYNAMIC_MINOR;
-        device->misc.fops = &slash_qdma_fops;
-        device->misc.parent = &pdev->dev;
-        device->misc.mode = SLASH_CTLDEV_QDMA_MODE;
-
-        /* Name visible in /sys/class/misc, includes PCI BDF for uniqueness. */
-        device->misc.name = kasprintf(GFP_KERNEL, SLASH_QDMA_CTLDEV_NAME_FMT, pci_name(device->pdev));
-        if (!device->misc.name) {
-            dev_err(&device->pdev->dev, "qdma: kasprintf(name) failed\n");
-            err = -ENOMEM;
-            goto err_free;
-        }
-
-        /* /dev node name: stable numeric index from BDF-to-number map. */
-        id = slash_qdma_id_get(pci_name(device->pdev));
-        if (id < 0) {
-            dev_err(&device->pdev->dev, "qdma: id_get failed: %d\n", id);
-            err = id;
-            goto err_free_name;
-        }
-
-        device->misc.nodename = kasprintf(GFP_KERNEL, SLASH_QDMA_CTLDEV_NODENAME_FMT, id);
-        if (!device->misc.nodename) {
-            dev_err(&device->pdev->dev, "qdma: kasprintf(nodename) failed\n");
-            err = -ENOMEM;
-            goto err_release_id;
-        }
+    err = slash_chrdev_board_get(pdev);
+    if (err < 0) {
+        dev_err(&pdev->dev, "qdma: board-slot allocation failed: %d\n",
+                err);
+        goto err_free;
     }
+    device->slot = err;
+    device->have_board_slot = true;
 
     *pdevice = device;
     return 0;
 
-err_release_id:
-    slash_qdma_id_release(pci_name(device->pdev));
-
-err_free_name:
-    kfree(device->misc.name);
-    device->misc.name = NULL;
-
 err_free:
     slash_qdma_destroy_qdma_device(device);
+    kref_put(&device->ref, slash_qdma_dev_release);
     *pdevice = NULL;
 
     return err;
@@ -1441,7 +1293,7 @@ err_free:
  *
  * Teardown order:
  *   1. Set @hw_shutdown = true (prevents new ioctls).
- *   2. Deregister the miscdevice (prevents new opens).
+ *   2. Deregister the character device (prevents new opens).
  *   3. Iterate all queue pairs: stop, remove each HW queue, erase from
  *      xarray, and drop the xarray's ref.
  *   4. Destroy the xarray.
@@ -1469,11 +1321,16 @@ static void slash_qdma_destroy_qdma_device(struct slash_qdma_dev *device)
     /* Detach from PCI drvdata so no new lookups can find us. */
     pci_set_drvdata(device->pdev, NULL);
 
-    /* Deregister miscdevice to prevent new file opens. */
-    if (device->is_misc_registered) {
-        misc_deregister(&device->misc);
-        slash_qdma_id_release(pci_name(device->pdev));
-        device->is_misc_registered = false;
+    /* Remove the character device before tearing down hardware state. */
+    if (device->is_cdev_registered) {
+        slash_chrdev_del(&device->cdev, device->device);
+        device->device = NULL;
+        device->is_cdev_registered = false;
+    }
+    if (device->have_board_slot) {
+        slash_chrdev_board_put(device->pdev);
+        device->slot = -1;
+        device->have_board_slot = false;
     }
 
     mutex_lock(&device->lock);
@@ -1496,7 +1353,7 @@ static void slash_qdma_destroy_qdma_device(struct slash_qdma_dev *device)
                 if (!(entry->dir_mask & dir_bit))
                     continue;
 
-                slash_qdma_ioctl_qpair_rm_q(&device->misc, device, entry, qtype);
+                slash_qdma_ioctl_qpair_rm_q(device, entry, qtype);
             }
             xa_erase(&device->qpairs, index);
             slash_qdma_qpair_put(entry);
@@ -1528,9 +1385,9 @@ static void slash_qdma_destroy_qdma_device(struct slash_qdma_dev *device)
  * slash_qdma_dev_release() - kref release callback for the QDMA device.
  * @ref: kref embedded in the slash_qdma_dev being released.
  *
- * Called when the last reference drops (after both the miscdevice is
- * closed and all anon_inode fds are released).  Frees the dynamically
- * allocated miscdevice name/nodename strings and the device structure.
+ * Called when the last reference drops (after both the control device is
+ * closed and all anon_inode fds are released).  Drops the retained PCI
+ * device reference and frees the device structure.
  */
 static void slash_qdma_dev_release(struct kref *ref)
 {
@@ -1538,15 +1395,7 @@ static void slash_qdma_dev_release(struct kref *ref)
         container_of(ref, struct slash_qdma_dev, ref);
 
     mutex_destroy(&device->lock);
-
-    if (device->misc.name) {
-        kfree(device->misc.name);
-    }
-
-    if (device->misc.nodename) {
-        kfree(device->misc.nodename);
-    }
-
+    pci_dev_put(device->pdev);
     kfree(device);
 }
 
@@ -1611,12 +1460,12 @@ static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *
 }
 
 /* ─────────────────────────────────────────────────────────────────────
- * Miscdevice file operations (management interface)
+ * Character-device file operations (management interface)
  * ───────────────────────────────────────────────────────────────────── */
 
 /**
- * slash_qdma_fop_ioctl() - Dispatch ioctls on the QDMA control miscdevice.
- * @file: Open file for the miscdevice.
+ * slash_qdma_fop_ioctl() - Dispatch ioctls on the QDMA control device.
+ * @file: Open file for the character device.
  * @op:   Ioctl command number.
  * @arg:  User-space argument pointer.
  *
@@ -1634,14 +1483,11 @@ static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *
 static long slash_qdma_fop_ioctl(struct file *file, unsigned int op, unsigned long arg)
 {
     struct slash_qdma_dev *qdma_dev = file->private_data;
-    struct miscdevice *misc;
     void __user *uarg = (void __user *)arg;
     long ret = 0;
 
     if (!qdma_dev)
         return -ENODEV;
-
-    misc = &qdma_dev->misc;
 
     SLASH_QDMA_OP_DEV_LOG(&qdma_dev->pdev->dev, "ioctl op=0x%x\n", op);
 
@@ -1655,23 +1501,23 @@ static long slash_qdma_fop_ioctl(struct file *file, unsigned int op, unsigned lo
 
     switch (op) {
     case SLASH_QDMA_IOCTL_INFO:
-        ret = slash_qdma_ioctl_info_w(misc, qdma_dev, uarg);
+        ret = slash_qdma_ioctl_info_w(qdma_dev, uarg);
         break;
 
     case SLASH_QDMA_IOCTL_QPAIR_ADD:
-        ret = slash_qdma_ioctl_qpair_add_w(misc, qdma_dev, uarg);
+        ret = slash_qdma_ioctl_qpair_add_w(qdma_dev, uarg);
         break;
 
     case SLASH_QDMA_IOCTL_Q_OP:
-        ret = slash_qdma_ioctl_qpair_op_w(misc, qdma_dev, uarg);
+        ret = slash_qdma_ioctl_qpair_op_w(qdma_dev, uarg);
         break;
 
     case SLASH_QDMA_IOCTL_QPAIR_GET_FD:
-        ret = slash_qdma_ioctl_qpair_get_fd_w(misc, qdma_dev, uarg);
+        ret = slash_qdma_ioctl_qpair_get_fd_w(qdma_dev, uarg);
         break;
 
     case SLASH_QDMA_IOCTL_BUF_CREATE:
-        ret = slash_qdma_ioctl_buf_create_w(misc, qdma_dev, uarg);
+        ret = slash_qdma_ioctl_buf_create_w(qdma_dev, uarg);
         break;
 
     default:
@@ -1683,22 +1529,19 @@ static long slash_qdma_fop_ioctl(struct file *file, unsigned int op, unsigned lo
 }
 
 /**
- * slash_qdma_fop_open() - Open handler for the QDMA control miscdevice.
+ * slash_qdma_fop_open() - Open handler for the QDMA control device.
  * @inode: Inode of the device node.
  * @file:  File being opened.
  *
- * The misc framework sets file->private_data to the miscdevice before
- * calling open.  We use container_of to recover the slash_qdma_dev,
- * take a device reference, and stash the device pointer in private_data
- * so that subsequent ioctl/release calls can find it directly.
+ * Uses inode->i_cdev to recover the slash_qdma_dev, takes a device reference,
+ * and stores it in file->private_data for ioctl/release.
  *
  * Return: 0 on success, -ENODEV if the device is shutting down.
  */
 static int slash_qdma_fop_open(struct inode *inode, struct file *file)
 {
-    struct miscdevice *misc = file->private_data;
     struct slash_qdma_dev *qdma_dev =
-        container_of(misc, struct slash_qdma_dev, misc);
+        container_of(inode->i_cdev, struct slash_qdma_dev, cdev);
 
     mutex_lock(&qdma_dev->lock);
     if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
@@ -1714,7 +1557,7 @@ static int slash_qdma_fop_open(struct inode *inode, struct file *file)
 }
 
 /**
- * slash_qdma_fop_release() - Release handler for the QDMA control miscdevice.
+ * slash_qdma_fop_release() - Release handler for the QDMA control device.
  * @inode: Inode of the device node.
  * @file:  File being closed.
  *
@@ -1743,7 +1586,6 @@ static int slash_qdma_fop_release(struct inode *inode, struct file *file)
 
 /**
  * slash_qdma_ioctl_info_w() - Wrapper for the QDMA info ioctl.
- * @misc:     Miscdevice handle.
  * @qdma_dev: QDMA device.
  * @uarg:     User-space pointer to a slash_qdma_info struct.
  *
@@ -1755,8 +1597,7 @@ static int slash_qdma_fop_release(struct inode *inode, struct file *file)
  *
  * Return: 0 on success, -EFAULT on copy failure, -ENODEV if shutting down.
  */
-static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
-                                    struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_info_w(struct slash_qdma_dev *qdma_dev,
                                     void __user *uarg)
 {
     struct slash_qdma_info info;
@@ -1767,7 +1608,7 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
         return -EFAULT;
 
     if (user_size < SLASH_QDMA_INFO_MIN_SIZE) {
-        dev_warn(misc->this_device,
+        dev_warn(&qdma_dev->pdev->dev,
                  "qdma: INFO size too small (%u)\n", user_size);
         return -EINVAL;
     }
@@ -1780,7 +1621,7 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
         mutex_unlock(&qdma_dev->lock);
         return -ENODEV;
     }
-    slash_qdma_ioctl_info(misc, qdma_dev, &info);
+    slash_qdma_ioctl_info(qdma_dev, &info);
     mutex_unlock(&qdma_dev->lock);
 
     copy_size = min_t(size_t, user_size, sizeof(info));
@@ -1797,20 +1638,17 @@ static int slash_qdma_ioctl_info_w(struct miscdevice *misc,
 
 /**
  * slash_qdma_ioctl_info() - Populate QDMA capability information.
- * @misc:      Miscdevice handle (unused).
- * @qdma_dev:  QDMA device (unused for now).
+ * @qdma_dev:  QDMA device whose PF1 identity is reported.
  * @qdma_info: [out] Structure to fill with capability data.
  *
  * Currently returns zeroes for all fields.  This is a placeholder for
  * future capability reporting (e.g., querying qdma_device_capabilities).
  */
-static void slash_qdma_ioctl_info(struct miscdevice *misc,
-                                  struct slash_qdma_dev *qdma_dev,
+static void slash_qdma_ioctl_info(struct slash_qdma_dev *qdma_dev,
                                   struct slash_qdma_info *qdma_info)
 {
-    (void) misc;
-    (void) qdma_dev;
-
+    strscpy(qdma_info->bdf, pci_name(qdma_dev->pdev),
+            sizeof(qdma_info->bdf));
     qdma_info->qsets_max = 0;
     qdma_info->msix_qvecs = 0;
     qdma_info->vf_max = 0;
@@ -1823,14 +1661,12 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc,
 
 /**
  * slash_qdma_ioctl_qpair_add_w() - Wrapper for the qpair-add ioctl.
- * @misc:     Miscdevice handle.
  * @qdma_dev: QDMA device.
  * @uarg:     User-space pointer to a slash_qdma_qpair_add struct.
  *
  * Validates userspace inputs:
- *   - @dir_mask must be non-zero, contain only known bits, and not include CMPT
- *     (completion queues are not yet supported).
- *   - @mode must be MM; streaming mode (ST) is not yet supported.
+ *   - @dir_mask must contain only valid direction bits and be non-zero.
+ *   - @mode must be MM or ST.
  *   - Ring size indices must be in [0, 15] (CSR table range).
  *   - @aperture_size must be zero (linear addressing) or a power-of-two
  *     libqdma keyhole aperture.
@@ -1839,8 +1675,7 @@ static void slash_qdma_ioctl_info(struct miscdevice *misc,
  *
  * Return: 0 on success, negative errno on failure.
  */
-static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
-                                         struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_add_w(struct slash_qdma_dev *qdma_dev,
                                          void __user *uarg)
 {
     struct slash_qdma_qpair_add req;
@@ -1858,7 +1693,7 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
         return -EFAULT;
 
     if (user_size < SLASH_QDMA_QPAIR_ADD_MIN_SIZE) {
-        dev_warn(misc->this_device,
+        dev_warn(&qdma_dev->pdev->dev,
                  "qdma: QPAIR_ADD size too small (%u)\n", user_size);
         return -EINVAL;
     }
@@ -1868,19 +1703,13 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
     if (copy_from_user(&req, uarg, min_t(size_t, user_size, sizeof(req))))
         return -EFAULT;
 
-    /* Completion queues are not yet supported. */
-    if (req.dir_mask & SLASH_QDMA_DIR_CMPT)
-        return -EOPNOTSUPP;
-
     /* Validate direction mask: must be non-zero and contain only known bits. */
     dir_mask = req.dir_mask & SLASH_QDMA_DIR_MASK;
     if (!dir_mask || dir_mask != req.dir_mask)
         return -EINVAL;
 
-    /* Streaming mode is not yet supported; only memory-mapped mode is accepted. */
-    if (req.mode == QDMA_Q_MODE_ST)
-        return -EOPNOTSUPP;
-    if (req.mode != QDMA_Q_MODE_MM)
+    /* Only memory-mapped and streaming modes are supported. */
+    if (req.mode != QDMA_Q_MODE_MM && req.mode != QDMA_Q_MODE_ST)
         return -EINVAL;
 
     /*
@@ -1906,7 +1735,7 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
         mutex_unlock(&qdma_dev->lock);
         return -ENODEV;
     }
-    err = slash_qdma_ioctl_qpair_add(misc, qdma_dev, &req);
+    err = slash_qdma_ioctl_qpair_add(qdma_dev, &req);
     mutex_unlock(&qdma_dev->lock);
 
     if (err)
@@ -1932,7 +1761,6 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
 
 /**
  * slash_qdma_ioctl_qpair_add() - Allocate a qpair and add its constituent queues.
- * @misc:     Miscdevice handle.
  * @qdma_dev: QDMA device.
  * @req:      Add request (dir_mask, mode, ring sizes); @qid is set on success.
  *
@@ -1948,8 +1776,7 @@ static int slash_qdma_ioctl_qpair_add_w(struct miscdevice *misc,
  *
  * Return: 0 on success, negative errno on failure.
  */
-static int slash_qdma_ioctl_qpair_add(struct miscdevice *misc,
-                                      struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_add(struct slash_qdma_dev *qdma_dev,
                                       struct slash_qdma_qpair_add *req)
 {
     struct slash_qdma_qpair_entry *entry = kzalloc(sizeof(*entry), GFP_KERNEL);
@@ -1989,7 +1816,7 @@ static int slash_qdma_ioctl_qpair_add(struct miscdevice *misc,
         if (!(req->dir_mask & dir_bit))
             continue;
 
-        ret = slash_qdma_ioctl_qpair_add_q(misc, qdma_dev, req, entry, qtype);
+        ret = slash_qdma_ioctl_qpair_add_q(qdma_dev, req, entry, qtype);
         if (ret)
             goto rollback;
 
@@ -2002,7 +1829,7 @@ rollback:
     /* Undo any queues that were successfully added before the failure. */
     for (idx = 0; idx < SLASH_QDMA_QTYPE_COUNT; idx++) {
         if (added[idx])
-            slash_qdma_ioctl_qpair_rm_q(misc, qdma_dev, entry, idx);
+            slash_qdma_ioctl_qpair_rm_q(qdma_dev, entry, idx);
     }
 
     slash_qdma_qpair_remove(qdma_dev, req->qid);
@@ -2012,7 +1839,6 @@ rollback:
 
 /**
  * slash_qdma_ioctl_qpair_add_q() - Add a single HW queue to a queue pair.
- * @misc:     Miscdevice handle (for error logging context).
  * @qdma_dev: QDMA device.
  * @req:      The add request (provides queue index, mode, and ring sizes).
  * @entry:    The qpair entry to attach the new queue to.
@@ -2056,8 +1882,7 @@ rollback:
  *
  * Return: 0 on success, negative errno on failure.
  */
-static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
-                                         struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_add_q(struct slash_qdma_dev *qdma_dev,
                                          struct slash_qdma_qpair_add *req,
                                          struct slash_qdma_qpair_entry *entry,
                                          enum queue_type_t qtype)
@@ -2189,7 +2014,6 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
 
 /**
  * slash_qdma_ioctl_qpair_rm_q() - Remove a single HW queue from a queue pair.
- * @misc:     Miscdevice handle (for logging context).
  * @qdma_dev: QDMA device.
  * @entry:    The qpair entry to remove the queue from.
  * @qtype:    Which queue type to remove (Q_H2C, Q_C2H, or Q_CMPT).
@@ -2202,8 +2026,7 @@ static int slash_qdma_ioctl_qpair_add_q(struct miscdevice *misc,
  * Errors are logged but not propagated — this is best-effort cleanup
  * used during teardown.
  */
-static void slash_qdma_ioctl_qpair_rm_q(struct miscdevice *misc,
-                                         struct slash_qdma_dev *qdma_dev,
+static void slash_qdma_ioctl_qpair_rm_q(struct slash_qdma_dev *qdma_dev,
                                          struct slash_qdma_qpair_entry *entry,
                                          enum queue_type_t qtype)
 {
@@ -2247,7 +2070,6 @@ static void slash_qdma_ioctl_qpair_rm_q(struct miscdevice *misc,
 
 /**
  * slash_qdma_ioctl_qpair_op_w() - Wrapper for the qpair operation ioctl.
- * @misc:     Miscdevice handle.
  * @qdma_dev: QDMA device.
  * @uarg:     User-space pointer to a slash_qdma_qpair_op struct.
  *
@@ -2256,8 +2078,7 @@ static void slash_qdma_ioctl_qpair_rm_q(struct miscdevice *misc,
  *
  * Return: 0 on success, negative errno on failure.
  */
-static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
-                                       struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_op_w(struct slash_qdma_dev *qdma_dev,
                                        void __user *uarg)
 {
     struct slash_qdma_qpair_op req;
@@ -2274,7 +2095,7 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
         return -EFAULT;
 
     if (user_size < SLASH_QDMA_QPAIR_OP_MIN_SIZE) {
-        dev_warn(misc->this_device,
+        dev_warn(&qdma_dev->pdev->dev,
                  "qdma: Q_OP size too small (%u)\n", user_size);
         return -EINVAL;
     }
@@ -2292,7 +2113,7 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
         mutex_unlock(&qdma_dev->lock);
         return -ENODEV;
     }
-    ret = slash_qdma_ioctl_qpair_op(misc, qdma_dev, &req);
+    ret = slash_qdma_ioctl_qpair_op(qdma_dev, &req);
     mutex_unlock(&qdma_dev->lock);
 
     if (ret)
@@ -2318,7 +2139,6 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
 
 /**
  * slash_qdma_ioctl_qpair_op() - Dispatch a lifecycle operation on a queue pair.
- * @misc:     Miscdevice handle (unused, present for API consistency).
  * @qdma_dev: QDMA device.
  * @req:      Operation request (@qid identifies the target, @op selects
  *            the action).
@@ -2335,14 +2155,11 @@ static int slash_qdma_ioctl_qpair_op_w(struct miscdevice *misc,
  * Return: 0 on success, -ENOENT if qpair not found, other negative errno
  *         from the underlying libqdma call.
  */
-static int slash_qdma_ioctl_qpair_op(struct miscdevice *misc,
-                                     struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_op(struct slash_qdma_dev *qdma_dev,
                                      struct slash_qdma_qpair_op *req)
 {
     struct slash_qdma_qpair_entry *entry;
     int ret = 0;
-
-    (void) misc;
 
     if (!qdma_dev->have_qdma_handle)
         return -ENODEV;
@@ -2826,7 +2643,6 @@ static struct slash_qdma_buf *slash_qdma_buf_from_file(struct file *file)
 
 /**
  * slash_qdma_ioctl_buf_create_w() - Allocate a kernel buffer and return its fd.
- * @misc:     Miscdevice handle (for logging).
  * @qdma_dev: QDMA device the buffer is bound to (for DMA mapping).
  * @uarg:     User pointer to a struct slash_qdma_buf_create.
  *
@@ -2838,8 +2654,7 @@ static struct slash_qdma_buf *slash_qdma_buf_from_file(struct file *file)
  *
  * Return: The new buffer fd (>= 0) on success, negative errno on failure.
  */
-static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
-                                         struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_buf_create_w(struct slash_qdma_dev *qdma_dev,
                                          void __user *uarg)
 {
     struct slash_qdma_buf_create req;
@@ -2854,7 +2669,7 @@ static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
         return -EFAULT;
 
     if (user_size < SLASH_QDMA_BUF_CREATE_MIN_SIZE) {
-        dev_warn(misc->this_device,
+        dev_warn(&qdma_dev->pdev->dev,
                  "qdma: BUF_CREATE size too small (%u)\n", user_size);
         return -EINVAL;
     }
@@ -2879,7 +2694,15 @@ static int slash_qdma_ioctl_buf_create_w(struct miscdevice *misc,
     buf->qdma_dev = qdma_dev;
     buf->length = req.length;
 
+    mutex_lock(&qdma_dev->lock);
+    if (qdma_dev->hw_shutdown || !qdma_dev->have_qdma_handle) {
+        mutex_unlock(&qdma_dev->lock);
+        kref_put(&qdma_dev->ref, slash_qdma_dev_release);
+        kfree(buf);
+        return -ENODEV;
+    }
     rv = slash_qdma_buf_alloc(buf);
+    mutex_unlock(&qdma_dev->lock);
     if (rv < 0) {
         kref_put(&qdma_dev->ref, slash_qdma_dev_release);
         kfree(buf);
@@ -3539,8 +3362,7 @@ static long slash_qdma_qpair_ioctl(struct file *file,
 
     switch (cmd) {
     case SLASH_QDMA_IOCTL_BUF_CREATE:
-        return slash_qdma_ioctl_buf_create_w(&ctx->qdma_dev->misc,
-                                             ctx->qdma_dev,
+        return slash_qdma_ioctl_buf_create_w(ctx->qdma_dev,
                                              (void __user *)arg);
     case SLASH_QDMA_QPAIR_IOCTL_TRANSFER:
         return slash_qdma_qpair_transfer(file, (void __user *)arg);
@@ -3591,7 +3413,6 @@ static int slash_qdma_qpair_release(struct inode *inode, struct file *file)
 
 /**
  * slash_qdma_ioctl_qpair_get_fd_w() - Create an anon_inode fd for queue I/O.
- * @misc:     Miscdevice handle (unused).
  * @qdma_dev: QDMA device.
  * @uarg:     User-space pointer to a slash_qdma_qpair_fd_request struct.
  *
@@ -3613,8 +3434,7 @@ static int slash_qdma_qpair_release(struct inode *inode, struct file *file)
  *
  * Return: The new fd (>= 0) on success, negative errno on failure.
  */
-static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
-                                           struct slash_qdma_dev *qdma_dev,
+static int slash_qdma_ioctl_qpair_get_fd_w(struct slash_qdma_dev *qdma_dev,
                                            void __user *uarg)
 {
     struct slash_qdma_qpair_fd_request req;
@@ -3632,7 +3452,7 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct miscdevice *misc,
         return -EFAULT;
 
     if (user_size < SLASH_QDMA_QPAIR_GET_FD_MIN_SIZE) {
-        dev_warn(misc->this_device,
+        dev_warn(&qdma_dev->pdev->dev,
                  "qdma: QPAIR_GET_FD size too small (%u)\n", user_size);
         return -EINVAL;
     }

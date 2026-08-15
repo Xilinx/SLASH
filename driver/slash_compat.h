@@ -15,6 +15,7 @@
 #ifndef SLASH_COMPAT_H
 #define SLASH_COMPAT_H
 
+#include <linux/device.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/timer.h>
@@ -32,6 +33,15 @@ static inline void slash_vm_flags_set(struct vm_area_struct *vma, vm_flags_t fla
     vm_flags_set(vma, flags);
 #else
     vma->vm_flags |= flags;
+#endif
+}
+
+static inline struct class *slash_class_create(const char *name)
+{
+#if defined(SLASH_HAVE_CLASS_CREATE_ONE_ARG)
+    return class_create(name);
+#else
+    return class_create(THIS_MODULE, name);
 #endif
 }
 

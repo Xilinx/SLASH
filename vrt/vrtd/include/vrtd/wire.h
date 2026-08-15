@@ -118,6 +118,9 @@ enum vrtd_opcode {
 
     /** Query progress for a cfgmem program job. */
     VRTD_REQ_CFGMEM_PROGRAM_STATUS,
+
+    /** Set vrtd's in-memory shell/JTAG state for a device. */
+    VRTD_REQ_SET_SHELL_STATE,
 };
 
 /**
@@ -137,6 +140,7 @@ enum vrtd_ret {
     VRTD_RET_INTERNAL_ERROR, ///< Internal error in the vrtd daemon. Check the vrtd log.
     VRTD_RET_AUTH_ERROR, ///< User does not have permission to execute request.
     VRTD_RET_BUSY, ///< Requested resource is busy.
+    VRTD_RET_SHELL_LOCKED, ///< Device is JTAG-booted and will not be auto-reset for shell switching.
 };
 
 /**
@@ -200,6 +204,8 @@ struct vrtd_req_get_device_info {
 struct vrtd_device_info {
     char name[128]; ///< The name of the device.
     struct vrtd_pci_info pci; ///< PCIe metadata (BDF and IDs).
+    uint8_t shell_type; ///< Current shell state known by vrtd (enum vrtd_shell_type).
+    uint8_t jtag;       ///< Non-zero if vrtd believes the device is JTAG-booted.
 } __attribute__((packed));
 
 struct vrtd_resp_get_device_info {
@@ -368,6 +374,12 @@ struct vrtd_resp_buffer_open_raw {
     uint32_t qpair_count;
 } __attribute__((packed));
 
+enum vrtd_shell_type {
+    VRTD_SHELL_UNKNOWN = 0,
+    VRTD_SHELL_SERVICE = 1,
+    VRTD_SHELL_COMPUTE = 2,
+};
+
 /**
  * @brief Request a design writer transfer.
  *
@@ -375,6 +387,7 @@ struct vrtd_resp_buffer_open_raw {
  */
 struct vrtd_req_design_write {
     uint32_t dev_number; ///< Device index (0-based).
+    uint8_t required_shell; ///< One of vrtd_shell_type.
 } __attribute__((packed));
 
 struct vrtd_resp_design_write {
@@ -466,7 +479,8 @@ enum vrtd_device_hotplug_op {
  * @brief Request a PCIe hotplug operation for a device.
  *
  * RESCAN is device-independent; dev_number and function are ignored.
- * For RESET_SEQUENCE, function is ignored.
+ * For RESET_SEQUENCE, shell_type selects the shell partition to boot and
+ * function is ignored.
  *
  * For REMOVE and HOTPLUG, function selects the PCI physical function (0-7)
  * or VRTD_DEVICE_HOTPLUG_FUNCTION_ALL for all V80 PFs.  TOGGLE_SBR always
@@ -476,9 +490,27 @@ struct vrtd_req_device_hotplug_op {
     uint32_t dev_number; ///< Device index (0-based).
     uint8_t op;          ///< One of vrtd_device_hotplug_op.
     uint8_t function;    ///< PCI function number (0-7), or FUNCTION_ALL where allowed.
+    uint8_t shell_type;  ///< One of vrtd_shell_type for RESET_SEQUENCE.
 } __attribute__((packed));
 
 struct vrtd_resp_device_hotplug_op {
+    uint8_t zero; ///< Placeholder to avoid empty-struct ABI issues.
+} __attribute__((packed));
+
+/**
+ * @brief Set vrtd's in-memory shell state for a device.
+ *
+ * Requires the same hotplug permission as disruptive PCIe operations.  The
+ * daemon accepts shell_type only while the current shell is UNKNOWN; jtag is a
+ * set-only flag that is cleared by device rediscovery/reset.
+ */
+struct vrtd_req_set_shell_state {
+    uint32_t dev_number; ///< Device index (0-based).
+    uint8_t shell_type;  ///< One of vrtd_shell_type.
+    uint8_t jtag;        ///< Non-zero to mark the device as JTAG-booted.
+} __attribute__((packed));
+
+struct vrtd_resp_set_shell_state {
     uint8_t zero; ///< Placeholder to avoid empty-struct ABI issues.
 } __attribute__((packed));
 

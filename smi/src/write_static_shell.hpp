@@ -38,6 +38,7 @@ public:
     struct Options {
         bool flash = false;                 ///< Use VRTD cfgmem flash programming.
         bool jtag = false;                  ///< Use JTAG/xsdb instead of cfgmem flash.
+        std::string shellType;              ///< Static shell type to program; empty means mode default.
         std::string bdf;                    ///< Target board address, unless noRemoveDevice is set.
         std::string pdiPath;                ///< Override PDI path for active development.
         bool noRemoveDevice = false;        ///< Skip pre-JTAG PCIe remove; JTAG mode only.

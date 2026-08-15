@@ -217,13 +217,16 @@ pushd "${SCRATCH}"
 OLD_PYTHONPATH="${PYTHONPATH:-}"
 export PYTHONPATH="${PWD}/linker${PYTHONPATH:+:${PYTHONPATH}}"
 
-protected git submodule update --init --recursive
+protected git submodule update --init submodules/AVED submodules/qdma_drv
+# The QEMU pair is `update = none` in .gitmodules so that a recursive clone
+# skips QEMU's ROM submodules; --checkout is what opts back in.
+protected git submodule update --init --checkout submodules/xilinx-qemu submodules/qemu-devicetrees
 
 # Build phase
 
-protected python3 -m zipfile -e "${SMBUS_IP}" linker/slashkit/resources/base/iprepo
-if ! compgen -G 'linker/slashkit/resources/base/iprepo/smbus*/' >/dev/null; then
-    echo "ERROR: extracted SMBus IP zip did not create linker/slashkit/resources/base/iprepo/smbus*/" >&2
+protected python3 -m zipfile -e "${SMBUS_IP}" linker/slashkit/resources/base/common/iprepo
+if ! compgen -G 'linker/slashkit/resources/base/common/iprepo/smbus*/' >/dev/null; then
+    echo "ERROR: extracted SMBus IP zip did not create linker/slashkit/resources/base/common/iprepo/smbus*/" >&2
     exit 1
 fi
 

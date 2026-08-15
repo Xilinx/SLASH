@@ -32,12 +32,38 @@ from contextlib import ExitStack
 
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
-from slashkit.core.command_config import LinkerConfiguration, InstallerConfiguration, CommandConfiguration
-from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm, read_system_map_clock_hz
+from slashkit.core.command_config import (
+    LinkerConfiguration,
+    InstallerConfiguration,
+    CommandConfiguration,
+    ShellType,
+)
+from slashkit.emit.metadata.timing_freq import (
+    require_static_shell_timing_or_confirm,
+    read_system_map_clock_hz,
+)
+from slashkit.core.launcher import (
+    TASK_AVED,
+    TASK_BOOTGEN,
+    TASK_RM_SERVICE_LAYER,
+    TASK_RM_SLASH,
+    TASK_STATIC_SHELL,
+    TASK_STATIC_SHELL_COMPUTE,
+    run_tool,
+)
 
 logger = logging.getLogger(__name__)
 
 AVED_DESIGN_NAME = "amd_v80_gen5x8_25.1"
+_RP1_RESOURCE_PACKAGE = "slashkit.resources.aved"
+_RP1_RESOURCE_DIRECTORY = "rp1"
+_RP1_REQUIRED_RESOURCES = (
+    "CMakeLists.txt",
+    "build-rp1.sh",
+    "config/rp1_platform_config.h.in",
+    "include/slash/uapi/rp1_protocol.h",
+    "tools/generate_platform_config.py",
+)
 
 
 # Host toolchain flags injected by dpkg-buildpackage (e.g. -mno-omit-leaf-frame-pointer,
@@ -119,7 +145,12 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
     _ensure_boot_device_pcie_in_bif(bif_path)
     logger.info("Running bootgen in %s to generate %s",
                 impl_dir, output_pdi.name)
-    subprocess.run(
+    # bootgen resolves the file paths written inside the BIF against its own
+    # working directory, not against the BIF, so impl_dir is part of the
+    # contract rather than a convenience. run_tool carries it across to the
+    # execution host in SLASH_TOOL_CWD; making the arguments below absolute
+    # would not help, because the paths inside the BIF stay relative.
+    run_tool(
         [
             "bootgen",
             "-arch",
@@ -130,8 +161,8 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
             "-o",
             output_pdi.name,
         ],
-        cwd=str(impl_dir),
-        check=True,
+        task=TASK_BOOTGEN,
+        cwd=impl_dir,
     )
 
     if not output_pdi.exists():
@@ -146,6 +177,69 @@ def _first_existing(candidates: List[str]) -> Optional[str]:
         if Path(candidate).is_file():
             return candidate
     return None
+
+
+def _rp1_resource_root():
+    try:
+        root = resources.files(_RP1_RESOURCE_PACKAGE)
+    except ModuleNotFoundError as error:
+        raise FileNotFoundError(
+            "Required packaged RP1 firmware resources are unavailable; "
+            "reinstall slashkit from a complete wheel or source archive"
+        ) from error
+
+    root = root.joinpath(_RP1_RESOURCE_DIRECTORY)
+    if not root.is_dir():
+        raise FileNotFoundError(
+            "Required packaged RP1 firmware resource tree is missing: "
+            f"{_RP1_RESOURCE_DIRECTORY}"
+        )
+
+    missing = [
+        name for name in _RP1_REQUIRED_RESOURCES
+        if not root.joinpath(*name.split("/")).is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Required packaged RP1 firmware resources are missing: "
+            + ", ".join(missing)
+        )
+    return root
+
+
+def _copy_rp1_resource_tree(source, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for entry in source.iterdir():
+        if entry.is_dir() and (
+            entry.name == "build"
+            or entry.name.startswith("build-")
+            or entry.name == "__pycache__"
+        ):
+            continue
+
+        target = destination / entry.name
+        if entry.is_dir():
+            _copy_rp1_resource_tree(entry, target)
+        elif entry.is_file():
+            with resources.as_file(entry) as source_path:
+                shutil.copy2(source_path, target)
+
+
+def _copy_rp1_sources_to_aved(aved_dir: Path) -> None:
+    rp1_resources = _rp1_resource_root()
+    rp1_dest_dir = aved_dir / "fw" / "RP1"
+    if rp1_dest_dir.exists():
+        shutil.rmtree(rp1_dest_dir)
+    _copy_rp1_resource_tree(rp1_resources, rp1_dest_dir)
+
+
+def _add_init_files(path: Path) -> None:
+    """Make every installed artifact directory importable as package data."""
+    (path / "__init__.py").touch()
+    for sub_path in path.iterdir():
+        if not sub_path.is_dir():
+            continue
+        _add_init_files(sub_path)
 
 
 def _environment_with_udev_ld_preload() -> Dict[str, str]:
@@ -188,6 +282,8 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
     aved_fw_profile_dir = aved_dir / "fw" / "AMC" / \
         "src" / "profiles" / "v80"
 
+    _copy_rp1_sources_to_aved(aved_dir)
+
     logger.info("Starting AVED base build for %s", config.project_name)
     aved_build_dir.mkdir(parents=True, exist_ok=True)
 
@@ -204,12 +300,16 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
         with resources.path("slashkit.resources.aved", file_name) as in_path:
             _copy_checked(in_path, target_dir / file_name)
 
+    # build_all.sh and the four files staged above all live in the AVED clone,
+    # so offloading this step needs nothing installed on the execution host
+    # beyond a Vitis toolchain. It does need more of the base system than the
+    # other steps (cmake, make, git, python3); see scripts/lsf/README.md.
     logger.info("Running AVED build script in %s", aved_hw_dir)
-    subprocess.run(
+    run_tool(
         ["bash", "build_all.sh"],
-        cwd=str(aved_hw_dir),
+        task=TASK_AVED,
+        cwd=aved_hw_dir,
         env=_clean_cross_build_env(),
-        check=True,
     )
 
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
@@ -230,12 +330,16 @@ def _compute_build_id_env() -> Dict[str, str]:
     Derive the shell build-ID constants from the git commit of the SLASH source
     tree and return them as environment variables consumed by create_project.tcl.
 
-    Encoding (60-bit hash + dirty), split across two 32-bit GPIO channels.
-    The 60 hash bits are the top 60 bits of the SHA-1 (bits[159:100]), so the
-    value starts with the commit's GitHub short hash:
+    Encoding (60-bit hash + shell type + dirty), split across two 32-bit GPIO
+    channels. The 60 hash bits are the top 60 bits of the SHA-1
+    (bits[159:100]), so the value starts with the commit's GitHub short hash:
       - SLASH_BUILD_ID_LO = low 32 bits of the 60-bit window
-      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], bits[30:28] reserved,
-        dirty flag in bit[31]
+      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], shell type in bit[28]
+        (0 = service, 1 = compute), bits[30:29] reserved, dirty flag in bit[31]
+
+    Bit[28] is left clear here: each shell's create_project.tcl forces it to its
+    own value, so the bit is owned by the design that it describes and stays
+    correct even when the Tcl is run outside this driver.
 
     Falls back to hash 0 with the dirty bit set when git information is
     unavailable (e.g. building from an exported tarball, not a git checkout).
@@ -279,12 +383,14 @@ def create_build_project(
 ) -> None:
     log_path = config.build_dir / "vivado.log"
 
-    with resources.path("slashkit.resources.base.scripts", "create_project.tcl") as tcl_path:
+    with resources.path(
+        "slashkit.resources.base.service.scripts", "create_project.tcl"
+    ) as tcl_path:
         if not tcl_path.exists():
             raise FileNotFoundError(
                 f"create_project.tcl not found: {tcl_path}")
         cmd = [
-            config.vivado_bin,
+            str(config.vivado_bin),
             "-mode",
             "batch",
             "-nojournal",
@@ -294,7 +400,7 @@ def create_build_project(
             str(tcl_path),
             "-tclargs",
             config.project_name,
-            config.ip_repository
+            str(config.ip_repository),
         ]
         if action:
             cmd.append(action)
@@ -302,10 +408,54 @@ def create_build_project(
         cmd.append(str(config.n_jobs))
 
         env = _environment_with_udev_ld_preload()
+        # Computed here, from this checkout, and carried across to wherever the
+        # run happens: an execution host may see a different git tree, or none.
         env.update(_compute_build_id_env())
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True,
-                       env=env)
+        run_tool(cmd, task=TASK_STATIC_SHELL,
+                 cwd=config.build_dir, env=env)
+
+
+def create_build_project_compute(
+    config: CommandConfiguration, action: Optional[str] = None
+) -> None:
+    log_path = config.build_dir / "vivado_compute.log"
+
+    with resources.path(
+        "slashkit.resources.base.compute.scripts", "create_project.tcl"
+    ) as tcl_path:
+        if not tcl_path.exists():
+            raise FileNotFoundError(
+                f"create_project.tcl not found: {tcl_path}"
+            )
+        cmd = [
+            str(config.vivado_bin),
+            "-mode",
+            "batch",
+            "-nojournal",
+            "-log",
+            str(log_path),
+            "-source",
+            str(tcl_path),
+            "-tclargs",
+            config.project_name,
+            str(config.ip_repository),
+        ]
+        if action:
+            cmd.append(action)
+        cmd.append(str(config.n_jobs))
+
+        env = _environment_with_udev_ld_preload()
+        # Same as the service path: derived from this checkout, not from
+        # whatever tree the execution host happens to see.
+        env.update(_compute_build_id_env())
+
+        run_tool(
+            cmd,
+            task=TASK_STATIC_SHELL_COMPUTE,
+            cwd=config.build_dir,
+            env=env,
+        )
 
 
 class RM_KIND(Enum):
@@ -341,19 +491,19 @@ def _generate_user_clock_xdc(config: LinkerConfiguration) -> Optional[Path]:
 
 
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
-    if rm_kind == RM_KIND.SLASH_PROJECT:
-        # Copy all base IP cores into the ip repository
-        config.ip_repository.mkdir(parents=True)
-        export_package("slashkit.resources.base.iprepo",
-                       config.ip_repository / "slash_base")
+    # Copy all base IP cores into the ip repository
+    config.ip_repository.mkdir(parents=True, exist_ok=True)
+    base_ip_repository = config.ip_repository / "slash_base"
+    if not base_ip_repository.exists():
+        export_package("slashkit.resources.base.common.iprepo",
+                       base_ip_repository)
 
+    if rm_kind == RM_KIND.SLASH_PROJECT:
         # Copy all user kernels into the ip repository
         for kernel in config.kernels:
-            shutil.copytree(kernel.component_xml_path.parent,
-                            config.ip_repository / kernel.name)
-    elif rm_kind == RM_KIND.SERVICE_LAYER and not config.ip_repository.is_dir():
-        raise RuntimeError("The IP repository is missing, the user region has to be built before the service layer.\n"
-                           "This is a bug, please report it at https://github.com/Xilinx/SLASH")
+            shutil.copytree(
+                kernel.component_xml_path.parent, config.ip_repository / kernel.name
+            )
 
     logs_dir = config.build_dir / "logs"
     image_out_dir = config.build_dir / "images"
@@ -364,32 +514,41 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     rm_work_dir.mkdir(parents=True, exist_ok=True)
 
     if rm_kind == RM_KIND.SERVICE_LAYER:
+        tcl_package = "slashkit.resources.base.service.scripts"
         tcl_name = "service_layer_build.tcl"
+        static_shell_package = "slashkit.resources.static_shell"
         static_shell_dcp_name = "static_shell_service_layer.dcp"
         base_bd_package = "slashkit.resources.static_shell.service_layer"
         base_bd_name = "service_layer.bd"
         log_path = logs_dir / "service_layer_build.log"
-    else:
+    elif config.shell_type == ShellType.COMPUTE:
+        tcl_package = "slashkit.resources.base.common.scripts"
         tcl_name = "slash_project_build.tcl"
+        static_shell_package = "slashkit.resources.static_shell_compute"
+        static_shell_dcp_name = "static_shell_slash.dcp"
+        base_bd_package = "slashkit.resources.static_shell_compute.slash_base"
+        base_bd_name = "slash_base.bd"
+        log_path = logs_dir / "slash_project_build.log"
+    else:  # SERVICE slash RM
+        tcl_package = "slashkit.resources.base.common.scripts"
+        tcl_name = "slash_project_build.tcl"
+        static_shell_package = "slashkit.resources.static_shell"
         static_shell_dcp_name = "static_shell_slash.dcp"
         base_bd_package = "slashkit.resources.static_shell.slash_base"
         base_bd_name = "slash_base.bd"
         log_path = logs_dir / "slash_project_build.log"
 
     with ExitStack() as stack:
-        tcl_path = stack.enter_context(
-            resources.path("slashkit.resources.base.scripts", tcl_name)
-        )
+        tcl_path = stack.enter_context(resources.path(tcl_package, tcl_name))
         static_shell_dcp_path = stack.enter_context(
-            resources.path("slashkit.resources.static_shell",
-                           static_shell_dcp_name)
+            resources.path(static_shell_package, static_shell_dcp_name)
         )
         base_bd_path = stack.enter_context(
             resources.path(base_bd_package, base_bd_name)
         )
 
         cmd = [
-            config.vivado_bin,
+            str(config.vivado_bin),
             "-mode",
             "batch",
             "-nojournal",
@@ -416,8 +575,10 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             str(config.n_jobs),
         ]
         if rm_kind == RM_KIND.SLASH_PROJECT:
-            util_report_path = config.build_dir / \
+            util_report_path = (
+                config.build_dir /
                 f"report_utilization_{config.project_name}.txt"
+            )
             util_report_path.parent.mkdir(parents=True, exist_ok=True)
             cmd.extend(["--util-report-file", str(util_report_path)])
 
@@ -431,12 +592,18 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
         if rm_kind == RM_KIND.SERVICE_LAYER:
             opt_post_tcl = stack.enter_context(
                 resources.path(
-                    "slashkit.resources.base.constraints.service_layer.eth", "service_layer_eth.opt.post.tcl")
+                    "slashkit.resources.base.service.constraints.service_layer.eth",
+                    "service_layer_eth.opt.post.tcl",
+                )
             )
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True,
-                       env=_environment_with_udev_ld_preload())
+        # Distinct task kinds: a single `slashkit link` runs both RM builds, so
+        # the launcher cannot tell them apart from a per-invocation override.
+        task = (TASK_RM_SLASH if rm_kind == RM_KIND.SLASH_PROJECT
+                else TASK_RM_SERVICE_LAYER)
+        run_tool(cmd, task=task, cwd=config.build_dir,
+                 env=_environment_with_udev_ld_preload())
 
     if rm_kind == RM_KIND.SLASH_PROJECT:
         pdi_out_path = image_out_dir / \
@@ -458,21 +625,33 @@ def build_slash_rm(config: LinkerConfiguration) -> None:
     _run_rm_build(config, RM_KIND.SLASH_PROJECT)
 
 
-def install_static_shell(config: InstallerConfiguration) -> None:
-    static_shell_dir = config.out_dir / "static_shell"
+def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir: Path) -> None:
+    """Build and install implementation artifacts for the selected shell."""
     static_shell_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cloning the AVED repository into the build directory
-    # We're doing this early so that errors are caught *before* the 10-hour Vivado run!
-    subprocess.run([
-        "git", "clone",
-        "--recurse-submodules",
-        "-b", config.aved_ref,
-        config.aved_repo,
-        config.build_dir / "AVED"
-    ], check=True)
+    aved_dir = config.build_dir / "AVED"
+    if not aved_dir.exists():
+        # Clone AVED early so that errors are caught before the multi-hour
+        # implementation run. Stays local even when the tool steps are
+        # offloaded: this needs network egress, which compute nodes typically
+        # do not have.
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--recurse-submodules",
+                "-b",
+                config.aved_ref,
+                config.aved_repo,
+                aved_dir,
+            ],
+            check=True,
+        )
 
-    create_build_project(config)
+    if config.shell_type == ShellType.SERVICE:
+        create_build_project(config)
+    else:
+        create_build_project_compute(config)
 
     require_static_shell_timing_or_confirm(
         build_dir=config.build_dir,
@@ -482,43 +661,173 @@ def install_static_shell(config: InstallerConfiguration) -> None:
     )
 
     impl_dir = config.build_dir / "slash.runs" / "impl_1"
-    # debug_nets.ltx is auto-emitted by Vivado because the base shell instantiates the
-    # debug hub. It is the full debug probe file (FULL_PROBES.FILE) that must be loaded
-    # before a user region's partial probe file in the Vivado Hardware Manager.
-    install_sources = (
-        impl_dir / "top_wrapper_routed_bb.dcp",
-        impl_dir / "static_shell_slash.dcp",
-        impl_dir / "static_shell_service_layer.dcp",
-        impl_dir / "debug_nets.ltx",
-    )
-    for src in install_sources:
-        if not src.exists():
-            raise FileNotFoundError(
-                f"Expected install artifact not found: {src}")
-    _copy_files(list(install_sources), static_shell_dir)
+    bd_src_dir = config.build_dir / "slash.srcs" / "sources_1" / "bd"
 
-    src_dirs = config.build_dir / "slash.srcs" / "sources_1" / "bd"
-    for src_dir in (src_dirs / "slash_base", src_dirs / "service_layer"):
+    if config.shell_type == ShellType.SERVICE:
+        # debug_nets.ltx is auto-emitted by Vivado because the service base shell
+        # instantiates the debug hub. It is the full debug probe file
+        # (FULL_PROBES.FILE) that must be loaded before a user region's partial
+        # probe file in the Vivado Hardware Manager.
+        install_sources = (
+            impl_dir / "top_wrapper_routed_bb.dcp",
+            impl_dir / "static_shell_slash.dcp",
+            impl_dir / "static_shell_service_layer.dcp",
+            impl_dir / "debug_nets.ltx",
+        )
+        for src in install_sources:
+            if not src.exists():
+                raise FileNotFoundError(
+                    f"Expected install artifact not found: {src}")
+        _copy_files(list(install_sources), static_shell_dir)
+
+        for bd_name in ("slash_base", "service_layer"):
+            src_dir = bd_src_dir / bd_name
+            if not src_dir.is_dir():
+                raise FileNotFoundError(
+                    f"Expected install BD directory not found: {src_dir}"
+                )
+            _copy_tree(src_dir, static_shell_dir)
+
+    else:  # ShellType.COMPUTE
+        dcp_sources = (
+            impl_dir / "top_wrapper_routed_bb.dcp",
+            impl_dir / "static_shell_slash.dcp",
+        )
+        for src in dcp_sources:
+            if not src.exists():
+                raise FileNotFoundError(
+                    f"Expected install artifact not found: {src}")
+        _copy_files(list(dcp_sources), static_shell_dir)
+
+        src_dir = bd_src_dir / "slash_base"
         if not src_dir.is_dir():
             raise FileNotFoundError(
                 f"Expected install BD directory not found: {src_dir}")
         _copy_tree(src_dir, static_shell_dir)
 
-    aved_pdi_path, aved_nofpt_pdi_path = generate_base_pdi_with_aved(
-        config)
+    _add_init_files(static_shell_dir)
+
+
+def _install_static_shell_firmware(config: InstallerConfiguration, static_shell_dir: Path) -> None:
+    """Build AMC and RP1 firmware and install both packaged static-shell PDIs."""
+    static_shell_dir.mkdir(parents=True, exist_ok=True)
+    if not (config.build_dir / "AVED").is_dir():
+        raise FileNotFoundError(
+            f"Expected AVED checkout not found in build directory: {config.build_dir / 'AVED'}")
+
+    aved_pdi_path, aved_nofpt_pdi_path = generate_base_pdi_with_aved(config)
     for pdi_path in (aved_pdi_path, aved_nofpt_pdi_path):
         if not pdi_path.exists():
             raise FileNotFoundError(
                 f"Expected AVED PDI not found in results/base: {pdi_path}")
     _copy_files([aved_pdi_path, aved_nofpt_pdi_path], static_shell_dir)
 
-    def add_init_files(path: Path):
-        (path / "__init__.py").touch()
-        for sub_path in path.iterdir():
-            if not sub_path.is_dir():
-                continue
-            add_init_files(sub_path)
-    add_init_files(static_shell_dir)
+    _add_init_files(static_shell_dir)
+
+
+def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
+                                       static_shell_dir: Path) -> None:
+    """Rebuild RP1 and repack it with existing base-shell and AMC artifacts."""
+    static_shell_dir.mkdir(parents=True, exist_ok=True)
+
+    aved_dir = config.build_dir / "AVED"
+    aved_hw_dir = aved_dir / "hw" / AVED_DESIGN_NAME
+    aved_build_dir = aved_hw_dir / "build"
+    aved_fpt_dir = aved_hw_dir / "fpt"
+    aved_fw_dir = aved_dir / "fw"
+
+    _copy_rp1_sources_to_aved(aved_dir)
+
+    required = (
+        aved_build_dir / "top_wrapper.pdi",
+        aved_build_dir / f"{AVED_DESIGN_NAME}.xsa",
+        aved_build_dir / "amc.elf",
+        aved_build_dir / "fpt.bin",
+        aved_fpt_dir / "pdi_combine.bif",
+        aved_fpt_dir / "fpt_pdi_gen.py",
+    )
+    for path in required:
+        if not path.exists():
+            raise FileNotFoundError(
+                f"RP1-only firmware repack requires existing artifact: {path}")
+
+    rp1_dir = aved_fw_dir / "RP1"
+    logger.info("Rebuilding RP1 firmware in %s", rp1_dir)
+    rp1_env = _clean_cross_build_env()
+    rp1_env["XSA"] = str(
+        aved_build_dir / f"{AVED_DESIGN_NAME}.xsa")
+    # Tagged as AVED rather than given a kind of its own: this is the same
+    # cross-compile the AVED step already runs -- build_all.sh calls this very
+    # script -- so it wants the same reservation and the same node.
+    run_tool(
+        ["bash", "build-rp1.sh"],
+        task=TASK_AVED,
+        cwd=rp1_dir,
+        env=rp1_env,
+    )
+    _copy_checked(rp1_dir / "build" / "rp1.elf", aved_build_dir / "rp1.elf")
+
+    nofpt_pdi = aved_build_dir / f"{AVED_DESIGN_NAME}_nofpt.pdi"
+    logger.info(
+        "Repacking %s with existing AMC/FPT and rebuilt RP1", nofpt_pdi.name)
+    # As in _generate_top_wrapper_pdi_with_bootgen, the paths inside the BIF are
+    # relative, so aved_hw_dir is part of the contract and travels in
+    # SLASH_TOOL_CWD.
+    run_tool(
+        [
+            "bootgen",
+            "-arch",
+            "versal",
+            "-image",
+            str(aved_fpt_dir / "pdi_combine.bif"),
+            "-w",
+            "-o",
+            str(nofpt_pdi),
+        ],
+        task=TASK_BOOTGEN,
+        cwd=aved_hw_dir,
+        env=_clean_cross_build_env(),
+    )
+
+    aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
+    # Deliberately local: fpt_pdi_gen.py is plain Python that splices two files
+    # together, with no vendor toolchain behind it. Offloading it would buy a
+    # queue wait and nothing else.
+    subprocess.run(
+        [
+            str(aved_fpt_dir / "fpt_pdi_gen.py"),
+            "--fpt",
+            str(aved_build_dir / "fpt.bin"),
+            "--pdi",
+            str(nofpt_pdi),
+            "--output",
+            str(aved_pdi),
+        ],
+        cwd=str(aved_hw_dir),
+        env=_clean_cross_build_env(),
+        check=True,
+    )
+    for pdi_path in (aved_pdi, nofpt_pdi):
+        if not pdi_path.is_file():
+            raise FileNotFoundError(
+                f"Expected RP1 repack output not found: {pdi_path}")
+    _copy_files([aved_pdi, nofpt_pdi], static_shell_dir)
+    _add_init_files(static_shell_dir)
+
+
+def install_static_shell(config: InstallerConfiguration) -> None:
+    """Run the requested install stage for the selected static-shell package."""
+    static_shell_dir = config.out_dir / (
+        "static_shell"
+        if config.shell_type == ShellType.SERVICE
+        else "static_shell_compute"
+    )
+    if config.stage in ("all", "base-shell"):
+        _install_static_shell_base(config, static_shell_dir)
+    if config.stage in ("all", "firmware"):
+        _install_static_shell_firmware(config, static_shell_dir)
+    if config.stage == "rp1-firmware":
+        _install_static_shell_rp1_firmware(config, static_shell_dir)
 
 
 def generate_util_report(config: CommandConfiguration) -> None:

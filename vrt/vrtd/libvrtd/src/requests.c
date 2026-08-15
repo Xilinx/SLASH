@@ -677,7 +677,8 @@ enum vrtd_ret vrtd_buffer_open_raw(
 enum vrtd_ret vrtd_design_write(
     int fd,
     uint32_t dev,
-    int input_fd
+    int input_fd,
+    uint8_t required_shell
 )
 {
     if (input_fd < 0) {
@@ -686,6 +687,7 @@ enum vrtd_ret vrtd_design_write(
 
     struct vrtd_req_design_write req = {
         .dev_number = dev,
+        .required_shell = required_shell,
     };
     struct vrtd_resp_design_write resp = {0};
 
@@ -703,7 +705,8 @@ enum vrtd_ret vrtd_design_write(
 enum vrtd_ret vrtd_design_write_file(
     int fd,
     uint32_t dev,
-    const char *path
+    const char *path,
+    uint8_t required_shell
 )
 {
     if (path == NULL) {
@@ -715,9 +718,34 @@ enum vrtd_ret vrtd_design_write_file(
         return VRTD_RET_BAD_LIB_CALL;
     }
 
-    enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd);
+    enum vrtd_ret ret = vrtd_design_write(fd, dev, input_fd, required_shell);
     (void) close(input_fd);
     return ret;
+}
+
+enum vrtd_ret vrtd_set_shell_state(
+    int fd,
+    uint32_t dev,
+    uint8_t shell_type,
+    uint8_t jtag
+)
+{
+    struct vrtd_req_set_shell_state req = {
+        .dev_number = dev,
+        .shell_type = shell_type,
+        .jtag = jtag,
+    };
+    struct vrtd_resp_set_shell_state resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_SET_SHELL_STATE,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    return VRTD_RET_OK;
 }
 
 enum vrtd_ret vrtd_cfgmem_program(
@@ -923,6 +951,7 @@ enum vrtd_ret vrtd_device_hotplug_op(
         .dev_number = dev,
         .op = op,
         .function = function,
+        .shell_type = VRTD_SHELL_SERVICE,
     };
     struct vrtd_resp_device_hotplug_op resp = {0};
 
@@ -955,6 +984,27 @@ enum vrtd_ret vrtd_device_hotplug_toggle_sbr(int fd, uint32_t dev, uint8_t funct
 enum vrtd_ret vrtd_device_hotplug_hotplug(int fd, uint32_t dev, uint8_t function)
 {
     return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, function);
+}
+
+enum vrtd_ret vrtd_device_reset_sequence(int fd, uint32_t dev, uint8_t shell_type)
+{
+    struct vrtd_req_device_hotplug_op req = {
+        .dev_number = dev,
+        .op = VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE,
+        .function = 0,
+        .shell_type = shell_type,
+    };
+    struct vrtd_resp_device_hotplug_op resp = {0};
+
+    int ret = vrtd_raw_request(fd, VRTD_REQ_DEVICE_HOTPLUG_OP,
+                               &req, sizeof(req),
+                               &resp, sizeof(resp),
+                               NULL, NULL);
+    if (ret != VRTD_RET_OK) {
+        return ret;
+    }
+
+    return VRTD_RET_OK;
 }
 
 enum vrtd_ret vrtd_clock_get_rate(

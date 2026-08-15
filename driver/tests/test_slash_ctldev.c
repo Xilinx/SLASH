@@ -9,12 +9,9 @@
 #include "kselftest_harness.h"
 #include "slash_test_helpers.h"
 
-#include <ctype.h>
 #include <stdio.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-
-#define SYSFS_CTL_FMT "/sys/class/misc/slash_ctl_%s"
 
 /* ---------- fixture ---------- */
 
@@ -42,29 +39,6 @@ FIXTURE_TEARDOWN(ctldev)
 		close(self->ctl_fd);
 }
 
-/* ---------- helpers local to this file ---------- */
-
-static int looks_like_bdf(const char *s)
-{
-	/* "DDDD:BB:DD.F" — 12 chars: 4 hex, ':', 2 hex, ':', 2 hex, '.', 1 hex */
-	int i;
-	const int hex_positions[] = {0, 1, 2, 3, 5, 6, 8, 9, 11};
-	const int colon_positions[] = {4, 7};
-	const int dot_position = 10;
-
-	if (strnlen(s, SLASH_PCI_BDF_LEN) < 12)
-		return 0;
-	for (i = 0; i < (int)(sizeof(hex_positions) / sizeof(*hex_positions)); i++)
-		if (!isxdigit((unsigned char)s[hex_positions[i]]))
-			return 0;
-	for (i = 0; i < (int)(sizeof(colon_positions) / sizeof(*colon_positions)); i++)
-		if (s[colon_positions[i]] != ':')
-			return 0;
-	if (s[dot_position] != '.')
-		return 0;
-	return 1;
-}
-
 /* ---------- tests ---------- */
 
 TEST_F(ctldev, get_device_info_happy)
@@ -74,26 +48,38 @@ TEST_F(ctldev, get_device_info_happy)
 	ASSERT_EQ(0, slash_get_device_info(self->ctl_fd, &info));
 
 	EXPECT_NE('\0', info.bdf[0]);
-	EXPECT_TRUE(looks_like_bdf(info.bdf))
+	EXPECT_TRUE(slash_looks_like_bdf(info.bdf))
 	TH_LOG("bad BDF '%s'", info.bdf);
 	EXPECT_EQ(SLASH_TEST_VENDOR_ID, info.vendor_id);
-	EXPECT_EQ(SLASH_TEST_PF2_DEV_ID, info.device_id);
+	EXPECT_TRUE(info.device_id == SLASH_TEST_PF2_DEV_ID ||
+		    info.device_id == SLASH_TEST_PF2_DEV_ID_LEGACY)
+	TH_LOG("unexpected PF2 device ID 0x%04x", info.device_id);
 	/* The function digit of the BDF must be '2' (PF2). */
 	EXPECT_EQ('2', info.bdf[11]);
 }
 
-TEST_F(ctldev, get_device_info_bdf_matches_sysfs)
+TEST_F(ctldev, device_node_identity_matches_sysfs_and_fd)
 {
 	struct slash_ioctl_device_info info;
-	char sysfs_path[256];
-	struct stat st;
+	struct slash_test_node_identity identity;
+	char sysfs_name[64];
+	struct stat fd_stat;
 
 	ASSERT_EQ(0, slash_get_device_info(self->ctl_fd, &info));
 
-	snprintf(sysfs_path, sizeof(sysfs_path), SYSFS_CTL_FMT, info.bdf);
-	EXPECT_EQ(0, stat(sysfs_path, &st))
-	TH_LOG("expected sysfs entry %s for BDF reported by ioctl",
-		   sysfs_path);
+	snprintf(sysfs_name, sizeof(sysfs_name),
+			 SLASH_TEST_CTL_SYSFS_PREFIX "%s", info.bdf);
+	ASSERT_EQ(0, slash_test_read_node_identity(sysfs_name, &identity))
+	TH_LOG("sysfs dev/uevent or /dev node disagree for %s/%s",
+		   SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
+	EXPECT_TRUE(slash_test_validate_ctl_node(&identity))
+	TH_LOG("control node %s has invalid minor/name (%u:%u)",
+		   identity.devpath, identity.major, identity.minor);
+
+	ASSERT_EQ(0, fstat(self->ctl_fd, &fd_stat));
+	EXPECT_EQ(identity.dev, fd_stat.st_rdev)
+	TH_LOG("opened fd %s does not match %s/%s",
+		   SLASH_TEST_CTL_DEV, SLASH_TEST_SYSFS_CLASS_DIR, sysfs_name);
 }
 
 TEST_F(ctldev, bar_info_all_indices_succeed)
@@ -430,7 +416,7 @@ TEST_F(ctldev, get_device_info_undersized_truncates_output)
 					   SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO, &info));
 
 	/* bdf is inside the user-claimed window — the kernel must populate it. */
-	EXPECT_TRUE(looks_like_bdf(info.bdf))
+	EXPECT_TRUE(slash_looks_like_bdf(info.bdf))
 	TH_LOG("bdf was not populated within the user-claimed window");
 
 	/* vendor_id and the trailing IDs are beyond user_size — the kernel

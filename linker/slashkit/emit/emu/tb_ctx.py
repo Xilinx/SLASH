@@ -235,8 +235,8 @@ def build_tb_context(instances: Dict[str, KernelInstance], streams: List[StreamC
     # Prototypes: generated from Top + Args (metadata doesn't store full prototype)
     prototypes = []
     for ktype, meta in hls_meta.items():
-        sig = [f'{a["cppType"]} {a["name"]}' for a in meta["Args"]]
-        prototypes.append(f'void {meta["Top"]}({", ".join(sig)});')
+        sig = [f"{a['cppType']} {a['name']}" for a in meta["Args"]]
+        prototypes.append(f"void {meta['Top']}({', '.join(sig)});")
 
     # Streams: wire name per stream_connect edge
     wires = []
@@ -328,16 +328,19 @@ def build_tb_context(instances: Dict[str, KernelInstance], streams: List[StreamC
                 decode_blocks.append(
                     f'  std::string bufferName = root["args"]["arg{argN}"]["name"].asString();')
                 decode_blocks.append(
-                    '  if (buffers.find(bufferName) != buffers.end()) {')
+                    "  if (buffers.find(bufferName) != buffers.end()) {"
+                )
                 decode_blocks.append(
-                    f'    {vname} = static_cast<{base}*>(buffers[bufferName]);')
-                decode_blocks.append('  }')
-                decode_blocks.append('}')
+                    f"    {vname} = static_cast<{base}*>(buffers[bufferName]);"
+                )
+                decode_blocks.append("  }")
+                decode_blocks.append("}")
             else:
                 decode_blocks.append('if (argType == "scalar") {')
                 decode_blocks.append(
-                    f'  assignValue({vname}, root["args"]["arg{argN}"]["value"]);')
-                decode_blocks.append('}')
+                    f'  assignValue({vname}, root["args"]["arg{argN}"]["value"]);'
+                )
+                decode_blocks.append("}")
 
             include_in_manifest_call = True
             if (a.get("direction") or "in") == "out" and not _is_ptr(cpp_t):

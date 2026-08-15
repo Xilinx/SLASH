@@ -3,6 +3,7 @@
 /cmake-build-debug/
 /cmake-build-release/
 **/build_*
+**/build-*/
 # Ignore CMake generated files
 CMakeFiles/
 CMakeCache.txt
@@ -26,6 +27,7 @@ cmake_install.cmake
 *.exe
 *.out
 *.app
+*.elf
 
 # Ignore logs and databases
 *.jou
@@ -40,7 +42,11 @@ Thumbs.db
 # Ignore IDE specific files
 .vscode/
 .idea/
+.cursor/
 *.iml
+
+# Ignore local git worktrees
+.worktrees/
 
 # Ignore test binaries
 /tests/*.exe
@@ -80,13 +86,33 @@ driver/kcompat/.scratch/
 # VBIN build directories
 *.prj
 
+# Root design build outputs
+/linker/install.prj.compute/
+/linker/slashkit/resources/static_shell/
+/linker/slashkit/resources/static_shell_compute/
+
+# LSF job scripts, job logs, and smoke-test scratch
+lsf_logs/
+lsf_smoke/
+
+# Cluster configuration: queue names, host selectors and tool paths, all of
+# which describe one particular site. See scripts/lsf/site.conf.example.
+scripts/lsf/site.conf
+
 # Python virtual environment
 .venv
 
 # Python test coverage
 .coverage
 
+# Generated graph/render demo artifacts
+/render_demo_out/
+
 # Project-local scratch space
 /tmp/
 tmp/
 **/build-host/
+
+# Claude Code files
+/CLAUDE.md
+.claude/

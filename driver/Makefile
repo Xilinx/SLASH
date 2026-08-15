@@ -64,6 +64,8 @@ SLASH_HAVE_VM_FLAGS_SET ?= n
 SLASH_HAVE_MODULE_IMPORT_NS_TOKEN ?= n
 SLASH_HAVE_URING_CMD ?= n
 SLASH_HAVE_URING_SQE_CMD ?= n
+SLASH_HAVE_CLASS_CREATE_ONE_ARG ?= n
+SLASH_HAVE_CLASS_DEVNODE_CONST ?= n
 
 # Set GCOV=1 to instrument the module for kernel gcov coverage.
 # Not set by default — never enable this in production builds.
@@ -72,7 +74,7 @@ GCOV_PROFILE := y
 endif
 
 obj-m          := $(MODULE).o
-$(MODULE)-objs := $(MODULE)_main.o $(MODULE)_ctldev.o $(MODULE)_pcie.o $(MODULE)_dmabuf.o $(MODULE)_hotplug.o $(MODULE)_qdma.o
+$(MODULE)-objs := $(MODULE)_main.o $(MODULE)_chrdev.o $(MODULE)_ctldev.o $(MODULE)_pcie.o $(MODULE)_dmabuf.o $(MODULE)_hotplug.o $(MODULE)_qdma.o
 ccflags-y += \
 	-I$(src)/libslash/include \
 	-I$(src)/libslash/include/slash/uapi \
@@ -94,6 +96,14 @@ endif
 
 ifeq ($(SLASH_HAVE_MODULE_IMPORT_NS_TOKEN),y)
 ccflags-y += -DSLASH_HAVE_MODULE_IMPORT_NS_TOKEN
+endif
+
+ifeq ($(SLASH_HAVE_CLASS_CREATE_ONE_ARG),y)
+ccflags-y += -DSLASH_HAVE_CLASS_CREATE_ONE_ARG
+endif
+
+ifeq ($(SLASH_HAVE_CLASS_DEVNODE_CONST),y)
+ccflags-y += -DSLASH_HAVE_CLASS_DEVNODE_CONST
 endif
 
 # Optional io_uring uring_cmd async transfer path. Probed by kcompat; absent on
@@ -180,7 +190,7 @@ libqdma-patches:
 	else lq="$(PWD)/$(LIBQDMA_FALLBACK)"; fi; \
 	if [ ! -d "$$lq" ]; then \
 		echo "slash: ERROR libqdma sources not found at $$lq" >&2; \
-		echo "slash:       run 'git submodule update --init --recursive' first" >&2; \
+		echo "slash:       run 'git submodule update --init submodules/qdma_drv' first" >&2; \
 		exit 1; \
 	fi; \
 	command -v patch >/dev/null 2>&1 || { \

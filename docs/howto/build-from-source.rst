@@ -17,6 +17,8 @@ Prerequisites
 - **C compiler** with C11 support
 - **Linux kernel headers** (for the kernel module)
 - **pkg-config**
+- **git**
+- **dkms** (for kernel module packaging)
 
 Library dependencies:
 
@@ -27,11 +29,21 @@ Library dependencies:
 - **libsystemd** — vrtd daemon integration
 - **inih** — INI configuration parsing (vrtd)
 
-On Debian/Ubuntu:
+On Ubuntu 22.04:
 
 .. code-block:: bash
 
-   sudo apt install cmake pkg-config ninja-build \
+   sudo apt install cmake pkg-config ninja-build git dkms \
+     libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
+     libsystemd-dev libinih-dev libcli11-dev \
+     linux-headers-$(uname -r) \
+     python3
+
+On Ubuntu 24.04+:
+
+.. code-block:: bash
+
+   sudo apt install cmake pkg-config ninja-build git dkms dh-dkms \
      libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
      libsystemd-dev libinih-dev libcli11-dev \
      linux-headers-$(uname -r) \
@@ -163,7 +175,8 @@ local IP repository before building:
 
 1. Download the SMBus IP from https://www.xilinx.com/member/v80.html
    (AMD account required).
-2. Copy the downloaded IP directory into ``linker/slashkit/resources/base/iprepo/``
+2. Copy the downloaded IP directory into
+   ``linker/slashkit/resources/base/common/iprepo/``
    so that Vivado can locate it during synthesis.
 
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for

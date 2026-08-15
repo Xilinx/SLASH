@@ -27,8 +27,14 @@ import argparse
 import sys
 import importlib.resources as resources
 
-from slashkit.core.bd_ports import load_bd_ports_from_file, BlockDesignPorts
+from slashkit.core.bd_ports import (
+    load_bd_ports_from_file,
+    load_bd_ports_from_lines,
+    generate_bd_port_lines,
+    BlockDesignPorts,
+)
 from slashkit.core.kernel import Kernel, KernelInstance
+from slashkit.core.launcher import tool_launcher
 from slashkit.core.connectivity import ConnectivityConfig
 from slashkit.parser.config_parser import parse_connectivity_file, apply_config_to_instances
 from slashkit.parser.component_parser import parse_component_xml
@@ -38,6 +44,11 @@ class Platform(Enum):
     HARDWARE = "hw"
     SIMULATION = "sim"
     EMULATION = "emu"
+
+
+class ShellType(Enum):
+    SERVICE = "service"
+    COMPUTE = "compute"
 
 
 def _find_vitis_include() -> Path:
@@ -68,7 +79,9 @@ class CommandConfiguration(object):
     def populate_argument_parser(cls, ap: argparse.ArgumentParser):
         ap.formatter_class = argparse.RawTextHelpFormatter
         ap.add_argument("--vivado", required=False, type=Path, default=shutil.which("vivado"),
-                        help="Vivado binary to use for linking. If not given, it will be derived from PATH.")
+                        help="Vivado binary to use for linking. If not given, it will be derived from PATH.\n"
+                             "With SLASH_TOOL_LAUNCHER set, a bare name such as 'vivado' is passed through\n"
+                             "unresolved and looked up on the execution host instead.")
         ap.add_argument("--jobs", required=False, type=int, default=8,
                         help="Number of parallel jobs for Vivado runs.")
 
@@ -80,9 +93,17 @@ class CommandConfiguration(object):
             raise ValueError(
                 "Vivado binary not specified and could not be found on PATH.")
 
-        self._vivado_bin = Path(args.vivado).expanduser().resolve()
-        if not self._vivado_bin.is_file():
-            raise FileNotFoundError(self._vivado_bin)
+        vivado_arg = Path(args.vivado)
+        if tool_launcher() and vivado_arg.parent == Path("."):
+            # A bare name plus a launcher: the binary belongs to the execution
+            # host, so resolving it here would only find the wrong one or
+            # nothing at all. Pass it through and let the host's settings
+            # script put it on PATH.
+            self._vivado_bin = vivado_arg
+        else:
+            self._vivado_bin = vivado_arg.expanduser().resolve()
+            if not self._vivado_bin.is_file():
+                raise FileNotFoundError(self._vivado_bin)
 
         # Misc. arguments
         self._n_jobs: int = args.jobs
@@ -245,21 +266,33 @@ class LinkerConfiguration(CommandConfiguration):
             s2 = "_" + s2
         self._project_name: str = s2
 
-        # Resolve the Vitis include directory
-        self._vitis_include_dir = _find_vitis_include()
+        # The Vitis include directory is resolved lazily, by the property
+        # below. Only the emulation flow compiles anything against it, so
+        # looking it up here would make every hardware link require a local
+        # Vitis -- which is exactly what a tool launcher exists to avoid.
+        self._vitis_include_dir: Optional[Path] = None
 
         # =======================
         # Argument interpretation
         # =======================
-        with resources.path("slashkit.resources", "bd_ports.txt") as bd_ports_path:
-            self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
-                bd_ports_path)
-
-        self._kernels: List[Kernel] = [parse_component_xml(
-            kfile) for kfile in self.kernel_component_paths]
+        self._kernels: List[Kernel] = [
+            parse_component_xml(kfile) for kfile in self.kernel_component_paths
+        ]
 
         self._configuration: ConnectivityConfig = parse_connectivity_file(
-            configuration_file)
+            configuration_file
+        )
+
+        if self._configuration.shell == "compute":
+            self._bd_ports: BlockDesignPorts = load_bd_ports_from_lines(
+                generate_bd_port_lines(num_ddr=12, num_virt=0)
+            )
+        else:
+            with resources.path("slashkit.resources", "bd_ports.txt") as bd_ports_path:
+                self._bd_ports: BlockDesignPorts = load_bd_ports_from_file(
+                    bd_ports_path
+                )
+
         self._kernel_instances: List[KernelInstance] = apply_config_to_instances(
             self.configuration, self.kernels)
 
@@ -287,8 +320,23 @@ class LinkerConfiguration(CommandConfiguration):
 
     @property
     def networking_enabled(self) -> bool:
-        # TODO: Change to some sort of description for different service layers once available.
         return len(self.configuration.net.enabled_eth) > 0
+
+    @property
+    def shell_type(self) -> ShellType:
+        try:
+            st = ShellType(self.configuration.shell)
+        except ValueError:
+            raise ValueError(
+                f"Invalid shell '{self.configuration.shell}' in connectivity config. "
+                "Use 'compute' or 'service'."
+            )
+        if st == ShellType.COMPUTE and self.networking_enabled:
+            raise ValueError(
+                "Ethernet connections (eth_* in [network]) require shell=service. "
+                "Either remove the [network] section or set shell=service in [connectivity]."
+            )
+        return st
 
     @property
     def out_path(self) -> Path:
@@ -320,6 +368,8 @@ class LinkerConfiguration(CommandConfiguration):
 
     @property
     def vitis_include_dir(self) -> Path:
+        if self._vitis_include_dir is None:
+            self._vitis_include_dir = _find_vitis_include()
         return self._vitis_include_dir
 
     @property
@@ -362,35 +412,81 @@ Example:
 
 
 class InstallerConfiguration(CommandConfiguration):
+    VALID_STAGES = ("all", "base-shell", "firmware", "rp1-firmware")
+
     @classmethod
     def populate_argument_parser(cls, ap: argparse.ArgumentParser):
         super().populate_argument_parser(ap)
         ap.description = "Build and install base images for hardware builds."
         ap.epilog = INSTALL_HELP_EPILOG
-        ap.add_argument("--build-dir", required=False, type=Path, default=Path(
-            "./install.prj"), help="The build directory for the installer. Default: ./install_prj")
-        ap.add_argument("--aved-repo", required=False, type=str, default="https://github.com/Xilinx/AVED.git",
-                        help="The AVED git repository to check out. Default: https://github.com/Xilinx/AVED.git")
-        ap.add_argument("--aved-ref", required=False, type=str, default="amd_v80_gen5x8_25.1_xbtest_20251113",
-                        help="The AVED git ref to check out. Default: amd_v80_gen5x8_25.1_xbtest_20251113")
-        ap.add_argument("--out-dir", required=True, type=Path,
-                        help="The resource directory to install the artifacts to. "
-                        + "If you have checked out the SLASH repository, this would be linker/slashkit/resources")
-        ap.add_argument("--ignore-timing-failure", action="store_true",
-                        help="Install static shell artifacts even when timing failed (WNS < 0 or WHS < 0).")
+        ap.add_argument(
+            "--build-dir",
+            required=False,
+            type=Path,
+            default=Path("./install.prj"),
+            help="The build directory for the installer. Default: ./install_prj",
+        )
+        ap.add_argument(
+            "--aved-repo",
+            required=False,
+            type=str,
+            default="https://github.com/Xilinx/AVED.git",
+            help="The AVED git repository to check out. Default: https://github.com/Xilinx/AVED.git",
+        )
+        ap.add_argument(
+            "--aved-ref",
+            required=False,
+            type=str,
+            default="amd_v80_gen5x8_25.1_xbtest_20251113",
+            help="The AVED git ref to check out. Default: amd_v80_gen5x8_25.1_xbtest_20251113",
+        )
+        ap.add_argument(
+            "--out-dir",
+            required=True,
+            type=Path,
+            help="The resource directory to install the artifacts to. "
+            + "If you have checked out the SLASH repository, this would be linker/slashkit/resources",
+        )
+        ap.add_argument(
+            "--ignore-timing-failure",
+            action="store_true",
+            help="Install static shell artifacts even when timing failed (WNS < 0 or WHS < 0).",
+        )
+        ap.add_argument(
+            "--stage",
+            choices=cls.VALID_STAGES,
+            default="all",
+            help="Installer stage to run. Default: all. "
+            "Development-only: use base-shell to build/reuse implementation artifacts, "
+            "firmware to rebuild AMC+RP1 firmware and repack an existing build-dir, "
+            "or rp1-firmware to rebuild only RP1 and repack using existing AMC/FPT artifacts.",
+        )
+        ap.add_argument(
+            "--shell-type",
+            choices=["compute", "service"],
+            default="service",
+            help="Hardware shell variant to build and install (compute or service). Default: service",
+        )
 
     def __init__(self, args: argparse.Namespace):
         super().__init__(args)
 
         self._ignore_timing_failure: bool = args.ignore_timing_failure
+        self._stage: str = args.stage
 
         self._build_dir: Path = args.build_dir.expanduser().resolve()
-        if self._build_dir.is_dir():
-            shutil.rmtree(self._build_dir)
-        self._build_dir.mkdir(parents=True)
+        if self._stage == "all":
+            if self._build_dir.is_dir():
+                shutil.rmtree(self._build_dir)
+            self._build_dir.mkdir(parents=True)
+        elif self._stage == "base-shell":
+            self._build_dir.mkdir(parents=True, exist_ok=True)
+        elif not self._build_dir.is_dir():
+            raise FileNotFoundError(self._build_dir)
 
         self._aved_repo: str = args.aved_repo
         self._aved_ref: str = args.aved_ref
+        self._shell_type: ShellType = ShellType(args.shell_type)
 
         self._out_dir: Path = args.out_dir.expanduser().resolve()
         if not self._out_dir.is_dir():
@@ -413,6 +509,10 @@ class InstallerConfiguration(CommandConfiguration):
         return self._aved_ref
 
     @property
+    def shell_type(self) -> ShellType:
+        return self._shell_type
+
+    @property
     def out_dir(self) -> Path:
         return self._out_dir
 
@@ -424,3 +524,7 @@ class InstallerConfiguration(CommandConfiguration):
     def noninteractive(self) -> bool:
         value = os.getenv("SLASH_NONINTERACTIVE", "")
         return value not in ("", "0", "false", "False", "no", "No")
+
+    @property
+    def stage(self) -> str:
+        return self._stage

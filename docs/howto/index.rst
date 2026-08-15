@@ -17,8 +17,10 @@ Task-oriented recipes for common operations.
    chain-streaming-kernels
    benchmark-memory
    build-from-source
+   offload-builds-to-a-cluster
    use-cmake-modules
    inspect-vrtbin-metadata
+   debug-graph-with-dot
    use-mock-mode
    migrate-from-xrt
    use-rtl-kernels

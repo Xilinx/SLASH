@@ -25,7 +25,27 @@
 
 namespace vrt {
 
-ZmqServer::ZmqServer() : context(1), socket(context, ZMQ_REQ) { socket.connect(address); }
+namespace {
+
+constexpr int ZmqReplyTimeoutMs = 5000;
+
+zmq::message_t receiveReply(zmq::socket_t& socket, const char* operation) {
+    zmq::message_t reply;
+    auto received = socket.recv(reply);
+    if (!received) {
+        throw std::runtime_error(std::string("ZMQ ") + operation + " timed out waiting for reply");
+    }
+    return reply;
+}
+
+}  // namespace
+
+ZmqServer::ZmqServer() : context(1), socket(context, ZMQ_REQ) {
+    socket.set(zmq::sockopt::linger, 0);
+    socket.set(zmq::sockopt::rcvtimeo, ZmqReplyTimeoutMs);
+    socket.set(zmq::sockopt::sndtimeo, ZmqReplyTimeoutMs);
+    socket.connect(address);
+}
 
 void ZmqServer::sendBuffer(const std::string& name, const std::vector<uint8_t>& buffer) {
     Json::Value command;
@@ -41,11 +61,7 @@ void ZmqServer::sendBuffer(const std::string& name, const std::vector<uint8_t>& 
     memcpy(data.data(), buffer.data(), buffer.size());
     socket.send(data, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in sendBuffer");
-    }
+    zmq::message_t reply = receiveReply(socket, "sendBuffer");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 }
 
@@ -56,11 +72,7 @@ void ZmqServer::sendCommand(const Json::Value& command) {
     zmq::message_t request(commandStr.size());
     memcpy(request.data(), commandStr.data(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in sendCommand");
-    }
+    zmq::message_t reply = receiveReply(socket, "sendCommand");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
     if (replyStr != "OK") {
         throw std::runtime_error("ZMQ command failed: " + replyStr);
@@ -88,11 +100,7 @@ uint32_t ZmqServer::fetchScalar(const std::string& function, const std::string& 
     memcpy(request.data(), commandStr.c_str(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in fetchScalar");
-    }
+    zmq::message_t reply = receiveReply(socket, "fetchScalar");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 
     Json::Value response;
@@ -122,11 +130,7 @@ uint32_t ZmqServer::readRegister(const std::string& function, uint32_t offset) {
     memcpy(request.data(), commandStr.c_str(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in readRegister");
-    }
+    zmq::message_t reply = receiveReply(socket, "readRegister");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 
     Json::Value response;
@@ -163,11 +167,7 @@ std::vector<uint8_t> ZmqServer::fetchBuffer(const std::string& name) {
     memcpy(request.data(), commandStr.c_str(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in fetchBuffer");
-    }
+    zmq::message_t reply = receiveReply(socket, "fetchBuffer");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 
     Json::Value response;
@@ -195,11 +195,7 @@ void ZmqServer::sendStream(const std::string& name, const std::vector<uint8_t>& 
     memcpy(data.data(), buffer.data(), buffer.size());
     socket.send(data, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in sendStream");
-    }
+    zmq::message_t reply = receiveReply(socket, "sendStream");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 }
 
@@ -216,11 +212,7 @@ std::vector<uint8_t> ZmqServer::fetchStream(const std::string& name, size_t size
     memcpy(request.data(), commandStr.c_str(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in fetchStream");
-    }
+    zmq::message_t reply = receiveReply(socket, "fetchStream");
     std::vector<uint8_t> buffer(reply.size());
     memcpy(buffer.data(), reply.data(), reply.size());
     return buffer;
@@ -242,11 +234,7 @@ void ZmqServer::fetchBufferSim(uint64_t addr, uint64_t size, std::vector<uint8_t
     memcpy(request.data(), commandStr.c_str(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in fetchBufferSim");
-    }
+    zmq::message_t reply = receiveReply(socket, "fetchBufferSim");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 
     Json::Value response;
@@ -271,11 +259,7 @@ uint32_t ZmqServer::fetchScalarSim(uint64_t addr) {
     memcpy(request.data(), commandStr.c_str(), commandStr.size());
     socket.send(request, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in fetchScalarSim");
-    }
+    zmq::message_t reply = receiveReply(socket, "fetchScalarSim");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 
     Json::Value response;
@@ -296,11 +280,7 @@ void ZmqServer::sendBufferSim(uint64_t addr, const std::vector<uint8_t>& buffer)
     socket.send(request, zmq::send_flags::sndmore);
     socket.send(dataMsg, zmq::send_flags::none);
 
-    zmq::message_t reply;
-    auto recvResult = socket.recv(reply);
-    if (!recvResult) {
-        throw std::runtime_error("ZMQ recv failed in sendBufferSim");
-    }
+    zmq::message_t reply = receiveReply(socket, "sendBufferSim");
     std::string replyStr(static_cast<char*>(reply.data()), reply.size());
 }
 

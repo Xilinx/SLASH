@@ -38,6 +38,7 @@
 #include "debug/clockwiz.hpp"
 #include "debug/hotplug.hpp"
 #include "debug/mem_poke.hpp"
+#include "debug/rp1_probe.hpp"
 #include "inspect.hpp"
 #include "list.hpp"
 #include "program.hpp"
@@ -109,6 +110,14 @@ static int smiMain(int argc, char **argv) {
     auto* resetCommand = app.add_subcommand("reset", "Hardware reset a V80 board");
     Reset::Options resetOptions;
     resetCommand->add_option("-d,--device", resetOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+    const std::map<std::string, std::string> shellTypeMap{
+        {"service", "service"},
+        {"compute", "compute"},
+    };
+    resetCommand->add_option("--shell-type", resetOptions.shellType,
+        "Shell to boot after reset: service (partition 0) or compute (partition 1)")
+        ->transform(CLI::CheckedTransformer(shellTypeMap, CLI::ignore_case))
+        ->default_str("service");
 
     // -- write-static-shell (persistent static shell programming) --
     auto* writeStaticShellCommand = app.add_subcommand("write-static-shell",
@@ -124,6 +133,15 @@ static int smiMain(int argc, char **argv) {
         "Board address (e.g. 03:00 or 0000:03:00)");
     writeStaticShellCommand->add_option("--pdi", writeStaticShellOptions.pdiPath,
         "Use this PDI file instead of resolving the installed static shell PDI");
+    const std::map<std::string, std::string> writeStaticShellTypeMap{
+        {"service", "service"},
+        {"compute", "compute"},
+        {"all", "all"},
+    };
+    writeStaticShellCommand->add_option("--shell-type", writeStaticShellOptions.shellType,
+        "Shell to program: all (both flash partitions), service (partition 0), or compute (partition 1)")
+        ->transform(CLI::CheckedTransformer(writeStaticShellTypeMap, CLI::ignore_case))
+        ->default_str("all for --flash without --pdi, service otherwise");
     writeStaticShellCommand->add_flag("--no-remove-device", writeStaticShellOptions.noRemoveDevice,
         "Skip pre-JTAG PCIe device removal; only valid with --jtag");
     writeStaticShellCommand->add_option("--bash-source", writeStaticShellOptions.bashSources,
@@ -292,6 +310,27 @@ static int smiMain(int argc, char **argv) {
         "PCI function number (0-7); defaults to all PFs for remove/hotplug")
         ->check(CLI::Range(0u, 7u));
 
+    Rp1Probe::Options rp1ProbeOptions;
+    auto addRp1ProbeCommonOptions = [&](CLI::App* cmd) {
+        cmd->add_option("-d,--device", rp1ProbeOptions.bdf, "Board address (e.g. 03:00 or 0000:03:00)")->required();
+        cmd->add_option("-b,--bar", rp1ProbeOptions.bar, "BAR that maps the RP1 DDR window")
+            ->default_val(4)->check(CLI::Range(0u, 5u));
+        cmd->add_option("--ctrl-offset", rp1ProbeOptions.ctrlOffsetText,
+            "Host BAR offset of the RP1 control block (0x... for hex)")->default_val("0x4000000");
+    };
+
+    auto* rp1DumpCommand = debugCommand->add_subcommand("rp1-dump",
+        "Read the RP1 control block and sample its heartbeat for liveness");
+    addRp1ProbeCommonOptions(rp1DumpCommand);
+
+    auto* rp1PingCommand = debugCommand->add_subcommand("rp1-ping",
+        "Submit a one-node SIGNAL graph to RP1 and verify it completes end-to-end");
+    addRp1ProbeCommonOptions(rp1PingCommand);
+
+    auto* rp1TracePingCommand = debugCommand->add_subcommand("rp1-trace-ping",
+        "Submit a one-node SIGNAL graph with RP1 tracing enabled and print CQ/trace entries");
+    addRp1ProbeCommonOptions(rp1TracePingCommand);
+
     CLI11_PARSE(app, argc, argv);
 
     // Route commands
@@ -319,6 +358,12 @@ static int smiMain(int argc, char **argv) {
         return MemPoke::run(memPokeOptions);
     } else if (hotplugOpCommand->parsed()) {
         return Hotplug::run(hotplugOptions);
+    } else if (rp1DumpCommand->parsed()) {
+        return Rp1Probe::dump(rp1ProbeOptions);
+    } else if (rp1PingCommand->parsed()) {
+        return Rp1Probe::ping(rp1ProbeOptions);
+    } else if (rp1TracePingCommand->parsed()) {
+        return Rp1Probe::tracePing(rp1ProbeOptions);
     } else {
         // No subcommand given - print help and exit with error.
         std::cerr << app.help() << std::endl;
