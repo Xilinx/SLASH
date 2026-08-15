@@ -327,12 +327,16 @@ def _compute_build_id_env() -> Dict[str, str]:
     Derive the shell build-ID constants from the git commit of the SLASH source
     tree and return them as environment variables consumed by create_project.tcl.
 
-    Encoding (60-bit hash + dirty), split across two 32-bit GPIO channels.
-    The 60 hash bits are the top 60 bits of the SHA-1 (bits[159:100]), so the
-    value starts with the commit's GitHub short hash:
+    Encoding (60-bit hash + shell type + dirty), split across two 32-bit GPIO
+    channels. The 60 hash bits are the top 60 bits of the SHA-1
+    (bits[159:100]), so the value starts with the commit's GitHub short hash:
       - SLASH_BUILD_ID_LO = low 32 bits of the 60-bit window
-      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], bits[30:28] reserved,
-        dirty flag in bit[31]
+      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], shell type in bit[28]
+        (0 = service, 1 = compute), bits[30:29] reserved, dirty flag in bit[31]
+
+    Bit[28] is left clear here: each shell's create_project.tcl forces it to its
+    own value, so the bit is owned by the design that it describes and stays
+    correct even when the Tcl is run outside this driver.
 
     Falls back to hash 0 with the dirty bit set when git information is
     unavailable (e.g. building from an exported tarball, not a git checkout).
@@ -438,13 +442,16 @@ def create_build_project_compute(
             cmd.append(action)
         cmd.append(str(config.n_jobs))
 
-        # No SLASH_BUILD_ID_* here: the compute shell has no build-ID GPIO and
-        # its create_project.tcl never reads those globals.
+        env = _environment_with_udev_ld_preload()
+        # Same as the service path: derived from this checkout, not from
+        # whatever tree the execution host happens to see.
+        env.update(_compute_build_id_env())
+
         run_tool(
             cmd,
             task=TASK_STATIC_SHELL_COMPUTE,
             cwd=config.build_dir,
-            env=_environment_with_udev_ld_preload(),
+            env=env,
         )
 
 

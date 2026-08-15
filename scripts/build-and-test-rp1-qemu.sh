@@ -55,10 +55,12 @@ done
 build_qemu() {
     echo "=== Building Xilinx QEMU (aarch64-softmmu) ==="
 
-    # Ensure submodule is initialised
+    # Ensure submodule is initialised. --checkout overrides the `update = none`
+    # in .gitmodules, which is there to keep a recursive clone out of QEMU's
+    # ROM submodules; not passing it here would silently skip the checkout.
     if [ ! -f "${QEMU_SRC}/configure" ]; then
         echo "Initialising xilinx-qemu submodule..."
-        git -C "${REPO_ROOT}" submodule update --init submodules/xilinx-qemu
+        git -C "${REPO_ROOT}" submodule update --init --checkout submodules/xilinx-qemu
     fi
 
     # Check build dependencies
@@ -124,7 +126,8 @@ if [ ! -f "${DT_FILE}" ]; then
     echo "=== Building ZynqMP device trees ==="
     if [ ! -f "${DT_SRC}/Makefile" ]; then
         echo "ERROR: qemu-devicetrees not found at ${DT_SRC}"
-        echo "Clone it with: git clone https://github.com/Xilinx/qemu-devicetrees.git ${DT_SRC}"
+        echo "Initialise it with:"
+        echo "  git submodule update --init --checkout submodules/qemu-devicetrees"
         exit 1
     fi
     make -C "${DT_SRC}"

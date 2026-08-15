@@ -37,6 +37,10 @@ std::string BuildId::commitHex() const {
     return std::string(buf);
 }
 
+const char* BuildId::shellName() const {
+    return shell == ShellVariant::Compute ? "compute" : "service";
+}
+
 BuildId readBuildId(const std::string& bdf) {
     vrtd::Session session;
     auto device = session.getDeviceByBdf(bdf);
@@ -60,7 +64,9 @@ BuildId readBuildId(const std::string& bdf) {
 
     BuildId id;
     id.lo = lo;
-    id.hiHash = hi & 0x0FFFFFFF;
-    id.dirty = (hi & 0x80000000u) != 0;
+    id.hiHash = hi & BUILD_ID_HI_HASH_MASK;
+    id.dirty = (hi & BUILD_ID_HI_DIRTY_MASK) != 0;
+    id.shell = (hi & BUILD_ID_HI_SHELL_MASK) != 0 ? ShellVariant::Compute
+                                                  : ShellVariant::Service;
     return id;
 }

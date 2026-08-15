@@ -123,6 +123,13 @@ def test_compute_build_forwards_job_count(monkeypatch, tmp_path):
         "_environment_with_udev_ld_preload",
         lambda: {},
     )
+    # Stubbed out so the build-ID lookup does not shell out to git: its calls
+    # would otherwise land in `commands` ahead of the Vivado invocation.
+    monkeypatch.setattr(
+        project_gen,
+        "_compute_build_id_env",
+        lambda: {},
+    )
     monkeypatch.setattr(
         project_gen.subprocess,
         "run",
@@ -132,6 +139,46 @@ def test_compute_build_forwards_job_count(monkeypatch, tmp_path):
     project_gen.create_build_project_compute(config, action="build")
 
     assert commands[0][-2:] == ["build", "23"]
+
+
+def _stub_git(monkeypatch, sha, dirty=False):
+    """Make the build-ID helper see a fixed commit and clean/dirty state."""
+    monkeypatch.setattr(
+        project_gen.subprocess,
+        "run",
+        lambda _command, **_kwargs: SimpleNamespace(
+            stdout=f"{sha}\n", returncode=1 if dirty else 0
+        ),
+    )
+
+
+def test_build_id_leaves_shell_type_bit_clear(monkeypatch):
+    """The shell-type bit[28] is owned by each shell's create_project.tcl.
+
+    This helper is shell-agnostic, so it must leave bit[28] clear for the Tcl
+    to set: a compute build ORs it on, a service build masks it off.
+    """
+    _stub_git(monkeypatch, "204620aada6eeaf1234567890abcdef012345678")
+
+    env = project_gen._compute_build_id_env()
+
+    assert env["SLASH_BUILD_ID_LO"] == "0xada6eeaf"
+    assert env["SLASH_BUILD_ID_HI"] == "0x0204620a"
+
+    hi = int(env["SLASH_BUILD_ID_HI"], 16)
+    assert hi & 0x0FFFFFFF == 0x0204620A          # hash bits preserved
+    assert (hi >> 28) & 0x1 == 0                  # shell type left to the Tcl
+    assert (hi >> 29) & 0x3 == 0                  # reserved bits stay clear
+    assert (hi >> 31) & 0x1 == 0                  # clean tree
+
+
+def test_build_id_sets_dirty_bit(monkeypatch):
+    """A dirty tree sets bit[31] without disturbing the hash or shell bits."""
+    _stub_git(monkeypatch, "204620aada6eeaf1234567890abcdef012345678", dirty=True)
+
+    env = project_gen._compute_build_id_env()
+
+    assert env["SLASH_BUILD_ID_HI"] == "0x8204620a"
 
 
 def _only_present(monkeypatch, present):
