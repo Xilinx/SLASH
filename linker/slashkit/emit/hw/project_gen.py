@@ -703,7 +703,6 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
         # (FULL_PROBES.FILE) that must be loaded before a user region's partial
         # probe file in the Vivado Hardware Manager.
         install_sources = (
-            impl_dir / "top_wrapper_routed_bb.dcp",
             impl_dir / "static_shell_slash.dcp",
             impl_dir / "static_shell_service_layer.dcp",
             impl_dir / "debug_nets.ltx",
@@ -724,7 +723,6 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
 
     else:  # ShellType.COMPUTE
         dcp_sources = (
-            impl_dir / "top_wrapper_routed_bb.dcp",
             impl_dir / "static_shell_slash.dcp",
         )
         for src in dcp_sources:
