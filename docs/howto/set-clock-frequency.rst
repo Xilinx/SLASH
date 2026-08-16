@@ -103,6 +103,40 @@ Frequency Guidelines
 - The user's ``vrtd`` role must include the ``clock`` permission.
   See :doc:`/reference/vrtd/configuration`.
 
+.. _clock-hz-not-a-wish:
+
+Asking for more than the design can reach
+==========================================
+
+``--clock-hz`` is the frequency the reconfigurable module is *implemented
+against*, not an upper bound to aim at. After routing, the linker measures the
+worst negative slack and records the frequency actually achieved in the vbin,
+so the runtime never clocks user logic faster than it was timed for.
+
+Setting a target the design cannot reach is therefore counterproductive. An
+over-constrained implementation routes worse than an achievable one, and the
+recorded frequency is derated from that worse result. Measured on
+``00_axilite``:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Shell
+     - ``--clock-hz 200000000``
+     - ``--clock-hz 250000000``
+   * - service
+     - 184 MHz delivered
+     - 146 MHz delivered
+   * - compute
+     - 200 MHz delivered (timing met)
+     - 161 MHz delivered
+
+Asking for 250 MHz produced a *slower* device than asking for 200 MHz on both
+shells. When the target is missed the linker prints a warning naming the
+requested and recorded frequencies; treat it as a prompt to re-link at a lower
+target rather than as advisory noise. Raise ``--clock-hz`` incrementally and
+keep the highest value that still meets timing.
+
 Next Steps
 ==========
 

@@ -394,10 +394,12 @@ private:
      * @param device Device owning the clock.
      * @param region One of vrtd_clock_region.
      * @param rate_hz Requested rate in Hz.
+     * @param roundDown If true, never select a realizable rate above the request.
      * @return Achieved rate in Hz.
      * @throws vrtd::Error on error.
      */
-    uint32_t setClockRate(const Device& device, ClockRegion region, uint32_t rate_hz) const;
+    uint32_t setClockRate(const Device& device, ClockRegion region, uint32_t rate_hz,
+                          bool roundDown = false) const;
 
     /**
      * @internal Start, stop or delete an existing QDMA qpair.

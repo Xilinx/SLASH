@@ -38,7 +38,10 @@ from slashkit.core.command_config import (
     CommandConfiguration,
     ShellType,
 )
-from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm
+from slashkit.emit.metadata.timing_freq import (
+    require_static_shell_timing_or_confirm,
+    read_system_map_clock_hz,
+)
 from slashkit.core.launcher import (
     TASK_AVED,
     TASK_BOOTGEN,
@@ -460,6 +463,61 @@ class RM_KIND(Enum):
     SERVICE_LAYER = "service_layer"
 
 
+def _resolve_target_user_clock_hz(config: LinkerConfiguration) -> Optional[int]:
+    # The resolved target user-clock frequency has already been written to
+    # system_map.xml by generate_tcl(), so read it back rather than re-deriving
+    # it, keeping a single source of truth (see resolve_system_map_clock).
+    system_map_path = config.build_dir / "system_map.xml"
+    target_hz = read_system_map_clock_hz(system_map_path)
+    if target_hz is None or target_hz <= 0:
+        logger.warning(
+            "No valid target ClockFrequency in %s; skipping user-clock constraint",
+            system_map_path,
+        )
+        return None
+    return target_hz
+
+
+def _generate_user_clock_xdc(
+    config: LinkerConfiguration, target_hz: int
+) -> Path:
+    # Turn the resolved target user-clock frequency into an actual Vivado timing
+    # constraint for the reconfigurable-module implementation.
+    period_ns = 1e9 / float(target_hz)
+    xdc_path = config.build_dir / "user_clock.xdc"
+    # Defining a clock at the RM's user_clk port overrides, downstream of that
+    # point, the clock the abstract shell propagates in. That clock is
+    # clkout1_primitive_2, auto-derived by Vivado from the clocking wizard's
+    # MMCME5 CLKOUT0 and therefore pinned to the 200 MHz the static shell was
+    # built with -- it does not follow the wizard's runtime DRP reprogramming,
+    # so it has to be overridden here rather than trusted.
+    #
+    # Overriding at the RM boundary rather than at the MMCM output keeps the
+    # signed-off static timing untouched, and needs no reference to a
+    # static-region hierarchy path, which would differ between the service and
+    # compute shells.
+    #
+    # Known limitation: this leaves two clock objects on one physical net --
+    # user_clk at the requested period inside the RM, and the shell's
+    # clkout1_primitive_2 at 200 MHz outside it. A handful of static-side flops
+    # do drive into the RM's clock domain (2 endpoints on 00_axilite), and
+    # Vivado times those crossings against the beat frequency of the two
+    # periods rather than treating them as the same clock: at 250 MHz the
+    # 4 ns / 5 ns pair yields a bogus 1 ns requirement. Both are physically the
+    # same net and run at the same rate once the wizard is reprogrammed, so
+    # those paths are not really failing. Measured cost is under 1 MHz on both
+    # shells, and it is latent at the default -- at 200 MHz the two clocks share
+    # a 5 ns grid and the crossings pass with positive slack.
+    constraint = (
+        f"create_clock -name user_clk -period {period_ns:.6f}"
+        " [get_ports user_clk]\n"
+    )
+    xdc_path.write_text(constraint, encoding="utf-8")
+    logger.info("Wrote user-clock constraint (%.6f ns / %d Hz) to %s",
+                period_ns, target_hz, xdc_path)
+    return xdc_path
+
+
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     # Copy all base IP cores into the ip repository
     config.ip_repository.mkdir(parents=True, exist_ok=True)
@@ -554,6 +612,16 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
 
             for path in config.pre_synth_tcls:
                 cmd.extend(["--pre-synth-tcl", str(path)])
+
+            # Both halves of the user-clock chain come from the same resolved
+            # target: --user-clock-hz retargets the RM block design (and with
+            # it the module's synthesis constraints), --user-clock-xdc
+            # constrains the implementation run.
+            target_hz = _resolve_target_user_clock_hz(config)
+            if target_hz is not None:
+                cmd.extend(["--user-clock-hz", str(target_hz)])
+                user_clock_xdc = _generate_user_clock_xdc(config, target_hz)
+                cmd.extend(["--user-clock-xdc", str(user_clock_xdc)])
 
         if rm_kind == RM_KIND.SERVICE_LAYER:
             opt_post_tcl = stack.enter_context(

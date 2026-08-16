@@ -43,6 +43,8 @@ array set opts {
     --rm-work-dir ""
     --artifact-out-dir ""
     --util-report-file ""
+    --user-clock-xdc ""
+    --user-clock-hz ""
     --jobs 8
 }
 
@@ -89,6 +91,14 @@ set linker_results_dir [file normalize $opts(--linker-results-dir)]
 set rm_work_dir $opts(--rm-work-dir)
 set artifact_out_dir $opts(--artifact-out-dir)
 set util_report_file $opts(--util-report-file)
+set user_clock_xdc $opts(--user-clock-xdc)
+if {$user_clock_xdc ne ""} {
+    set user_clock_xdc [file normalize $user_clock_xdc]
+}
+set user_clock_hz $opts(--user-clock-hz)
+if {$user_clock_hz ne "" && ![string is integer -strict $user_clock_hz]} {
+    error "Value for '--user-clock-hz' must be an integer, got '$user_clock_hz'."
+}
 set jobs $opts(--jobs)
 
 file mkdir $rm_work_dir
@@ -146,6 +156,26 @@ open_bd_design $imported_bd
 foreach p [get_bd_intf_ports] {
     set_property HDL_ATTRIBUTE.LOCKED {TRUE} $p
 }
+
+# Retarget the reconfigurable module's clock port to the requested user-clock
+# frequency before the kernels are added. slash_base.bd hardcodes user_clk at
+# 200 MHz, so without this every AXI IP inside the RM is configured -- and the
+# out-of-context constraints the module's synthesis run is timed against are
+# derived -- for 200 MHz regardless of what --clock-hz asked for. The generated
+# BD Tcl ends in validate_bd_design, which propagates this to everything
+# connected downstream, so the retarget has to happen first.
+#
+# Only user_clk moves. The AXI interfaces crossing the partition boundary run on
+# static_region_clk at 400 MHz and are locked above; they are untouched by this.
+if {$user_clock_hz ne ""} {
+    set user_clk_port [get_bd_ports -quiet user_clk]
+    if {$user_clk_port eq ""} {
+        error "No user_clk port found in $imported_bd; cannot apply --user-clock-hz."
+    }
+    puts "Retargeting user_clk: [get_property CONFIG.FREQ_HZ $user_clk_port] -> $user_clock_hz Hz"
+    set_property CONFIG.FREQ_HZ $user_clock_hz $user_clk_port
+}
+
 source $generated_bd_tcl
 
 # Apply the default implementation strategy before sourcing the user pre-synth Tcl, so a
@@ -155,6 +185,20 @@ set_property strategy Congestion_SSI_SpreadLogic_high [get_runs impl_1]
 foreach pre_synth_tcl $pre_synth_tcls {
     puts "Sourcing pre-synth Tcl: $pre_synth_tcl"
     source $pre_synth_tcl
+}
+
+# Apply the user-region clock timing constraint (create_clock on user_clk),
+# derived from the requested --clock-hz target. Scoped to the slash cell so it
+# overrides, inside the reconfigurable module only, the 200 MHz clock the
+# abstract shell propagates in from the clocking wizard. See
+# _generate_user_clock_xdc in project_gen.py for why the override belongs at
+# the RM boundary rather than at the wizard output.
+if {$user_clock_xdc ne ""} {
+    puts "Applying user-clock constraint: $user_clock_xdc"
+    _require_file $user_clock_xdc "user-clock XDC"
+    add_files -fileset constrs_1 -norecurse $user_clock_xdc
+    set_property USED_IN {synthesis implementation} [get_files $user_clock_xdc]
+    set_property SCOPED_TO_CELLS {top_i/slash} [get_files $user_clock_xdc]
 }
 
 launch_runs "${slash_rm_name}_synth_1" -jobs $jobs
