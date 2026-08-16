@@ -65,8 +65,28 @@ jobs:
           genhtml coverage.filtered.info --output-directory coverage-report
           lcov --list coverage.filtered.info
 
+      - name: Summarise coverage
+        run: |
+          cd vrt/vrtd/build
+          {
+            echo "### vrtd coverage"
+            echo
+            echo '```'
+            lcov --summary coverage.filtered.info 2>&1 \
+              | grep -E '^[[:space:]]+(lines|functions|branches)' \
+              || echo '(no lcov summary produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
           name: vrtd-coverage-report
           path: vrt/vrtd/build/coverage-report/
+
+      # Kept separate from the HTML so the comment workflow downloads kilobytes.
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrtd-coverage-data
+          path: vrt/vrtd/build/coverage.filtered.info

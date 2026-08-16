@@ -1,0 +1,254 @@
+# ##################################################################################################
+#  The MIT License (MIT)
+#  Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+#  and associated documentation files (the "Software"), to deal in the Software without restriction,
+#  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+#  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
+#
+#  The above copyright notice and this permission notice shall be included in all copies or
+#  substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+# NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# ##################################################################################################
+
+# Posts the coverage numbers from the three unit test workflows as a pull
+# request comment.
+#
+# This runs on workflow_run rather than pull_request because a pull_request
+# event raised by a fork gets a read-only token, and commenting needs write.
+# workflow_run always runs in the context of the base repository, so the token
+# has the permissions declared below whatever the PR came from. Nothing from
+# the PR is checked out or executed here -- the job only reads artifacts.
+#
+# For the same reason GitHub reads this file only from the default branch. A
+# change to it takes effect once it is merged there, not when it is merged to
+# the branch the pull requests target.
+
+name: Coverage comment
+
+on:
+  workflow_run:
+    workflows:
+      - Linker unit testing
+      - VRT unit testing
+      - VRTD unit testing
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+# The three test workflows each fire this one. Serialise the firings for a
+# given commit so they do not race to post.
+concurrency:
+  group: coverage-comment-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  coverage_comment:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Wait for all three test workflows
+        id: gate
+        run: |
+          # Post only once the other two workflows have finished, so a push
+          # produces one comment instead of three. Whichever finishes last
+          # does the posting; the earlier two stop here.
+          runs=$(gh api --paginate \
+            "repos/$GH_REPO/actions/runs?head_sha=$SHA&event=pull_request" \
+            --jq '.workflow_runs[] | [.name, .status, (.id | tostring)] | @tsv')
+
+          ready=true
+          for wf in "Linker unit testing" "VRT unit testing" "VRTD unit testing"; do
+            # Runs come back newest first, so the first match is the current one.
+            match=$(printf '%s\n' "$runs" \
+              | awk -F'\t' -v wf="$wf" '$1 == wf { print $2, $3; exit }')
+            status=${match%% *}
+            id=${match##* }
+            echo "$wf: status=${status:-absent} run=${id:-none}"
+            [ "$status" = "completed" ] || ready=false
+            case "$wf" in
+              "Linker unit testing") echo "linker_run=$id" >> "$GITHUB_OUTPUT" ;;
+              "VRT unit testing")    echo "vrt_run=$id"    >> "$GITHUB_OUTPUT" ;;
+              "VRTD unit testing")   echo "vrtd_run=$id"   >> "$GITHUB_OUTPUT" ;;
+            esac
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - name: Find the pull request
+        id: pr
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          # workflow_run.pull_requests is empty for forks, so ask which pull
+          # requests contain the commit instead.
+          pr=$(gh api "repos/$GH_REPO/commits/$SHA/pulls" \
+            --jq 'map(select(.state == "open")) | .[0] | [(.number|tostring), .base.ref] | @tsv')
+          number=${pr%%$'\t'*}
+          base=${pr##*$'\t'}
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          if [ -z "$number" ]; then
+            echo "no open pull request contains $SHA; nothing to comment on"
+          else
+            echo "pull request #$number into $base"
+          fi
+
+      - name: Download coverage data
+        if: steps.gate.outputs.ready == 'true' && steps.pr.outputs.number != ''
+        run: |
+          # A missing artifact means that workflow failed before producing
+          # coverage. That is reported in the comment rather than fatal here.
+          download() {
+            mkdir -p "cov/$3"
+            gh run download "$1" -n "$2" -D "cov/$3" \
+              || echo "no $2 artifact on run $1"
+          }
+          download "${{ steps.gate.outputs.linker_run }}" linker-coverage-data linker
+          download "${{ steps.gate.outputs.vrt_run }}"    vrt-coverage-data    vrt
+          download "${{ steps.gate.outputs.vrtd_run }}"   vrtd-coverage-data   vrtd
+
+      - name: Download baseline coverage from the base branch
+        if: steps.gate.outputs.ready == 'true' && steps.pr.outputs.number != ''
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+        run: |
+          # The base branch runs these same workflows on every push, so its
+          # most recent successful run already carries the numbers to compare
+          # against. Nothing extra is stored anywhere to make this work.
+          #
+          # Two ways this legitimately comes up empty: a base branch that has
+          # not run since these artifacts were introduced, and one that has not
+          # run inside the artifact retention window. Both report "no baseline"
+          # rather than failing.
+          baseline() {
+            local workflow=$1 artifact=$2 dir=$3 run
+            run=$(gh run list --workflow "$workflow" --branch "$BASE" \
+                    --status success --limit 1 \
+                    --json databaseId --jq '.[0].databaseId // empty')
+            if [ -z "$run" ]; then
+              echo "no successful $workflow run on $BASE"
+              return 0
+            fi
+            mkdir -p "base/$dir"
+            gh run download "$run" -n "$artifact" -D "base/$dir" \
+              || echo "no $artifact artifact on $BASE run $run"
+          }
+          baseline linker-unit-test.yml linker-coverage-data linker
+          baseline vrt-unit-test.yml    vrt-coverage-data    vrt
+          baseline vrtd-unit-test.yml   vrtd-coverage-data   vrtd
+
+      - name: Build the comment
+        if: steps.gate.outputs.ready == 'true' && steps.pr.outputs.number != ''
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+        run: |
+          python3 - > body.md <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+
+          def from_lcov(path):
+              """Total LH/LF over an lcov tracefile: lines hit, lines found."""
+              hit = found = 0
+              for line in path.read_text().splitlines():
+                  if line.startswith("LH:"):
+                      hit += int(line[3:])
+                  elif line.startswith("LF:"):
+                      found += int(line[3:])
+              return hit, found
+
+
+          def from_coverage_json(path):
+              totals = json.loads(path.read_text())["totals"]
+              return totals["covered_lines"], totals["num_statements"]
+
+
+          COMPONENTS = (
+              ("linker", "linker/coverage.json", from_coverage_json),
+              ("vrt", "vrt/coverage.filtered.info", from_lcov),
+              ("vrtd", "vrtd/coverage.filtered.info", from_lcov),
+          )
+
+          BASE = os.environ["BASE"]
+
+
+          def percent(root, relative, parse):
+              path = Path(root) / relative
+              if not path.is_file():
+                  return None
+              hit, found = parse(path)
+              if not found:
+                  return None
+              return hit, found, 100 * hit / found
+
+
+          rows = []
+          regressed = False
+          have_any = False
+          for name, relative, parse in COMPONENTS:
+              head = percent("cov", relative, parse)
+              base = percent("base", relative, parse)
+              if head is None:
+                  rows.append(f"| {name} | — | — | — | no data |")
+                  continue
+              have_any = True
+              hit, found, pct = head
+              if base is None:
+                  delta = "no baseline"
+              else:
+                  points = pct - base[2]
+                  # Below a tenth of a point the rounded percentages are equal,
+                  # so calling it a change would be noise.
+                  if abs(points) < 0.05:
+                      delta = "no change"
+                  else:
+                      delta = f"{points:+.1f} pts"
+                      if points < 0:
+                          delta = f"⚠️ {delta}"
+                          regressed = True
+              rows.append(f"| {name} | {hit} | {found} | {pct:.1f}% | {delta} |")
+
+          # A branch that predates these artifacts produces no coverage at all.
+          # Say nothing rather than post a table of three "no data" rows.
+          if not have_any:
+              raise SystemExit(0)
+
+          print("## Coverage")
+          print()
+          print(f"| component | covered | total | | vs `{BASE}` |")
+          print("| --- | ---: | ---: | ---: | ---: |")
+          for row in rows:
+              print(row)
+          print()
+          if regressed:
+              print(f"This branch covers a smaller share of its lines than `{BASE}` does.")
+              print()
+          print(f"<sub>Lines covered at {os.environ['SHA'][:7]}, compared with the most "
+                f"recent successful `{BASE}` run. Full HTML reports are attached to the "
+                "test runs as artifacts.</sub>")
+          PY
+          cat body.md
+
+      - name: Post the comment
+        if: steps.gate.outputs.ready == 'true' && steps.pr.outputs.number != ''
+        run: |
+          if [ ! -s body.md ]; then
+            echo "no coverage data from any component; not commenting"
+            exit 0
+          fi
+          gh pr comment "${{ steps.pr.outputs.number }}" --body-file body.md

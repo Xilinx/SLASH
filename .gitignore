@@ -107,6 +107,8 @@ scripts/lsf/site.conf
 
 # Python test coverage
 .coverage
+coverage.xml
+coverage.json
 
 # Generated graph/render demo artifacts
 /render_demo_out/
