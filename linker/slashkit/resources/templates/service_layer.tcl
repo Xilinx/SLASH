@@ -1128,6 +1128,45 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   set ::DUAL_QSFP_DCMAC1 {{ dual_qsfp_1 }}
 
   add_dcmac_inst
+
+  # --- External QSFP boundary for the generated service-layer RM ---
+  #
+  # add_dcmac_inst (resources/dcmac/tcl/slash_wrapper.tcl) instantiates the DCMAC
+  # hierarchies but does not provision the external QSFP ports, so
+  # bd_clock_reset_ctrl/diff_buff/CLK_IN_D1 has no clock source and
+  # validate_bd_design fails with BD 41-758. The static shell path is unaffected
+  # because base/service/scripts/service_layer.tcl creates and connects these
+  # ports by hand; this template had no equivalent.
+  #
+  # The helper is idempotent so the ports resolve whether or not an enclosing
+  # script has already created them.
+  proc slash_get_or_create_intf_port {name mode vlnv} {
+    set p [get_bd_intf_ports -quiet $name]
+    if {[llength $p] == 0} {
+      return [create_bd_intf_port -mode $mode -vlnv $vlnv $name]
+    }
+    return [lindex $p 0]
+  }
+
+  foreach {__dc __idx __hier} {0 0 qsfp_0_n_1  1 2 qsfp_2_n_3} {
+    if { [set ::DCMAC${__dc}_ENABLED] != 1 } { continue }
+
+    set __clk [slash_get_or_create_intf_port qsfp${__idx}_322mhz Slave \
+                 xilinx.com:interface:diff_clock_rtl:1.0]
+    set_property -dict [list CONFIG.FREQ_HZ {322265625}] $__clk
+    connect_bd_intf_net $__clk [get_bd_intf_pins ${__hier}/qsfp_gt_clk]
+
+    set __gt0 [slash_get_or_create_intf_port qsfp${__idx}_4x Master \
+                 xilinx.com:interface:gt_rtl:1.0]
+    connect_bd_intf_net $__gt0 [get_bd_intf_pins ${__hier}/qsfp_gt0]
+
+    # Second QSFP of the pair, present only when that DCMAC is in dual mode.
+    if { [set ::DUAL_QSFP_DCMAC${__dc}] == 1 } {
+      set __gt1 [slash_get_or_create_intf_port qsfp[expr {$__idx + 1}]_4x Master \
+                   xilinx.com:interface:gt_rtl:1.0]
+      connect_bd_intf_net $__gt1 [get_bd_intf_pins ${__hier}/qsfp_gt1]
+    }
+  }
 {% else %}
   set ::DCMAC0_ENABLED   0
   set ::DCMAC1_ENABLED   0
