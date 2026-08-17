@@ -51,6 +51,7 @@ management, and memory operations.
    explanation/architecture
    explanation/graph-api-architecture
    explanation/memory-model
+   explanation/dcmac
    explanation/vrtbin-format
    explanation/pcie-topology
    explanation/platform-modes

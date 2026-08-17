@@ -290,7 +290,14 @@ struct VbinData {
     uint64_t clockFrequency{};                       ///< Design clock frequency in Hz.
     std::map<std::string, KernelData> kernels;       ///< Kernels keyed by name.
     std::optional<vrt::UtilizationReport> utilization; ///< Utilization report (if present).
-    std::optional<BuildId> shellBuildId;             ///< Shell build ID read from HW (device query only).
+
+    /// Shell the vbin asks the stack to program the board with — a request,
+    /// not a statement about what is currently loaded.
+    vrt::ShellType requiredShell{vrt::ShellType::UNKNOWN};
+
+    /// Shell build ID read from the board's register (device query only). This
+    /// is the ground truth for which shell is actually loaded.
+    std::optional<BuildId> shellBuildId;
 
     /// Builds a VbinData from an already-parsed system-map XMLParser.
     static VbinData fromParser(vrt::XMLParser& parser, const std::string& name) {
@@ -305,6 +312,7 @@ struct VbinData {
             .platform{parser.getPlatform()},
             .clockFrequency{parser.getClockFrequency()},
             .kernels{std::move(kernels)},
+            .requiredShell{parser.getShellType()},
         };
     }
 
@@ -369,6 +377,19 @@ struct VbinData {
     }
 };
 
+/// Converts a vrt::ShellType enum to its lowercase string name, matching the
+/// names the build-ID register decodes to.
+const char* toString(vrt::ShellType shell) {
+    switch (shell) {
+    case vrt::ShellType::SERVICE:
+        return "service";
+    case vrt::ShellType::COMPUTE:
+        return "compute";
+    default:
+        return "unknown";
+    }
+}
+
 /// Converts a vrt::Platform enum to its string name.
 const char* toString(vrt::Platform platform) {
     switch (platform) {
@@ -388,10 +409,14 @@ std::ostream& operator<<(std::ostream& out, const VbinData& vbin) {
     out
         << "Vbin " << vbin.name << ":\n"
         << INDENT1 << "Platform: " << toString(vbin.platform) << "\n"
-        << INDENT1 << "Clock frequency: " << vbin.clockFrequency << "\n";
+        << INDENT1 << "Clock frequency: " << vbin.clockFrequency << "\n"
+        << INDENT1 << "Shell required: " << toString(vbin.requiredShell) << "\n";
 
+    // Only a device query can say what is really loaded; for a vbin on disk
+    // the required shell above is the only shell information there is.
     if (vbin.shellBuildId) {
-        out << INDENT1 << "Shell build commit: " << vbin.shellBuildId->commitHex()
+        out << INDENT1 << "Shell loaded: " << vbin.shellBuildId->shellName() << "\n"
+            << INDENT1 << "Shell build commit: " << vbin.shellBuildId->commitHex()
             << (vbin.shellBuildId->dirty ? " (dirty)" : "") << "\n";
     }
 
@@ -411,8 +436,11 @@ Json::Value toJson(const VbinData& vbin) {
     Json::Value j;
 
     j["clock_frequency"] = toHexString(vbin.clockFrequency);
+    j["shell_required"] = toString(vbin.requiredShell);
 
     if (vbin.shellBuildId) {
+        j["shell"] = vbin.shellBuildId->shellName();
+        j["shell_source"] = "hardware";
         j["shell_build_commit"] = vbin.shellBuildId->commitHex();
         j["shell_build_dirty"] = vbin.shellBuildId->dirty;
     }

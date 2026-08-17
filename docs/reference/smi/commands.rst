@@ -116,6 +116,73 @@ Display the metadata of the vrtbin currently loaded on a device.
 
    Output as indented JSON.
 
+.. _shell-build-id:
+
+Shell build ID
+~~~~~~~~~~~~~~
+
+``list`` and ``query`` read a read-only register baked into the static region
+of the shell, reporting which shell build is physically loaded on the board.
+Both shells expose it at BD address ``0x0204_0002_0000`` — offset
+``0x20000`` within BAR4 — as a dual-channel AXI GPIO.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Register
+     - Bits
+     - Meaning
+   * - ``+0x0`` (channel 1)
+     - ``[31:0]``
+     - Low 32 bits of the commit prefix
+   * - ``+0x8`` (channel 2)
+     - ``[27:0]``
+     - High 28 bits of the commit prefix
+   * - ``+0x8`` (channel 2)
+     - ``[28]``
+     - Shell variant: ``0`` = service, ``1`` = compute
+   * - ``+0x8`` (channel 2)
+     - ``[30:29]``
+     - Reserved
+   * - ``+0x8`` (channel 2)
+     - ``[31]``
+     - Set when the shell was built from a dirty working tree
+
+The commit value is the top 60 bits of the SLASH source SHA-1, so it reads as
+the commit's short hash. It is ``0`` with the dirty bit set when the shell was
+built outside a git checkout.
+
+Which shell is loaded
+~~~~~~~~~~~~~~~~~~~~~
+
+Three different things can be called "the shell type", and SMI keeps them
+apart:
+
+* **The shell that is loaded.** Bit ``[28]`` of the register, baked into the
+  bitstream, so it is the authoritative answer. ``list`` prints it as
+  ``Shell:`` and ``query`` as ``Shell loaded:``.
+* **The shell state ``vrtd`` tracks.** Software bookkeeping in the daemon,
+  reset to unknown when the daemon restarts. ``list --long`` shows it under
+  ``VRTD:`` as ``Shell state:``. It is used for the ``Shell:`` line, marked
+  ``(per vrtd)``, only as a fallback when the register cannot be read.
+* **The shell a vbin requires.** The ``<ShellType>`` node in the vbin's system
+  map, reported by ``inspect`` and ``query`` as ``Shell required:``. This is a
+  request telling the stack which shell to program onto the board, not a
+  statement about the board's current state.
+
+In JSON, ``list`` and ``query`` report the loaded shell as ``shell`` alongside
+a ``shell_source`` of ``hardware`` or ``vrtd``; ``inspect`` and ``query``
+report the vbin's request as ``shell_required``; and ``vrtd.shell_type`` in
+``list`` stays the daemon's own tracked state.
+
+Service shells built before bit ``[28]`` was assigned read back as
+``service``, since the reserved bits were tied to zero.
+
+Reading the register is best-effort: it needs a usable BAR4. ``list`` falls
+back to the ``vrtd`` state when it is unavailable, and ``query`` prints a
+warning and omits the loaded-shell and commit fields.
+
 program
 -------
 

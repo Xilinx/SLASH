@@ -270,12 +270,19 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
             sleep(1); // wait for device to be ready after programming before accessing BAR
 
         }
-        if (vrtdDevice.has_value()) {
-            if (clockFreq > CLOCK_MAX_FREQ) {
-                utils::Logger::log(utils::LogLevel::WARN, __PRETTY_FUNCTION__,
-                           "Clock frequency {} exceeds maximum frequency {}", clockFreq, CLOCK_MAX_FREQ);
-                vrtdDevice->setUserClockRate(static_cast<uint32_t>(CLOCK_MAX_FREQ));
+        if (program && vrtdDevice.has_value() && clockFreq > 0) {
+            // Program the user clock to the achieved (timed) frequency recorded
+            // in the vbin, rounding down so the user logic never runs faster
+            // than it was timed for. The user may still override afterwards via
+            // setFrequency().
+            if (clockFreq > std::numeric_limits<uint32_t>::max()) {
+                throw std::runtime_error(
+                    "Achieved clock frequency exceeds vrtd clock API limits");
             }
+            uint32_t achieved =
+                vrtdDevice->setUserClockRateRoundDown(static_cast<uint32_t>(clockFreq));
+            utils::Logger::log(utils::LogLevel::INFO, __PRETTY_FUNCTION__,
+                       "Programmed user clock to {} Hz (target {} Hz)", achieved, clockFreq);
         }
     } else if (platform == Platform::EMULATION) {
         std::string emulationExecPath = this->vrtbin.getEmulationExec();

@@ -522,6 +522,10 @@ enum vrtd_clock_region {
 enum vrtd_clock_op {
     VRTD_CLOCK_OP_GET = 0,
     VRTD_CLOCK_OP_SET = 1,
+    /* Like SET, but never selects a realizable rate above the request. Used to
+     * program the user clock to the achieved (timed) frequency at load without
+     * ever running the user logic faster than it was timed for. */
+    VRTD_CLOCK_OP_SET_ROUND_DOWN = 2,
 };
 
 /**

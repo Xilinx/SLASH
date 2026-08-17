@@ -5,7 +5,6 @@ import ipaddress
 import numpy as np
 from enum import Enum
 from tabulate import tabulate
-from IPython.display import JSON
 from default_ip import DefaultIP
 from netlayer_regs import nl_regs
 
@@ -145,8 +144,12 @@ class NetworkLayer(DefaultIP):
                 socket_dict['socket'][i]['theirPort'] = tp
                 socket_dict['socket'][i]['myPort'] = mp
 
-        print(f'{socket_dict=}')
-        return JSON(socket_dict, rootname='socket_table')
+        socket_rows = [[i, s['theirIP'], s['theirPort'], s['myPort']]
+                       for i, s in socket_dict['socket'].items()]
+        print(tabulate(socket_rows,
+                       headers=['socket', 'theirIP', 'theirPort', 'myPort'],
+                       tablefmt='pretty'))
+        return socket_dict
 
     def invalidate_socket_table(self):
         """ Clear the Socket table """
@@ -214,7 +217,6 @@ class NetworkLayer(DefaultIP):
             table_data.append([key, mac_address, ip_address])
 
         print(tabulate(table_data, headers=headers, tablefmt="pretty"))
-        #return JSON(arptable, rootname='ARP Table')
 
     def write_arp_entry(self, mac: str, ip: str):
         """
@@ -300,8 +302,10 @@ class NetworkLayer(DefaultIP):
             "gateway addr": str(ipaddress.IPv4Address(ip_gw)),
             "Mask": str(ipaddress.IPv4Address(ip_mask)),
         }
-        print(f'{config=}')
-        return JSON(config, rootname='Network Information')
+        print(tabulate(config.items(),
+                       headers=['Network Information', 'value'],
+                       tablefmt='pretty'))
+        return config
 
     def set_ip_address(self, ipaddrsrt, gwaddr="None", debug=False):
         """
@@ -459,7 +463,7 @@ class NetworkLayer(DefaultIP):
             print(f"Debug {path} probes")
             print(tabulate(table_data, headers=[f'Probe {path}', 'Packets', 'Bytes', 'Cycles', 'BW (Mb/s)'], tablefmt='pretty'))
 
-        return JSON(probes, rootname='debug_probes')
+        return probes
 
     @property
     def get_freq(self):

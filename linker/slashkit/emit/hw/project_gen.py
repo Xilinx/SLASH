@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 from enum import Enum
 from pathlib import Path
 import logging
@@ -39,7 +38,19 @@ from slashkit.core.command_config import (
     CommandConfiguration,
     ShellType,
 )
-from slashkit.emit.metadata.timing_freq import require_static_shell_timing_or_confirm
+from slashkit.emit.metadata.timing_freq import (
+    require_static_shell_timing_or_confirm,
+    read_system_map_clock_hz,
+)
+from slashkit.core.launcher import (
+    TASK_AVED,
+    TASK_BOOTGEN,
+    TASK_RM_SERVICE_LAYER,
+    TASK_RM_SLASH,
+    TASK_STATIC_SHELL,
+    TASK_STATIC_SHELL_COMPUTE,
+    run_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +145,12 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
     _ensure_boot_device_pcie_in_bif(bif_path)
     logger.info("Running bootgen in %s to generate %s",
                 impl_dir, output_pdi.name)
-    subprocess.run(
+    # bootgen resolves the file paths written inside the BIF against its own
+    # working directory, not against the BIF, so impl_dir is part of the
+    # contract rather than a convenience. run_tool carries it across to the
+    # execution host in SLASH_TOOL_CWD; making the arguments below absolute
+    # would not help, because the paths inside the BIF stay relative.
+    run_tool(
         [
             "bootgen",
             "-arch",
@@ -145,8 +161,8 @@ def _generate_top_wrapper_pdi_with_bootgen(impl_dir: Path) -> Path:
             "-o",
             output_pdi.name,
         ],
-        cwd=str(impl_dir),
-        check=True,
+        task=TASK_BOOTGEN,
+        cwd=impl_dir,
     )
 
     if not output_pdi.exists():
@@ -284,12 +300,16 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
         with resources.path("slashkit.resources.aved", file_name) as in_path:
             _copy_checked(in_path, target_dir / file_name)
 
+    # build_all.sh and the four files staged above all live in the AVED clone,
+    # so offloading this step needs nothing installed on the execution host
+    # beyond a Vitis toolchain. It does need more of the base system than the
+    # other steps (cmake, make, git, python3); see scripts/lsf/README.md.
     logger.info("Running AVED build script in %s", aved_hw_dir)
-    subprocess.run(
+    run_tool(
         ["bash", "build_all.sh"],
-        cwd=str(aved_hw_dir),
+        task=TASK_AVED,
+        cwd=aved_hw_dir,
         env=_clean_cross_build_env(),
-        check=True,
     )
 
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
@@ -310,12 +330,16 @@ def _compute_build_id_env() -> Dict[str, str]:
     Derive the shell build-ID constants from the git commit of the SLASH source
     tree and return them as environment variables consumed by create_project.tcl.
 
-    Encoding (60-bit hash + dirty), split across two 32-bit GPIO channels.
-    The 60 hash bits are the top 60 bits of the SHA-1 (bits[159:100]), so the
-    value starts with the commit's GitHub short hash:
+    Encoding (60-bit hash + shell type + dirty), split across two 32-bit GPIO
+    channels. The 60 hash bits are the top 60 bits of the SHA-1
+    (bits[159:100]), so the value starts with the commit's GitHub short hash:
       - SLASH_BUILD_ID_LO = low 32 bits of the 60-bit window
-      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], bits[30:28] reserved,
-        dirty flag in bit[31]
+      - SLASH_BUILD_ID_HI = high 28 bits in bits[27:0], shell type in bit[28]
+        (0 = service, 1 = compute), bits[30:29] reserved, dirty flag in bit[31]
+
+    Bit[28] is left clear here: each shell's create_project.tcl forces it to its
+    own value, so the bit is owned by the design that it describes and stays
+    correct even when the Tcl is run outside this driver.
 
     Falls back to hash 0 with the dirty bit set when git information is
     unavailable (e.g. building from an exported tarball, not a git checkout).
@@ -365,8 +389,7 @@ def create_build_project(
         if not tcl_path.exists():
             raise FileNotFoundError(
                 f"create_project.tcl not found: {tcl_path}")
-        launcher = shlex.split(os.environ.get("SLASH_VIVADO_LAUNCHER", ""))
-        cmd = launcher + [
+        cmd = [
             str(config.vivado_bin),
             "-mode",
             "batch",
@@ -385,10 +408,12 @@ def create_build_project(
         cmd.append(str(config.n_jobs))
 
         env = _environment_with_udev_ld_preload()
+        # Computed here, from this checkout, and carried across to wherever the
+        # run happens: an execution host may see a different git tree, or none.
         env.update(_compute_build_id_env())
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True,
-                       env=env)
+        run_tool(cmd, task=TASK_STATIC_SHELL,
+                 cwd=config.build_dir, env=env)
 
 
 def create_build_project_compute(
@@ -403,8 +428,7 @@ def create_build_project_compute(
             raise FileNotFoundError(
                 f"create_project.tcl not found: {tcl_path}"
             )
-        launcher = shlex.split(os.environ.get("SLASH_VIVADO_LAUNCHER", ""))
-        cmd = launcher + [
+        cmd = [
             str(config.vivado_bin),
             "-mode",
             "batch",
@@ -421,19 +445,77 @@ def create_build_project_compute(
             cmd.append(action)
         cmd.append(str(config.n_jobs))
 
-        # No SLASH_BUILD_ID_* here: the compute shell has no build-ID GPIO and
-        # its create_project.tcl never reads those globals.
-        subprocess.run(
+        env = _environment_with_udev_ld_preload()
+        # Same as the service path: derived from this checkout, not from
+        # whatever tree the execution host happens to see.
+        env.update(_compute_build_id_env())
+
+        run_tool(
             cmd,
-            cwd=str(config.build_dir),
-            check=True,
-            env=_environment_with_udev_ld_preload(),
+            task=TASK_STATIC_SHELL_COMPUTE,
+            cwd=config.build_dir,
+            env=env,
         )
 
 
 class RM_KIND(Enum):
     SLASH_PROJECT = "slash"
     SERVICE_LAYER = "service_layer"
+
+
+def _resolve_target_user_clock_hz(config: LinkerConfiguration) -> Optional[int]:
+    # The resolved target user-clock frequency has already been written to
+    # system_map.xml by generate_tcl(), so read it back rather than re-deriving
+    # it, keeping a single source of truth (see resolve_system_map_clock).
+    system_map_path = config.build_dir / "system_map.xml"
+    target_hz = read_system_map_clock_hz(system_map_path)
+    if target_hz is None or target_hz <= 0:
+        logger.warning(
+            "No valid target ClockFrequency in %s; skipping user-clock constraint",
+            system_map_path,
+        )
+        return None
+    return target_hz
+
+
+def _generate_user_clock_xdc(
+    config: LinkerConfiguration, target_hz: int
+) -> Path:
+    # Turn the resolved target user-clock frequency into an actual Vivado timing
+    # constraint for the reconfigurable-module implementation.
+    period_ns = 1e9 / float(target_hz)
+    xdc_path = config.build_dir / "user_clock.xdc"
+    # Defining a clock at the RM's user_clk port overrides, downstream of that
+    # point, the clock the abstract shell propagates in. That clock is
+    # clkout1_primitive_2, auto-derived by Vivado from the clocking wizard's
+    # MMCME5 CLKOUT0 and therefore pinned to the 200 MHz the static shell was
+    # built with -- it does not follow the wizard's runtime DRP reprogramming,
+    # so it has to be overridden here rather than trusted.
+    #
+    # Overriding at the RM boundary rather than at the MMCM output keeps the
+    # signed-off static timing untouched, and needs no reference to a
+    # static-region hierarchy path, which would differ between the service and
+    # compute shells.
+    #
+    # Known limitation: this leaves two clock objects on one physical net --
+    # user_clk at the requested period inside the RM, and the shell's
+    # clkout1_primitive_2 at 200 MHz outside it. A handful of static-side flops
+    # do drive into the RM's clock domain (2 endpoints on 00_axilite), and
+    # Vivado times those crossings against the beat frequency of the two
+    # periods rather than treating them as the same clock: at 250 MHz the
+    # 4 ns / 5 ns pair yields a bogus 1 ns requirement. Both are physically the
+    # same net and run at the same rate once the wizard is reprogrammed, so
+    # those paths are not really failing. Measured cost is under 1 MHz on both
+    # shells, and it is latent at the default -- at 200 MHz the two clocks share
+    # a 5 ns grid and the crossings pass with positive slack.
+    constraint = (
+        f"create_clock -name user_clk -period {period_ns:.6f}"
+        " [get_ports user_clk]\n"
+    )
+    xdc_path.write_text(constraint, encoding="utf-8")
+    logger.info("Wrote user-clock constraint (%.6f ns / %d Hz) to %s",
+                period_ns, target_hz, xdc_path)
+    return xdc_path
 
 
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
@@ -494,7 +576,7 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
         )
 
         cmd = [
-            config.vivado_bin,
+            str(config.vivado_bin),
             "-mode",
             "batch",
             "-nojournal",
@@ -531,6 +613,16 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             for path in config.pre_synth_tcls:
                 cmd.extend(["--pre-synth-tcl", str(path)])
 
+            # Both halves of the user-clock chain come from the same resolved
+            # target: --user-clock-hz retargets the RM block design (and with
+            # it the module's synthesis constraints), --user-clock-xdc
+            # constrains the implementation run.
+            target_hz = _resolve_target_user_clock_hz(config)
+            if target_hz is not None:
+                cmd.extend(["--user-clock-hz", str(target_hz)])
+                user_clock_xdc = _generate_user_clock_xdc(config, target_hz)
+                cmd.extend(["--user-clock-xdc", str(user_clock_xdc)])
+
         if rm_kind == RM_KIND.SERVICE_LAYER:
             opt_post_tcl = stack.enter_context(
                 resources.path(
@@ -540,8 +632,12 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             )
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
-        subprocess.run(cmd, cwd=str(config.build_dir), check=True,
-                       env=_environment_with_udev_ld_preload())
+        # Distinct task kinds: a single `slashkit link` runs both RM builds, so
+        # the launcher cannot tell them apart from a per-invocation override.
+        task = (TASK_RM_SLASH if rm_kind == RM_KIND.SLASH_PROJECT
+                else TASK_RM_SERVICE_LAYER)
+        run_tool(cmd, task=task, cwd=config.build_dir,
+                 env=_environment_with_udev_ld_preload())
 
     if rm_kind == RM_KIND.SLASH_PROJECT:
         pdi_out_path = image_out_dir / \
@@ -570,7 +666,9 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
     aved_dir = config.build_dir / "AVED"
     if not aved_dir.exists():
         # Clone AVED early so that errors are caught before the multi-hour
-        # implementation run.
+        # implementation run. Stays local even when the tool steps are
+        # offloaded: this needs network egress, which compute nodes typically
+        # do not have.
         subprocess.run(
             [
                 "git",
@@ -605,7 +703,6 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
         # (FULL_PROBES.FILE) that must be loaded before a user region's partial
         # probe file in the Vivado Hardware Manager.
         install_sources = (
-            impl_dir / "top_wrapper_routed_bb.dcp",
             impl_dir / "static_shell_slash.dcp",
             impl_dir / "static_shell_service_layer.dcp",
             impl_dir / "debug_nets.ltx",
@@ -626,7 +723,6 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
 
     else:  # ShellType.COMPUTE
         dcp_sources = (
-            impl_dir / "top_wrapper_routed_bb.dcp",
             impl_dir / "static_shell_slash.dcp",
         )
         for src in dcp_sources:
@@ -692,18 +788,24 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
     rp1_env = _clean_cross_build_env()
     rp1_env["XSA"] = str(
         aved_build_dir / f"{AVED_DESIGN_NAME}.xsa")
-    subprocess.run(
+    # Tagged as AVED rather than given a kind of its own: this is the same
+    # cross-compile the AVED step already runs -- build_all.sh calls this very
+    # script -- so it wants the same reservation and the same node.
+    run_tool(
         ["bash", "build-rp1.sh"],
-        cwd=str(rp1_dir),
+        task=TASK_AVED,
+        cwd=rp1_dir,
         env=rp1_env,
-        check=True,
     )
     _copy_checked(rp1_dir / "build" / "rp1.elf", aved_build_dir / "rp1.elf")
 
     nofpt_pdi = aved_build_dir / f"{AVED_DESIGN_NAME}_nofpt.pdi"
     logger.info(
         "Repacking %s with existing AMC/FPT and rebuilt RP1", nofpt_pdi.name)
-    subprocess.run(
+    # As in _generate_top_wrapper_pdi_with_bootgen, the paths inside the BIF are
+    # relative, so aved_hw_dir is part of the contract and travels in
+    # SLASH_TOOL_CWD.
+    run_tool(
         [
             "bootgen",
             "-arch",
@@ -714,12 +816,15 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
             "-o",
             str(nofpt_pdi),
         ],
-        cwd=str(aved_hw_dir),
+        task=TASK_BOOTGEN,
+        cwd=aved_hw_dir,
         env=_clean_cross_build_env(),
-        check=True,
     )
 
     aved_pdi = aved_hw_dir / f"{AVED_DESIGN_NAME}.pdi"
+    # Deliberately local: fpt_pdi_gen.py is plain Python that splices two files
+    # together, with no vendor toolchain behind it. Offloading it would buy a
+    # queue wait and nothing else.
     subprocess.run(
         [
             str(aved_fpt_dir / "fpt_pdi_gen.py"),

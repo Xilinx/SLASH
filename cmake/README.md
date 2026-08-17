@@ -76,6 +76,20 @@ Variables set after loading:
 Compiles HLS kernels using `v++` and `vitis-run`.  Both executables
 must be on PATH.
 
+Set `SLASH_TOOL_LAUNCHER` &mdash; either as a cache variable or in the
+environment &mdash; to run the two tools through a command prefix, which is how
+kernel builds are handed to a compute farm:
+
+```bash
+cmake -B build -DSLASH_TOOL_LAUNCHER=/path/to/your/submit-wrapper
+```
+
+With a launcher set, the tools are resolved on the execution host, so they need
+not be installed locally.  It is a cache entry and therefore sticky; use
+`-USLASH_TOOL_LAUNCHER` to go back to building locally.  See
+`docs/howto/offload-builds-to-a-cluster.rst` for the contract a wrapper has to
+satisfy.
+
 #### `build_hls()` &mdash; single kernel
 
 ```cmake

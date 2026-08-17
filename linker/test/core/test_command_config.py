@@ -27,7 +27,7 @@ from unittest import mock
 
 import pytest
 
-from slashkit.core import command_config
+from slashkit.core import command_config, launcher
 from slashkit.core.command_config import InstallerConfiguration, LinkerConfiguration
 
 _FIXTURE_COMPONENT = (
@@ -36,10 +36,11 @@ _FIXTURE_COMPONENT = (
 )
 
 
-def _make_args(tmp_path: Path, *, config: Path, cli_pre_synth):
-    vivado = tmp_path / "vivado"
-    vivado.write_text("#!/bin/sh\n")
-    vivado.chmod(0o755)
+def _make_args(tmp_path: Path, *, config: Path, cli_pre_synth, vivado=None):
+    if vivado is None:
+        vivado = tmp_path / "vivado"
+        vivado.write_text("#!/bin/sh\n")
+        vivado.chmod(0o755)
     return argparse.Namespace(
         vivado=vivado,
         jobs=8,
@@ -52,10 +53,11 @@ def _make_args(tmp_path: Path, *, config: Path, cli_pre_synth):
     )
 
 
-def _build_config(tmp_path: Path, *, config: Path, cli_pre_synth):
+def _build_config(tmp_path: Path, *, config: Path, cli_pre_synth, vivado=None):
     """Construct a LinkerConfiguration with the heavy, environment-dependent
     lookups stubbed out, so only the pre-synth resolution/merging is exercised."""
-    args = _make_args(tmp_path, config=config, cli_pre_synth=cli_pre_synth)
+    args = _make_args(tmp_path, config=config,
+                      cli_pre_synth=cli_pre_synth, vivado=vivado)
     with mock.patch.object(command_config, "_find_vitis_include",
                            return_value=tmp_path), \
             mock.patch.object(command_config, "apply_config_to_instances",
@@ -171,3 +173,33 @@ def test_missing_config_cfg_pre_synth_raises(tmp_path):
     """)
     with pytest.raises(FileNotFoundError):
         _build_config(tmp_path, config=cfg, cli_pre_synth=[])
+
+
+def _empty_cfg(tmp_path: Path) -> Path:
+    return _write_cfg(tmp_path, """
+        [connectivity]
+    """)
+
+
+def test_bare_vivado_name_is_passed_through_when_offloading(tmp_path, monkeypatch):
+    """With a launcher, the binary is resolved on the execution host."""
+    monkeypatch.setenv(launcher.LAUNCHER_ENV, "submit")
+    config = _build_config(tmp_path, config=_empty_cfg(tmp_path),
+                           cli_pre_synth=[], vivado="vivado")
+    assert config.vivado_bin == Path("vivado")
+
+
+def test_bare_vivado_name_without_a_launcher_still_fails_fast(tmp_path, monkeypatch):
+    """Running locally, a name that resolves to nothing is an error, as before."""
+    monkeypatch.delenv(launcher.LAUNCHER_ENV, raising=False)
+    with pytest.raises(FileNotFoundError):
+        _build_config(tmp_path, config=_empty_cfg(tmp_path),
+                      cli_pre_synth=[], vivado="no_such_vivado")
+
+
+def test_explicit_vivado_path_is_still_checked_when_offloading(tmp_path, monkeypatch):
+    """The relaxation is only for bare names; a spelled-out path is still verified."""
+    monkeypatch.setenv(launcher.LAUNCHER_ENV, "submit")
+    with pytest.raises(FileNotFoundError):
+        _build_config(tmp_path, config=_empty_cfg(tmp_path), cli_pre_synth=[],
+                      vivado=tmp_path / "bin" / "vivado")

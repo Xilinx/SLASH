@@ -1114,56 +1114,64 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   [get_bd_pins dummy_noc_7/M00_AXIS_tready]
 
 
-proc add_dcmac_inst {} {
-
-  set DCMAC0_ENABLED 1
-  set DCMAC1_ENABLED 1
-
-  ## Each DCMAC can support 2 QSFP56 interfaces
-  ## select how many QSFP56 you want for each DCMAC, provided they are enabled
-
-  ## Setup number of QSFP56 interfaces for DCMAC0
-  set DUAL_QSFP_DCMAC0 0
-
-  ## Setup number of QSFP56 interfaces for DCMAC1
-  set DUAL_QSFP_DCMAC1 0
-
-    # Create network hierarchy
-    if { ${DCMAC0_ENABLED} == "1" } {
-        create_qsfp_hierarchy 0 ${DUAL_QSFP_DCMAC0}
-    }
-    if { ${DCMAC1_ENABLED} == "1" } {
-        create_qsfp_hierarchy 1 ${DUAL_QSFP_DCMAC1}
-    }
-}
 # ===== Service Layer (generated) =====
 # create_service_layer ""
 
-# Absolute paths (normalized)
-set ::slash_dcmac_tcl  [file normalize "{{ dcmac_tcl }}"]
-set ::slash_dcmac_hdl  [file normalize "{{ dcmac_hdl_dir }}"]
-
-# Source the DCMAC Tcl helpers
-source $::slash_dcmac_tcl
-
-{% for vf in dcmac_hdl_files %}
-import_files -fileset sources_1 -norecurse [file normalize "{{ vf }}"]
-{% endfor %}
-
 # --- Drive DCMAC creation based on config ---
 {% if needs_dcmac %}
-  set DCMAC0_ENABLED {{ dc_enable_0 }}
-  set DCMAC1_ENABLED {{ dc_enable_1 }}
-  set DUAL_QSFP_DCMAC0 {{ dual_qsfp_0 }}
-  set DUAL_QSFP_DCMAC1 {{ dual_qsfp_1 }}
+  source [file normalize "{{ dcmac_tcl }}"]
+  slash_setup_dcmac [file normalize "{{ versal_dcmac_root }}"]
 
-  # Calls proc add_dcmac_inst which expects the above variables
+  set ::DCMAC0_ENABLED   {{ dc_enable_0 }}
+  set ::DCMAC1_ENABLED   {{ dc_enable_1 }}
+  set ::DUAL_QSFP_DCMAC0 {{ dual_qsfp_0 }}
+  set ::DUAL_QSFP_DCMAC1 {{ dual_qsfp_1 }}
+
   add_dcmac_inst
+
+  # --- External QSFP boundary for the generated service-layer RM ---
+  #
+  # add_dcmac_inst (resources/dcmac/tcl/slash_wrapper.tcl) instantiates the DCMAC
+  # hierarchies but does not provision the external QSFP ports, so
+  # bd_clock_reset_ctrl/diff_buff/CLK_IN_D1 has no clock source and
+  # validate_bd_design fails with BD 41-758. The static shell path is unaffected
+  # because base/service/scripts/service_layer.tcl creates and connects these
+  # ports by hand; this template had no equivalent.
+  #
+  # The helper is idempotent so the ports resolve whether or not an enclosing
+  # script has already created them.
+  proc slash_get_or_create_intf_port {name mode vlnv} {
+    set p [get_bd_intf_ports -quiet $name]
+    if {[llength $p] == 0} {
+      return [create_bd_intf_port -mode $mode -vlnv $vlnv $name]
+    }
+    return [lindex $p 0]
+  }
+
+  foreach {__dc __idx __hier} {0 0 qsfp_0_n_1  1 2 qsfp_2_n_3} {
+    if { [set ::DCMAC${__dc}_ENABLED] != 1 } { continue }
+
+    set __clk [slash_get_or_create_intf_port qsfp${__idx}_322mhz Slave \
+                 xilinx.com:interface:diff_clock_rtl:1.0]
+    set_property -dict [list CONFIG.FREQ_HZ {322265625}] $__clk
+    connect_bd_intf_net $__clk [get_bd_intf_pins ${__hier}/qsfp_gt_clk]
+
+    set __gt0 [slash_get_or_create_intf_port qsfp${__idx}_4x Master \
+                 xilinx.com:interface:gt_rtl:1.0]
+    connect_bd_intf_net $__gt0 [get_bd_intf_pins ${__hier}/qsfp_gt0]
+
+    # Second QSFP of the pair, present only when that DCMAC is in dual mode.
+    if { [set ::DUAL_QSFP_DCMAC${__dc}] == 1 } {
+      set __gt1 [slash_get_or_create_intf_port qsfp[expr {$__idx + 1}]_4x Master \
+                   xilinx.com:interface:gt_rtl:1.0]
+      connect_bd_intf_net $__gt1 [get_bd_intf_pins ${__hier}/qsfp_gt1]
+    }
+  }
 {% else %}
-  set DCMAC0_ENABLED 0
-  set DCMAC1_ENABLED 0
-  set DUAL_QSFP_DCMAC0 0
-  set DUAL_QSFP_DCMAC1 0
+  set ::DCMAC0_ENABLED   0
+  set ::DCMAC1_ENABLED   0
+  set ::DUAL_QSFP_DCMAC0 0
+  set ::DUAL_QSFP_DCMAC1 0
   # Ethernet disabled; no DCMAC hierarchy created.
 {% endif %}
 
@@ -1201,8 +1209,8 @@ import_files -fileset sources_1 -norecurse [file normalize "{{ vf }}"]
 
   # Tie QSFP block clocks/resets
   {% for q in sl_qsfp_blocks %}
-    connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ q }}/ap_clk]
-    connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ q }}/ap_rst_n]
+    connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ q }}/aclk]
+    connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ q }}/aresetn]
   {% endfor %}
 
 {% else %}
@@ -1258,16 +1266,6 @@ import_files -fileset sources_1 -norecurse [file normalize "{{ vf }}"]
 
   # Restore previous instance
   current_bd_instance $__oldCurInst
-  assign_bd_address -offset 0x020302040400 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040400 -range 0x00000100 -with_name SEG_axi_gpio_datapath_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040000 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040000 -range 0x00000100 -with_name SEG_axi_gpio_gt_control_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040200 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040200 -range 0x00000100 -with_name SEG_axi_gpio_monitor_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040600 -range 0x00000100 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040600 -range 0x00000100 -with_name SEG_axi_gpio_reset_txrx_Reg_1 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_0_n_1/DCMAC_subsys/dcmac_0_core/s_axi/Reg] -force
-  assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs qsfp_2_n_3/DCMAC_subsys/dcmac_1_core/s_axi/Reg] -force
 
 {% else %}
   # No QSFP <-> NoC links required

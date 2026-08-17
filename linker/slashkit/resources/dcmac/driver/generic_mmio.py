@@ -38,7 +38,7 @@ class GenericMMIO:
 
 
 def main(args):
-    obj = GenericMMIO(args.dev, base_offset=args.baseoffset)
+    obj = GenericMMIO(args.dev, resource=args.resource, base_offset=args.baseoffset)
 
     if args.write:
         obj.write(args.offset, args.value)

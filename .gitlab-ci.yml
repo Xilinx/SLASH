@@ -86,6 +86,7 @@ package_linker:
         test -e "$path"
       done
     # Packaging the linker
+    - bash ../scripts/stage-versal-dcmac.sh
     - pip wheel --no-deps .
   artifacts:
     public: false

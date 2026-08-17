@@ -60,7 +60,8 @@ if { $list_projs eq "" } {
 }
 
 # Shell build-ID constants for the static-region GPIO register. Normally set by
-# create_project.tcl from the git commit; default to 0 if sourced standalone.
+# create_project.tcl from the git commit; if sourced standalone default to a
+# zero hash with bit [28] clear, which still identifies this as the service shell.
 if { ![info exists ::build_id_lo] } { set ::build_id_lo 0 }
 if { ![info exists ::build_id_hi] } { set ::build_id_hi 0 }
 
@@ -760,7 +761,8 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
 
 
   # Create instance: build_id_hi, and set properties.
-  # Bits [27:0] = next 28 bits of the git SHA-1; bits [30:28] reserved; bit [31] = dirty flag.
+  # Bits [27:0] = next 28 bits of the git SHA-1; bit [28] = shell type (0 = service);
+  # bits [30:29] reserved; bit [31] = dirty flag.
   # Value injected at build time via ::build_id_hi.
   set build_id_hi [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 build_id_hi ]
   set_property -dict [list \
@@ -4993,14 +4995,6 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces service_layer/eth_5/Data_m_axi_gmem0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_1/S01_INI/C1_DDR_CH2] -force
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces service_layer/eth_6/Data_m_axi_gmem0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_1/S00_INI/C0_DDR_CH2] -force
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces service_layer/eth_7/Data_m_axi_gmem0] [get_bd_addr_segs static_region/noc/axi_noc_mc_ddr4_1/S01_INI/C1_DDR_CH2] -force
-  assign_bd_address -offset 0x020302040400 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040400 -range 0x00000100 -with_name SEG_axi_gpio_datapath_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040000 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020300160000 -range 0x00000100 -with_name SEG_axi_gpio_gt_control_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040200 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040200 -range 0x00000100 -with_name SEG_axi_gpio_monitor_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040600 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040600 -range 0x00000100 -with_name SEG_axi_gpio_reset_txrx_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
   assign_bd_address -offset 0x004000000000 -range 0x40000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/noc/axi_noc_cips/S00_AXI/HBM0_PC0] -force
   assign_bd_address -offset 0x004040000000 -range 0x40000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/noc/axi_noc_cips/S00_AXI/HBM0_PC1] -force
   assign_bd_address -offset 0x004500000000 -range 0x40000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/noc/axi_noc_cips/S00_AXI/HBM10_PC0] -force
@@ -5039,8 +5033,8 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020400010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_service/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_slash/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/build_id_gpio/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/DCMAC_subsys/dcmac_0_core/s_axi/Reg] -force
-  assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/DCMAC_subsys/dcmac_1_core/s_axi/Reg] -force
+  assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_0_n_1/dcmac_wrapper/dcmac_0/s_axi/Reg] -force
+  assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs service_layer/qsfp_2_n_3/dcmac_wrapper/dcmac_1/s_axi/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200490000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_65/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202004A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_66/s_axi_control/Reg] -force
@@ -5148,14 +5142,6 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020200570000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/traffic_virt_3/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200580000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/traffic_virt_4/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020101001000 -range 0x00001000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/base_logic/uuid_rom/S_AXI/reg0] -force
-  assign_bd_address -offset 0x020303040400 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040400 -range 0x00000100 -with_name SEG_axi_gpio_datapath_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_datapath/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020300160000 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040000 -range 0x00000100 -with_name SEG_axi_gpio_gt_control_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_gt_control/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040200 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040200 -range 0x00000100 -with_name SEG_axi_gpio_monitor_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_monitor/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302040600 -range 0x00000100 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020303040600 -range 0x00000100 -with_name SEG_axi_gpio_reset_txrx_Reg_1 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/control_intf/axi_gpio_reset_txrx/S_AXI/Reg] -force
   assign_bd_address -offset 0x004000000000 -range 0x40000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/noc/axi_noc_cips/S01_AXI/HBM0_PC0] -force
   assign_bd_address -offset 0x004040000000 -range 0x40000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/noc/axi_noc_cips/S01_AXI/HBM0_PC1] -force
   assign_bd_address -offset 0x004500000000 -range 0x40000000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/noc/axi_noc_cips/S01_AXI/HBM10_PC0] -force
@@ -5196,8 +5182,8 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x020400010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_service/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_slash/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/build_id_gpio/S_AXI/Reg] -force
-  assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/DCMAC_subsys/dcmac_0_core/s_axi/Reg] -force
-  assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/DCMAC_subsys/dcmac_1_core/s_axi/Reg] -force
+  assign_bd_address -offset 0x020302000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_0_n_1/dcmac_wrapper/dcmac_0/s_axi/Reg] -force
+  assign_bd_address -offset 0x020303000000 -range 0x00040000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs service_layer/qsfp_2_n_3/dcmac_wrapper/dcmac_1/s_axi/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200490000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_65/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202004A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_66/s_axi_control/Reg] -force

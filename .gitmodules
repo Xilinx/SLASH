@@ -4,9 +4,20 @@
 [submodule "AVED"]
 	path = submodules/AVED
 	url = https://github.com/Xilinx/AVED.git
+[submodule "submodules/Versal-DCMAC"]
+	path = submodules/Versal-DCMAC
+	url = https://github.com/fpgasystems/Versal-DCMAC.git
+; The two QEMU submodules are needed only by the optional RP1 firmware test
+; (scripts/build-and-test-rp1-qemu.sh), so they are opt-in. `update = none`
+; keeps `git clone --recurse-submodules` from descending into them: QEMU
+; carries its full ROM tree as nested submodules, none of which SLASH builds,
+; and at least one of those URLs is dead upstream. Init them explicitly with
+; `git submodule update --init --checkout <path>`, which overrides this.
 [submodule "submodules/xilinx-qemu"]
 	path = submodules/xilinx-qemu
 	url = https://github.com/Xilinx/qemu.git
+	update = none
 [submodule "submodules/qemu-devicetrees"]
 	path = submodules/qemu-devicetrees
 	url = https://github.com/Xilinx/qemu-devicetrees.git
+	update = none

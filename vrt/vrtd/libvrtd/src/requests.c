@@ -1038,11 +1038,12 @@ enum vrtd_ret vrtd_clock_get_rate(
     return VRTD_RET_OK;
 }
 
-enum vrtd_ret vrtd_clock_set_rate(
+static enum vrtd_ret vrtd_clock_set_rate_op(
     int fd,
     uint32_t dev,
     uint32_t region,
     uint32_t rate_hz_in,
+    uint8_t op,
     uint32_t *rate_hz_out
 )
 {
@@ -1053,7 +1054,7 @@ enum vrtd_ret vrtd_clock_set_rate(
     struct vrtd_req_clock_op req = {
         .dev_number = dev,
         .region = region,
-        .op = VRTD_CLOCK_OP_SET,
+        .op = op,
         .rate_hz = rate_hz_in,
     };
     struct vrtd_resp_clock_op resp = {0};
@@ -1068,6 +1069,30 @@ enum vrtd_ret vrtd_clock_set_rate(
 
     *rate_hz_out = resp.rate_hz;
     return VRTD_RET_OK;
+}
+
+enum vrtd_ret vrtd_clock_set_rate(
+    int fd,
+    uint32_t dev,
+    uint32_t region,
+    uint32_t rate_hz_in,
+    uint32_t *rate_hz_out
+)
+{
+    return vrtd_clock_set_rate_op(fd, dev, region, rate_hz_in,
+                                  VRTD_CLOCK_OP_SET, rate_hz_out);
+}
+
+enum vrtd_ret vrtd_clock_set_rate_round_down(
+    int fd,
+    uint32_t dev,
+    uint32_t region,
+    uint32_t rate_hz_in,
+    uint32_t *rate_hz_out
+)
+{
+    return vrtd_clock_set_rate_op(fd, dev, region, rate_hz_in,
+                                  VRTD_CLOCK_OP_SET_ROUND_DOWN, rate_hz_out);
 }
 
 enum vrtd_ret vrtd_open_bar_file(
