@@ -625,18 +625,6 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
             _copy_tree(src_dir, static_shell_dir)
 
     else:  # ShellType.COMPUTE
-        static_shell_dir = config.out_dir / "static_shell_compute"
-        static_shell_dir.mkdir(parents=True, exist_ok=True)
-
-        create_build_project_compute(config)
-
-        require_static_shell_timing_or_confirm(
-            build_dir=config.build_dir,
-            project_name=config.project_name,
-            ignore_failure=config.ignore_timing_failure,
-            noninteractive=config.noninteractive,
-        )
-
         # debug_nets.ltx is auto-emitted by Vivado because the compute base shell
         # instantiates the debug hub. It is the full debug probe file
         # (FULL_PROBES.FILE) that must be loaded before a user region's partial
