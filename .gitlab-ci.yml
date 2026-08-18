@@ -37,7 +37,7 @@ package_linker:
       description: Build the base design from scratch?
       type: boolean
   variables:
-    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal -c 16 --mem 120G -t 12:00:00"
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal --exclusive -t 12:00:00"
     BASE_DESIGN_REF: dev
   needs:
     - project: $CI_PROJECT_PATH
