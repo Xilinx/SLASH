@@ -114,20 +114,31 @@ sudo apt install cmake pkg-config ninja-build \
   linux-headers-$(uname -r)
 ```
 
-**Submodules:**
+**Clone and submodules:**
 
-SLASH depends on [AVED](https://github.com/Xilinx/AVED) and
-[QDMA](https://github.com/Xilinx/dma_ip_drivers):
+SLASH depends on [AVED](https://github.com/Xilinx/AVED),
+[QDMA](https://github.com/Xilinx/dma_ip_drivers) and, for the Ethernet-capable
+service shell, [Versal-DCMAC](https://github.com/fpgasystems/Versal-DCMAC):
 
 ```bash
-git submodule update --init submodules/AVED submodules/qdma_drv
+git clone -b dev https://github.com/Xilinx/SLASH.git
+cd SLASH
+git submodule update --init submodules/AVED submodules/qdma_drv submodules/Versal-DCMAC
 ```
 
+Do not clone with `--recurse-submodules`. The optional Xilinx QEMU submodule
+brings in QEMU's entire ROM tree as further nested submodules — none of which
+SLASH builds — and at least one of those third-party URLs no longer exists
+upstream, so a recursive clone fails on a repository you do not need. The two
+QEMU submodules are therefore marked `update = none` in `.gitmodules` and a
+recursive clone skips them.
+
 The optional RP1 firmware test additionally requires Xilinx QEMU and its
-device trees:
+device trees. `--checkout` is what opts back in:
 
 ```bash
-git submodule update --init submodules/xilinx-qemu submodules/qemu-devicetrees
+git submodule update --init --checkout \
+    submodules/xilinx-qemu submodules/qemu-devicetrees
 ```
 
 ## Quick Start

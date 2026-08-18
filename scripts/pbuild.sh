@@ -32,6 +32,10 @@ if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
     bash scripts/root-design-build.sh
 fi
 
+# submodules/ is outside linker/, so the DCMAC sources have to be copied into
+# the package tree before the wheel is built.
+bash scripts/stage-versal-dcmac.sh
+
 rm -rf linker/dist linker/build linker/slashkit.egg-info
 rm -rf .venv
 python3 -m venv .venv

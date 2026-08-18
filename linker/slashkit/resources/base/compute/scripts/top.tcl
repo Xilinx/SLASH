@@ -59,6 +59,12 @@ if { $list_projs eq "" } {
    create_project project_1 myproj -part xcv80-lsva4737-2MHP-e-S
 }
 
+# Shell build-ID constants for the static-region GPIO register. Normally set by
+# create_project.tcl from the git commit; if sourced standalone default to a
+# zero hash with bit [28] set, which still identifies this as the compute shell.
+if { ![info exists ::build_id_lo] } { set ::build_id_lo 0 }
+if { ![info exists ::build_id_hi] } { set ::build_id_hi 0x10000000 }
+
 
 # CHANGE DESIGN NAME HERE
 variable design_name
@@ -152,6 +158,7 @@ xilinx.com:ip:cmd_queue:2.0\
 xilinx.com:ip:axi_gpio:2.0\
 xilinx.com:ip:xlconcat:2.1\
 xilinx.com:ip:util_reduced_logic:2.0\
+xilinx.com:ip:xlconstant:1.1\
 "
 
    set list_ips_missing ""
@@ -718,9 +725,42 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   # Create instance: smartconnect_0, and set properties
   set smartconnect_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0 ]
   set_property -dict [list \
-    CONFIG.NUM_MI {2} \
+    CONFIG.NUM_MI {3} \
     CONFIG.NUM_SI {1} \
   ] $smartconnect_0
+
+
+  # Create instance: build_id_gpio, and set properties.
+  # Read-only shell build-ID register: git commit hash (with dirty flag) baked in
+  # via constant blocks. Dual-channel AXI GPIO, both channels inputs.
+  set build_id_gpio [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 build_id_gpio ]
+  set_property -dict [list \
+    CONFIG.C_ALL_INPUTS {1} \
+    CONFIG.C_ALL_INPUTS_2 {1} \
+    CONFIG.C_GPIO2_WIDTH {32} \
+    CONFIG.C_GPIO_WIDTH {32} \
+    CONFIG.C_IS_DUAL {1} \
+  ] $build_id_gpio
+
+
+  # Create instance: build_id_lo, and set properties.
+  # Low 32 bits of the git SHA-1. Value injected at build time via ::build_id_lo.
+  set build_id_lo [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 build_id_lo ]
+  set_property -dict [list \
+    CONFIG.CONST_WIDTH {32} \
+    CONFIG.CONST_VAL $::build_id_lo \
+  ] $build_id_lo
+
+
+  # Create instance: build_id_hi, and set properties.
+  # Bits [27:0] = next 28 bits of the git SHA-1; bit [28] = shell type (1 = compute);
+  # bits [30:29] reserved; bit [31] = dirty flag.
+  # Value injected at build time via ::build_id_hi.
+  set build_id_hi [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 build_id_hi ]
+  set_property -dict [list \
+    CONFIG.CONST_WIDTH {32} \
+    CONFIG.CONST_VAL $::build_id_hi \
+  ] $build_id_hi
 
 
   # Create instance: clk_wizard_slash, and set properties
@@ -798,12 +838,18 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   connect_bd_intf_net -intf_net axi_noc_0_M00_AXI [get_bd_intf_pins smartconnect_0/S00_AXI] [get_bd_intf_pins axi_noc_0/M00_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M00_AXI [get_bd_intf_pins clk_wizard_slash/s_axi_lite] [get_bd_intf_pins smartconnect_0/M00_AXI]
   connect_bd_intf_net -intf_net smartconnect_0_M01_AXI [get_bd_intf_pins clk_wizard_service/s_axi_lite] [get_bd_intf_pins smartconnect_0/M01_AXI]
+  connect_bd_intf_net -intf_net smartconnect_0_M02_AXI [get_bd_intf_pins build_id_gpio/S_AXI] [get_bd_intf_pins smartconnect_0/M02_AXI]
 
   # Create port connections
+  connect_bd_net -net build_id_lo_dout  [get_bd_pins build_id_lo/dout] \
+  [get_bd_pins build_id_gpio/gpio_io_i]
+  connect_bd_net -net build_id_hi_dout  [get_bd_pins build_id_hi/dout] \
+  [get_bd_pins build_id_gpio/gpio2_io_i]
   connect_bd_net -net aresetn_1  [get_bd_pins aresetn] \
   [get_bd_pins smartconnect_0/aresetn] \
   [get_bd_pins clk_wizard_slash/s_axi_aresetn] \
   [get_bd_pins clk_wizard_service/s_axi_aresetn] \
+  [get_bd_pins build_id_gpio/s_axi_aresetn] \
   [get_bd_pins proc_sys_reset_0/ext_reset_in] \
   [get_bd_pins proc_sys_reset_1/ext_reset_in]
   connect_bd_net -net clk_wizard_service_clk_out1  [get_bd_pins clk_wizard_service/clk_out1] \
@@ -822,7 +868,8 @@ proc create_hier_cell_clk_rst_shell { parentCell nameHier } {
   [get_bd_pins axi_noc_0/aclk0] \
   [get_bd_pins smartconnect_0/aclk] \
   [get_bd_pins clk_wizard_slash/s_axi_aclk] \
-  [get_bd_pins clk_wizard_service/s_axi_aclk]
+  [get_bd_pins clk_wizard_service/s_axi_aclk] \
+  [get_bd_pins build_id_gpio/s_axi_aclk]
   connect_bd_net -net pl3_ref_clk_1  [get_bd_pins refclk] \
   [get_bd_pins clk_wizard_slash/clk_in1] \
   [get_bd_pins clk_wizard_service/clk_in1]
@@ -2594,7 +2641,7 @@ proc create_hier_cell_static_region { parentCell nameHier } {
     CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
     CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
     CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {350,100.000,100.000,100.000,100.000,100.000,100.000} \
+    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {360,100.000,100.000,100.000,100.000,100.000,100.000} \
     CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
     CONFIG.CLKOUT_USED {true,false,false,false,false,false,false} \
     CONFIG.RESET_TYPE {ACTIVE_LOW} \
@@ -4057,6 +4104,7 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x000102100000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_pmc_slave_boot_stream] -force
   assign_bd_address -offset 0x020400010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_service/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_slash/s_axi_lite/Reg] -force
+  assign_bd_address -offset 0x020400020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs static_region/clk_rst_shell/build_id_gpio/S_AXI/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200490000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_65/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202004A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_0] [get_bd_addr_segs slash/ddr_bandwidth_66/s_axi_control/Reg] -force
@@ -4185,6 +4233,7 @@ proc create_root_design { parentCell } {
   assign_bd_address -offset 0x000102100000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/aved/cips/NOC_PMC_AXI_0/pspmc_0_psv_pmc_slave_boot_stream] -force
   assign_bd_address -offset 0x020400010000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_service/s_axi_lite/Reg] -force
   assign_bd_address -offset 0x020400000000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/clk_wizard_slash/s_axi_lite/Reg] -force
+  assign_bd_address -offset 0x020400020000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs static_region/clk_rst_shell/build_id_gpio/S_AXI/Reg] -force
   assign_bd_address -offset 0x020200480000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_64/s_axi_control/Reg] -force
   assign_bd_address -offset 0x020200490000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_65/s_axi_control/Reg] -force
   assign_bd_address -offset 0x0202004A0000 -range 0x00010000 -target_address_space [get_bd_addr_spaces static_region/aved/cips/CPM_PCIE_NOC_1] [get_bd_addr_segs slash/ddr_bandwidth_66/s_axi_control/Reg] -force

@@ -46,7 +46,31 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run unit tests
-        run: cd linker && pytest
+        run: |
+          cd linker
+          pytest --cov-report=term \
+                 --cov-report=xml:coverage.xml \
+                 --cov-report=json:coverage.json
+
+      - name: Summarise coverage
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          totals = json.load(open("linker/coverage.json"))["totals"]
+          print("### linker coverage: "
+                f"{totals['percent_covered']:.1f}%")
+          print()
+          print(f"{totals['covered_lines']} of {totals['num_statements']} "
+                "statements covered")
+          PY
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: linker-coverage-data
+          path: |
+            linker/coverage.xml
+            linker/coverage.json
 
       - name: Check formatting
         run: cd linker && autopep8 -r --diff --exit-code --exclude 'slashkit/resources/*' slashkit/ test/

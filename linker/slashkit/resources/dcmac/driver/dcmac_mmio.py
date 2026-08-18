@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
-import pprint
 import time
 from tabulate import tabulate
 from generic_mmio import GenericMMIO
@@ -73,9 +72,9 @@ class DCMAC(GenericMMIO):
     #     offset = registers['C0_' + chn_reg_name]['offset']
     #     return self._pciemmio.read(self._offset + offset)
 
-    def read_reg_field(self, reg_name: str, field: str):
-        """Read a field from  reg'"""
-        field = registers[reg_name]['fields'][field]
+    def read_reg_field(self, reg_name: str, field_name: str):
+        """Read a field from reg'"""
+        field = registers[reg_name]['fields'][field_name]
         val = self.read(reg_name)
         return rshift(val, field['start'], field['length'])
 
@@ -117,7 +116,6 @@ class DCMAC(GenericMMIO):
                     if fields:
                         status_dict[entry_name] = {}
                         for f in fields:
-
                             status_dict[entry_name][f] = {"latched": "-", "real-time": "-", "default": fields[f]['default']}
                     else:
                         status_dict[entry_name] = {"latched": "-", "real-time": "-", "default": "-"}
@@ -132,7 +130,7 @@ class DCMAC(GenericMMIO):
     def print_status(self, only_modified_fields: bool = False):
         status_dict = self.status
         table = []
-        table += [["Register", "Field", "Latched", "Real-Time", "Default"]]
+        table.append(["Register", "Field", "Latched", "Real-Time", "Default"])
         for reg_name, fields in status_dict.items():
             row_count = 0
             for field_name, field in fields.items():
@@ -140,10 +138,10 @@ class DCMAC(GenericMMIO):
                 if only_modified_fields:
                     if field["latched"] == default_val and field["real-time"] == default_val:
                         continue
-                table += [[reg_name if row_count == 0 else "", field_name, field["latched"], field["real-time"], default_val]]
+                table.append([reg_name if row_count == 0 else "", field_name, field["latched"], field["real-time"], default_val])
                 row_count += 1
             if row_count > 0:
-                table += [["--------------------", "--------------------", "--------", "--------", "--------"]]
+                table.append(["--------------------", "--------------------", "--------", "--------", "--------"])
         if only_modified_fields:
             if len(table) == 1:
                 print("All status Registers have default values")
@@ -159,7 +157,7 @@ class DCMAC(GenericMMIO):
         config_regs = ['GLOBAL_MODE', 'C0_TX_MODE_REG', 'C0_RX_MODE_REG']
         for reg_name in config_regs:
             spec = registers[reg_name]
-            fields = spec.get('fields', False)
+            fields = spec.get('fields', {})
             readval = self.read(spec['offset'])
             config_dict[reg_name] = {}
             for f_name, f_spec in fields.items():
@@ -171,7 +169,7 @@ class DCMAC(GenericMMIO):
     def print_config(self, only_modified_fields: bool = False):
         config_dict = self.config
         table = []
-        table += [["Register", "Field", "Value", "Default"]]
+        table.append(["Register", "Field", "Value", "Default"])
         for reg_name, fields in config_dict.items():
             row_count = 0
             for field_name, field in fields.items():
@@ -179,45 +177,52 @@ class DCMAC(GenericMMIO):
                 if only_modified_fields:
                     if field["value"] == default_val:
                         continue
-                table += [[reg_name if row_count == 0 else "", field_name, field["value"], default_val]]
+                table.append([reg_name if row_count == 0 else "", field_name, field["value"], default_val])
                 row_count += 1
             if row_count > 0:
-                table += [["--------------------", "--------------------", "--------", "--------", "--------"]]
+                table.append(["--------------------", "--------------------", "--------", "--------"])
         if only_modified_fields:
             print("Configuration Registers with non-default values")
         else:
             print("Configuration Registers")
         print(tabulate(table, headers="firstrow", tablefmt="pretty"))
 
+    def pm_tick(self, port: int = 0, direction: str = 'tx'):
+        """Pulse the MAC PM tick for the given port and direction ('tx' or
+        'rx'). This latches the accumulated statistics and resets the
+        collection window."""
+        if port not in (0, 1):
+            raise ValueError("'port' must be either 0 or 1")
+
+        chan_base = 0x1000 * (port + 1)
+        if direction == 'tx':
+            mode_off, tick_off, done_off = 0x40, 0xFC, 0x808
+            mode_bit = registers['C0_TX_MODE_REG']['fields']['c0_ctl_tx_tick_reg_mode_sel']['start']
+        elif direction == 'rx':
+            mode_off, tick_off, done_off = 0x44, 0xF4, 0xC08
+            mode_bit = registers['C0_RX_MODE_REG']['fields']['c0_ctl_rx_tick_reg_mode_sel']['start']
+        else:
+            raise ValueError("'direction' must be 'tx' or 'rx'")
+
+        value = self.read(chan_base + mode_off)
+        value |= (1 << mode_bit)
+        self.write(chan_base + mode_off, value)
+        self.write(chan_base + tick_off, 0)
+        self.write(chan_base + tick_off, 1)
+
+        for _ in range(10):
+            if self.read(chan_base + done_off) != 0:
+                break
+
     def tx_stats(self, port: int = 0, debug: bool = False,
                  verbose: int = 0):
         """Reads and print TX stats for the given port"""
 
-        if isinstance(port, int) and not 0 <= port < 1:
+        if port not in (0, 1):
             raise ValueError("'port' must be either 0 or 1")
 
         baseoffset = 0x1000 * (port + 1) + 0x0200
-
-        # Sets pm tick to be triggered by registers
-        value = self.read(baseoffset - 0x200 + 0x40)
-        pm_tick_bit = registers['C0_TX_MODE_REG']['fields']['c0_ctl_tx_tick_reg_mode_sel']['start']
-        value |= (1 * (2**pm_tick_bit))
-        self.write(baseoffset - 0x200 + 0x40, value)
-
-        # trigger ALL_CHANNEL_MAC_TICK_REG_TX
-        #offset = registers['ALL_CHANNEL_MAC_TICK_REG_TX']['offset']
-        #self.write(offset, 0)
-        #self.write(offset, 1)
-        #self.write(offset, 0)
-
-        # trigger pm tick
-        self.write(baseoffset - 0x200 + 0xFC, 0)
-        self.write(baseoffset - 0x200 + 0xFC, 1)
-
-        for i in range(10):
-            val = self.read(baseoffset - 0x200 + 0x808)
-            if val != 0:
-                break
+        self.pm_tick(port, 'tx')
 
         heading = [[f"TX Stats {port=}", "Value"]]
         if debug:
@@ -229,31 +234,11 @@ class DCMAC(GenericMMIO):
                  verbose: int = 0):
         """Reads and print RX stats for the given port"""
 
-        if isinstance(port, int) and not 0 <= port < 1:
+        if port not in (0, 1):
             raise ValueError("'port' must be either 0 or 1")
 
         baseoffset = 0x1000 * (port + 1) + 0x0400
-
-        # Sets pm tick to be triggered by registers
-        value = self.read(baseoffset - 0x400 + 0x44)
-        pm_tick_bit = registers['C0_RX_MODE_REG']['fields']['c0_ctl_rx_tick_reg_mode_sel']['start']
-        value |= (1 * (2**pm_tick_bit))
-        self.write(baseoffset - 0x400 + 0x44, value)
-
-        # trigger ALL_CHANNEL_MAC_TICK_REG_RX
-        #offset = registers['ALL_CHANNEL_MAC_TICK_REG_RX']['offset']
-        #self.write(offset, 0)
-        #self.write(offset, 1)
-        #self.write(offset, 0)
-
-        # trigger pm tick
-        self.write(baseoffset - 0x400 + 0xF4, 0)
-        self.write(baseoffset - 0x400 + 0xF4, 1)
-
-        for i in range(10):
-            val = self.read(baseoffset - 0x400 + 0xC08)
-            if val != 0:
-                break
+        self.pm_tick(port, 'rx')
 
         heading = [[f"RX Stats {port=}", "Value"]]
         if debug:
@@ -261,11 +246,11 @@ class DCMAC(GenericMMIO):
         table = self._stats(baseoffset, 'rx', heading, debug, verbose)
         print(tabulate(table, headers="firstrow", tablefmt="pretty"))
 
-    def _stats(self, baseoffset: int, dir: str, tableheading: str,
+    def _stats(self, baseoffset: int, direction: str, tableheading: list,
                debug: bool, verbose: int = 0):
 
         table = tableheading
-        stats_base_reg = tx_stats_base_reg if dir == 'tx' else rx_stats_base_reg
+        stats_base_reg = tx_stats_base_reg if direction == 'tx' else rx_stats_base_reg
         for k, v in stats_base_reg.items():
             if 'LSB' in k:
                 readval = self.read_long(baseoffset + v['offset'])
@@ -365,7 +350,7 @@ class DCMAC(GenericMMIO):
             print(".", end= "", flush=True)
             time.sleep(0.25)
         else:
-            print('WARN: Chn 0 RX failed to achieve alignment')
+            print('WARN: channel 0 RX failed to achieve alignment')
             rst_successful = False
 
         if clear_status_history:
@@ -392,7 +377,7 @@ class DCMAC(GenericMMIO):
 
 def main(args):
     offset = get_ip_offset(0x200_0000, args.dcmac)
-    obj = DCMAC(args.dev, base_offset=offset)
+    obj = DCMAC(args.dev, resource=args.resource, base_offset=offset)
 
     if args.tx:
         obj.reset_tx()
@@ -411,10 +396,8 @@ def main(args):
         obj.print_config(only_modified_fields=args.verbose < 1)
 
     if args.print:
-        # pprint.pp(obj.ip_dict)
         obj.tx_stats(0, True, verbose=args.verbose)
         obj.rx_stats(0, True, verbose=args.verbose)
-    del obj
 
 
 if __name__ == "__main__":

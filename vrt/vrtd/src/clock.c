@@ -812,7 +812,8 @@ static size_t clock_driver_generate_candidates(
     struct clock_driver *clk,
     uint32_t target_hz,
     struct clock_candidate *cands,
-    size_t max_candidates
+    size_t max_candidates,
+    bool no_exceed
 )
 {
     if (clk == NULL || target_hz == 0 || cands == NULL || max_candidates == 0) {
@@ -859,6 +860,11 @@ static size_t clock_driver_generate_candidates(
 
             for (uint32_t o = o_lo; o <= o_hi; ++o) {
                 uint64_t achieved_hz = fvco_hz / o;
+                /* Round-down mode: never program a rate above the target, so the
+                 * user logic never runs faster than the timed frequency. */
+                if (no_exceed && achieved_hz > target_hz) {
+                    continue;
+                }
                 uint64_t diff_hz = (achieved_hz > target_hz)
                     ? (achieved_hz - target_hz)
                     : (target_hz - achieved_hz);
@@ -924,7 +930,8 @@ static int clock_driver_try_set_rate_hz(
     struct clock_driver *clk,
     uint32_t wizard_offset,
     uint32_t clock_id,
-    uint32_t *rate_hz_inout
+    uint32_t *rate_hz_inout,
+    bool no_exceed
 )
 {
     if (clk == NULL || rate_hz_inout == NULL || *rate_hz_inout == 0) {
@@ -944,7 +951,8 @@ static int clock_driver_try_set_rate_hz(
         clk,
         *rate_hz_inout,
         candidates,
-        CLOCK_DRIVER_DEFAULT_MAX_CANDIDATES
+        CLOCK_DRIVER_DEFAULT_MAX_CANDIDATES,
+        no_exceed
     );
     if (count == 0) {
         errno = ERANGE;
@@ -1075,7 +1083,8 @@ int clock_driver_set_service_region_rate_hz(struct clock_driver *clk, uint32_t *
         clk,
         CLOCK_DRIVER_SERVICE_REGION_WIZARD_OFFSET,
         CLOCK_DRIVER_WIZARD_CLKOUT_ID,
-        rate_hz_inout
+        rate_hz_inout,
+        false
     );
     if (ret != 0) {
         LOG(
@@ -1127,7 +1136,11 @@ int clock_driver_get_user_region_rate_hz(struct clock_driver *clk, uint32_t *rat
  *                       actual achieved frequency in Hz.
  * @return 0 on success, -1 on error (logged).
  */
-int clock_driver_set_user_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_inout)
+int clock_driver_set_user_region_rate_hz(
+    struct clock_driver *clk,
+    uint32_t *rate_hz_inout,
+    bool no_exceed
+)
 {
     if (clock_driver_check_wizard_bounds(clk, CLOCK_DRIVER_USER_REGION_WIZARD_OFFSET) != 0) {
         LOG(LOG_ERR, "clock_driver: user region wizard bounds check failed: %m");
@@ -1137,7 +1150,8 @@ int clock_driver_set_user_region_rate_hz(struct clock_driver *clk, uint32_t *rat
         clk,
         CLOCK_DRIVER_USER_REGION_WIZARD_OFFSET,
         CLOCK_DRIVER_WIZARD_CLKOUT_ID,
-        rate_hz_inout
+        rate_hz_inout,
+        no_exceed
     );
     if (ret != 0) {
         LOG(

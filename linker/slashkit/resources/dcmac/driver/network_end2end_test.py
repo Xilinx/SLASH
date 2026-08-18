@@ -3,11 +3,10 @@
 
 import argparse
 import time
-from dcmac_init import dcmac_logic_init
 from dcmac_mmio import DCMAC
 from utils import add_common_args, get_ip_offset
 from udp_utils import NetworkLayer
-from trafficgen import TrafficGenerator
+from trafficgen import TrafficProducer
 
 """This file aims at doing a test of the Ethernet or UDP layer between two interfaces in
 board, interface 0 and 2. It will initialize the DCMAC and then setup the
@@ -15,34 +14,20 @@ interfaces IP, MAC addresses as well as the UDP socket table.
 """
 
 DCMAC_BASEADDR = 0x200_0000
-TRAFFICGEN_BASEADDR = 0x400_2000
 NL_BASEADDR = 0x400_0000
 
 
-class ArgsClass:
-    dcmac = 0
-    init = False
-    print = 1
-    dev = None
-    verbose = 1
-    loopback = None
-    keep_alive = 0
-    align_rx = 1
-    traffic_test = 0
-
-
 def main(args):
-    """Initialize DCMAC in each interface"""
-    init_args = ArgsClass()
-    init_args.dev = args.dev
-    """Init DCMAC 0"""
-    dcmac_logic_init(init_args)
+    dcmac0 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 0))
+    dcmac1 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 1))
 
-    """Init DCMAC 0"""
-    init_args.dcmac = 1
-    dcmac_logic_init(init_args)
+    print(f'{dcmac0.link_up=}')
+    print(f'{dcmac1.link_up=}')
 
-    # reset TX first then RX
+    if not (dcmac0.link_up and dcmac1.link_up):
+        print('Link not detected in at least one of the DCMACs')
+        return
+
     if args.udp:
         """Basic network layer config"""
         nl0 = NetworkLayer(args.dev, base_offset=get_ip_offset(NL_BASEADDR, 0))
@@ -82,19 +67,26 @@ def main(args):
         nl1.sockets[0] = (ip_if0, port_rx, port_tx, True)
         nl1.populate_socket_table(debug=True)
 
+    if not args.skip_clear:
+        # Discard the link bring-up transient (e.g. the initial BAD_CODE_COUNT)
+        # so the post-traffic numbers reflect only the packets we send below.
+        for d in (dcmac0, dcmac1):
+            d.pm_tick(direction='tx')
+            d.pm_tick(direction='rx')
+
     """Now we can generate some traffic"""
 
-    tgen0 = TrafficGenerator(args.dev, resource=0, base_offset=0x004C_0000)
-    tgen1 = TrafficGenerator(args.dev, resource=0, base_offset=0x0050_0000)
+    tp0 = TrafficProducer(args.dev, resource=0, base_offset=0x004C_0000)
+    tp1 = TrafficProducer(args.dev, resource=0, base_offset=0x0050_0000)
 
-    tgen0.flits = 22
-    tgen0.dest = 0
-    tgen0.start()
+    tp0.flits = 22
+    tp0.dest = 0
+    tp0.start()
     time.sleep(1)
 
-    tgen1.flits = 22
-    tgen1.dest = 0
-    tgen1.start()
+    tp1.flits = 8
+    tp1.dest = 0
+    tp1.start()
     time.sleep(1)
 
     if args.udp:
@@ -105,14 +97,11 @@ def main(args):
         nl1.get_debug_stats(True)
         print('\n')
 
-    dcmac0 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 0))
-    dcmac1 = DCMAC(args.dev, base_offset=get_ip_offset(DCMAC_BASEADDR, 1))
+    print(f'{dcmac0.tx_stats(verbose=1)=}\n')
+    print(f'{dcmac0.rx_stats(verbose=1)=}\n\n')
 
-    print(f'{dcmac0.tx_stats(verbose=1)=}')
-    print(f'{dcmac0.rx_stats(verbose=1)=}')
-
-    print(f'{dcmac1.tx_stats(verbose=1)=}')
-    print(f'{dcmac1.rx_stats(verbose=1)=}')
+    print(f'{dcmac1.tx_stats(verbose=1)=}\n')
+    print(f'{dcmac1.rx_stats(verbose=1)=}\n\n')
 
     if args.udp:
         print(f'{nl0.get_freq=}')
@@ -123,6 +112,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-u', '--udp', action='store_true',
                         help='Use UDP logic')
+    parser.add_argument('--skip-clear', action='store_true',
+                        help='Skip reading/clearing DCMAC stats before sending traffic')
     parser = add_common_args(parser, verbose=True)
     args = parser.parse_args()
     main(args)
