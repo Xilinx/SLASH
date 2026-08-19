@@ -53,6 +53,7 @@ management, and memory operations.
    explanation/dcmac
    explanation/vrtbin-format
    explanation/pcie-topology
+   explanation/bar-address-map
    explanation/platform-modes
 
 .. toctree::
