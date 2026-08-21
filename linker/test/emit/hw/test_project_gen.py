@@ -28,7 +28,7 @@ import pytest
 
 from slashkit.core import launcher
 from slashkit.core.command_config import ShellType
-from slashkit.emit.hw import project_gen, tcl_gen
+from slashkit.emit.hw import project_gen
 
 LIBUDEV = "/lib/x86_64-linux-gnu/libudev.so.1"
 LIBCAP = "/lib/x86_64-linux-gnu/libcap.so.2"
@@ -81,23 +81,6 @@ def test_install_dispatches_selected_stage_to_selected_shell(
 
     assert [stage_name for stage_name, _path in calls] == expected
     assert all(path == tmp_path / directory for _stage, path in calls)
-
-
-def test_compute_shell_rejects_debug_hub():
-    """Compute builds fail before emitting references to a missing debug hub."""
-    config = SimpleNamespace(
-        block_design_ports=None,
-        configuration=SimpleNamespace(
-            streams=[],
-            debug=SimpleNamespace(nets=[object()]),
-        ),
-        kernel_instances=[],
-        kernels=[],
-        shell_type=ShellType.COMPUTE,
-    )
-
-    with pytest.raises(ValueError, match=r"\[debug\] requires shell=service"):
-        tcl_gen.generate_tcl(config)
 
 
 def test_compute_build_forwards_job_count(monkeypatch, tmp_path):

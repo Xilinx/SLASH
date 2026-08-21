@@ -33,9 +33,14 @@ logger = logging.getLogger(__name__)
 
 HW_BUILD_DIR_ENV_KEYS = ("SLASH_HW_BUILD_DIR", "slash_hw_build_dir")
 _FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+# Columns are separated by two or more spaces; the multi-word headings
+# ("TNS Failing Endpoints") use single spaces internally.
+_COLUMN_SPLIT_RE = re.compile(r"\s{2,}")
 
 
-def _find_design_timing_summary_row(report_text: str) -> Optional[list[float]]:
+def _find_design_timing_summary_row(
+    report_text: str,
+) -> Optional[tuple[list[str], list[float]]]:
     if not report_text:
         return None
 
@@ -56,6 +61,9 @@ def _find_design_timing_summary_row(report_text: str) -> Optional[list[float]]:
     if header_idx is None:
         return None
 
+    header = lines[header_idx].strip()
+    columns = [c for c in _COLUMN_SPLIT_RE.split(header) if c]
+
     for i in range(header_idx + 1, min(header_idx + 20, len(lines))):
         line = lines[i].strip()
         if not line:
@@ -64,16 +72,39 @@ def _find_design_timing_summary_row(report_text: str) -> Optional[list[float]]:
             continue
         values = [float(m.group(0)) for m in _FLOAT_RE.finditer(line)]
         if values:
-            return values
+            return columns, values
 
     return None
 
 
-def extract_design_timing_slacks_ns(report_text: str) -> Optional[tuple[float, float]]:
-    values = _find_design_timing_summary_row(report_text)
-    if values is None or len(values) < 3:
+def _column_value(
+    columns: list[str], values: list[float], name: str
+) -> Optional[float]:
+    # Index by heading rather than by offset. Vivado interleaves endpoint counts
+    # between the slack columns -- WNS, TNS, TNS Failing Endpoints, TNS Total
+    # Endpoints, WHS, THS, ... -- so WHS sits at offset 4, not the 2 that a
+    # WNS/TNS/WHS/THS reading of the table would suggest. Reading offset 2
+    # returned the failing-endpoint count as the hold slack, which silently
+    # disabled the whs >= 0 half of design_timing_met() (a count is never
+    # negative) and printed nonsense in the failure message.
+    if len(columns) != len(values):
         return None
-    return values[0], values[2]
+    try:
+        return values[columns.index(name)]
+    except ValueError:
+        return None
+
+
+def extract_design_timing_slacks_ns(report_text: str) -> Optional[tuple[float, float]]:
+    row = _find_design_timing_summary_row(report_text)
+    if row is None:
+        return None
+    columns, values = row
+    wns_ns = _column_value(columns, values, "WNS(ns)")
+    whs_ns = _column_value(columns, values, "WHS(ns)")
+    if wns_ns is None or whs_ns is None:
+        return None
+    return wns_ns, whs_ns
 
 
 def extract_design_wns_ns(report_text: str) -> Optional[float]:

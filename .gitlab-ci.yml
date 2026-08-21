@@ -37,7 +37,7 @@ package_linker:
       description: Build the base design from scratch?
       type: boolean
   variables:
-    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal -c 16 --mem 120G -t 12:00:00"
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal --exclusive -t 12:00:00"
     BASE_DESIGN_REF: dev
   needs:
     - project: $CI_PROJECT_PATH
@@ -81,6 +81,7 @@ package_linker:
         slashkit/resources/static_shell_compute/amd_v80_gen5x8_25.1.pdi \
         slashkit/resources/static_shell_compute/amd_v80_gen5x8_25.1_nofpt.pdi \
         slashkit/resources/static_shell_compute/static_shell_slash.dcp \
+        slashkit/resources/static_shell_compute/debug_nets.ltx \
         slashkit/resources/static_shell_compute/slash_base/slash_base.bd
       do
         test -e "$path"

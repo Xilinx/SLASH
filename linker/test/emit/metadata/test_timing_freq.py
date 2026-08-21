@@ -23,6 +23,8 @@
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from slashkit.emit.metadata import timing_freq
 
 
@@ -34,19 +36,21 @@ def _write_system_map(path: Path, clock_hz: int) -> None:
     )
 
 
-def _write_timing_report(path: Path, wns_ns: float) -> None:
-    # Minimal shape matching what extract_design_wns_ns() scans for: a
-    # "Design Timing Summary" section, a WNS(ns)/TNS(ns) header, then a data row
-    # whose first value is WNS and third is WHS.
+def _write_timing_report(path: Path, wns_ns: float, whs_ns: float = 0.100) -> None:
+    # The full column set Vivado emits, reproduced verbatim from a V80 static
+    # shell run. The endpoint-count columns interleaved between the slacks are
+    # the point: an abridged WNS/TNS/WHS/THS table puts WHS at offset 2 and lets
+    # an offset-based parser look correct while reading the wrong column off a
+    # real report.
     path.write_text(
         textwrap.dedent(
             f"""\
-            Design Timing Summary
-            ---------------------
+            | Design Timing Summary
+            | ---------------------
 
-              WNS(ns)      TNS(ns)  WHS(ns)  THS(ns)
-              -------      -------  -------  -------
-              {wns_ns:.3f}      0.000    0.100    0.000
+                WNS(ns)      TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints      WHS(ns)      THS(ns)  THS Failing Endpoints  THS Total Endpoints     WPWS(ns)     TPWS(ns)  TPWS Failing Endpoints  TPWS Total Endpoints
+                -------      -------  ---------------------  -------------------      -------      -------  ---------------------  -------------------     --------     --------  ----------------------  --------------------
+                 {wns_ns:.3f}       -31.539                   2049              1704696        {whs_ns:.3f}        0.000                      0              1700856        0.000        0.000                       0                520312
             """
         ),
         encoding="utf-8",
@@ -146,3 +150,37 @@ def test_met_target_does_not_warn(tmp_path, capsys):
     )
 
     assert "target not met" not in capsys.readouterr().err
+
+
+def test_slacks_come_from_the_named_columns(tmp_path):
+    # WHS must be read from the WHS(ns) column, not from a fixed offset. On a
+    # real report offset 2 is "TNS Failing Endpoints", so an offset-based parser
+    # reports the failing-endpoint count as the hold slack.
+    report = tmp_path / "report_timing_proj.txt"
+    _write_timing_report(report, wns_ns=-0.030, whs_ns=0.000)
+
+    slacks = timing_freq.extract_design_timing_slacks_ns(
+        report.read_text(encoding="utf-8"))
+
+    assert slacks == (-0.030, 0.000)
+
+
+def test_hold_violation_fails_the_gate(tmp_path):
+    # A design that meets setup but violates hold must not pass. This is the
+    # case the offset bug hid: the count it returned instead of WHS is never
+    # negative, so the whs >= 0 check could never fire.
+    build_dir = tmp_path
+    report = build_dir / "report_timing_proj.txt"
+    _write_timing_report(report, wns_ns=0.500, whs_ns=-0.012)
+
+    assert timing_freq.extract_design_timing_slacks_ns(
+        report.read_text(encoding="utf-8")) == (0.500, -0.012)
+    assert not timing_freq.design_timing_met(0.500, -0.012)
+
+    with pytest.raises(RuntimeError, match="timing failed"):
+        timing_freq.require_static_shell_timing_or_confirm(
+            build_dir=build_dir,
+            project_name="proj",
+            ignore_failure=False,
+            noninteractive=True,
+        )

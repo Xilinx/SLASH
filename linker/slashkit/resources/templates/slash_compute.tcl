@@ -726,6 +726,16 @@ connect_bd_net [get_bd_pins {{ c.src_pin }}] [get_bd_pins user_clk]
 connect_bd_net [get_bd_pins {{ r.src_pin }}] [get_bd_pins ilreduced_logic_0/Res]
 {% endfor %}
 
+# === Debug hub (paired with AXIS ILA) — created BEFORE the SmartConnect MI loop ===
+# The SmartConnect MI loop below wires <sc>/M##_AXI -> {{ debug_hub_name }}/S_AXI,
+# so the hub cell must already exist. S_AXI addressing is handled by the AXI-Lite
+# address loop (debug hub is passed as an extra AXI-Lite slave).
+{% if debug_hub_enabled|default(false) %}
+set {{ debug_hub_name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dbg_hub:2.0 {{ debug_hub_name }} ]
+connect_bd_net [get_bd_pins {{ debug_hub_name }}/aclk] [get_bd_pins user_clk]
+connect_bd_net [get_bd_pins {{ debug_hub_name }}/aresetn] [get_bd_pins ilreduced_logic_0/Res]
+{% endif %}
+
 # === SmartConnects for AXI-Lite control ===
 {% for sc in smartconnects %}
 # Create {{ sc.name }}
