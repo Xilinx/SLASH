@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Simulation</Platform>
+  <ClockFrequency>250000000</ClockFrequency>
+  <Kernel>
+    <Name>stagingk</Name>
+    <BaseAddress>0x0</BaseAddress>
+    <Range>0x1000</Range>
+    <register offset="0x00" name="CTRL" access="RW" description="Control register" range="32"/>
+  </Kernel>
+</SystemMap>

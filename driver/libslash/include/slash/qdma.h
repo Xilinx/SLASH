@@ -52,6 +52,7 @@
 #define LIBSLASH_QDMA_H
 
 #include "uapi/slash_interface.h"
+#include "ctldev.h"  /* enum slash_transport */
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -68,8 +69,10 @@ extern "C" {
  * callers should treat it as opaque.
  */
 struct slash_qdma {
-    int fd;     /**< File descriptor for the QDMA character device (-1 in mock mode). */
-    void *priv; /**< Opaque mock context, or NULL for real hardware. */
+    int fd;                      /**< File descriptor (char device or socket). */
+    void *priv;                  /**< Opaque mock context, or NULL for real hardware. */
+    enum slash_transport transport; /**< Transport selector (IOCTL, MOCK, or SOCKET). */
+    uint32_t seq;                /**< Next sequence id for socket requests. */
 };
 
 /**

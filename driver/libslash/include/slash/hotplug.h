@@ -29,7 +29,10 @@
 #ifndef LIBSLASH_HOTPLUG_H
 #define LIBSLASH_HOTPLUG_H
 
+#include "ctldev.h"
 #include "uapi/slash_hotplug.h"
+
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,7 +45,9 @@ extern "C" {
  * @brief Opaque handle to the hotplug control device.
  */
 struct slash_hotplug {
-    int fd; /**< File descriptor for the opened hotplug character device. */
+    int fd; /**< File descriptor for the opened hotplug character device or socket. */
+    enum slash_transport transport; /**< IOCTL or SOCKET, chosen at open time. */
+    uint32_t seq; /**< Per-handle request sequence counter (socket transport only). */
 };
 
 /**

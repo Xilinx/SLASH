@@ -155,7 +155,13 @@ TEST_F(qdma, query_info)
 
 	memset(&info, 0, sizeof(info));
 	info.size = sizeof(info);
-	ASSERT_EQ(0, ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info));
+	ASSERT_EQ(ioctl(self->ctl_fd, SLASH_QDMA_IOCTL_INFO, &info), 0);
+
+	/* The QDMA PF BDF must be reported, NUL-terminated and non-empty. */
+	size_t bdf_len = strnlen(info.bdf, sizeof(info.bdf));
+	EXPECT_GT(bdf_len, 0);
+	EXPECT_LT(bdf_len, sizeof(info.bdf));
+	
 	EXPECT_TRUE(slash_looks_like_bdf(info.bdf))
 	TH_LOG("bad QDMA BDF '%s'", info.bdf);
 	EXPECT_EQ('1', info.bdf[11])

@@ -26,6 +26,7 @@ set -euxo pipefail
 cd "$(dirname "$0")/.."
 
 cmake --build pbuild/smi
+cmake --build pbuild/slash_sysemu
 
 if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
     bash scripts/root-design-clean.sh

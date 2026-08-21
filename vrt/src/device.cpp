@@ -103,14 +103,20 @@ std::string shellQuote(const std::string& value) {
     return quoted;
 }
 
+std::string makeZmqURLFromBinaryDirCommand(const std::string& execPath) {
+    std::filesystem::path path(execPath);
+    return "ipc://" + (path.parent_path() / "zmq.socket").string();
+}
+
 std::string makeExecFromBinaryDirCommand(const std::string& execPath) {
     const std::filesystem::path path(execPath);
     const std::string dir = path.parent_path().string();
     const std::string file = path.filename().string();
+    const std::string socket_path = makeZmqURLFromBinaryDirCommand(execPath);
     if (dir.empty() || file.empty()) {
         return shellQuote(execPath);
     }
-    return "cd " + shellQuote(dir) + " && exec ./" + shellQuote(file);
+    return "cd " + shellQuote(dir) + " && exec ./" + shellQuote(file) + " " + socket_path;
 }
 
 vrtd::ShellType toVrtdShellType(ShellType shellType) {
@@ -246,7 +252,6 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
     this->pdiPath = this->vrtbin.getPdiPath();
     this->pdiPaths = this->vrtbin.getPdiPaths();
     this->programType = programType;
-    this->zmqServer = std::make_shared<ZmqServer>();
     this->platform = vrtbin.getPlatform();
     this->requiredShell = vrtbin.getShellType();
     if (platform == Platform::HARDWARE) {
@@ -280,8 +285,6 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
                        "Programmed user clock to {} Hz (target {} Hz)", achieved, clockFreq);
         }
     } else if (platform == Platform::EMULATION) {
-        parseSystemMap();
-        applyEmuManifestToKernels(this->vrtbin.getEmulationManifest(), kernels);
         std::string emulationExecPath = this->vrtbin.getEmulationExec();
         if (emulationExecPath.empty()) {
             throw std::runtime_error("Emulation executable vpp_emu not found in vrtbin");
@@ -290,6 +293,14 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
             throw std::runtime_error("Emulation executable is not runnable: " + emulationExecPath +
                                      " (" + std::strerror(errno) + ")");
         }
+
+        // Bind the server to the per-device socket derived from the executable's
+        // (per-BDF) extraction directory, before parseSystemMap() hands the server
+        // to each kernel via setServer().
+        this->zmqServer =
+            std::make_shared<ZmqServer>(makeZmqURLFromBinaryDirCommand(emulationExecPath));
+        parseSystemMap();
+        applyEmuManifestToKernels(this->vrtbin.getEmulationManifest(), kernels);
 
         const std::string emuCommand = makeExecFromBinaryDirCommand(emulationExecPath);
         runtimeThread = std::thread([emuCommand]() {
@@ -301,7 +312,6 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
         });
 
     } else {
-        parseSystemMap();
         std::string simulationExecPath = this->vrtbin.getSimulationExec();
         if (simulationExecPath.empty()) {
             throw std::runtime_error("Simulation executable vpp_sim not found in vrtbin");
@@ -310,6 +320,13 @@ Device::Device(const std::string& bdf, const std::string& vrtbinPath, bool progr
             throw std::runtime_error("Simulation executable is not runnable: " +
                                      simulationExecPath + " (" + std::strerror(errno) + ")");
         }
+
+        // Bind the server to the per-device socket derived from the executable's
+        // (per-BDF) extraction directory, before parseSystemMap() hands the server
+        // to each kernel via setServer().
+        this->zmqServer =
+            std::make_shared<ZmqServer>(makeZmqURLFromBinaryDirCommand(simulationExecPath));
+        parseSystemMap();
 
         const std::string simCommand = makeExecFromBinaryDirCommand(simulationExecPath);
         runtimeThread = std::thread([simCommand]() {

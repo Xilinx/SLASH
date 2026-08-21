@@ -42,6 +42,7 @@
 #include <linux/ioctl.h>
 #else
 #include <sys/ioctl.h>
+#include <stddef.h>
 #endif /* __KERNEL__ */
 
 /**
@@ -84,6 +85,10 @@ struct slash_ioctl_bar_info {
     __u64 start_address; /**< [out] Physical / bus start address of the BAR. */
     __u64 length;        /**< [out] Size of the BAR region in bytes. */
 };
+#define SLASH_IOCTL_BAR_INFO_MIN_SIZE \
+    offsetof(struct slash_ioctl_bar_info, usable)
+#define SLASH_IOCTL_BAR_INFO_RESPONSE_SIZE \
+    sizeof(struct slash_ioctl_bar_info)
 
 /**
  * @brief Obtain a file descriptor for a BAR.
@@ -106,6 +111,10 @@ struct slash_ioctl_bar_fd_request {
     /* Kernel to userspace */
     __u64 length;        /**< [out] Size of the BAR region backing the returned fd. */
 };
+#define SLASH_IOCTL_BAR_FD_MIN_SIZE \
+    offsetof(struct slash_ioctl_bar_fd_request, length)
+#define SLASH_IOCTL_BAR_FD_RESPONSE_SIZE \
+    sizeof(struct slash_ioctl_bar_fd_request)
 
 /** Maximum length (including NUL) of a PCI BDF string ("DDDD:BB:DD.F"). */
 #define SLASH_PCI_BDF_LEN 32
@@ -123,6 +132,17 @@ struct slash_ioctl_device_info {
     __u16 subsystem_vendor_id;        /**< [out] PCI subsystem vendor ID. */
     __u16 subsystem_device_id;        /**< [out] PCI subsystem device ID. */
 };
+
+/*
+ * GET_DEVICE_INFO is pure output: there are no input fields beyond `size`
+ * itself, so the smallest meaningful user_size is the size field on its
+ * own. A caller passing size==0 has either forgotten to initialise the
+ * struct or claimed an incoherent "my struct has zero bytes" — either way
+ * the kernel rejects with -EINVAL rather than silently writing 0 bytes
+ * back.
+ */
+#define SLASH_IOCTL_DEVICE_INFO_MIN_SIZE \
+    offsetof(struct slash_ioctl_device_info, bdf)
 
 /** Query BAR properties.  Fills the kernel-to-userspace fields of slash_ioctl_bar_info. */
 #define SLASH_CTLDEV_IOCTL_GET_BAR_INFO _IOWR('v', 0x30, struct slash_ioctl_bar_info)
@@ -142,6 +162,11 @@ struct slash_ioctl_device_info {
  * @brief Query QDMA subsystem capabilities.
  *
  * \@caps is reserved for future use; the kernel currently sets it to 0.
+ *
+ * \@bdf returns the PCI BDF string of the QDMA physical function (PF 1),
+ * NUL-terminated, e.g. "0000:61:00.1".  It lets userspace discover the device's
+ * PCI identity without reading /sys/ (needed by the emulation daemon, which
+ * exposes no sysfs, and convenient for real-driver device pairing).
  */
 struct slash_qdma_info {
     __u32 size;          /**< Struct size for ABI versioning. */
@@ -153,6 +178,8 @@ struct slash_qdma_info {
     __u32 caps;          /**< [out] Capability bitmask. */
     char bdf[SLASH_PCI_BDF_LEN]; /**< [out] Full PF1 PCI BDF string, NUL-terminated. */
 };
+#define SLASH_QDMA_INFO_MIN_SIZE \
+    offsetof(struct slash_qdma_info, qsets_max)
 
 /**
  * @brief AXI-MM / NoC channel selection for a queue pair.
@@ -207,6 +234,8 @@ struct slash_qdma_qpair_add {
     /* Userspace to kernel; appended for ABI compatibility. */
     __u32 aperture_size; /**< [in]  0 = linear MM addressing, non-zero = keyhole aperture. */
 };
+#define SLASH_QDMA_QPAIR_ADD_MIN_SIZE \
+    offsetof(struct slash_qdma_qpair_add, qid)
 
 /**
  * Queue pair lifecycle operations, used in slash_qdma_qpair_op::op.
@@ -230,6 +259,8 @@ struct slash_qdma_qpair_op {
     __u32 qid;  /**< [in] Queue pair ID (as returned by slash_qdma_qpair_add). */
     __u32 op;   /**< [in] One of the SLASH_QDMA_QUEUE_OP_* constants. */
 };
+#define SLASH_QDMA_QPAIR_OP_MIN_SIZE \
+    sizeof(struct slash_qdma_qpair_op)
 
 /**
  * @brief Maximum number of queue pairs a single transfer fd may own.
@@ -271,6 +302,8 @@ struct slash_qdma_qpair_fd_request {
     __u32 qpair_ids[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Queue pair IDs bound to
                         *  this fd; the array index is the qpair_index. */
 };
+#define SLASH_QDMA_QPAIR_FD_REQUEST_MIN_SIZE \
+    offsetof(struct slash_qdma_qpair_fd_request, qpair_count)
 
 /**
  * @brief Transfer direction for a registered-buffer DMA transfer.
@@ -327,6 +360,8 @@ struct slash_qdma_buf_create {
     __u32 granule;       /**< [out] Bytes per SGL descriptor (host page size). */
     __u32 transfer_hint; /**< [out] enum slash_qdma_transfer_hint. */
 };
+#define SLASH_QDMA_BUF_CREATE_MIN_SIZE \
+    offsetof(struct slash_qdma_buf_create, granule)
 
 /**
  * @brief One per-queue-pair sub-transfer within a transfer batch.
@@ -364,6 +399,8 @@ struct slash_qdma_transfer {
     __u32 count;       /**< [in] Number of sub-transfers (1..SLASH_QDMA_FD_MAX_QPAIRS). */
     struct slash_qdma_subxfer xfers[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Sub-transfers. */
 };
+#define SLASH_QDMA_TRANSFER_MIN_SIZE \
+    offsetof(struct slash_qdma_transfer, xfers)
 
 /**
  * Encoded size of the original slash_qdma_info ABI.
