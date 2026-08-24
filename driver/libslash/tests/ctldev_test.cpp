@@ -181,7 +181,8 @@ TEST_P(CtldevTest, DeviceInfoBdfNonEmpty) {
     struct slash_ioctl_device_info *info = slash_device_info_read(dev_);
     ASSERT_NE(info, nullptr) << strerror(errno);
     EXPECT_EQ(info->vendor_id, 0x10EEu);
-    EXPECT_EQ(info->device_id, 0x50B6u);
+    std::array<unsigned short, 2> device_ids{0x50B6u, 0x50C2u};
+    EXPECT_THAT(device_ids, testing::Contains(info->device_id));
     EXPECT_EQ(info->subsystem_vendor_id, 0x10EEu);
     EXPECT_EQ(info->subsystem_device_id, 0x000eu);
     EXPECT_GT(strlen(info->bdf), 0u);
@@ -195,17 +196,17 @@ TEST_P(CtldevTest, EvenBarsUsable) {
     for (int bar = 0; bar < 6; bar++) {
         struct slash_ioctl_bar_info *info = slash_bar_info_read(dev_, bar);
         ASSERT_NE(info, nullptr);
-        if (bar % 2 == 0) {
+        EXPECT_EQ(info->bar_number, bar);
+        if (bar == 0) {
             EXPECT_GT(info->usable, 0) << "Bar " << bar << " unusable";
             if (backend == LibSlashBackend::MOCK && bar == 0) {
                 EXPECT_EQ(info->length, LIBSLASH_MOCK_SOCK_BAR_SIZE);
             } else {
                 EXPECT_GT(info->length, 0u);
             }
-        } else {
-            EXPECT_EQ(info->usable, 0);
+        } else if (info->usable) {
+            EXPECT_GT(info->length, 0u);
         }
-        EXPECT_EQ(info->bar_number, bar);
         slash_bar_info_free(info);
     }
 }

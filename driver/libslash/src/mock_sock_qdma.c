@@ -600,7 +600,7 @@ static int qdma_qpair_ioctl_transfer(struct slash_mock_sock_qpair_state *state,
                    dev_end <= MOCK_SOCK_QDMA_HBM_END) {
             dev_start -= MOCK_SOCK_QDMA_HBM_BASE;
             dev_end -= MOCK_SOCK_QDMA_HBM_BASE;
-            size_t *buffer_size = state->main_state->hbm_memory_current_size;
+            size_t *buffer_size = &state->main_state->hbm_memory_current_size;
 
             if (dev_end > *buffer_size) {
                 void *new_ptr =

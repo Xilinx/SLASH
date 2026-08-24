@@ -22,6 +22,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 enum class LibSlashBackend {
     // Only relevant for hotplug, where no path equates to the driver.
