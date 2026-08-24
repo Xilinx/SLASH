@@ -132,7 +132,7 @@ TEST_P(DeviceTest, KernelRead) {
 TEST_P(DeviceTest, StubFetchesScalarByFunctionArgument) {
     constexpr uint64_t sizeAddress = 0x10000 + 0x28;
     constexpr uint32_t sizeValue = 17;
-    vrt::ZmqServer client;
+    vrt::ZmqServer client("tcp://localhost:5555");
 
     client.sendScalar(sizeAddress, sizeValue);
 
