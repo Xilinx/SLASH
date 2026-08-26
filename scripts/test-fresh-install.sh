@@ -130,6 +130,14 @@ RPM_PACKAGES=(
     ami
 )
 
+# Return success when dpkg records the package payload as installed. Selection
+# states such as "hold" must not turn an installed package into a false miss.
+deb_package_installed() {
+    local status
+    status=$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null || true)
+    [[ "${status}" == "installed" ]]
+}
+
 # =========================================================================
 #  DEB workflow
 # =========================================================================
@@ -142,14 +150,14 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
 
     INSTALLED=()
     for pkg in "${DEB_PACKAGES[@]}"; do
-        if dpkg -l "${pkg}" 2>/dev/null | grep -q '^ii'; then
+        if deb_package_installed "${pkg}"; then
             INSTALLED+=("${pkg}")
         fi
     done
 
     if [[ ${#INSTALLED[@]} -gt 0 ]]; then
         echo "Purging: ${INSTALLED[*]}"
-        apt-get purge -y "${INSTALLED[@]}"
+        apt-get purge -y --allow-change-held-packages "${INSTALLED[@]}"
         apt-get autoremove --purge -y
     else
         echo "No SLASH packages currently installed."
@@ -176,7 +184,7 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
     echo "  Stage 2: Install SLASH packages from ${ARTIFACTS_DIR}"
     echo "========================================================================"
 
-    apt-get install -y "${ARTIFACTS_DIR}"/*.deb
+    apt-get install -y --allow-change-held-packages "${ARTIFACTS_DIR}"/*.deb
 
 # =========================================================================
 #  RPM workflow
@@ -250,7 +258,7 @@ fi
 
 for pkg in "${PACKAGES[@]}"; do
     if [[ "${PKG_TYPE}" == "deb" ]]; then
-        if dpkg -l "${pkg}" 2>/dev/null | grep -q '^ii'; then
+        if deb_package_installed "${pkg}"; then
             RESULTS+=("${pkg}: INSTALLED")
             PASS_COUNT=$((PASS_COUNT + 1))
         else
