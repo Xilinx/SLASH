@@ -22,7 +22,7 @@ typedef enum {
 
 /*
  * outcome separates transport timeout from a completed PLM rejection.
- * status/detail remain unsigned and unmodified for CQ and terminal evidence.
+ * status/detail remain unsigned and unmodified for terminal evidence.
  */
 typedef struct {
     rp1_pdi_outcome_t outcome;

@@ -148,7 +148,7 @@ class Rp1BarWindow {
         writeAt(0, &in, sizeof(in));
     }
 
-    /// Copy @p n consecutive 64-byte node packets to the node array at
+    /// Copy @p n consecutive 32-byte node packets to the node array at
     /// @c (RP1_DEFAULT_NODE_ARRAY_OFFSET + index * sizeof(rp1_node_t)).
     /// @p node_array_offset is the window-relative byte offset of the
     /// node array (defaults to @c RP1_DEFAULT_NODE_ARRAY_OFFSET).
@@ -171,9 +171,14 @@ class Rp1BarWindow {
     void readSignal(std::uint32_t slot, rp1_signal_slot_t& out,
                     std::uint32_t sig_array_offset = RP1_DEFAULT_SIG_ARRAY_OFFSET);
 
-    /// Read completion-queue entry @p idx.
-    void readCq(std::uint32_t idx, rp1_cq_entry_t& out,
-                std::uint32_t cq_offset = RP1_DEFAULT_CQ_OFFSET);
+    /**
+     * @brief Read the committed 64-byte graph-result record in one snapshot.
+     *
+     * Callers must first observe the matching @c graph_done_seq. Firmware
+     * publishes every result payload word and its commit magic before that
+     * sequence, so one bracketed read then captures a stable terminal record.
+     */
+    void readGraphResult(rp1_graph_result_t& out);
 
     /// Read trace-queue entry @p idx.
     void readTrace(std::uint32_t idx, rp1_trace_entry_t& out,
@@ -189,7 +194,6 @@ class Rp1BarWindow {
     std::uint32_t readMagic()        { return readU32(offsetof(rp1_ctrl_t, magic)); }
     std::uint32_t readGraphSeq()     { return readU32(offsetof(rp1_ctrl_t, graph_seq)); }
     std::uint32_t readGraphDoneSeq() { return readU32(offsetof(rp1_ctrl_t, graph_done_seq)); }
-    std::uint32_t readCqWriteIdx()   { return readU32(offsetof(rp1_ctrl_t, cq_write_idx)); }
     std::uint32_t readTraceWriteIdx(){ return readU32(offsetof(rp1_ctrl_t, trace_write_idx)); }
     std::uint32_t readState()        { return readU32(offsetof(rp1_ctrl_t, rp1_state)); }
     std::uint32_t readErrorCode()    { return readU32(offsetof(rp1_ctrl_t, rp1_error_code)); }
@@ -200,9 +204,6 @@ class Rp1BarWindow {
     }
     void writeNodeCount(std::uint32_t value) {
         writeU32(offsetof(rp1_ctrl_t, node_count), value);
-    }
-    void writeCqReadIdx(std::uint32_t value) {
-        writeU32(offsetof(rp1_ctrl_t, cq_read_idx), value);
     }
     void writeTraceEnable(std::uint32_t value) {
         writeU32(offsetof(rp1_ctrl_t, trace_enable), value);

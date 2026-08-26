@@ -517,19 +517,21 @@ v80-smi debug rp1-dump -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
 | `-b,--bar`        | BAR that maps the RP1 DDR window (default `4`)       |
 | `--ctrl-offset`   | Host BAR offset of the RP1 control block (default `0x4000000`; `0x...` for hex) |
 
-Prints `magic`, `version`, `node_count`, `cq_size`, the node/CQ/arg-buffer/
-signal-array base addresses, trace configuration, the protocol-v4 capability
-mask and each named capability, required/missing capabilities, the generated
-platform/IPI identity, `graph_seq`/`graph_done_seq`, both CQ cursors,
-`rp1_state`, `rp1_error_code`, `rp1_current_node`, all latched terminal-error
-fields, and `heartbeat`, then the protocol-compatibility and liveness verdicts.
+Prints `magic`, `version`, `node_count`, the node/argument/signal base
+addresses, trace configuration, the protocol-v6 capability mask and each named
+capability, required/missing capabilities, the generated platform/IPI identity,
+`graph_seq`/`graph_done_seq`, `rp1_state`, legacy live diagnostics, and
+`heartbeat`. It also decodes the complete committed graph result: commit magic,
+sequence, outcome, flags, first terminal error, final image state, completed
+operation count, graph/publication timing, trace cursor, and quiescence counts.
 It exits non-zero if `magic` isn't `RP1_CTRL_MAGIC` ("SQR1"), the protocol
 version/capability contract is incompatible, or the generated platform/IPI
 identity is zero.
 
-`rp1-dump` is read-only: it does not submit a graph, alter CQ cursors, or issue
-a PDI load. This makes it safe for before/after snapshots around the no-reset
-graph hardware acceptance sequence.
+`rp1-dump` is read-only: it does not submit a graph, alter the result record, or
+issue a PDI load. This makes it safe for before/after snapshots around the
+no-reset graph hardware acceptance sequence. Before the first graph after
+firmware boot, result magic is uncommitted and the outcome is `NONE`.
 
 Example:
 
@@ -545,7 +547,11 @@ Liveness: heartbeat advanced 128841 -> 129091 (running)
 
 Submit a one-node `SIGNAL` graph to RP1 and verify it completes end-to-end:
 programs the control block if needed, submits the graph, polls
-`graph_done_seq`, and checks the signal slot the node was expected to write.
+`graph_done_seq`, validates the sequence-tagged `SUCCESS` result, and checks the
+signal slot the node was expected to write. The probe rejects terminal error
+data, unknown image state, partial/recovery/overflow/unreached flags,
+unexpected quiescence, and inconsistent graph/publication timing. A successful
+probe prints the fully decoded result before its PASS summary.
 
 ```
 v80-smi debug rp1-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
@@ -553,27 +559,30 @@ v80-smi debug rp1-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
 
 Takes the same `-d`, `-b`, and `--ctrl-offset` flags as `debug rp1-dump`.
 Exits non-zero and dumps the control block on timeout, firmware-not-ready,
-or a signal-slot mismatch.
+result-contract failure, or a signal-slot mismatch.
 
 Example:
 
 ```console
 $ v80-smi debug rp1-ping -d 03:00
 rp1-ping: submitted seq=1, polling...
-PASS: slot[0] = 0xdeadbeef, cq_write_idx=1, state=1
+Graph result:
+  ...
+PASS: slot[0] = 0xdeadbeef, result_seq=1, outcome=SUCCESS, graph_ticks=3, publish_ticks=5, state=READY
 ```
 
 ### debug rp1-trace-ping
 
 Run the same one-node `SIGNAL` probe with RP1 tracing enabled, then print the
-completion-queue entries and trace records in chronological order.
+committed graph result and trace records in chronological order.
 
 ```
 v80-smi debug rp1-trace-ping -d <BDF> [-b <bar>] [--ctrl-offset <offset>]
 ```
 
 Takes the same options as `debug rp1-dump`. It exits non-zero if RP1 is not
-ready, the graph times out, or the sentinel signal is not produced.
+ready, the graph times out, the result is not a clean traced success, the
+result/control trace cursors disagree, or the sentinel signal is not produced.
 
 All three `rp1-*` commands require RP1 firmware to be loaded onto R5-1 and
 reporting `RP1_STATE_READY`; see

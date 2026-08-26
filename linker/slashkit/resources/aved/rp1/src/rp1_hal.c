@@ -7,6 +7,8 @@
 
 #include <stddef.h>
 
+#ifdef QEMU_SEMIHOSTING
+
 static rp1_hal_hooks_t g_hooks;
 
 void rp1_hal_set_hooks(const rp1_hal_hooks_t *hooks)
@@ -42,14 +44,43 @@ void rp1_mmio_write32(uintptr_t address, uint32_t value)
     *(volatile uint32_t *)address = value;
 }
 
-void rp1_barrier(void)
+void rp1_dsb_st(void)
 {
     if (g_hooks.barrier) {
-        g_hooks.barrier(g_hooks.context);
+        g_hooks.barrier(RP1_BARRIER_DSB_ST, g_hooks.context);
+        return;
+    }
+    __asm__ volatile("dsb st" ::: "memory");
+}
+
+void rp1_dsb_sy(void)
+{
+    if (g_hooks.barrier) {
+        g_hooks.barrier(RP1_BARRIER_DSB_SY, g_hooks.context);
         return;
     }
     __asm__ volatile("dsb sy" ::: "memory");
 }
+
+void rp1_dmb_st(void)
+{
+    if (g_hooks.barrier) {
+        g_hooks.barrier(RP1_BARRIER_DMB_ST, g_hooks.context);
+        return;
+    }
+    __asm__ volatile("dmb st" ::: "memory");
+}
+
+void rp1_dmb_sy(void)
+{
+    if (g_hooks.barrier) {
+        g_hooks.barrier(RP1_BARRIER_DMB_SY, g_hooks.context);
+        return;
+    }
+    __asm__ volatile("dmb sy" ::: "memory");
+}
+
+#endif /* QEMU_SEMIHOSTING */
 
 void rp1_pmu_init(void)
 {
@@ -66,6 +97,8 @@ void rp1_pmu_init(void)
     __asm__ volatile("mcr p15, 0, %0, c9, c12, 1" :: "r"(1u << 31) : "memory");
 }
 
+#ifdef QEMU_SEMIHOSTING
+
 uint32_t rp1_cycles(void)
 {
     uint32_t cycles;
@@ -75,6 +108,8 @@ uint32_t rp1_cycles(void)
     __asm__ volatile("mrc p15, 0, %0, c9, c13, 0" : "=r"(cycles));
     return cycles;
 }
+
+#endif /* QEMU_SEMIHOSTING */
 
 _Static_assert(RP1_DEFAULT_KERNEL_TIMEOUT_TICKS != 0u,
                "kernel timeout must be non-zero");

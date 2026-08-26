@@ -30,8 +30,18 @@ namespace vrt::graph::fpga {
 
 namespace {
 
-constexpr std::chrono::microseconds kPollInterval{1000};  // 1 ms
+/// Host polling cadence retained from the protocol-v4 submitter.
+constexpr std::chrono::microseconds kPollInterval{1000};
 
+/// Bytes available before the default signal-array region begins.
+constexpr std::size_t kDefaultArgBufferBytes =
+    RP1_DEFAULT_SIG_ARRAY_OFFSET - RP1_DEFAULT_ARG_BUF_OFFSET;
+
+/// Result flags that prove the device cannot be reused without recovery.
+constexpr std::uint32_t kPoisonFlags =
+    RP1_RESULT_RECOVERY_REQUIRED | RP1_RESULT_INFINITE_WORK_REMAINS;
+
+/// Return a stable diagnostic label for a raw firmware state.
 const char* stateName(std::uint32_t s) {
     switch (s) {
         case RP1_STATE_INIT:    return "INIT";
@@ -43,22 +53,35 @@ const char* stateName(std::uint32_t s) {
     }
 }
 
+/// Return true when @p v is a non-zero power of two.
 bool isPowerOfTwo(std::uint32_t v) noexcept {
     return v != 0 && (v & (v - 1)) == 0;
 }
 
-bool isValidCqSize(std::uint32_t size) noexcept {
-    return isPowerOfTwo(size) && size <= RP1_MAX_CQ_ENTRIES;
-}
-
+/// Return true when @p op is a protocol-defined condition operation.
 bool isValidCondition(std::uint16_t op) noexcept {
     return op <= RP1_COP_AND_Z;
+}
+
+/**
+ * @brief Return whether one phase-1 DMA endpoint fits the 32-bit DDR model.
+ *
+ * Phase 1 supports only word-aligned, low-word addresses. A zero-byte transfer
+ * is valid; non-empty ranges may end at the top of the 32-bit address space
+ * but must not wrap past it.
+ */
+bool isValidPhase1DmaRange(std::uint32_t lo, std::uint32_t hi,
+                           std::uint32_t bytes) noexcept {
+    constexpr std::uint64_t addressSpaceSize =
+        std::uint64_t{1} << 32;
+    return hi == 0u && ((lo | bytes) & 3u) == 0u &&
+           static_cast<std::uint64_t>(lo) + bytes <= addressSpaceSize;
 }
 
 /*
  * Validation is deliberately complete before the doorbell can move. Check the
  * shared header first, then opcode-specific slots and ranges, and reject
- * undefined packets or PDI loads that suppress durable completion evidence.
+ * undefined packets before staged bytes can become firmware-owned.
  */
 void validateImage(const Rp1GraphImage& image) {
     const auto bad = [](std::size_t index, const std::string& reason) {
@@ -70,19 +93,73 @@ void validateImage(const Rp1GraphImage& image) {
         return slot < RP1_MAX_SIGNALS;
     };
 
+    if (image.arg_buf.size() >
+        kDefaultArgBufferBytes / sizeof(std::uint32_t)) {
+        throw std::logic_error(
+            "Rp1Submitter: argument buffer exceeds the default " +
+            std::to_string(kDefaultArgBufferBytes) + "-byte region");
+    }
+
     for (std::size_t i = 0; i < image.nodes.size(); ++i) {
         const rp1_node_t& node = image.nodes[i];
+        const std::uint16_t opcode = rp1_node_get_opcode(&node);
+        const std::uint16_t flags = rp1_node_get_flags(&node);
+        if ((rp1_node_get_control(&node) & RP1_NODE_RESERVED_MASK) != 0u) {
+            bad(i, "packed control reserved bits are non-zero");
+        }
+        if (rp1_node_get_status(&node) != RP1_NODE_PENDING) {
+            bad(i, "initial status is not PENDING");
+        }
+        if ((flags & ~RP1_FLAG_INFINITE) != 0u ||
+            ((flags & RP1_FLAG_INFINITE) != 0u &&
+             opcode != RP1_OP_KERNEL_DISPATCH)) {
+            bad(i, "flags are invalid for the opcode");
+        }
         if (node.barrier_await_bucket >= RP1_MAX_BUCKETS ||
             node.barrier_set_bucket >= RP1_MAX_BUCKETS) {
             bad(i, "barrier bucket out of range");
         }
-        switch (node.opcode) {
+        switch (opcode) {
             case RP1_OP_NOP:
-            case RP1_OP_SCALAR_WRITE:
-            case RP1_OP_DMA_COPY:
-            case RP1_OP_DMA_FILL:
             case RP1_OP_HALT:
                 break;
+            case RP1_OP_SCALAR_WRITE: {
+                bool terminated = false;
+                for (const rp1_write_pair_t& write :
+                     node.payload.scalar_write.writes) {
+                    if (write.addr == 0u) {
+                        terminated = true;
+                    } else if (terminated || (write.addr & 3u) != 0u) {
+                        bad(i, "SCALAR_WRITE pair sequence is invalid");
+                    }
+                }
+                break;
+            }
+            case RP1_OP_DMA_COPY: {
+                const auto& dma = node.payload.dma_copy;
+                const std::uint32_t packed =
+                    dma.length_types;
+                const std::uint32_t length =
+                    rp1_dma_get_length(packed);
+                if (rp1_dma_get_src_type(packed) != 0u ||
+                    rp1_dma_get_dst_type(packed) != 0u ||
+                    !isValidPhase1DmaRange(
+                        dma.src_addr_lo, dma.src_addr_hi, length) ||
+                    !isValidPhase1DmaRange(
+                        dma.dst_addr_lo, dma.dst_addr_hi, length)) {
+                    bad(i, "DMA_COPY address, length, or memory type is invalid");
+                }
+                break;
+            }
+            case RP1_OP_DMA_FILL: {
+                const auto& dma = node.payload.dma_fill;
+                if (dma.dst_type != 0u ||
+                    !isValidPhase1DmaRange(
+                        dma.dst_addr_lo, dma.dst_addr_hi, dma.length)) {
+                    bad(i, "DMA_FILL address, length, or memory type is invalid");
+                }
+                break;
+            }
             case RP1_OP_SIGNAL:
                 if (!validSlot(node.payload.signal.target_slot)) {
                     bad(i, "SIGNAL target slot out of range");
@@ -117,15 +194,13 @@ void validateImage(const Rp1GraphImage& image) {
                         sizeof(rp1_kernel_arg_t);
                 if (kernel.kernel_base_addr == 0 ||
                     (kernel.arg_buffer_offset & 7u) != 0u ||
+                    kernel.ctrl_flags != 0u ||
                     argEnd > image.arg_buf.size() * sizeof(std::uint32_t)) {
                     bad(i, "KERNEL_DISPATCH argument range is invalid");
                 }
                 break;
             }
             case RP1_OP_PDI_LOAD:
-                if ((node.flags & RP1_FLAG_SILENT) != 0u) {
-                    bad(i, "PDI_LOAD must retain CQ evidence");
-                }
                 break;
             case RP1_OP_LOOP: {
                 const auto& loop = node.payload.loop;
@@ -161,6 +236,8 @@ void validateImage(const Rp1GraphImage& image) {
             }
             case RP1_OP_RERUN:
                 if (node.payload.rerun.target_node >= image.nodes.size() ||
+                    (node.payload.rerun.rerun_flags &
+                     ~RP1_RERUN_CLEAR_STATE) != 0u ||
                     (((node.payload.rerun.rerun_flags &
                        RP1_RERUN_CLEAR_STATE) != 0u) &&
                      node.payload.rerun.loop_id >= RP1_MAX_LOOPS)) {
@@ -168,7 +245,7 @@ void validateImage(const Rp1GraphImage& image) {
                 }
                 break;
             default:
-                bad(i, "opcode is not defined by protocol v4");
+                bad(i, "opcode is not defined by protocol v6");
         }
     }
 }
@@ -197,7 +274,7 @@ void requireFirmwareContract(Rp1BarWindow& window) {
         RP1_REQUIRED_CAPABILITIES & ~capabilities;
     if (missing != 0u) {
         throw std::runtime_error(
-            "Rp1Submitter: RP1 firmware is missing required protocol-v4 "
+            "Rp1Submitter: RP1 firmware is missing required protocol-v6 "
             "capabilities (firmware mask=" +
             std::to_string(capabilities) + ", required mask=" +
             std::to_string(RP1_REQUIRED_CAPABILITIES) + ", missing mask=" +
@@ -214,22 +291,71 @@ void requireFirmwareContract(Rp1BarWindow& window) {
 
 }  // namespace
 
-Rp1Submitter::Rp1Submitter(Rp1BarWindow& window, std::uint32_t cq_size)
-    : window_(&window), cq_size_(cq_size) {
-    if (!isValidCqSize(cq_size_)) {
-        throw std::invalid_argument(
-            "Rp1Submitter: cq_size must be a power of 2 in [1, " +
-            std::to_string(RP1_MAX_CQ_ENTRIES) + "], got " +
-            std::to_string(cq_size_));
+void appendScalarWritePackets(
+    Rp1GraphImage& image,
+    const std::vector<rp1_write_pair_t>& writes,
+    std::uint8_t awaitBucket, std::uint32_t awaitMask,
+    std::uint8_t setBucket, std::uint32_t setMask) {
+    if (writes.empty()) {
+        throw std::logic_error(
+            "appendScalarWritePackets: write list is empty");
+    }
+    if (awaitBucket >= RP1_MAX_BUCKETS ||
+        setBucket >= RP1_MAX_BUCKETS) {
+        throw std::logic_error(
+            "appendScalarWritePackets: barrier bucket is out of range");
+    }
+    for (const rp1_write_pair_t& write : writes) {
+        if (write.addr == 0u || (write.addr & 3u) != 0u) {
+            throw std::logic_error(
+                "appendScalarWritePackets: address is zero or unaligned");
+        }
+    }
+
+    const std::size_t packetCount =
+        writes.size() / RP1_SCALAR_WRITE_MAX +
+        (writes.size() % RP1_SCALAR_WRITE_MAX != 0u ? 1u : 0u);
+    if (image.nodes.size() > RP1_MAX_NODES ||
+        packetCount > RP1_MAX_NODES - image.nodes.size()) {
+        throw std::logic_error(
+            "appendScalarWritePackets: image exceeds RP1_MAX_NODES");
+    }
+
+    /*
+     * Every packet shares the original await. Only the final packet publishes
+     * completion, so contiguous flat-scanner order cannot expose a partial
+     * register-write sequence to dependent nodes.
+     */
+    image.nodes.reserve(image.nodes.size() + packetCount);
+    for (std::size_t first = 0; first < writes.size();
+         first += RP1_SCALAR_WRITE_MAX) {
+        rp1_node_t node{};
+        rp1_node_set_opcode(&node, RP1_OP_SCALAR_WRITE);
+        rp1_node_set_flags(&node, 0u);
+        rp1_node_set_status(&node, RP1_NODE_PENDING);
+        node.barrier_await_bucket = awaitBucket;
+        node.barrier_await_mask = awaitMask;
+        const bool final =
+            first + RP1_SCALAR_WRITE_MAX >= writes.size();
+        node.barrier_set_bucket = final ? setBucket : 0u;
+        node.barrier_set_mask = final ? setMask : 0u;
+        for (std::size_t i = 0;
+             i < RP1_SCALAR_WRITE_MAX && first + i < writes.size();
+             ++i) {
+            node.payload.scalar_write.writes[i] = writes[first + i];
+        }
+        image.nodes.push_back(node);
     }
 }
+
+Rp1Submitter::Rp1Submitter(Rp1BarWindow& window) : window_(&window) {}
 
 void Rp1Submitter::requireUsable() const {
     if (poisoned()) {
         throw std::runtime_error(
-            "Rp1Submitter: device is poisoned after an indeterminate "
-            "submission timeout; reset/recover the device and construct "
-            "a new runtime device before submitting again");
+            "Rp1Submitter: device is poisoned after an unsafe terminal "
+            "submission; reset/recover the device and construct a new "
+            "runtime device before submitting again");
     }
 }
 
@@ -260,22 +386,18 @@ void Rp1Submitter::ensureReady(std::chrono::milliseconds timeout) {
     // publication fields are visible.
     requireFirmwareContract(*window_);
 
-    // Program the recommended base addresses + cq_size by writing
-    // host-owned fields individually.  We must NOT bulk-write the 4 KB
-    // control block here: the firmware concurrently updates its own
-    // fields (heartbeat, rp1_state, graph_done_seq, cq_write_idx,
-    // rp1_current_node, rp1_error_code), so a read-modify-write of the
-    // whole block would clobber whatever RP1 changed between our read
-    // and write.  Individual 32-bit writes only touch host-owned slots.
-    window_->writeU32(offsetof(rp1_ctrl_t, cq_size), cq_size_);
+    /*
+     * Program host-owned words individually. A bulk control-block write would
+     * race firmware-owned heartbeat, state, sequence, result, and diagnostics.
+     * Former CQ configuration words are zero-only protocol-v6 reservations.
+     */
+    window_->writeU32(offsetof(rp1_ctrl_t, _reserved_cq_size), 0u);
     window_->writeU32(offsetof(rp1_ctrl_t, node_base_lo),
                        static_cast<std::uint32_t>(
                            RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_NODE_ARRAY_OFFSET));
     window_->writeU32(offsetof(rp1_ctrl_t, node_base_hi),  0);
-    window_->writeU32(offsetof(rp1_ctrl_t, cq_base_lo),
-                       static_cast<std::uint32_t>(
-                           RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_CQ_OFFSET));
-    window_->writeU32(offsetof(rp1_ctrl_t, cq_base_hi),    0);
+    window_->writeU32(offsetof(rp1_ctrl_t, _reserved_cq_base_lo), 0u);
+    window_->writeU32(offsetof(rp1_ctrl_t, _reserved_cq_base_hi), 0u);
     window_->writeU32(offsetof(rp1_ctrl_t, arg_buf_base_lo),
                        static_cast<std::uint32_t>(
                            RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_ARG_BUF_OFFSET));
@@ -291,29 +413,19 @@ void Rp1Submitter::ensureReady(std::chrono::milliseconds timeout) {
     window_->writeTraceEnable(0);
     last_trace_size_ = kDefaultTraceSize;
 
-    // Synchronize the host-owned CQ consumer cursor to the producer's current
-    // position. Other sequence/state fields remain firmware-owned.
-    cq_cursor_ = window_->readCqWriteIdx();
-    window_->writeCqReadIdx(cq_cursor_);
-    pending_cq_.clear();
-
     std::atomic_thread_fence(std::memory_order_seq_cst);
-
-    // Seed last_cq_start_ so callers that immediately drainCq() see an
-    // empty range.
-    last_cq_start_ = cq_cursor_;
     last_graph_seq_ = window_->readGraphSeq();
 
     ready_ = true;
 }
 
 /*
- * A submission has five ordered phases: claim and validate, establish READY,
- * retire prior CQ evidence, stage the image, then publish graph_seq and wait.
- * Only publication transfers ownership of the staged bytes to RP1.
+ * A submission has four ordered phases: claim and validate, establish READY,
+ * stage the image, then publish graph_seq and wait. Only publication transfers
+ * ownership of the staged bytes to RP1.
  */
-void Rp1Submitter::submitAndWait(const Rp1GraphImage& image,
-                                  std::chrono::milliseconds timeout) {
+Rp1GraphResult Rp1Submitter::submitAndWait(
+    const Rp1GraphImage& image, std::chrono::milliseconds timeout) {
     requireUsable();
     bool expected = false;
     if (!submission_active_.compare_exchange_strong(
@@ -322,8 +434,11 @@ void Rp1Submitter::submitAndWait(const Rp1GraphImage& image,
         throw std::runtime_error(
             "Rp1Submitter: a graph submission is already active");
     }
+    /// Clear the single-flight claim during every stack-unwind path.
     struct ActiveSubmission {
+        /// Submitter flag exclusively owned by this scope guard.
         std::atomic_bool& active;
+        /// Release the single-flight claim after result or exception.
         ~ActiveSubmission() {
             active.store(false, std::memory_order_release);
         }
@@ -349,35 +464,33 @@ void Rp1Submitter::submitAndWait(const Rp1GraphImage& image,
                 " exceeds RP1_MAX_SIGNALS (" + std::to_string(RP1_MAX_SIGNALS) + ")");
         }
     }
+    const std::uint32_t trace_size =
+        image.trace_size_override != 0 ?
+            image.trace_size_override : kDefaultTraceSize;
+    if (!isPowerOfTwo(trace_size) ||
+        trace_size > RP1_MAX_TRACE_ENTRIES) {
+        throw std::invalid_argument(
+            "Rp1Submitter: trace_size must be a power of 2 in [1, " +
+            std::to_string(RP1_MAX_TRACE_ENTRIES) + "], got " +
+            std::to_string(trace_size));
+    }
 
     /*
      * Phase 2: establish the firmware contract and reject terminal or busy
      * state before this submission takes ownership of shared storage.
      */
-    if (!ready_) {
-        ensureReady(kDefaultReadyTimeout);
-    }
+    ensureReady(kDefaultReadyTimeout);
     const std::uint32_t preflightState = window_->readState();
     if (preflightState != RP1_STATE_READY) {
-        if (preflightState == RP1_STATE_ERROR ||
-            preflightState == RP1_STATE_HALTED) {
-            throwTerminalError(preflightState, window_->readGraphSeq());
-        }
         throw std::runtime_error(
             "Rp1Submitter: firmware is not READY before submission "
             "(state=" + std::string(stateName(preflightState)) + ")");
     }
 
     /*
-     * Phase 3: retire old CQ records, then stage arguments, signals, nodes,
-     * and host-owned configuration while firmware still sees the old sequence.
+     * Phase 3: stage arguments, signals, nodes, and host-owned configuration
+     * while firmware still sees the old sequence.
      */
-    drainAvailableCq();
-    // CQ records carry no graph sequence. Retain evidence for exactly this
-    // submission so an earlier image can never be interpreted as the next one.
-    pending_cq_.clear();
-    last_cq_start_ = cq_cursor_;
-
     // Stage args first so the kernel-dispatch packets reference valid
     // memory the moment graph_seq advances.
     if (!image.arg_buf.empty()) {
@@ -393,37 +506,13 @@ void Rp1Submitter::submitAndWait(const Rp1GraphImage& image,
     // Stage the node array.
     window_->writeNodes(image.nodes.data(), image.nodes.size());
 
-    // Read pre-submission cq cursor + current graph_seq so the caller
-    // can drain just this graph's CQ entries.
-    last_cq_start_ = cq_cursor_;
     const std::uint32_t prev_seq = window_->readGraphSeq();
     const std::uint32_t want_seq = prev_seq + 1u;
 
-    // Program node_count and (optionally) cq_size *before* bumping
-    // graph_seq.  RP1's flat scanner reads node_count when it observes
-    // graph_seq advancing, so this must be visible first.
+    // Program node_count before bumping graph_seq. RP1 snapshots it only after
+    // observing the new sequence, so the count must be visible first.
     window_->writeNodeCount(static_cast<std::uint32_t>(image.nodes.size()));
-    if (image.cq_size_override != 0) {
-        if (!isValidCqSize(image.cq_size_override)) {
-            throw std::invalid_argument(
-                "Rp1Submitter: cq_size_override must be a power of 2 in [1, " +
-                std::to_string(RP1_MAX_CQ_ENTRIES) + "], got " +
-                std::to_string(image.cq_size_override));
-        }
-        // Persist for subsequent submissions too.
-        cq_size_ = image.cq_size_override;
-        window_->writeU32(offsetof(rp1_ctrl_t, cq_size), cq_size_);
-    }
 
-    const std::uint32_t trace_size =
-        image.trace_size_override != 0 ? image.trace_size_override : kDefaultTraceSize;
-    if (!isPowerOfTwo(trace_size) ||
-        trace_size > RP1_MAX_TRACE_ENTRIES) {
-        throw std::invalid_argument(
-            "Rp1Submitter: trace_size must be a power of 2 in [1, " +
-            std::to_string(RP1_MAX_TRACE_ENTRIES) + "], got " +
-            std::to_string(trace_size));
-    }
     window_->writeTraceBase(static_cast<std::uint32_t>(
                                 RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET),
                             0);
@@ -443,39 +532,32 @@ void Rp1Submitter::submitAndWait(const Rp1GraphImage& image,
     ++submission_serial_;
 
     /*
-     * Phase 5: drain while waiting so a full CQ cannot stall firmware, then
-     * translate the terminal publication into the host-visible result.
+     * Completion: exact sequence equality releases the committed graph result.
+     * A timeout after the doorbell is indeterminate and permanently poisons
+     * this submitter so no later image can overwrite firmware-owned storage.
      */
     try {
-        waitForGraphDone(want_seq, timeout);
+        return waitForGraphDone(want_seq, timeout);
     } catch (const Rp1TimeoutError&) {
-        /*
-         * The doorbell is irreversible: RP1 may still consume the image or
-         * publish CQ after timeout. Poisoning prevents a second image racing it.
-         */
+        // The doorbell is irreversible: RP1 may still consume the staged image.
         poisoned_.store(true, std::memory_order_release);
         throw;
-    }
-
-    // After completion, surface explicit firmware-side errors so the
-    // caller doesn't have to remember to inspect rp1_state.
-    const std::uint32_t state = window_->readState();
-    if (state == RP1_STATE_ERROR || state == RP1_STATE_HALTED) {
-        throwTerminalError(state, want_seq);
     }
 }
 
 void Rp1Submitter::clearSignalSlots(const std::vector<std::uint32_t>& slots) {
     requireUsable();
-    if (!ready_) {
-        ensureReady(kDefaultReadyTimeout);
-    }
     for (std::uint32_t slot : slots) {
         if (slot >= RP1_MAX_SIGNALS) {
             throw std::logic_error(
                 "Rp1Submitter: signal slot " + std::to_string(slot) +
                 " exceeds RP1_MAX_SIGNALS (" + std::to_string(RP1_MAX_SIGNALS) + ")");
         }
+    }
+    if (!ready_) {
+        ensureReady(kDefaultReadyTimeout);
+    }
+    for (std::uint32_t slot : slots) {
         window_->clearSignal(slot);
     }
 }
@@ -490,63 +572,6 @@ std::uint32_t Rp1Submitter::readSignalValue(std::uint32_t slot) const {
     rp1_signal_slot_t value{};
     window_->readSignal(slot, value);
     return value.value;
-}
-
-std::vector<rp1_cq_entry_t> Rp1Submitter::drainCq() {
-    std::vector<rp1_cq_entry_t> out = drainCqRaw();
-    validateCq(out);
-    return out;
-}
-
-std::vector<rp1_cq_entry_t> Rp1Submitter::drainCqRaw() {
-    drainAvailableCq();
-    std::vector<rp1_cq_entry_t> out;
-    out.swap(pending_cq_);
-    last_cq_start_ = cq_cursor_;
-    return out;
-}
-
-/*
- * Monotonic uint32_t subtraction remains valid across wrap while delta does
- * not exceed the ring; the power-of-two mask then selects physical slots.
- * Copy before advancing read_idx so firmware cannot overwrite unretained
- * evidence. Draining in the wait loop also relieves producer backpressure.
- */
-void Rp1Submitter::drainAvailableCq() {
-    const std::uint32_t end = window_->readCqWriteIdx();
-    const std::uint32_t delta = end - cq_cursor_;
-    if (delta > cq_size_) {
-        throw std::runtime_error(
-            "Rp1Submitter::drainCq: corrupt completion queue cursors (" +
-            std::to_string(delta) + " entries for a " +
-            std::to_string(cq_size_) + "-entry ring)");
-    }
-
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    pending_cq_.reserve(pending_cq_.size() + delta);
-    for (std::uint32_t i = 0; i < delta; ++i) {
-        const std::uint32_t idx = (cq_cursor_ + i) & (cq_size_ - 1u);
-        rp1_cq_entry_t entry{};
-        window_->readCq(idx, entry);
-        pending_cq_.push_back(entry);
-    }
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    window_->writeCqReadIdx(end);
-    cq_cursor_ = end;
-}
-
-void Rp1Submitter::validateCq(
-    const std::vector<rp1_cq_entry_t>& entries) {
-    for (const rp1_cq_entry_t& entry : entries) {
-        if (entry.status == RP1_CQ_OK) continue;
-        const char* status =
-            entry.status == RP1_CQ_TIMEOUT ? "timeout" : "error";
-        throw std::runtime_error(
-            "Rp1Submitter: node " +
-            std::to_string(entry.node_index) + " reported " + status +
-            " (status=" + std::to_string(entry.status) +
-            ", detail=" + std::to_string(entry.error_detail) + ")");
-    }
 }
 
 Rp1TraceCapture Rp1Submitter::drainTrace() {
@@ -599,7 +624,10 @@ void Rp1Submitter::waitForState(std::uint32_t target,
         const std::uint32_t s = window_->readState();
         if (s == target) return;
         if (s == RP1_STATE_ERROR || s == RP1_STATE_HALTED) {
-            throwTerminalError(s, window_->readGraphSeq());
+            throw std::runtime_error(
+                "Rp1Submitter: firmware entered terminal state " +
+                std::string(stateName(s)) +
+                " before becoming READY; reset/recover the device");
         }
         if (std::chrono::steady_clock::now() > deadline) {
             throw Rp1TimeoutError(
@@ -611,33 +639,26 @@ void Rp1Submitter::waitForState(std::uint32_t target,
 }
 
 /*
- * Each poll first frees CQ space, then handles terminal, exact completion, or
- * timeout. Completion gets a final drain and state recheck because firmware
- * publishes CQ and errors before graph_done_seq, but BAR reads are separate.
+ * graph_done_seq is the sole release point for a terminal publication.
+ * Firmware deliberately writes result magic and terminal state first, so
+ * neither field may short-circuit this exact-sequence wait.
  */
-void Rp1Submitter::waitForGraphDone(std::uint32_t want_seq,
-                                     std::chrono::milliseconds timeout) {
+Rp1GraphResult Rp1Submitter::waitForGraphDone(
+    std::uint32_t want_seq, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (true) {
-        drainAvailableCq();
-        std::uint32_t state = window_->readState();
-        if (state == RP1_STATE_ERROR || state == RP1_STATE_HALTED) {
-            throwTerminalError(state, want_seq);
-        }
         const std::uint32_t done = window_->readGraphDoneSeq();
         if (done == want_seq) {
-            drainAvailableCq();
-            state = window_->readState();
-            if (state == RP1_STATE_ERROR || state == RP1_STATE_HALTED) {
-                throwTerminalError(state, want_seq);
-            }
-            return;
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            return readGraphResult(want_seq);
         }
         if (std::chrono::steady_clock::now() > deadline) {
-            const std::uint32_t cur     = window_->readU32(
-                                              offsetof(rp1_ctrl_t, rp1_current_node));
-            const std::uint32_t err     = window_->readErrorCode();
-            const std::uint32_t cq_idx  = window_->readCqWriteIdx();
+            const std::uint32_t state = window_->readState();
+            const std::uint32_t cur = window_->readU32(
+                offsetof(rp1_ctrl_t, rp1_current_node));
+            const std::uint32_t err = window_->readErrorCode();
+            rp1_graph_result_t result{};
+            window_->readGraphResult(result);
             throw Rp1TimeoutError(
                 "Rp1Submitter: timed out waiting for graph_done_seq=" +
                 std::to_string(want_seq) +
@@ -645,36 +666,160 @@ void Rp1Submitter::waitForGraphDone(std::uint32_t want_seq,
                 ", state=" + stateName(state) +
                 ", current_node=" + std::to_string(cur) +
                 ", error_code=" + std::to_string(err) +
-                ", cq_write_idx=" + std::to_string(cq_idx) + ")");
+                ", result_magic=" + std::to_string(result.magic) +
+                ", result_seq=" + std::to_string(result.graph_seq) +
+                ", result_outcome=" + std::to_string(result.outcome) + ")");
         }
         std::this_thread::sleep_for(kPollInterval);
     }
 }
 
 /*
- * Terminal state publishes the first-error-wins record after quiescence.
- * Read every field only after observing that state so diagnostics describe
- * the accepted graph rather than a partially written failure.
+ * Convert the stable wire record only after validating every discriminant.
+ * State/outcome agreement catches a reordered or torn terminal publication;
+ * image-id agreement prevents higher layers from trusting a malformed image.
  */
-void Rp1Submitter::throwTerminalError(
-    std::uint32_t state, std::uint32_t graph_seq) const {
-    const std::uint32_t code = window_->readErrorCode();
-    const std::uint32_t node =
-        window_->readU32(offsetof(rp1_ctrl_t, terminal_error_node));
-    const std::uint32_t detail =
-        window_->readU32(offsetof(rp1_ctrl_t, terminal_error_detail));
-    const std::uint32_t aux =
-        window_->readU32(offsetof(rp1_ctrl_t, terminal_error_aux));
-    throw std::runtime_error(
-        std::string("Rp1Submitter: firmware reported terminal state ") +
-        stateName(state) + " for graph seq " + std::to_string(graph_seq) +
-        " (error_code=" + std::to_string(code) +
-        ", base_error=" + std::to_string(code & RP1_ERR_CODE_MASK) +
-        ", recovery_required=" +
-        std::to_string((code & RP1_ERR_RECOVERY_REQUIRED) != 0u) +
-        ", node=" + std::to_string(node) +
-        ", detail=" + std::to_string(detail) +
-        ", aux=" + std::to_string(aux) + ")");
+Rp1GraphResult Rp1Submitter::readGraphResult(
+    std::uint32_t want_seq) {
+    rp1_graph_result_t wire{};
+    window_->readGraphResult(wire);
+    const std::uint32_t state = window_->readState();
+
+    const auto corrupt = [want_seq](const std::string& reason) {
+        throw std::runtime_error(
+            "Rp1Submitter: corrupt graph result for sequence " +
+            std::to_string(want_seq) + ": " + reason);
+    };
+    if (wire.magic != RP1_GRAPH_RESULT_MAGIC) {
+        corrupt("magic=" + std::to_string(wire.magic) +
+                ", expected=" + std::to_string(RP1_GRAPH_RESULT_MAGIC));
+    }
+    if (wire.graph_seq != want_seq) {
+        corrupt("result sequence=" + std::to_string(wire.graph_seq) +
+                ", expected=" + std::to_string(want_seq));
+    }
+    /*
+     * A committed hazardous result is enough to close the session even when
+     * another field is corrupt. Firmware may still own staged addresses.
+     */
+    if ((wire.flags & kPoisonFlags) != 0u) {
+        poisoned_.store(true, std::memory_order_release);
+    }
+    const std::uint32_t finiteDone =
+        (wire.quiescence >> RP1_QUIESCE_FINITE_DONE_SHIFT) &
+        RP1_QUIESCE_COUNT_MASK;
+    const std::uint32_t finiteTimeout =
+        (wire.quiescence >> RP1_QUIESCE_FINITE_TIMEOUT_SHIFT) &
+        RP1_QUIESCE_COUNT_MASK;
+    const std::uint32_t infinite =
+        (wire.quiescence >> RP1_QUIESCE_INFINITE_SHIFT) &
+        RP1_QUIESCE_COUNT_MASK;
+    if (finiteTimeout != 0u || infinite != 0u) {
+        /*
+         * Counters are direct evidence that firmware may retain access even
+         * when a corrupt result omitted the matching hazard flags.
+         */
+        poisoned_.store(true, std::memory_order_release);
+    }
+    if (finiteTimeout != 0u &&
+        (wire.flags & RP1_RESULT_RECOVERY_REQUIRED) == 0u) {
+        corrupt("finite timeout quiescence lacks recovery-required flag");
+    }
+    if (infinite != 0u &&
+        (wire.flags & (RP1_RESULT_RECOVERY_REQUIRED |
+                       RP1_RESULT_INFINITE_WORK_REMAINS)) !=
+            (RP1_RESULT_RECOVERY_REQUIRED |
+             RP1_RESULT_INFINITE_WORK_REMAINS)) {
+        corrupt("infinite quiescence lacks recovery/infinite flags");
+    }
+
+    Rp1GraphOutcome outcome = Rp1GraphOutcome::Success;
+    std::uint32_t expectedState = RP1_STATE_READY;
+    switch (wire.outcome) {
+        case RP1_GRAPH_RESULT_SUCCESS:
+            outcome = Rp1GraphOutcome::Success;
+            expectedState = RP1_STATE_READY;
+            if (wire.error_code != 0u) {
+                corrupt("SUCCESS carries error_code=" +
+                        std::to_string(wire.error_code));
+            }
+            if ((wire.flags &
+                 (RP1_RESULT_RECOVERY_REQUIRED |
+                  RP1_RESULT_EFFECTS_MAY_BE_PARTIAL)) != 0u) {
+                corrupt("SUCCESS carries terminal-only flags=" +
+                        std::to_string(wire.flags));
+            }
+            break;
+        case RP1_GRAPH_RESULT_FAILED:
+            outcome = Rp1GraphOutcome::Failed;
+            expectedState = RP1_STATE_ERROR;
+            if (wire.error_code == 0u) {
+                corrupt("FAILED carries no terminal error code");
+            }
+            break;
+        case RP1_GRAPH_RESULT_HALTED:
+            outcome = Rp1GraphOutcome::Halted;
+            expectedState = RP1_STATE_HALTED;
+            if (wire.error_code != 0u ||
+                wire.terminal_opcode != RP1_OP_HALT) {
+                corrupt("HALTED terminal record is inconsistent");
+            }
+            break;
+        default:
+            corrupt("outcome=" + std::to_string(wire.outcome) +
+                    " is not terminal");
+    }
+    if (state != expectedState) {
+        corrupt("state=" + std::string(stateName(state)) +
+                " does not match outcome=" +
+                std::to_string(wire.outcome));
+    }
+
+    Rp1ImageState imageState = Rp1ImageState::None;
+    switch (wire.image_state) {
+        case RP1_IMAGE_STATE_NONE:
+            imageState = Rp1ImageState::None;
+            break;
+        case RP1_IMAGE_STATE_KNOWN:
+            imageState = Rp1ImageState::Known;
+            break;
+        case RP1_IMAGE_STATE_UNKNOWN:
+            imageState = Rp1ImageState::Unknown;
+            break;
+        default:
+            corrupt("image_state=" + std::to_string(wire.image_state) +
+                    " is invalid");
+    }
+    if ((imageState == Rp1ImageState::Known) !=
+        (wire.active_image_id != 0u)) {
+        corrupt("active_image_id=" +
+                std::to_string(wire.active_image_id) +
+                " disagrees with image_state=" +
+                std::to_string(wire.image_state));
+    }
+
+    Rp1GraphResult result;
+    result.sequence = wire.graph_seq;
+    result.outcome = outcome;
+    result.flags = wire.flags;
+    if (outcome != Rp1GraphOutcome::Success) {
+        result.terminal = Rp1TerminalError{
+            wire.error_code,
+            wire.terminal_node,
+            wire.terminal_opcode,
+            wire.error_detail,
+            wire.error_aux};
+    }
+    result.activeImageId = wire.active_image_id;
+    result.imageState = imageState;
+    result.completedOperations = wire.completed_operations;
+    result.graphElapsedTicks = wire.graph_elapsed_ticks;
+    result.publishElapsedTicks = wire.publish_elapsed_ticks;
+    result.traceWriteIndex = wire.trace_write_idx;
+    result.quiescence.finiteDone = finiteDone;
+    result.quiescence.finiteTimeout = finiteTimeout;
+    result.quiescence.infinite = infinite;
+    return result;
 }
 
 }  // namespace vrt::graph::fpga
