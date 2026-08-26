@@ -1123,7 +1123,8 @@ static int slash_qdma_program_host_profiles(struct slash_qdma_dev *device)
  * the control function handled by slash_ctldev).  Then:
  *   1. Allocates and initialises a slash_qdma_dev structure.
  *   2. Configures and opens the libqdma device via qdma_device_open().
- *   3. Registers the management character device (/dev/slash_qdma_ctlN).
+ *   3. Sets the global completion-writeback interval before queues exist.
+ *   4. Registers the management character device (/dev/slash_qdma_ctlN).
  *
  * On any failure, the partially-constructed device is torn down and
  * the probe returns the error.
@@ -1172,6 +1173,22 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
                           "qdma_device_open done: handle=%lu\n",
                           device->qdma_handle);
     device->have_qdma_handle = true;
+
+    /*
+     * SLASH MM buffers use one 4 KiB scatter-gather entry per descriptor.
+     * The largest hardware interval therefore requests periodic completion
+     * writebacks every 2 MiB instead of libqdma's 512 KiB default. Pending
+     * checks still report short and final partial batches.
+     */
+    err = qdma_set_cmpl_status_acc(device->qdma_handle,
+                                   QDMA_WRB_INTERVAL_512);
+    if (err) {
+        dev_err(&pdev->dev,
+                "slash: qdma: could not set writeback interval: %d", err);
+        goto err_free;
+    }
+    dev_info(&pdev->dev,
+             "slash: qdma: writeback interval set to 512 descriptors\n");
 
     /*
      * Program the CPM5 Host Profiles before exposing the character device, so
