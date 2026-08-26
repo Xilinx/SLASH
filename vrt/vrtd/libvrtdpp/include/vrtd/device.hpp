@@ -23,7 +23,7 @@
 
 #include <string>
 #include <string_view>
-#include <functional>
+#include <memory>
 #include <vector>
 #include <stddef.h>
 #include <stdint.h>
@@ -35,19 +35,26 @@
 
 namespace vrtd {
 
+namespace detail {
+class Connection;
+}
+
+/** @brief Device clock domain selected by clock-control operations. */
 enum class ClockRegion : uint32_t {
-    Service = VRTD_CLOCK_REGION_SERVICE,
-    User = VRTD_CLOCK_REGION_USER,
+    Service = VRTD_CLOCK_REGION_SERVICE, ///< Static service-region clock.
+    User = VRTD_CLOCK_REGION_USER,       ///< Reconfigurable user-region clock.
 };
 
+/** @brief PCIe hotplug/reset operation applied by Device::hotplugOp(). */
 enum class HotplugOp : uint8_t {
-    Rescan = VRTD_DEVICE_HOTPLUG_OP_RESCAN,
-    Remove = VRTD_DEVICE_HOTPLUG_OP_REMOVE,
-    ToggleSbr = VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR,
-    Hotplug = VRTD_DEVICE_HOTPLUG_OP_HOTPLUG,
-    ResetSequence = VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE,
+    Rescan = VRTD_DEVICE_HOTPLUG_OP_RESCAN, ///< Rescan the PCI bus.
+    Remove = VRTD_DEVICE_HOTPLUG_OP_REMOVE, ///< Remove selected PCI functions.
+    ToggleSbr = VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR, ///< Toggle secondary-bus reset.
+    Hotplug = VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, ///< Remove then rescan.
+    ResetSequence = VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE, ///< Run managed reset.
 };
 
+/** Select all V80 physical functions where a hotplug operation permits it. */
 inline constexpr uint8_t HotplugFunctionAll = VRTD_DEVICE_HOTPLUG_FUNCTION_ALL;
 
 /**
@@ -64,23 +71,27 @@ struct SensorEntry {
 /**
  * @brief Value-type handle describing a vrtd device.
  *
- * A @c Device carries its device number, name, and PCI metadata and routes operations back
- * through its originating @c Session.
+ * A @c Device carries its device number, name, and PCI metadata and retains
+ * the shared vrtd connection used for device operations.
  *
  * @par Lifetime
- * A @c Device becomes invalid if its originating @c Session is closed or moved.
- * Any subsequent member call will throw.
+ * Moving or destroying the originating @c Session does not invalidate a
+ * Device. Explicitly closing the shared connection does.
  *
  * @par Thread safety
  * Methods are thread-safe and may be called concurrently; they synchronize
- * on the originating @c Session.
+ * on the shared connection.
  */
 class Device {
 public:
+    /** Release this metadata handle and its shared connection reference. */
     ~Device() = default;
 
+    /** Device handles are copyable views of the same shared connection. */
     Device(const Device&)                = default;
     Device& operator=(const Device&)     = default;
+
+    /** Moving transfers the shared connection and cached metadata. */
     Device(Device&&) noexcept            = default;
     Device& operator=(Device&&) noexcept = default;
 
@@ -129,8 +140,7 @@ public:
      * @throws vrtd::Error on error (e.g., invalid index or unusable session).
      *
      * @par Notes
-     * The returned @c Bar becomes invalid if the originating @c Session is
-     * later closed or moved.
+     * The returned @c Bar retains the same shared connection.
      */
     Bar getBar(uint8_t num) const;
 
@@ -146,8 +156,7 @@ public:
      * @throws vrtd::Error on error.
      *
      * @par Notes
-     * The returned @c QdmaQpair becomes invalid if the originating
-     * @c Session is later closed or moved.
+     * The returned @c QdmaQpair retains the same shared connection.
      */
     QdmaQpair createQdmaQpair(const struct slash_qdma_qpair_add& cfg) const;
 
@@ -171,7 +180,13 @@ public:
                       MmChannel mmChannel = MmChannel::Auto) const;
 
     /**
-     * @brief Convenience helper for DDR allocations.
+     * @brief Allocate a DDR buffer through openBuffer().
+     *
+     * @param size Requested byte count.
+     * @param allocDir Permitted transfer direction.
+     * @param mmChannel AXI-MM/NoC channel selection.
+     * @return Owning DDR buffer.
+     * @throws vrtd::Error if allocation fails.
      */
     Buffer openDdrBuffer(uint64_t size, BufferAllocDir allocDir = BufferAllocDir::Bidirectional,
                          MmChannel mmChannel = MmChannel::Auto) const {
@@ -179,7 +194,14 @@ public:
     }
 
     /**
-     * @brief Convenience helper for HBM allocations (fixed region).
+     * @brief Allocate a buffer from one fixed HBM region.
+     *
+     * @param region HBM region index passed as the allocation argument.
+     * @param size Requested byte count.
+     * @param allocDir Permitted transfer direction.
+     * @param mmChannel AXI-MM/NoC channel selection.
+     * @return Owning HBM buffer.
+     * @throws vrtd::Error if the region or allocation is invalid.
      */
     Buffer openHbmBuffer(uint32_t region,
                          uint64_t size,
@@ -189,7 +211,13 @@ public:
     }
 
     /**
-     * @brief Convenience helper for HBM VNOC allocations.
+     * @brief Allocate an HBM buffer using daemon VNOC placement.
+     *
+     * @param size Requested byte count.
+     * @param allocDir Permitted transfer direction.
+     * @param mmChannel AXI-MM/NoC channel selection.
+     * @return Owning HBM VNOC buffer.
+     * @throws vrtd::Error if allocation fails.
      */
     Buffer openHbmVnocBuffer(uint64_t size,
                              BufferAllocDir allocDir = BufferAllocDir::Bidirectional,
@@ -221,7 +249,8 @@ public:
      * For ResetSequence, @p function is ignored. For Remove and Hotplug,
      * @p function selects the PCI physical function (0-7) or
      * HotplugFunctionAll for all V80 PFs. ToggleSbr requires a single PCI
-     * physical function (0-7). Use Session::hotplugRescan() for bus rescan.
+     * physical function (0-7). Rescan is global and ignores this Device and
+     * @p function; prefer Session::hotplugRescan() for that operation.
      *
      * @param op       One of HotplugOp.
      * @param function PCI function number (0-7), or HotplugFunctionAll where allowed.
@@ -231,7 +260,9 @@ public:
 
     /**
      * @brief Convenience helper for remove.
+     *
      * @param function PCI function number (0-7), or HotplugFunctionAll for all PFs.
+     * @throws vrtd::Error if removal fails.
      */
     void hotplugRemove(uint8_t function = HotplugFunctionAll) const {
         hotplugOp(HotplugOp::Remove, function);
@@ -239,7 +270,9 @@ public:
 
     /**
      * @brief Convenience helper for SBR toggle.
+     *
      * @param function PCI function number (0-7). Required.
+     * @throws vrtd::Error if the selector is invalid or the reset fails.
      */
     void hotplugToggleSbr(uint8_t function) const {
         hotplugOp(HotplugOp::ToggleSbr, function);
@@ -247,7 +280,9 @@ public:
 
     /**
      * @brief Convenience helper for a remove+rescan hotplug cycle.
+     *
      * @param function PCI function number (0-7), or HotplugFunctionAll for all PFs.
+     * @throws vrtd::Error if removal or rescan fails.
      */
     void hotplug(uint8_t function = HotplugFunctionAll) const {
         hotplugOp(HotplugOp::Hotplug, function);
@@ -256,8 +291,10 @@ public:
     /**
      * @brief Perform a design writer transfer using an input file descriptor.
      *
-     * The daemon takes ownership of the FD and blocks until the transfer completes.
+     * The call blocks until the daemon finishes the transfer. SCM_RIGHTS
+     * duplicates the descriptor, so the caller retains ownership of @p input_fd.
      *
+     * @param input_fd Readable design image descriptor.
      * @throws vrtd::Error on error.
      */
     void designWrite(int input_fd) const;
@@ -267,6 +304,7 @@ public:
      *
      * Convenience helper that opens the path and passes the FD to the daemon.
      *
+     * @param path Design image opened and closed internally by libvrtd.
      * @throws vrtd::Error on error.
      */
     void designWriteFile(std::string_view path) const;
@@ -278,6 +316,11 @@ public:
      * through AMI, selects that partition for boot, and performs the vrtd-managed
      * reset sequence.
      *
+     * SCM_RIGHTS preserves caller ownership of @p input_fd.
+     *
+     * @param input_fd Readable PDI descriptor.
+     * @param bootDevice AMI boot-device selector.
+     * @param partition Flash partition to program and select.
      * @throws vrtd::Error on error.
      */
     void cfgmemProgram(int input_fd, uint8_t bootDevice, uint32_t partition) const;
@@ -285,8 +328,12 @@ public:
     /**
      * @brief Program a PDI file into cfgmem.
      *
-     * Convenience helper that opens @p path and passes the FD to the daemon.
+     * Opens @p path, programs @p partition through AMI, selects it for boot,
+     * and performs the vrtd-managed reset sequence.
      *
+     * @param path PDI file opened and closed internally by libvrtd.
+     * @param bootDevice AMI boot-device selector.
+     * @param partition Flash partition to program and select.
      * @throws vrtd::Error on error.
      */
     void cfgmemProgramFile(std::string_view path, uint8_t bootDevice, uint32_t partition) const;
@@ -300,8 +347,6 @@ public:
      */
     uint32_t getClockRate(ClockRegion region) const;
 
-    // TODO: getClockRateMHz()
-
     /**
      * @brief Set the clock rate for a region.
      *
@@ -313,32 +358,38 @@ public:
     uint32_t setClockRate(ClockRegion region, uint32_t rate_hz) const;
 
     /**
-     * @brief Convenience helper for service region get.
-     * @see getClockRate
+     * @brief Return the service-region clock rate in hertz.
+     *
+     * @throws vrtd::Error if the query fails.
      */
     uint32_t getServiceClockRate() const {
         return getClockRate(ClockRegion::Service);
     }
 
     /**
-     * @brief Convenience helper for service region set.
-     * @see setClockRate
+     * @brief Set the service-region clock and return the achieved hertz value.
+     *
+     * @param rate_hz Requested rate in hertz.
+     * @throws vrtd::Error if the rate cannot be applied.
      */
     uint32_t setServiceClockRate(uint32_t rate_hz) const {
         return setClockRate(ClockRegion::Service, rate_hz);
     }
 
     /**
-     * @brief Convenience helper for user region get.
-     * @see getClockRate
+     * @brief Return the user-region clock rate in hertz.
+     *
+     * @throws vrtd::Error if the query fails.
      */
     uint32_t getUserClockRate() const {
         return getClockRate(ClockRegion::User);
     }
 
     /**
-     * @brief Convenience helper for user region set.
-     * @see setClockRate
+     * @brief Set the user-region clock and return the achieved hertz value.
+     *
+     * @param rate_hz Requested rate in hertz.
+     * @throws vrtd::Error if the rate cannot be applied.
      */
     uint32_t setUserClockRate(uint32_t rate_hz) const {
         return setClockRate(ClockRegion::User, rate_hz);
@@ -355,56 +406,34 @@ public:
      */
     std::vector<SensorEntry> getSensorInfo() const;
 
-
-    // reconfigureUserRegion()
-    // reconfigureServiceRegion()
-    // setUserRegionFrequency()
-    // setServiceRegionFrequency()
-
-
 private:
-    // Only allow the Session class to generate this class
     friend class Session;
-    Device(uint32_t num,
+
+    /**
+     * @brief Construct an owned device metadata snapshot.
+     *
+     * Session supplies a shared connection plus bounded copies of the daemon's
+     * name and PCI identity fields. Derived handles retain the same connection.
+     */
+    Device(std::shared_ptr<detail::Connection> connection,
+           uint32_t num,
            std::string_view name,
            std::string_view bdf,
            uint16_t vendorId,
            uint16_t deviceId,
            uint16_t subsystemVendorId,
-           uint16_t subsystemDeviceId,
-           std::function<Bar(const Device&, uint8_t)> fGetBar,
-           std::function<QdmaQpair(const Device&, const struct slash_qdma_qpair_add&)> fCreateQdmaQpair,
-           std::function<Buffer(const Device&, BufferAllocType, uint64_t, uint64_t, BufferAllocDir, MmChannel)> fOpenBuffer,
-           std::function<Buffer(const Device&, uint64_t, uint64_t, BufferAllocDir, MmChannel)> fOpenBufferRaw,
-           std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp,
-           std::function<void(const Device&, int)> fDesignWrite,
-           std::function<void(const Device&, std::string_view)> fDesignWriteFile,
-           std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram,
-           std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile,
-           std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate,
-           std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate,
-           std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo);
+           uint16_t subsystemDeviceId);
 
-    uint32_t num;
-    std::string name;
-    std::string bdf;
-    uint16_t vendorId = 0;
-    uint16_t deviceId = 0;
-    uint16_t subsystemVendorId = 0;
-    uint16_t subsystemDeviceId = 0;
+    /** Shared transport used by all connection-dependent operations. */
+    std::shared_ptr<detail::Connection> connection;
+    uint32_t num; ///< Zero-based daemon device index.
+    std::string name; ///< Owned human-readable daemon name.
+    std::string bdf; ///< Owned board-level PCI BDF.
+    uint16_t vendorId = 0; ///< PCI vendor identifier.
+    uint16_t deviceId = 0; ///< PCI device identifier.
+    uint16_t subsystemVendorId = 0; ///< PCI subsystem vendor identifier.
+    uint16_t subsystemDeviceId = 0; ///< PCI subsystem device identifier.
 
-    std::function<Bar(const Device&, uint8_t)> fGetBar;
-    std::function<QdmaQpair(const Device&, const struct slash_qdma_qpair_add&)> fCreateQdmaQpair;
-    std::function<Buffer(const Device&, BufferAllocType, uint64_t, uint64_t, BufferAllocDir, MmChannel)> fOpenBuffer;
-    std::function<Buffer(const Device&, uint64_t, uint64_t, BufferAllocDir, MmChannel)> fOpenBufferRaw;
-    std::function<void(const Device&, HotplugOp, uint8_t)> fHotplugOp;
-    std::function<void(const Device&, int)> fDesignWrite;
-    std::function<void(const Device&, std::string_view)> fDesignWriteFile;
-    std::function<void(const Device&, int, uint8_t, uint32_t)> fCfgmemProgram;
-    std::function<void(const Device&, std::string_view, uint8_t, uint32_t)> fCfgmemProgramFile;
-    std::function<uint32_t(const Device&, ClockRegion)> fGetClockRate;
-    std::function<uint32_t(const Device&, ClockRegion, uint32_t)> fSetClockRate;
-    std::function<std::vector<SensorEntry>(const Device&)> fGetSensorInfo;
 };
 
 }

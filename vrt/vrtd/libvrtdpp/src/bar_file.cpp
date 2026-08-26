@@ -27,37 +27,68 @@
  * It wraps a slash_bar_file (fd + mmap pointer + length) obtained from
  * the daemon, and unmaps/closes on destruction.
  *
- * Move semantics are fully supported; copying is disabled.
+ * Move semantics transfer an idle mapping; copying is disabled.
  */
 
 #include <vrtd/bar_file.hpp>
-
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <vrtd/vrtd.h>
 
 #include <utility>
 
 namespace vrtd {
 
 BarFile::BarFile(slash_bar_file barFile) noexcept {
+    /* Adopt the mapping and FD exactly as returned by libvrtd. */
     this->barFile = barFile;
 }
 
-BarFile::~BarFile() {
-    close();
+BarFile::~BarFile() noexcept {
+    try {
+        close();
+    } catch (...) {
+        /*
+         * A live access violates the destructor precondition. Destruction cannot
+         * preserve the object or report close()'s error, so release the native
+         * resources as a final backstop despite invalidating the live pointer.
+         */
+        vrtd_close_bar_file(&barFile);
+        closed = true;
+    }
 }
 
-BarFile::BarFile(BarFile&& other) noexcept {
+BarFile::BarFile(BarFile&& other) {
+    /*
+     * A live pointer's callback remains bound to the source object. Refuse to
+     * separate that callback from the mapping it must synchronize.
+     */
+    if (other.reading || other.writing) {
+        throw std::runtime_error("Bar file moved while in memory operation");
+    }
+
+    /* Transfer the idle mapping, then permanently close the source. */
     barFile = std::exchange(other.barFile, {});
     reading = std::exchange(other.reading, false);
     writing = std::exchange(other.writing, false);
     closed  = std::exchange(other.closed, true);
 }
 
-BarFile& BarFile::operator=(BarFile&& other) noexcept {
+BarFile& BarFile::operator=(BarFile&& other) {
+    if (this == &other) {
+        return *this;
+    }
+
+    /*
+     * Validate the source before closing the destination so either failure
+     * leaves both objects unchanged.
+     */
+    if (other.reading || other.writing) {
+        throw std::runtime_error("Bar file moved while in memory operation");
+    }
+
+    /* close() rejects a live destination before releasing its resources. */
     close();
 
+    /* Transfer the idle mapping, then permanently close the source. */
     barFile = std::exchange(other.barFile, {});
     reading = std::exchange(other.reading, false);
     writing = std::exchange(other.writing, false);
@@ -72,11 +103,15 @@ void BarFile::close() {
     }
 
     if (reading || writing) {
+        /*
+         * Unmapping here would invalidate a live volatile pointer and prevent
+         * its cleanup callback from ending the native synchronization session.
+         */
         throw std::runtime_error("Bar file closed while in memory operation");
     }
 
-    munmap(barFile.map, barFile.len);
-    ::close(barFile.fd);
+    vrtd_close_bar_file(&barFile);
+    closed = true;
 }
 
 bool BarFile::isClosed() const noexcept {
@@ -96,6 +131,10 @@ volatile void *BarFile::getRawPtr(size_t address) const noexcept {
         return nullptr;
     }
 
+    /*
+     * Raw access can validate only the starting byte. The caller owns access
+     * width and alignment because this API has no element type.
+     */
     if (address >= barFile.len) {
         return nullptr;
     }

@@ -40,6 +40,7 @@ namespace vrtd {
  */
 class Error : public std::exception {
 private:
+    /** libvrtd result code exposed by getErrorCode() and what(). */
     vrtd_ret errorCode;
 
 public:
@@ -49,8 +50,10 @@ public:
      */
     explicit Error(vrtd_ret errorCode) noexcept;
 
+    /** Destroy the value without owning external resources. */
     ~Error() = default;
 
+    /** Error values preserve their result code across copy and move. */
     Error(const Error&)                = default;
     Error& operator=(const Error&)     = default;
     Error(Error&&) noexcept            = default;
@@ -58,6 +61,8 @@ public:
 
     /**
      * @brief Retrieve the underlying error code.
+     *
+     * @return Exact libvrtd result supplied to the constructor.
      */
     vrtd_ret getErrorCode() const noexcept;
 

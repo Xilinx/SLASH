@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <memory>
 
 #include <vrtd/wire.h>
 
@@ -30,22 +31,31 @@ struct vrtd_buffer;
 
 namespace vrtd {
 
+namespace detail {
+class Connection;
+}
+
 /**
- * @brief Allocation type for buffers.
+ * @brief Device memory class requested from the vrtd allocator.
+ *
+ * Values mirror @c vrtd_alloc_type. The interpretation of Buffer::getAllocArg()
+ * depends on the selected class.
  */
 enum class BufferAllocType : uint32_t {
-    Ddr     = VRTD_ALLOC_TYPE_DDR,
-    Hbm     = VRTD_ALLOC_TYPE_HBM,
-    HbmVnoc = VRTD_ALLOC_TYPE_HBM_VNOC,
+    Ddr     = VRTD_ALLOC_TYPE_DDR, ///< Allocate from DDR memory.
+    Hbm     = VRTD_ALLOC_TYPE_HBM, ///< Allocate from one requested HBM region.
+    HbmVnoc = VRTD_ALLOC_TYPE_HBM_VNOC, ///< Let vrtd place the HBM allocation.
 };
 
 /**
- * @brief Direction for QDMA transfers for a buffer.
+ * @brief QDMA transfer directions enabled for a buffer.
+ *
+ * Values mirror @c vrtd_alloc_dir and constrain which sync method may be used.
  */
 enum class BufferAllocDir : uint32_t {
-    Bidirectional  = VRTD_ALLOC_DIR_BIDIRECTIONAL,
-    HostToDevice   = VRTD_ALLOC_DIR_HOST_TO_DEVICE,
-    DeviceToHost   = VRTD_ALLOC_DIR_DEVICE_TO_HOST,
+    Bidirectional  = VRTD_ALLOC_DIR_BIDIRECTIONAL, ///< Permit both sync directions.
+    HostToDevice   = VRTD_ALLOC_DIR_HOST_TO_DEVICE, ///< Reject syncFromDevice().
+    DeviceToHost   = VRTD_ALLOC_DIR_DEVICE_TO_HOST, ///< Reject syncToDevice().
 };
 
 /**
@@ -65,63 +75,95 @@ enum class MmChannel : uint32_t {
  *
  * A @c Buffer owns the underlying @c vrtd_buffer, including its qpair FD and
  * host-side staging buffer. Destruction closes the FD and releases the mapping.
+ * The buffer retains the connection needed for daemon-side cleanup.
  *
  * @note Move-only; copying is disabled. The moved-from object is closed.
+ * @warning A single Buffer is not safe for concurrent close, move, or sync
+ * operations. Operations on independent buffers may run concurrently.
  */
 class Buffer {
 public:
+    /**
+     * @brief Release daemon and local buffer resources.
+     *
+     * Cleanup is best-effort and does not throw. All pointers and borrowed
+     * descriptors obtained from this object become invalid.
+     */
     ~Buffer();
 
+    /** Native allocation and descriptor ownership cannot be copied. */
     Buffer(const Buffer&)            = delete;
     Buffer& operator=(const Buffer&) = delete;
 
+    /** Transfer ownership and leave @p other closed. */
     Buffer(Buffer&& other) noexcept;
+
+    /**
+     * @brief Close the current allocation, then adopt @p other.
+     *
+     * The moved-from object becomes closed.
+     */
     Buffer& operator=(Buffer&& other) noexcept;
 
     /**
-     * @brief Device index owning this buffer.
+     * @brief Return the owning device index, or zero when closed.
+     *
+     * Zero is also a valid device index; use isClosed() to disambiguate.
      */
     uint32_t getDeviceNum() const noexcept;
 
     /**
-     * @brief Allocation type requested for this buffer.
+     * @brief Return the requested allocation type.
+     *
+     * A closed object reports BufferAllocType::Ddr as a sentinel.
      */
     BufferAllocType getAllocType() const noexcept;
 
     /**
-     * @brief QDMA transfer direction for this buffer.
+     * @brief Return the enabled QDMA transfer direction.
+     *
+     * A closed object reports BufferAllocDir::Bidirectional as a sentinel.
      */
     BufferAllocDir getAllocDir() const noexcept;
 
     /**
-     * @brief Allocation argument (HBM region index for HBM allocations).
+     * @brief Return the type-specific allocation argument, or zero if closed.
+     *
+     * For BufferAllocType::Hbm this is the requested HBM region.
      */
     uint64_t getAllocArg() const noexcept;
 
     /**
-     * @brief Allocated size in bytes (rounded to subregions).
+     * @brief Return the allocated byte count after allocator rounding.
+     *
+     * A closed object returns zero.
      */
     uint64_t getSize() const noexcept;
 
     /**
-     * @brief Physical device address for this allocation.
+     * @brief Return the physical device address, or zero if closed.
      */
     uint64_t getPhysAddr() const noexcept;
 
     /**
-     * @brief Pointer to the host staging buffer.
+     * @brief Return the mutable host mapping, or null if closed.
+     *
+     * The pointer remains mutable for compatibility even on a const Buffer and
+     * becomes invalid on close, move, or destruction.
      */
     void *data() const noexcept;
 
-
     /**
-     * @brief Pointer to the host staging buffer.
+     * @brief Return the writable host mapping, or null if closed.
+     *
+     * The pointer becomes invalid on close, move, or destruction.
      */
     void *data() noexcept;
 
     /**
      * @brief Borrow the owned file descriptor without transferring ownership.
      *
+     * @return QDMA descriptor, or -1 after close or releaseFd().
      * @warning Do not close the returned FD directly unless you have called
      *          @c releaseFd(). Prefer @c close().
      */
@@ -130,46 +172,60 @@ public:
     /**
      * @brief Release qpair FD ownership to the caller.
      *
-     * The buffer remains valid, but will no longer close the FD on destruction.
+     * The buffer remains valid, but later cleanup will not close that
+     * descriptor.
+     *
+     * @return Released descriptor, or -1 if no native buffer is owned.
+     * @warning The caller must close a successfully released descriptor.
      */
     int releaseFd() noexcept;
 
     /**
      * @brief Close and destroy the buffer via vrtd (idempotent).
      *
-     * Releases the server-side allocation and local staging buffer. Errors
-     * are ignored to preserve noexcept semantics.
+     * While connected, cleanup asks vrtd to release the server allocation and
+     * then destroys local mappings and descriptors. After connection closure,
+     * only local state is destroyed because vrtd already reclaims all resources
+     * associated with the disconnected client. Errors are ignored.
      */
     void close() noexcept;
 
     /**
-     * @brief Whether the buffer has been closed or destroyed.
+     * @brief Return whether this object owns no native buffer.
+     *
+     * Moved-from objects are closed.
      */
     bool isClosed() const noexcept;
 
     /**
      * @brief Sync host buffer contents to the device.
      *
-     * @throws vrtd::Error on error.
+     * @param offset First byte in the host mapping.
+     * @param size Number of bytes to transfer.
+     * @throws vrtd::Error if closed, if the range is invalid, if the buffer is
+     *         device-to-host-only, or if DMA fails.
      */
     void syncToDevice(uint64_t offset, uint64_t size);
 
     /**
      * @brief Sync device contents into the host buffer.
      *
-     * @throws vrtd::Error on error.
+     * @param offset First byte in the host mapping.
+     * @param size Number of bytes to transfer.
+     * @throws vrtd::Error if closed, if the range is invalid, if the buffer is
+     *         host-to-device-only, or if DMA fails.
      */
     void syncFromDevice(uint64_t offset, uint64_t size);
 
     /**
-     * @brief Obtain a std::fstream bound to this buffer FD.
+     * @brief Reject stream access to the ioctl-only buffer descriptor.
      *
-     * @param mode Standard iostream open mode (defaults to in|out|binary).
-     * @return A @c std::fstream owning its own FD.
+     * QDMA buffer descriptors support registered-buffer ioctls rather than
+     * read/write stream operations, so this compatibility entry point never
+     * returns.
      *
-     * @throws std::runtime_error if the buffer is closed or the stream cannot be opened.
-     *
-     * @note Implementation is Linux-specific and relies on @c /proc/self/fd.
+     * @param mode Ignored compatibility argument.
+     * @throws std::runtime_error for both open and closed buffers.
      */
     std::fstream fstream(
         std::ios_base::openmode mode =
@@ -177,10 +233,21 @@ public:
     ) const;
 
 private:
-    friend class Session;
+    friend class Device;
 
-    explicit Buffer(struct vrtd_buffer *buffer) noexcept;
+    /**
+     * @brief Adopt a native buffer and retain its cleanup connection.
+     *
+     * @param connection Open shared connection that created @p buffer.
+     * @param buffer Exclusively owned native handle.
+     */
+    Buffer(std::shared_ptr<detail::Connection> connection,
+           struct vrtd_buffer *buffer) noexcept;
 
+    /** Shared connection used to coordinate sync and daemon-side cleanup. */
+    std::shared_ptr<detail::Connection> connection;
+
+    /** Exclusively owned native handle, or null when closed or moved-from. */
     struct vrtd_buffer *buffer{nullptr};
 };
 

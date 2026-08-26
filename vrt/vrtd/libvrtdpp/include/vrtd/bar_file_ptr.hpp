@@ -28,6 +28,8 @@
 
 namespace vrtd {
 
+class BarFile;
+
 /**
  * @brief Move-only RAII pointer for BAR memory access sessions.
  *
@@ -39,41 +41,52 @@ namespace vrtd {
  *
  * @warning Not thread-safe. Intended to be short-lived and used on a
  *          single thread that owns the corresponding @c BarFile operation.
+ * @warning The originating BarFile must outlive this pointer.
  */
 template<class T>
 class BarFilePtr {
+    /** Typed BAR access requires an object type. */
     static_assert(std::is_object_v<T>, "T must be an object type");
 public:
+    /** Unqualified element type exposed by this pointer wrapper. */
     using element_type = T;
+
+    /** Volatile pointer type used for MMIO loads and stores. */
     using pointer      = volatile T*;
+
+    /** Non-throwing cleanup action run once when ownership ends. */
     using callback_t   = std::function<void()>;
 
     /**
-     * @brief Construct from a raw volatile pointer and optional destructor callback.
+     * @brief Transfer pointer and cleanup ownership from @p other.
      *
-     * @param p  Raw volatile pointer within the BAR mapping.
-     * @param cb Callback to run on destruction (e.g., to end a read/write session).
+     * The moved-from pointer becomes null and will not run the callback.
      */
-    explicit BarFilePtr(pointer p = nullptr, callback_t cb = {}) noexcept
-        : p_(p), cb_(std::move(cb)) {}
-
-    // move-only (ensures callback runs at most once)
     BarFilePtr(BarFilePtr&& other) noexcept
         : p_(other.p_), cb_(std::move(other.cb_)) {
         other.p_ = nullptr;
         other.cb_ = nullptr;
     }
+
+    /**
+     * @brief End the current access session, then adopt @p other.
+     *
+     * The moved-from pointer becomes null and will not run the callback.
+     */
     BarFilePtr& operator=(BarFilePtr&& other) noexcept {
         if (this != &other) {
             run_callback();
+
             p_  = other.p_;
             cb_ = std::move(other.cb_);
             other.p_ = nullptr;
             other.cb_ = nullptr;
         }
+
         return *this;
     }
 
+    /** Copying would run one cleanup action from multiple owners. */
     BarFilePtr(const BarFilePtr&)            = delete;
     BarFilePtr& operator=(const BarFilePtr&) = delete;
 
@@ -82,56 +95,88 @@ public:
      */
     ~BarFilePtr() { run_callback(); }
 
-    // ---- implicit conversions (only these two) ----
     /**
-     * @brief Implicit conversion to volatile T*.
+     * @brief Return the wrapped volatile element pointer.
      */
     operator pointer() const noexcept { return p_; }
+
     /**
-     * @brief Implicit conversion to volatile void*.
+     * @brief Return the wrapped address without its element type.
      */
     operator volatile void*() const noexcept { return p_; }
 
-    // ---- pointer-like interface ----
+    /** Return the wrapped pointer without transferring cleanup ownership. */
     pointer get()        const noexcept { return p_; }
+
+    /** Dereference the wrapped volatile element. */
     volatile T& operator*() const noexcept { return *p_; }
+
+    /** Access a member through the wrapped volatile element pointer. */
     pointer     operator->() const noexcept { return p_; }
 
-    // index (useful for arrays / pointer arithmetic)
+    /**
+     * @brief Index from the wrapped address.
+     *
+     * Bounds and alignment remain the caller's responsibility.
+     */
     volatile T& operator[](std::size_t i) const noexcept { return p_[i]; }
 
     /**
-     * @brief returns true if non-null.
+     * @brief Return whether the wrapped pointer is non-null.
      */
     explicit operator bool() const noexcept { return p_ != nullptr; }
 
-    // comparisons
+    /** Compare two wrappers by their raw pointer values. */
     friend bool operator==(const BarFilePtr& a, const BarFilePtr& b) noexcept { return a.p_ == b.p_; }
     friend bool operator!=(const BarFilePtr& a, const BarFilePtr& b) noexcept { return !(a == b); }
+
+    /** Compare the wrapped pointer with null. */
     friend bool operator==(const BarFilePtr& a, std::nullptr_t) noexcept { return a.p_ == nullptr; }
     friend bool operator==(std::nullptr_t, const BarFilePtr& a) noexcept { return a.p_ == nullptr; }
     friend bool operator!=(const BarFilePtr& a, std::nullptr_t) noexcept { return a.p_ != nullptr; }
     friend bool operator!=(std::nullptr_t, const BarFilePtr& a) noexcept { return a.p_ != nullptr; }
 
-    // optional: compare directly with a raw volatile T*
+    /** Compare the wrapper with a raw volatile pointer value. */
     friend bool operator==(const BarFilePtr& a, pointer p) noexcept { return a.p_ == p; }
     friend bool operator==(pointer p, const BarFilePtr& a) noexcept { return a.p_ == p; }
     friend bool operator!=(const BarFilePtr& a, pointer p) noexcept { return a.p_ != p; }
     friend bool operator!=(pointer p, const BarFilePtr& a) noexcept { return a.p_ != p; }
 
 private:
+    friend class BarFile;
+
+    /**
+     * @brief Construct a BAR access session for BarFile.
+     *
+     * @param p  Raw volatile pointer within the BAR mapping.
+     * @param cb Callback to run on destruction (e.g., to end a read/write session).
+     *
+     * @warning @p cb must not throw because cleanup runs from noexcept paths.
+     */
+    explicit BarFilePtr(pointer p, callback_t cb) noexcept
+        : p_(p), cb_(std::move(cb)) {}
+
+    /**
+     * @brief Consume and invoke the cleanup action at most once.
+     *
+     * Move the callback out before invocation so re-entrant destruction cannot
+     * invoke the same cleanup twice.
+     */
     void run_callback() noexcept {
         if (cb_) {
             auto cb = std::move(cb_);
-            cb_ = nullptr;      // ensure single fire
+            cb_ = nullptr;
             cb();
         }
     }
 
+    /** Borrowed volatile mapping address, or null after move. */
     pointer     p_  = nullptr;
+
+    /** Sole owner of the access-session cleanup action. */
     callback_t  cb_ = nullptr;
 };
 
-} // namsepace vrtd
+} // namespace vrtd
 
 #endif // VRTD_BAR_FILE_PTR_HPP

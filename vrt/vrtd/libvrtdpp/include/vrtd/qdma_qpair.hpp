@@ -22,69 +22,93 @@
 #define VRTD_QDMA_QPAIR_HPP
 
 #include <cstdint>
-#include <functional>
 #include <fstream>
+#include <memory>
 #include <fcntl.h>
 
 namespace vrtd {
+
+namespace detail {
+class Connection;
+}
 
 /**
  * @brief RAII wrapper for a QDMA queue pair (qpair).
  *
  * A @c QdmaQpair owns a qpair created through a @c Session. It provides
- * convenience methods to start/stop the qpair and to obtain a read/write
- * file descriptor. On destruction, it requests deletion of the qpair.
+ * lifecycle methods and access to the ioctl-only QDMA descriptor used for
+ * buffer creation and transfer commands. On destruction, it requests deletion
+ * of the qpair.
  *
- * @warning A @c QdmaQpair becomes invalid if its originating @c Session
- *          is closed or moved; methods will throw in that case. The
- *          destructor never throws and will silently ignore errors when
- *          attempting to delete the qpair.
+ * Moving or destroying the originating @c Session does not invalidate a
+ * QdmaQpair. Explicitly closing the shared connection does. The destructor
+ * never throws and silently ignores errors during best-effort deletion.
  */
 class QdmaQpair {
 public:
+    /**
+     * @brief Best-effort delete the owned queue pair.
+     *
+     * Errors do not escape; daemon disconnect remains the cleanup backstop.
+     */
     ~QdmaQpair();
 
+    /** A daemon queue-pair identity has one RAII owner and cannot be copied. */
     QdmaQpair(const QdmaQpair&)            = delete;
     QdmaQpair& operator=(const QdmaQpair&) = delete;
 
+    /** Transfer queue ownership and leave @p other unowned. */
     QdmaQpair(QdmaQpair&& other) noexcept;
+
+    /**
+     * @brief Best-effort delete the current queue, then adopt @p other.
+     *
+     * The moved-from object becomes unowned.
+     */
     QdmaQpair& operator=(QdmaQpair&& other) noexcept;
 
     /**
-     * @brief Device index owning this qpair.
+     * @brief Return the daemon device index owning this qpair.
      */
     uint32_t getDeviceNum() const noexcept { return devNum; }
 
     /**
-     * @brief Qpair identifier as assigned by the kernel.
+     * @brief Return the kernel-assigned queue identifier.
+     *
+     * Zero is valid for an owned queue and is also the moved-from sentinel.
      */
     uint32_t getQid() const noexcept { return qid; }
 
     /**
      * @brief Start the qpair.
      *
-     * @throws vrtd::Error on error.
+     * @throws vrtd::Error if this object is unowned, the shared connection is
+     *         closed, or the daemon rejects the lifecycle transition.
      */
     void start();
 
     /**
      * @brief Stop the qpair.
      *
-     * @throws vrtd::Error on error.
+     * @throws vrtd::Error if this object is unowned, the shared connection is
+     *         closed, or the daemon rejects the lifecycle transition.
      */
     void stop();
 
     /**
-     * @brief Obtain a read/write file descriptor for this qpair.
+     * @brief Obtain an ioctl-only QDMA descriptor for this qpair.
      *
      * @param flags OR of O_CLOEXEC and 0 (other flags may be rejected).
      * @return New file descriptor owned by the caller.
-     * @throws vrtd::Error on error.
+     * @throws vrtd::Error if unowned, closed, or the request fails.
      */
     int fd(uint32_t flags = O_CLOEXEC);
 
     /**
-     * @brief Obtain a std::fstream bound to this qpair.
+     * @brief Obtain a compatibility stream object bound to this qpair.
+     *
+     * The underlying QDMA endpoint remains ioctl-only; ordinary stream
+     * read/write operations are unsupported even if opening the stream succeeds.
      *
      * @param flags OR of O_CLOEXEC and 0 (other flags may be rejected).
      * @param mode  Standard iostream open mode (defaults to in|out|binary).
@@ -92,7 +116,8 @@ public:
      *
      * @throws vrtd::Error or std::runtime_error on error.
      *
-     * @note Implementation is Linux-specific and relies on @c /proc/self/fd.
+     * @note Linux-specific: opens @c /proc/self/fd/<fd> so the stream receives
+     *       its own descriptor before the temporary daemon-provided FD closes.
      */
     std::fstream fstream(
         uint32_t flags = O_CLOEXEC,
@@ -101,23 +126,24 @@ public:
     );
 
 private:
-    friend class Session;
+    friend class Device;
 
-    QdmaQpair(uint32_t devNum,
-              uint32_t qid,
-              std::function<void(const QdmaQpair&)> fStart,
-              std::function<void(const QdmaQpair&)> fStop,
-              std::function<void(const QdmaQpair&)> fDelete,
-              std::function<int(const QdmaQpair&, uint32_t)> fOpenFd) noexcept;
+    /**
+     * @brief Adopt ownership of a newly created daemon queue pair.
+     *
+     * @param connection Shared connection used for all lifecycle operations.
+     * @param devNum Zero-based owning device index.
+     * @param qid Kernel-assigned queue identifier; zero is valid.
+     */
+    QdmaQpair(std::shared_ptr<detail::Connection> connection,
+              uint32_t devNum,
+              uint32_t qid) noexcept;
 
-    uint32_t devNum{};
-    uint32_t qid{};
-    bool owned{true};
-
-    std::function<void(const QdmaQpair&)>        fStart;
-    std::function<void(const QdmaQpair&)>        fStop;
-    std::function<void(const QdmaQpair&)>        fDelete;
-    std::function<int(const QdmaQpair&, uint32_t)> fOpenFd;
+    /** Shared connection retained through best-effort deletion. */
+    std::shared_ptr<detail::Connection> connection;
+    uint32_t devNum{}; ///< Zero-based owning device index.
+    uint32_t qid{}; ///< Kernel-assigned queue identifier.
+    bool owned{true}; ///< Sole indicator that destruction must delete the queue.
 };
 
 } // namespace vrtd

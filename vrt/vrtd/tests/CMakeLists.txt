@@ -33,3 +33,18 @@ add_vrtd_test(v80_policy_test v80_policy_test.cpp)
 add_vrtd_test(design_writer_test design_writer_test.cpp)
 add_vrtd_test(device_test device_test.cpp)
 add_vrtd_test(flash_worker_test flash_worker_test.cpp)
+
+add_executable(libvrtdpp_test libvrtdpp_test.cpp)
+target_link_libraries(
+  libvrtdpp_test
+  PRIVATE
+    GTest::gtest_main
+    vrtd::libvrtdpp
+    Threads::Threads
+)
+set_target_properties(libvrtdpp_test PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED YES
+)
+gtest_discover_tests(libvrtdpp_test)
+add_dependencies(unit_tests libvrtdpp_test)

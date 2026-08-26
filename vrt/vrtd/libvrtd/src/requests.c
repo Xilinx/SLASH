@@ -1030,17 +1030,31 @@ enum vrtd_ret vrtd_open_bar_file(
         return VRTD_RET_BAD_LIB_CALL;
     }
 
-    int bar_fd = -1;
-    size_t len = 0;
-    enum vrtd_ret ret = vrtd_get_bar_fd(fd, dev,bar,  &bar_file_out->fd, &bar_file_out->len);
+    enum vrtd_ret ret = vrtd_get_bar_fd(
+        fd, dev, bar, &bar_file_out->fd, &bar_file_out->len);
     if (ret != VRTD_RET_OK) {
         return ret;
     }
 
-    bar_file_out->map = mmap(NULL, bar_file_out->len, PROT_READ | PROT_WRITE, MAP_SHARED, bar_file_out->fd, 0);
+    bar_file_out->map = mmap(
+        NULL,
+        bar_file_out->len,
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        bar_file_out->fd,
+        0
+    );
     if (bar_file_out->map == MAP_FAILED) {
+        /*
+         * The received BAR descriptor is independent of the vrtd connection.
+         * Closing fd here invalidates the client transport and may later close
+         * an unrelated descriptor if the kernel reuses that number.
+         */
+        close(bar_file_out->fd);
         bar_file_out->map = NULL;
-        close(fd);
+        bar_file_out->len = 0;
+        bar_file_out->fd = -1;
+
         return VRTD_RET_INTERNAL_ERROR;
     }
 

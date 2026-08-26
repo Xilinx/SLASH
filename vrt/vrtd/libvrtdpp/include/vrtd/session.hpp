@@ -30,52 +30,76 @@
 #include <vrtd/qdma_qpair.hpp>
 
 #include <functional>
-#include <mutex>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace vrtd {
 
+namespace detail {
+class Connection;
+}
+
+/**
+ * @brief Lifecycle state of an asynchronous cfgmem programming job.
+ *
+ * Values mirror the libvrtd wire protocol and may be compared directly with
+ * the corresponding @c VRTD_CFGMEM_PROGRAM_STATE_* constants.
+ */
 enum class CfgmemProgramState : uint32_t {
-    Queued = VRTD_CFGMEM_PROGRAM_STATE_QUEUED,
-    Running = VRTD_CFGMEM_PROGRAM_STATE_RUNNING,
-    Done = VRTD_CFGMEM_PROGRAM_STATE_DONE,
-    Failed = VRTD_CFGMEM_PROGRAM_STATE_FAILED,
+    Queued = VRTD_CFGMEM_PROGRAM_STATE_QUEUED,   ///< Waiting for a worker.
+    Running = VRTD_CFGMEM_PROGRAM_STATE_RUNNING, ///< Programming is active.
+    Done = VRTD_CFGMEM_PROGRAM_STATE_DONE,       ///< Completed successfully.
+    Failed = VRTD_CFGMEM_PROGRAM_STATE_FAILED,   ///< Completed with an error.
 };
 
+/**
+ * @brief Current phase of an asynchronous cfgmem programming job.
+ *
+ * The phase identifies the operation presently executing; use
+ * CfgmemProgramState to determine whether the job is terminal.
+ */
 enum class CfgmemProgramPhase : uint32_t {
-    Queued = VRTD_CFGMEM_PROGRAM_PHASE_QUEUED,
-    OpeningAmi = VRTD_CFGMEM_PROGRAM_PHASE_OPENING_AMI,
-    DownloadingPdi = VRTD_CFGMEM_PROGRAM_PHASE_DOWNLOADING_PDI,
-    SelectingPartition = VRTD_CFGMEM_PROGRAM_PHASE_SELECTING_PARTITION,
-    ResetPreparing = VRTD_CFGMEM_PROGRAM_PHASE_RESET_PREPARING,
-    RemovingPcie = VRTD_CFGMEM_PROGRAM_PHASE_REMOVING_PCIE,
-    TogglingSbr = VRTD_CFGMEM_PROGRAM_PHASE_TOGGLING_SBR,
-    RescanningPcie = VRTD_CFGMEM_PROGRAM_PHASE_RESCANNING_PCIE,
-    RediscoveringDevice = VRTD_CFGMEM_PROGRAM_PHASE_REDISCOVERING_DEVICE,
-    Done = VRTD_CFGMEM_PROGRAM_PHASE_DONE,
-    Failed = VRTD_CFGMEM_PROGRAM_PHASE_FAILED,
+    Queued = VRTD_CFGMEM_PROGRAM_PHASE_QUEUED, ///< Waiting for execution.
+    OpeningAmi = VRTD_CFGMEM_PROGRAM_PHASE_OPENING_AMI, ///< Opening AMI.
+    DownloadingPdi = VRTD_CFGMEM_PROGRAM_PHASE_DOWNLOADING_PDI, ///< Writing the PDI.
+    SelectingPartition = VRTD_CFGMEM_PROGRAM_PHASE_SELECTING_PARTITION, ///< Selecting boot.
+    ResetPreparing = VRTD_CFGMEM_PROGRAM_PHASE_RESET_PREPARING, ///< Preparing reset.
+    RemovingPcie = VRTD_CFGMEM_PROGRAM_PHASE_REMOVING_PCIE, ///< Removing PCI functions.
+    TogglingSbr = VRTD_CFGMEM_PROGRAM_PHASE_TOGGLING_SBR, ///< Toggling secondary-bus reset.
+    RescanningPcie = VRTD_CFGMEM_PROGRAM_PHASE_RESCANNING_PCIE, ///< Rescanning PCI.
+    RediscoveringDevice = VRTD_CFGMEM_PROGRAM_PHASE_REDISCOVERING_DEVICE, ///< Reopening the board.
+    Done = VRTD_CFGMEM_PROGRAM_PHASE_DONE, ///< Successful terminal phase.
+    Failed = VRTD_CFGMEM_PROGRAM_PHASE_FAILED, ///< Failed terminal phase.
 };
 
+/** @brief Copied progress snapshot for one cfgmem programming job. */
 struct CfgmemProgramStatus {
-    uint64_t jobId = 0;
-    CfgmemProgramState state = CfgmemProgramState::Queued;
-    CfgmemProgramPhase phase = CfgmemProgramPhase::Queued;
-    uint64_t bytesWritten = 0;
-    uint64_t bytesTotal = 0;
-    uint64_t elapsedMsec = 0;
-    enum vrtd_ret result = VRTD_RET_OK;
+    uint64_t jobId = 0; ///< Daemon-assigned job identifier.
+    CfgmemProgramState state = CfgmemProgramState::Queued; ///< Job lifecycle state.
+    CfgmemProgramPhase phase = CfgmemProgramPhase::Queued; ///< Current operation.
+    uint64_t bytesWritten = 0; ///< PDI bytes written so far.
+    uint64_t bytesTotal = 0; ///< Total PDI byte count.
+    uint64_t elapsedMsec = 0; ///< Elapsed job time in milliseconds.
+    enum vrtd_ret result = VRTD_RET_OK; ///< Result code; meaningful when terminal.
 };
 
+/**
+ * @brief Callback invoked with each observed cfgmem progress snapshot.
+ *
+ * Any observed terminal snapshot is delivered before
+ * cfgmemProgramFileProgress() handles its result. Throwing from the callback
+ * stops local polling but does not cancel the daemon job.
+ */
 using CfgmemProgressCallback = std::function<void(const CfgmemProgramStatus&)>;
 
 /**
- * @brief Owning session/connection to the V Runtime Daemon (vrtd).
+ * @brief Owning session/connection to the VRT Daemon (vrtd).
  *
- * A @c Session wraps a connected libvrtd socket and provides typed, exception-based
- * access to devices and BARs. All public member functions are thread-safe; calls
- * synchronize on an internal @c std::mutex.
+ * A @c Session provides typed, exception-based access to a shared connection
+ * to vrtd. Objects created from the session retain that connection and may
+ * outlive the Session facade.
  *
  * @par Exceptions
  * Most member functions throw #vrtd::Error on failure. The destructor never throws.
@@ -84,9 +108,10 @@ using CfgmemProgressCallback = std::function<void(const CfgmemProgramStatus&)>;
  * - The session is non-copyable and movable.
  * - Moving a session leaves the moved-from object in the closed state
  *   (i.e., @c isClosed()==true and @c operator bool() == false).
- * - **Important:** Any @c Device or @c Bar previously obtained from a session becomes
- *   invalid once that session is closed or moved; subsequent operations on those
- *   objects will throw.
+ * - Moving or destroying the Session facade does not invalidate objects
+ *   previously obtained from it.
+ * - Explicitly calling @c close() closes the shared connection and invalidates
+ *   all objects backed by it.
  */
 class Session {
 public:
@@ -104,10 +129,13 @@ public:
     explicit Session(const char *socket_path = nullptr);
 
     /**
-     * @brief Destructor; closes the session if still open.
+     * @brief Destructor; releases this facade's connection reference.
+     *
+     * The connection closes when its final owning object is destroyed.
      */
     ~Session() noexcept;
 
+    /** A Session facade has unique ownership semantics and cannot be copied. */
     Session(const Session&)            = delete;
     Session& operator=(const Session&) = delete;
 
@@ -123,9 +151,10 @@ public:
     /**
      * @brief Move-assign a session.
      *
-     * Closes any existing connection, then takes ownership from @p other.
+     * Releases this facade's existing connection, then takes ownership from
+     * @p other. Objects using the old connection remain valid.
      * The moved-from session becomes closed.
-    *
+     *
      * @param other The session to move from.
      */
     Session& operator=(Session&& other) noexcept;
@@ -134,9 +163,6 @@ public:
      * @brief Number of devices visible via vrtd.
      * @return Device count.
      * @throws vrtd::Error on error.
-     *
-     * @par Thread safety
-     * Safe for concurrent calls across threads.
      */
     uint32_t getNumDevices() const;
 
@@ -148,14 +174,19 @@ public:
      * @throws vrtd::Error if @p i is out of range or if the session is not usable.
      *
      * @par Notes
-     * The returned @c Device becomes invalid if this session is later closed or moved.
+     * The returned @c Device retains the shared connection. It becomes invalid
+     * only when that connection is explicitly closed.
      */
     Device getDevice(size_t i) const;
 
     /**
      * @brief Retrieve a device handle by PCI BDF string.
      *
-     * @param bdf PCI BDF string (e.g., "0000:65:00.0").
+     * Accepts a board BDF such as @c 0000:65:00 or domainless @c 65:00.
+     * A physical-function suffix is stripped because vrtd indexes whole boards;
+     * stripping emits a warning to stderr.
+     *
+     * @param bdf PCI board BDF, optionally with a domain or function suffix.
      * @return A lightweight @c Device value referring back to this session.
      * @throws vrtd::Error if the device cannot be found or if the session is not usable.
      */
@@ -171,6 +202,19 @@ public:
      */
     void hotplugRescan() const;
 
+    /**
+     * @brief Submit an asynchronous cfgmem programming job from an open FD.
+     *
+     * @p device must originate from this shared connection. The descriptor is
+     * duplicated for the daemon through SCM_RIGHTS and remains caller-owned.
+     *
+     * @param device Device whose configuration memory will be programmed.
+     * @param input_fd Readable PDI descriptor.
+     * @param bootDevice AMI boot-device selector.
+     * @param partition Flash partition to program and select.
+     * @return Daemon-assigned job identifier for cfgmemProgramStatus().
+     * @throws vrtd::Error if ownership validation or submission fails.
+     */
     uint64_t cfgmemProgramStart(
         const Device& device,
         int input_fd,
@@ -178,8 +222,32 @@ public:
         uint32_t partition
     ) const;
 
+    /**
+     * @brief Return the latest snapshot for a cfgmem programming job.
+     *
+     * @param jobId Identifier returned by cfgmemProgramStart().
+     * @return Copied progress and terminal-result fields.
+     * @throws vrtd::Error if the job is unknown, belongs to another client, or
+     *         the request fails.
+     */
     CfgmemProgramStatus cfgmemProgramStatus(uint64_t jobId) const;
 
+    /**
+     * @brief Program a PDI file while reporting asynchronous progress.
+     *
+     * Starts a daemon job, polls it until a terminal state, and invokes
+     * @p progressCallback for every observed snapshot including the terminal
+     * one. A zero polling interval selects the ten-second default. Callback
+     * exceptions stop local polling without cancelling the daemon job.
+     *
+     * @param device Device from this shared connection.
+     * @param path PDI file opened by libvrtd.
+     * @param bootDevice AMI boot-device selector.
+     * @param partition Flash partition to program and select.
+     * @param progressCallback Optional observer invoked outside connection locks.
+     * @param pollIntervalMsec Delay between nonterminal polls in milliseconds.
+     * @throws vrtd::Error on submission, polling, or terminal job failure.
+     */
     void cfgmemProgramFileProgress(
         const Device& device,
         std::string_view path,
@@ -192,9 +260,10 @@ public:
     /**
      * @brief Query QDMA capabilities for a device.
      *
-     * @param device Device for which to query QDMA info.
+     * @param device Device from this shared connection.
      * @return A copy of the QDMA capability struct as reported by the daemon.
-     * @throws vrtd::Error on error.
+     * @throws vrtd::Error if the device belongs to another connection or the
+     *         query fails.
      */
     struct slash_qdma_info getQdmaInfo(const Device& device) const;
 
@@ -202,12 +271,14 @@ public:
      * @brief Explicitly close the session.
      *
      * Idempotent. After closing, @c isClosed()==true and further operations
-     * on this session or on previously obtained @c Device/@c Bar objects will throw.
+     * on this session or on previously obtained connection-backed objects
+     * throw. The call first rejects new work and then waits for active
+     * operations to finish before closing the socket.
      */
     void close() noexcept;
 
     /**
-     * @brief Whether the session is closed.
+     * @brief Return whether this facade has no connection or close has begun.
      */
     bool isClosed() const noexcept;
 
@@ -218,195 +289,14 @@ public:
      */
     explicit operator bool() const noexcept;
 private:
-    int fd;
-    mutable std::unique_ptr<std::mutex> m;
-
     /**
-     * @internal Obtains a BAR for @p device. Called via @c Device::getBar().
+     * @brief Shared connection retained by this facade and all derived handles.
+     *
+     * A null pointer marks a moved-from Session. A non-null connection may
+     * itself be permanently closed.
      */
-    Bar getBar(const Device& device, uint8_t bar_number) const;
+    std::shared_ptr<detail::Connection> connection;
 
-    /**
-     * @internal Opens and mmaps a BAR file. Called via @c Bar::openBarFile().
-     */
-    BarFile openBarFile(const Bar &bar) const;
-
-    /**
-     * @internal Create a QDMA qpair on a device.
-     *
-     * Returns an owning @c QdmaQpair that will automatically delete
-     * the qpair on destruction.
-     *
-     * @param device Device on which to create the qpair.
-     * @param cfg    Qpair configuration parameters. The returned qpair
-     *               exposes @c getQid().
-     * @return An owning @c QdmaQpair.
-     * @throws vrtd::Error on error.
-     */
-    QdmaQpair createQdmaQpair(
-        const Device& device,
-        const struct slash_qdma_qpair_add& cfg
-    ) const;
-
-    /**
-     * @internal Open a buffer (allocation + QDMA qpair).
-     *
-     * @param device    Device on which to allocate.
-     * @param allocType Allocation type.
-     * @param size      Requested size in bytes.
-     * @param allocArg  Allocation argument (HBM region index for HBM).
-     * @param allocDir  QDMA transfer direction.
-     * @param mmChannel AXI-MM/NoC channel selection for the queue pair.
-     * @return An owning @c Buffer.
-     * @throws vrtd::Error on error.
-     */
-    Buffer openBuffer(
-        const Device& device,
-        BufferAllocType allocType,
-        uint64_t size,
-        uint64_t allocArg,
-        BufferAllocDir allocDir,
-        MmChannel mmChannel
-    ) const;
-
-    /**
-     * @internal Open a raw buffer (QDMA qpair at caller-specified device address).
-     *
-     * @param device    Device on which to create the qpair.
-     * @param phys_addr Caller-specified device physical address (bypasses allocator).
-     * @param size      Size in bytes.
-     * @param allocDir  QDMA transfer direction.
-     * @param mmChannel AXI-MM/NoC channel selection for the queue pair.
-     * @return An owning @c Buffer.
-     * @throws vrtd::Error on error.
-     */
-    Buffer openBufferRaw(
-        const Device& device,
-        uint64_t phys_addr,
-        uint64_t size,
-        BufferAllocDir allocDir,
-        MmChannel mmChannel
-    ) const;
-
-    /**
-     * @internal Perform a PCIe hotplug operation.
-     *
-     * For ResetSequence, @p function is ignored. For Remove and Hotplug,
-     * @p function selects the PCI physical function (0-7) or
-     * HotplugFunctionAll for all V80 PFs. ToggleSbr requires a single PCI
-     * physical function (0-7). Use hotplugRescan() for device-independent
-     * bus rescan.
-     *
-     * @param device   Device target.
-     * @param op       One of vrtd::HotplugOp.
-     * @param function PCI function number (0-7), or HotplugFunctionAll where allowed.
-     * @throws vrtd::Error on error.
-     */
-    void hotplugOp(const Device& device, HotplugOp op,
-                   uint8_t function = 0) const;
-
-    /**
-     * @internal Perform a design writer transfer using an input FD.
-     *
-     * @param device   Device owning the design writer.
-     * @param input_fd Input file descriptor to transfer from.
-     * @throws vrtd::Error on error.
-     */
-    void designWrite(const Device& device, int input_fd) const;
-
-    /**
-     * @internal Perform a design writer transfer using a file path.
-     *
-     * @param device Device owning the design writer.
-     * @param path   Input file path to transfer from.
-     * @throws vrtd::Error on error.
-     */
-    void designWriteFile(const Device& device, std::string_view path) const;
-
-    /**
-     * @internal Program a PDI into cfgmem using an input FD.
-     *
-     * @param device     Device to program.
-     * @param input_fd   Input PDI file descriptor.
-     * @param bootDevice AMI boot device selector.
-     * @param partition  Flash partition to program and boot.
-     * @throws vrtd::Error on error.
-     */
-    void cfgmemProgram(
-        const Device& device,
-        int input_fd,
-        uint8_t bootDevice,
-        uint32_t partition
-    ) const;
-
-    /**
-     * @internal Program a PDI into cfgmem using a file path.
-     *
-     * @param device     Device to program.
-     * @param path       Input PDI file path.
-     * @param bootDevice AMI boot device selector.
-     * @param partition  Flash partition to program and boot.
-     * @throws vrtd::Error on error.
-     */
-    void cfgmemProgramFile(
-        const Device& device,
-        std::string_view path,
-        uint8_t bootDevice,
-        uint32_t partition
-    ) const;
-
-    /**
-     * @internal Get clock rate for a region.
-     *
-     * @param device Device owning the clock.
-     * @param region One of vrtd_clock_region.
-     * @return Current rate in Hz.
-     * @throws vrtd::Error on error.
-     */
-    uint32_t getClockRate(const Device& device, ClockRegion region) const;
-
-    /**
-     * @internal Set clock rate for a region.
-     *
-     * @param device Device owning the clock.
-     * @param region One of vrtd_clock_region.
-     * @param rate_hz Requested rate in Hz.
-     * @return Achieved rate in Hz.
-     * @throws vrtd::Error on error.
-     */
-    uint32_t setClockRate(const Device& device, ClockRegion region, uint32_t rate_hz) const;
-
-    /**
-     * @internal Start, stop or delete an existing QDMA qpair.
-     *
-     * Convenience wrappers around the vrtd QDMA queue-op requests, used by
-     * @c QdmaQpair via the callbacks injected by @c createQdmaQpair().
-     *
-     * @throws vrtd::Error on error.
-     */
-    void startQdmaQpair(const Device& device, uint32_t qid) const;
-    void stopQdmaQpair (const Device& device, uint32_t qid) const;
-    void deleteQdmaQpair(const Device& device, uint32_t qid) const;
-
-    /**
-     * @internal Obtain a read/write file descriptor for a QDMA qpair.
-     *
-     * @param device Device owning the qpair.
-     * @param qid    Qpair identifier as returned by @c createQdmaQpair().
-     * @param flags  OR of O_CLOEXEC and 0 (other flags may be rejected).
-     * @return A new file descriptor referring to the qpair, owned by the caller.
-     * @throws vrtd::Error on error.
-     */
-    int openQdmaQpairFd(const Device& device, uint32_t qid, uint32_t flags = 0) const;
-
-    /**
-     * @internal Query sensor information for a device.
-     *
-     * @param device Device to query sensors for.
-     * @return Vector of sensor entries.
-     * @throws vrtd::Error on error.
-     */
-    std::vector<SensorEntry> getSensorInfo(const Device& device) const;
 };
 
 }

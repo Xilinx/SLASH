@@ -21,14 +21,16 @@
 #ifndef VRTD_BAR_HPP
 #define VRTD_BAR_HPP
 
-#include <string>
-#include <string_view>
-#include <functional>
+#include <memory>
 #include <stdint.h>
 
 #include <vrtd/bar_file.hpp>
 
 namespace vrtd {
+
+namespace detail {
+class Connection;
+}
 
 /**
  * @brief Value-type metadata handle for a device BAR (Base Address Register).
@@ -37,23 +39,27 @@ namespace vrtd {
  *
  * @par Semantics
  * - @c isUsable(): this BAR is currently accessible/mappable to the caller.
- * - @c isInUse(): this BAR is leased by another tenant (currently always false).
+ * - @c isInUse(): daemon-reported lease state at discovery time.
  * - @c getStartAddress(), @c getLength(): physical address and size in **bytes**.
  *
  * @par Lifetime
- * A @c Bar becomes invalid if its originating @c Session is closed or moved.
- * Any subsequent member call will throw.
+ * Moving or destroying the originating @c Session does not invalidate a Bar.
+ * Explicitly closing the shared connection does.
  *
  * @par Thread safety
  * Methods are thread-safe and may be called concurrently; they synchronize
- * on the originating @c Session.
+ * on the shared connection.
  */
 class Bar {
 public:
+    /** Release this metadata handle and its shared connection reference. */
     ~Bar() = default;
 
+    /** BAR handles are copyable views of the same connection and metadata. */
     Bar(const Bar&)                = default;
     Bar& operator=(const Bar&)     = default;
+
+    /** Moving transfers the shared connection and cached metadata. */
     Bar(Bar&&) noexcept            = default;
     Bar& operator=(Bar&&) noexcept = default;
 
@@ -73,9 +79,7 @@ public:
     bool isUsable() const noexcept;
 
     /**
-     * @brief Whether this BAR is currently in use by another tenant.
-     *
-     * @note In the current implementation this always returns false.
+     * @brief Return the daemon-reported in-use state from discovery time.
      */
     bool isInUse() const noexcept;
 
@@ -98,18 +102,35 @@ public:
      */
     BarFile openBarFile() const;
 private:
-    // Only allow the Session class to generate this class
-    friend class Session;
-    Bar(uint32_t deviceNum, uint8_t num, bool usable, bool inUse, uint64_t startAddress, uint64_t length, std::function<BarFile(const Bar&)> fOpenBarFile) noexcept;
+    friend class Device;
 
-    uint32_t deviceNum;
-    uint8_t num;
-    bool usable;
-    bool inUse;
-    uint64_t startAddress;
-    uint64_t length;
+    /**
+     * @brief Construct a BAR handle from one daemon metadata snapshot.
+     *
+     * @param connection Shared transport retained for later mapping.
+     * @param deviceNum Zero-based owning device index.
+     * @param num Zero-based BAR index.
+     * @param usable Whether the daemon permits mapping.
+     * @param inUse Whether another tenant currently holds the BAR.
+     * @param startAddress Physical BAR start address.
+     * @param length BAR size in bytes.
+     */
+    Bar(std::shared_ptr<detail::Connection> connection,
+        uint32_t deviceNum,
+        uint8_t num,
+        bool usable,
+        bool inUse,
+        uint64_t startAddress,
+        uint64_t length) noexcept;
 
-    std::function<BarFile(const Bar&)> fOpenBarFile;
+    /** Shared transport used by openBarFile(). */
+    std::shared_ptr<detail::Connection> connection;
+    uint32_t deviceNum; ///< Zero-based owning device index.
+    uint8_t num; ///< Zero-based PCI BAR index.
+    bool usable; ///< Whether this client may map the BAR.
+    bool inUse; ///< Whether another tenant currently holds the BAR.
+    uint64_t startAddress; ///< Physical BAR start address.
+    uint64_t length; ///< BAR size in bytes.
 };
 
 } // namespace vrtd

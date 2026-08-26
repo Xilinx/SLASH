@@ -21,6 +21,7 @@
 add_library(
     libvrtdpp
 
+    ${CMAKE_CURRENT_SOURCE_DIR}/connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bar_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bar.cpp
@@ -48,10 +49,11 @@ set_target_properties(libvrtdpp PROPERTIES
 )
 
 set_target_properties(libvrtdpp PROPERTIES
-  CXX_STANDARD 20
+  CXX_STANDARD 17
   CXX_STANDARD_REQUIRED YES
   CXX_EXTENSIONS YES
 )
+target_compile_features(libvrtdpp PUBLIC cxx_std_17)
 
 target_link_libraries(libvrtdpp PUBLIC libvrtd)
 

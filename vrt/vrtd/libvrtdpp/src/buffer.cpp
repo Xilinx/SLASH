@@ -1,52 +1,46 @@
 /**
  * The MIT License (MIT)
- * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
+ * Copyright (c) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of this software
- * and associated documentation files (the "Software"), to deal in the Software without restriction,
- * including without limitation the rights to use, copy, modify, merge, publish, distribute,
- * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in all copies or
- * substantial portions of the Software.
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
- * NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
-
-/**
- * @file buffer.cpp
- *
- * Implementation of the vrtd::Buffer C++ wrapper.
- *
- * Buffer provides RAII ownership of a @c vrtd_buffer obtained from the
- * daemon via libvrtd.  It wraps the host-side mmap, the QDMA queue pair
- * fd, and the device-side physical address into a single movable object.
- *
- * Key features:
- *  - Move-only semantics (no copies); destruction calls vrtd_buffer_close().
- *  - @c syncToDevice() / @c syncFromDevice() for DMA transfers.
- *  - @c fstream() opens a std::fstream on the qpair fd via
- *    @c /proc/self/fd/<n>, allowing stream-style I/O on the DMA channel.
- *  - @c releaseFd() transfers qpair fd ownership to the caller.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include <vrtd/buffer.hpp>
+
+#include "connection.hpp"
+
 #include <vrtd/error.hpp>
 #include <vrtd/vrtd.h>
 
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 namespace vrtd {
 
-Buffer::Buffer(struct vrtd_buffer *buffer) noexcept
-    : buffer(buffer)
+/*
+ * The native handle stores the connection's socket FD for daemon cleanup.
+ * Retain the Connection beside it so that descriptor cannot outlive its owner.
+ */
+Buffer::Buffer(std::shared_ptr<detail::Connection> connection,
+               struct vrtd_buffer *buffer) noexcept
+    : connection(std::move(connection))
+    , buffer(buffer)
 {
 }
 
@@ -56,9 +50,9 @@ Buffer::~Buffer()
 }
 
 Buffer::Buffer(Buffer&& other) noexcept
-    : buffer(other.buffer)
+    : connection(std::move(other.connection))
+    , buffer(std::exchange(other.buffer, nullptr))
 {
-    other.buffer = nullptr;
 }
 
 Buffer& Buffer::operator=(Buffer&& other) noexcept
@@ -67,10 +61,13 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept
         return *this;
     }
 
+    /*
+     * Release through the destination's original connection before replacing
+     * it. Moving the connection first would route cleanup to the wrong daemon.
+     */
     close();
-
-    buffer = other.buffer;
-    other.buffer = nullptr;
+    connection = std::move(other.connection);
+    buffer = std::exchange(other.buffer, nullptr);
 
     return *this;
 }
@@ -82,18 +79,16 @@ uint32_t Buffer::getDeviceNum() const noexcept
 
 BufferAllocType Buffer::getAllocType() const noexcept
 {
-    if (buffer == nullptr) {
-        return BufferAllocType::Ddr;
-    }
-    return static_cast<BufferAllocType>(buffer->alloc_type);
+    return buffer
+        ? static_cast<BufferAllocType>(buffer->alloc_type)
+        : BufferAllocType::Ddr;
 }
 
 BufferAllocDir Buffer::getAllocDir() const noexcept
 {
-    if (buffer == nullptr) {
-        return BufferAllocDir::Bidirectional;
-    }
-    return static_cast<BufferAllocDir>(buffer->alloc_dir);
+    return buffer
+        ? static_cast<BufferAllocDir>(buffer->alloc_dir)
+        : BufferAllocDir::Bidirectional;
 }
 
 uint64_t Buffer::getAllocArg() const noexcept
@@ -131,16 +126,28 @@ int Buffer::releaseFd() noexcept
     if (buffer == nullptr) {
         return -1;
     }
-    int ret = buffer->qpair_fd;
-    buffer->qpair_fd = -1;
-    return ret;
+
+    /* The -1 sentinel prevents later RAII cleanup from closing caller-owned FD. */
+    return std::exchange(buffer->qpair_fd, -1);
 }
 
 void Buffer::close() noexcept
 {
-    if (buffer != nullptr) {
-        (void) vrtd_buffer_close(buffer);
-        buffer = nullptr;
+    if (buffer == nullptr) {
+        return;
+    }
+
+    /*
+     * Detach ownership before cleanup so repeated or re-entrant close calls
+     * cannot destroy the same native handle twice.
+     */
+    auto raw = std::exchange(buffer, nullptr);
+
+    if (connection) {
+        connection->closeBuffer(raw);
+    } else {
+        /* A malformed/moved owner can still release its local native state. */
+        (void) vrtd_buffer_destroy(raw);
     }
 }
 
@@ -151,36 +158,37 @@ bool Buffer::isClosed() const noexcept
 
 std::fstream Buffer::fstream(std::ios_base::openmode mode) const
 {
-    (void)mode;
+    /*
+     * Buffer QDMA descriptors are ioctl endpoints, not byte streams. Keep the
+     * compatibility API explicit rather than manufacturing a misleading stream.
+     */
+    (void) mode;
+
     if (isClosed()) {
         throw std::runtime_error("Buffer is closed");
     }
 
-    throw std::runtime_error("Buffer qpair fds are ioctl-only; use syncToDevice/syncFromDevice");
+    throw std::runtime_error(
+        "Buffer qpair fds are ioctl-only; use syncToDevice/syncFromDevice"
+    );
 }
 
 void Buffer::syncToDevice(uint64_t offset, uint64_t size)
 {
-    if (buffer == nullptr) {
+    if (buffer == nullptr || !connection) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
 
-    enum vrtd_ret ret = vrtd_buffer_sync_to_device(buffer, offset, size);
-    if (ret != VRTD_RET_OK) {
-        throw Error(ret);
-    }
+    connection->syncBufferToDevice(buffer, offset, size);
 }
 
 void Buffer::syncFromDevice(uint64_t offset, uint64_t size)
 {
-    if (buffer == nullptr) {
+    if (buffer == nullptr || !connection) {
         throw Error(VRTD_RET_BAD_LIB_CALL);
     }
 
-    enum vrtd_ret ret = vrtd_buffer_sync_from_device(buffer, offset, size);
-    if (ret != VRTD_RET_OK) {
-        throw Error(ret);
-    }
+    connection->syncBufferFromDevice(buffer, offset, size);
 }
 
 } // namespace vrtd

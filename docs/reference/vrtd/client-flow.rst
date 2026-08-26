@@ -66,8 +66,6 @@ Minimal program that opens a session, grabs device 0, opens BAR 0, and reads a
        auto p = bf.getPtr<std::uint32_t>(vrtd::BarFile::Direction::Read, /*address=*/0);
        std::uint32_t value = *p;  // read via volatile
        (void)value;
-
-       bf.close();
      } catch (const vrtd::Error& e) {
        std::cerr << "vrtd error: " << e.what() << "\n";
        return 1;
@@ -129,7 +127,7 @@ showing the C and C++ entry points side-by-side.
 
 - **C++**: ``vrtd::Session s;`` or ``vrtd::Session s{"/run/vrtd.sock"};``
   Throws ``vrtd::Error(VRTD_RET_BAD_CONN)`` on failure.
-  RAII — destructor calls ``close()``. Thread-safe (internal mutex).
+  The session and its child objects share an RAII connection.
 
 2) Discover Devices
 -------------------
@@ -147,7 +145,8 @@ showing the C and C++ entry points side-by-side.
   - ``vrtd::Device d = s.getDevice(i);`` — throws ``vrtd::Error(VRTD_RET_NOEXIST)``
     if out of range.
   - Accessors: ``d.getNum()``, ``d.getName()``, ``d.getBdf()``.
-  - Any ``Device`` becomes invalid if its originating ``Session`` is closed or moved.
+  - A ``Device`` retains the connection and may outlive or survive a move of
+    its originating ``Session`` facade.
 
 3) BAR Metadata
 ---------------
@@ -221,20 +220,24 @@ Common return codes:
 Thread Safety
 =============
 
-- **Session / Device / Bar (C++)**: public methods are thread-safe (internal
-  mutex). Object validity is tied to the originating session — closing or
-  moving a session invalidates previously obtained ``Device`` / ``Bar`` values.
+- **Session / Device / Bar / QdmaQpair (C++)**: control requests are serialized
+  on their shared connection. Explicitly closing the connection waits for an
+  in-flight request before closing it.
+- **Buffer (C++)**: DMA operations on independent buffers may proceed in
+  parallel; explicit connection close waits for active operations.
 - **BarFile / BarFilePtr (C++)**: not thread-safe. Only one read or write
   operation may be active at a time. Re-entrant ``getPtr()`` calls throw.
 
 Lifetime and Moves (C++)
 =========================
 
-- Moving or closing a ``Session`` invalidates all ``Device`` and ``Bar`` objects
-  obtained from it (subsequent calls throw).
+- ``Device``, ``Bar``, ``Buffer``, and ``QdmaQpair`` retain their shared
+  connection. Moving or destroying a ``Session`` facade does not invalidate
+  them, and the connection closes when its final owner is destroyed.
+- Explicit ``Session::close()`` closes the shared connection and invalidates
+  every object backed by it; subsequent connection-dependent calls throw.
 - ``BarFile`` is move-only. Ensure all ``BarFilePtr`` instances have been
-  destroyed before calling ``bf.close()`` or letting the destructor run,
-  otherwise an exception is thrown.
+  destroyed before calling ``bf.close()`` or letting the destructor run.
 
 Wire Protocol
 =============
@@ -251,7 +254,8 @@ Troubleshooting
 ===============
 
 - **Out-of-range device index** → ``VRTD_RET_NOEXIST`` (C) or ``vrtd::Error`` (C++).
-- **Session closed/moved, then using Device/Bar** → throws (invalid lifetime).
+- **Session explicitly closed, then using Device/Bar** → throws
+  ``VRTD_RET_BAD_LIB_CALL`` without sending another request.
 - **Two concurrent ``getPtr()`` calls on the same BarFile** → throws re-entrancy error.
 - **Transport errors** (socket down, daemon not running) → map to
   ``VRTD_RET_BAD_CONN`` / ``vrtd::Error`` with "connection" message.

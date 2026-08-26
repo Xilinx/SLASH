@@ -41,6 +41,10 @@ vrtd_ret Error::getErrorCode() const noexcept {
 }
 
 const char *Error::what() const noexcept {
+    /*
+     * Return static storage for every protocol error so diagnostics remain
+     * allocation-free and safe from noexcept exception paths.
+     */
     switch (errorCode) {
     case VRTD_RET_BAD_LIB_CALL:
         return "Bad library call";
@@ -55,7 +59,7 @@ const char *Error::what() const noexcept {
         return "Invalid argument";
 
     case VRTD_RET_NOEXIST:
-        return "Requested resouce doesn't exist";
+        return "Requested resource doesn't exist";
 
     case VRTD_RET_INTERNAL_ERROR:
         return "Internal error in vrtd daemon or local libvrtd";
@@ -63,7 +67,11 @@ const char *Error::what() const noexcept {
     case VRTD_RET_AUTH_ERROR:
         return "Missing permission";
 
+    case VRTD_RET_BUSY:
+        return "Resource busy";
+
     default:
+        /* Covers accidental success values and future protocol extensions. */
         return "Unknown error";
     }
 }
