@@ -34,9 +34,8 @@
  *
  * A typical reconfiguration flow:
  *   1. REMOVE each PCI function (PF0, PF1, PF2 ...)
- *   2. TOGGLE_SBR to reset the device
- *   3. Wait in userspace for the FPGA to re-initialize
- *   4. RESCAN to discover the new configuration
+ *   2. TOGGLE_SBR to reset the device and wait for link recovery
+ *   3. RESCAN to discover the new configuration
  *
  * All ioctls that operate on a specific device require an explicit
  * BDF string in the request.
@@ -59,6 +58,9 @@
 #include <linux/uaccess.h>
 
 #define SLASH_HOTPLUG_MODE 0600
+#define SLASH_SBR_PDI_SETTLE_MS 5000
+#define SLASH_SBR_LINK_POLL_MS 100
+#define SLASH_SBR_LINK_TIMEOUT_MS 25000
 
 /**
  * slash_hotplug_copy_request() - Copy and sanitize a hotplug request from userspace.
@@ -210,6 +212,63 @@ static int slash_hotplug_handle_remove(const char *bdf)
 }
 
 /**
+ * slash_hotplug_wait_for_link() - Wait for V80 reload and a stable PCIe link.
+ * @bridge: Immediate upstream bridge whose secondary link was reset.
+ *
+ * The V80 turns SBR into a full PDI reload, so the link can remain down well
+ * after the PCI core's conventional-reset delay.  Wait for the AVED-specified
+ * five-second reload interval, then require DLL Link Active to remain asserted
+ * across two polls.  PCIe requires 100 ms after Gen3+ link activation before
+ * configuration access, which the second poll also supplies.
+ *
+ * Return: 0 when the link is ready (or DLLLA reporting is unavailable),
+ * -EIO on config-space access failure, or -ETIMEDOUT on link timeout.
+ */
+static int slash_hotplug_wait_for_link(struct pci_dev *bridge)
+{
+    unsigned int elapsed_ms = 0;
+    bool active_once = false;
+    u16 status;
+    int ret;
+
+    pr_info("slash_hotplug: toggle_sbr: waiting %u ms for V80 PDI reload\n",
+            SLASH_SBR_PDI_SETTLE_MS);
+    msleep(SLASH_SBR_PDI_SETTLE_MS);
+
+    if (!pci_is_pcie(bridge) || !bridge->link_active_reporting) {
+        pr_info("slash_hotplug: toggle_sbr: DLL Link Active reporting unavailable; reload delay complete\n");
+        return 0;
+    }
+
+    while (elapsed_ms < SLASH_SBR_LINK_TIMEOUT_MS) {
+        ret = pcie_capability_read_word(bridge, PCI_EXP_LNKSTA, &status);
+        if (ret != PCIBIOS_SUCCESSFUL) {
+            pr_err("slash_hotplug: toggle_sbr: failed to read link status (%d)\n",
+                   ret);
+            return -EIO;
+        }
+
+        if (status & PCI_EXP_LNKSTA_DLLLA) {
+            if (active_once) {
+                pr_info("slash_hotplug: toggle_sbr: link stable after %u ms of polling\n",
+                        elapsed_ms);
+                return 0;
+            }
+            active_once = true;
+        } else {
+            active_once = false;
+        }
+
+        msleep(SLASH_SBR_LINK_POLL_MS);
+        elapsed_ms += SLASH_SBR_LINK_POLL_MS;
+    }
+
+    pr_err("slash_hotplug: toggle_sbr: link did not become stable within %u ms\n",
+           SLASH_SBR_LINK_TIMEOUT_MS);
+    return -ETIMEDOUT;
+}
+
+/**
  * slash_hotplug_handle_toggle_sbr() - Perform a Secondary Bus Reset.
  * @bdf: BDF string identifying the device (or its former location).
  *
@@ -222,14 +281,15 @@ static int slash_hotplug_handle_remove(const char *bdf)
  *   3. Wait 2 ms — the PCIe spec minimum reset hold time.
  *   4. Deassert SBR (clear the BUS_RESET bit).
  *
- * The caller is responsible for waiting an appropriate settle time
- * after this ioctl returns before rescanning the bus.
+ * The ioctl waits for V80 PDI reload and stable link training before
+ * returning, so the caller may rescan immediately on success.
  *
  * Bridge resolution:
  *   The endpoint is typically removed before SBR is toggled, so we
  *   resolve the bridge via pci_find_bus() using the bus number from
  *   the BDF.  Bus structures survive endpoint removal.  The bridge
- *   is always the immediate parent (bus->self), never the root port.
+ *   is always the immediate parent (bus->self): a root port for direct
+ *   attachment, or a switch downstream port behind a PCIe switch.
  *
  * Return: 0 on success, negative errno on failure.
  */
@@ -237,6 +297,8 @@ static int slash_hotplug_handle_toggle_sbr(const char *bdf)
 {
     struct pci_bus *ep_bus;
     struct pci_dev *bridge;
+    bool coordinate_hotplug;
+    bool was_ignoring_hotplug;
     int domain, bus_nr, slot, func;
     int ret;
 
@@ -248,12 +310,14 @@ static int slash_hotplug_handle_toggle_sbr(const char *bdf)
     }
 
     /*
-     * Hold pci_lock_rescan_remove() across the pci_find_bus() + pci_dev_get()
-     * pair.  pci_find_bus() does not pin the returned pci_bus; without the
-     * lock, a concurrent bus removal could free ep_bus between the lookup and
-     * the dev_get, turning ep_bus->self into a use-after-free.  The lock is
-     * dropped before pci_bridge_secondary_bus_reset() to avoid deadlocking
-     * with the PCI slot lock that the reset function acquires internally.
+     * Hold pci_lock_rescan_remove() through bridge lookup, reset, and link
+     * recovery. pci_bridge_secondary_bus_reset() is a low-level primitive and
+     * does not serialize against pciehp or concurrent topology changes.
+     *
+     * ponytail: target kernels do not export the temporary pciehp link-change
+     * coordination added upstream.  The global lock plus ignore_hotplug is
+     * the compatible ceiling for RHEL 9 / Ubuntu 22.04; replace it with the
+     * per-port PCI core API if that API becomes exported to modules.
      */
     pr_info("slash_hotplug: toggle_sbr: looking up bus (domain=%04x bus=%02x)\n",
             domain, bus_nr);
@@ -264,46 +328,50 @@ static int slash_hotplug_handle_toggle_sbr(const char *bdf)
         pr_err("slash_hotplug: toggle_sbr: no upstream bridge for %s\n", bdf);
         return -ENODEV;
     }
+    if (!list_empty(&ep_bus->devices)) {
+        pci_unlock_rescan_remove();
+        pr_err("slash_hotplug: toggle_sbr: bus %04x:%02x still has live devices; remove every function before SBR\n",
+               domain, bus_nr);
+        return -EBUSY;
+    }
     bridge = pci_dev_get(ep_bus->self);
-    pci_unlock_rescan_remove();
 
     pr_info("slash_hotplug: toggle_sbr: bridge=%s bus=%02x\n",
             pci_name(bridge), bus_nr);
 
     /*
-     * pci_bridge_secondary_bus_reset() saves and restores bridge config
-     * space (memory windows, bus numbers, ACS, ARI) and holds the proper
-     * PCI slot lock.  This is essential for root ports whose memory-window
-     * configuration would otherwise be lost after an SBR.
-     *
-     * Available since kernel 5.9; guaranteed present on our minimum targets
-     * (RHEL 9 / Ubuntu 22.04, both ship kernel >= 5.14).
+     * SBR generates DLLSC/PDC events.  RHEL 9 backports the PCIe bandwidth
+     * controller, whose shared interrupt can make pciehp consume those events
+     * and power off or re-enumerate the slot while the V80 reloads.  The
+     * legacy ignore_hotplug flag is honored by pciehp's IRQ handler on all
+     * supported kernels.  Keep it asserted for the entire PDI/link outage,
+     * not merely the two-millisecond SBR assertion.
      */
+    coordinate_hotplug = bridge->is_hotplug_bridge;
+    was_ignoring_hotplug = bridge->ignore_hotplug;
+    if (coordinate_hotplug) {
+        bridge->ignore_hotplug = 1;
+        smp_mb();
+        pr_info("slash_hotplug: toggle_sbr: suppressing pciehp link events during V80 reload\n");
+    }
+
     ret = pci_bridge_secondary_bus_reset(bridge);
     if (ret) {
         pr_err("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset failed (%d)\n", ret);
-        goto out_put;
+        goto out_restore_hotplug;
     }
     pr_info("slash_hotplug: toggle_sbr: pci_bridge_secondary_bus_reset OK\n");
 
-    /*
-     * Post-SBR link training delay.  The PCIe spec requires at minimum
-     * 100 ms for link training after SBR deassertion; real FPGA hardware
-     * can take longer.  1000 ms provides margin for link instability seen
-     * on repeated resets where 300 ms was insufficient.
-     * Without this delay, config-space reads on root ports return 0xFFFF
-     * because the link is not yet trained.
-     *
-     * Userspace adds its own ~5 s wait for full FPGA re-initialisation;
-     * this 1000 ms covers the kernel-internal window between SBR
-     * deassertion and ioctl return.
-     */
-    pr_info("slash_hotplug: toggle_sbr: waiting 1000 ms for PCIe link training\n");
-    msleep(1000);
-    pr_info("slash_hotplug: toggle_sbr: post-SBR settle complete (1000 ms)\n");
+    ret = slash_hotplug_wait_for_link(bridge);
 
-out_put:
+out_restore_hotplug:
+    if (coordinate_hotplug) {
+        bridge->ignore_hotplug = was_ignoring_hotplug;
+        smp_mb();
+        pr_info("slash_hotplug: toggle_sbr: restored pciehp link-event handling\n");
+    }
     pci_dev_put(bridge);
+    pci_unlock_rescan_remove();
     if (!ret)
         pr_info("slash_hotplug: toggle_sbr: %s complete\n", bdf);
     return ret;

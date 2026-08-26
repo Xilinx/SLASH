@@ -69,12 +69,11 @@
  *   7. Remove PF0, PF1, PF2 from the PCI bus via slash_hotplug_remove().
  *      ENODEV is tolerated (device may already have been removed by firmware).
  *   8. Toggle Secondary Bus Reset on the upstream PCIe bridge via
- *      slash_hotplug_toggle_sbr().
- *   9. Wait 5 seconds for the device to complete reconfiguration and
- *      re-train the PCIe link.
- *  10. Rescan the PCI bus via slash_hotplug_rescan() to re-enumerate all PFs.
- *  11. Verify the device is back by calling ami_dev_find() on PF0.
- *  12. Run device discovery to re-add the reset device to vrtd's tracked
+ *      slash_hotplug_toggle_sbr().  The ioctl waits for the V80 PDI reload
+ *      and a stable PCIe link before returning.
+ *   9. Rescan the PCI bus via slash_hotplug_rescan() to re-enumerate all PFs.
+ *  10. Poll until PF0 AMI and the PF1/PF2 device nodes are ready.
+ *  11. Run device discovery to re-add the reset device to vrtd's tracked
  *      device list.
  */
 
@@ -83,6 +82,7 @@
 #include "reset.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <unistd.h>
 
@@ -99,6 +99,60 @@
 #include "utils.h"
 
 #define GPIO_ALLOW_SBR 0x1040000
+#define RESET_NODE_POLL_INTERVAL_US 100000
+#define RESET_NODE_READY_TIMEOUT_US 10000000
+#define RESCAN_MAX_RETRIES 5
+#define RESCAN_RETRY_DELAY_US 3000000
+
+/**
+ * Check whether all three V80 functions are ready for vrtd to reopen.
+ *
+ * PF0 readiness is verified through AMI, while PF1/PF2 readiness requires
+ * their BDF-specific device nodes to exist with the permissions vrtd needs.
+ * Keeping the successful AMI handle avoids repeatedly registering PF0 while
+ * udev finishes the other nodes.
+ *
+ * @param pf0_bdf     PF0 AMI BDF.
+ * @param pf1_bdf     PF1 QDMA BDF.
+ * @param pf2_bdf     PF2 control BDF.
+ * @param ami_device  Owning AMI handle, populated once PF0 is ready.
+ * @return true when every function is ready, false while probing or udev is
+ *         still incomplete.
+ */
+static bool reset_functions_ready(
+    const char *pf0_bdf,
+    const char *pf1_bdf,
+    const char *pf2_bdf,
+    struct ami_device **ami_device
+)
+{
+    _cleanup_(cleanup_free)
+    char *ctl_path = NULL;
+    _cleanup_(cleanup_free)
+    char *qdma_path = NULL;
+
+    if (*ami_device == NULL) {
+        int ret = ami_dev_find(pf0_bdf, ami_device);
+        if (ret != AMI_STATUS_OK) {
+            ami_dev_delete(ami_device);
+            return false;
+        }
+    }
+
+    if (find_slash_ctl_dev_path_by_bdf(pf2_bdf, &ctl_path) != 0
+        || ctl_path == NULL
+        || access(ctl_path, R_OK | W_OK) != 0) {
+        return false;
+    }
+
+    if (find_qdma_dev_path_by_bdf(pf1_bdf, &qdma_path) != 0
+        || qdma_path == NULL
+        || access(qdma_path, R_OK | W_OK) != 0) {
+        return false;
+    }
+
+    return true;
+}
 
 /**
  * Perform a full device reset using AMI firmware commands and PCIe hotplug.
@@ -310,23 +364,18 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
     LOG(LOG_INFO, "reset_with_ami: SBR toggle complete for %s", pf0_bdf);
 
     /*
-     * Step 9: Wait for the FPGA to complete reconfiguration and re-train
-     * the PCIe link.  5 seconds is a conservative estimate that accounts for
-     * bitstream loading time and link training, mentioned in a AVED sw comment.
+     * Step 9-10: Rescan the PCI bus and verify the device reappears.
+     * slash_hotplug_toggle_sbr() does not return until the V80 has had time
+     * to reload its PDI and the upstream bridge reports a stable link.
+     *
+     * The rescan re-enumerates all functions (PF0, PF1, PF2). Poll their
+     * specific AMI, QDMA, and control nodes until driver probing and udev
+     * permissions are complete. If they are not all ready within 10 seconds,
+     * retry the rescan after 3 seconds, up to 5 attempts total.
      */
-    usleep(5000000);
-
-    /*
-     * Step 10-12: Rescan the PCI bus and verify the device reappears.
-     * The rescan re-enumerates all functions (PF0, PF1, PF2), then we wait
-     * for the kernel, drivers, and udev to fully initialize device nodes.
-     * If the device has not reappeared, retry the rescan after 3 seconds,
-     * up to 5 attempts total.
-     */
-    #define RESCAN_MAX_RETRIES 5
-    #define RESCAN_RETRY_DELAY_US 3000000
-
     for (int attempt = 1; attempt <= RESCAN_MAX_RETRIES; attempt++) {
+        bool ready = false;
+
         ret = slash_hotplug_rescan(g_hotplug);
         if (ret != 0) {
             LOG(LOG_ERR, "reset_with_ami: hotplug rescan failed: %m");
@@ -335,48 +384,39 @@ uint16_t reset_with_ami(struct device *device, struct device_ptr_array  *devices
         LOG(LOG_INFO, "reset_with_ami: rescan complete (attempt %d/%d)",
             attempt, RESCAN_MAX_RETRIES);
 
-        /*
-         * After a rescan the following things need to happen:
-         *
-         * * The kernel needs to detect the device on the PCIe bus.
-         * * The kernel needs to hand that device to the slash and ami drivers.
-         * * The slash and ami drivers need to create device nodes.
-         * * The kernel needs to signal to userspace systemd-udev that the device node was created.
-         * * systemd-udev needs to set permisions on the device node.
-         *
-         * That all takes time, so we wait a generous 10 seconds for all of that to occur.
-         *
-         * TODO: A much more robust method would be to remove all the code bellow this
-         * and rework how devices are discovered. We could bring in libudev.
-         * This would allow us to get netlink notifications on device events, such as new devices
-         * appearing. Then we could attempt to open these devices only after the userspace has configured them.
-         */
-        usleep(10000000);
+        for (int elapsed_us = 0;
+             elapsed_us < RESET_NODE_READY_TIMEOUT_US;
+             elapsed_us += RESET_NODE_POLL_INTERVAL_US) {
+            if (reset_functions_ready(pf0_bdf, pf1_bdf, pf2_bdf, &ami_device)) {
+                ready = true;
+                break;
+            }
+            usleep(RESET_NODE_POLL_INTERVAL_US);
+        }
 
-        ret = ami_dev_find(pf0_bdf, &ami_device);
-        if (ret == AMI_STATUS_OK) {
-            LOG(LOG_INFO, "reset_with_ami: device %s found after reset", pf0_bdf);
+        if (ready) {
+            LOG(LOG_INFO, "reset_with_ami: PF0/PF1/PF2 ready after reset");
             break;
         }
 
+        ami_dev_delete(&ami_device);
         if (attempt < RESCAN_MAX_RETRIES) {
-            LOG(LOG_WARNING, "reset_with_ami: ami_dev_find(%s) failed (attempt %d/%d): %s, retrying in 3s",
-                pf0_bdf, attempt, RESCAN_MAX_RETRIES, ami_get_last_error());
+            LOG(LOG_WARNING,
+                "reset_with_ami: PF0/PF1/PF2 not ready (attempt %d/%d), retrying rescan in 3s",
+                attempt, RESCAN_MAX_RETRIES);
             usleep(RESCAN_RETRY_DELAY_US);
         } else {
-            LOG(LOG_ERR, "reset_with_ami: post-reset ami_dev_find(%s) failed after %d attempts: %s",
-                pf0_bdf, RESCAN_MAX_RETRIES, ami_get_last_error());
+            LOG(LOG_ERR,
+                "reset_with_ami: PF0/PF1/PF2 not ready after %d rescan attempts",
+                RESCAN_MAX_RETRIES);
             return VRTD_RET_INTERNAL_ERROR;
         }
     }
 
-    #undef RESCAN_MAX_RETRIES
-    #undef RESCAN_RETRY_DELAY_US
-
     ami_dev_delete(&ami_device);
 
     /*
-     * Step 13: Run device discovery to re-add the reset device to vrtd's
+     * Step 11: Run device discovery to re-add the reset device to vrtd's
      * tracked device list.  This opens the QDMA function, sets up queues,
      * and makes the device available for user requests again.
      */

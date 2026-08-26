@@ -26,10 +26,9 @@
  * A typical FPGA reconfiguration flow uses these operations in order:
  *
  *   1. REMOVE all PCI functions (PF0, PF1, PF2 …) from the bus.
- *   2. TOGGLE_SBR on the root-port to reset the device.
- *   3. Sleep (~5 s) to let the device re-initialise.
- *   4. RESCAN the PCI bus to discover the new configuration.
- *   5. HOTPLUG each function to complete re-enumeration.
+ *   2. TOGGLE_SBR on the upstream bridge to reset the device and wait
+ *      for PDI reload and stable link training.
+ *   3. RESCAN the PCI bus to discover the new configuration.
  *
  * For a simple device teardown/re-add (no reset or bitstream change),
  * REMOVE → RESCAN is sufficient.
@@ -88,12 +87,13 @@ struct slash_hotplug_device_request {
  * Toggle a Secondary Bus Reset (SBR) on the device's upstream port.
  *
  * A single ioctl call performs the full SBR sequence on the upstream
- * bridge.  The kernel first attempts pci_bridge_secondary_bus_reset()
- * (which saves/restores bridge config space), falling back to a manual
- * PCI_BRIDGE_CONTROL register toggle if the kernel API is unavailable.
- * A 1000 ms post-SBR link training delay is included before the ioctl
- * returns.  The caller should wait an additional ~10 s for full FPGA
- * re-initialisation before rescanning.
+ * bridge through pci_bridge_secondary_bus_reset().  On hotplug-capable
+ * ports, expected link-change events are suppressed so pciehp does not
+ * remove or re-enumerate the slot during the V80's full PDI reload.  The
+ * secondary bus must be empty before the call; otherwise it returns -EBUSY.
+ * The ioctl blocks for at least five seconds and, when supported by the port,
+ * until DLL Link Active remains asserted for 100 ms.  It can return
+ * -ETIMEDOUT after an additional 25 seconds if the link does not recover.
  */
 #define SLASH_HOTPLUG_IOCTL_TOGGLE_SBR _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x32, struct slash_hotplug_device_request)
 

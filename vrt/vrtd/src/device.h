@@ -112,6 +112,18 @@ DECLARE_OWNING_PTR_ARRAY(device_ptr_array, struct device *, cleanup_device);
 int devices_discover_and_open(struct device_ptr_array *devices);
 
 /**
+ * @brief Find the current /dev/slash_qdma_ctlN path for a PF1 device by BDF.
+ *
+ * Resolves the QDMA misc-device node on the same PCI bus and slot as @p bdf.
+ *
+ * @param bdf       Full PCI BDF including function number.
+ * @param out_path  On success, receives a heap-allocated /dev/ path string, or
+ *                  NULL if the device is not yet registered. Caller must free.
+ * @return 0 on success (device found or absent), -1 on I/O or allocation error.
+ */
+int find_qdma_dev_path_by_bdf(const char *bdf, char **out_path);
+
+/**
  * @brief Find the current /dev/slash_ctlN path for a PF2 device by its full BDF.
  *
  * The /dev node suffix is assigned by an incrementing kernel counter and changes

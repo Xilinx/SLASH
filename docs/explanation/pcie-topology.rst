@@ -130,8 +130,8 @@ with four ioctl operations:
    * - ``REMOVE``
      - Remove a device by BDF from the PCI bus.
    * - ``TOGGLE_SBR``
-     - Assert the Secondary Bus Reset on the root port (2 ms hold), deassert,
-       then wait 5 s for the link to retrain.
+     - Assert Secondary Bus Reset on the immediate upstream bridge, suppress
+       expected pciehp events, and wait for V80 reload and stable link training.
    * - ``RESCAN``
      - Rescan the entire PCI bus to re-enumerate devices.
    * - ``HOTPLUG``
@@ -142,9 +142,8 @@ A typical FPGA programming sequence follows this order:
 .. code-block:: text
 
    1. REMOVE  PF0, PF1, PF2       ← tear down all three functions
-   2. TOGGLE_SBR on root port      ← reset the FPGA, reload bitstream
+   2. TOGGLE_SBR upstream          ← reset the FPGA, reload bitstream, wait for link
    3. RESCAN                       ← re-enumerate the bus
-   4. HOTPLUG each function        ← bind drivers to the new device
 
 The ``vrtd`` daemon orchestrates this sequence through its
 ``ResetSequence`` hotplug operation, which is triggered by

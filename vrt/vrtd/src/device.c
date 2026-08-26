@@ -79,7 +79,7 @@ static int device_read_pci_info(struct device *d, struct vrtd_pci_info *out);
  *                  (which is not an error). Caller must free.
  * @return 0 on success (match found or no match), -1 on I/O or allocation error.
  */
-static int find_qdma_dev_path_by_bdf(const char *ctl_bdf, char **out_path)
+int find_qdma_dev_path_by_bdf(const char *ctl_bdf, char **out_path)
 {
     *out_path = NULL;
 

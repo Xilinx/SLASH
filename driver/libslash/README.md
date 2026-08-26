@@ -135,7 +135,7 @@ slash_qdma_close(qdma);
 ### Hotplug — PCIe device lifecycle
 
 Typical FPGA reconfiguration flow:
-**remove &rarr; SBR &rarr; sleep &rarr; rescan &rarr; hotplug**.
+**remove &rarr; SBR and link recovery &rarr; rescan**.
 
 ```c
 #include <slash/hotplug.h>
@@ -146,15 +146,10 @@ slash_hotplug_remove(hp, "0000:03:00.0");
 slash_hotplug_remove(hp, "0000:03:00.1");
 slash_hotplug_remove(hp, "0000:03:00.2");
 
-slash_hotplug_toggle_sbr(hp, "0000:03:00.0");  /* assert 2 ms, settle 5 s */
-
-usleep(5000000);  /* wait for device re-init */
+/* Blocks until V80 PDI reload and stable link training complete. */
+slash_hotplug_toggle_sbr(hp, "0000:03:00.0");
 
 slash_hotplug_rescan(hp);
-
-slash_hotplug_hotplug(hp, "0000:03:00.0");  /* remove + rescan in one step */
-slash_hotplug_hotplug(hp, "0000:03:00.1");
-slash_hotplug_hotplug(hp, "0000:03:00.2");
 
 slash_hotplug_close(hp);
 ```

@@ -18,7 +18,7 @@
  * cross-card damage (touching the wrong accelerator) and stale /dev
  * state (sysfs back but udev missed the node, or wrong minor).
  *
- * Two tests perform a full board reset (TOGGLE_SBR) or accept ~10 s of
+ * Two tests perform a full board reset (TOGGLE_SBR) or accept extended
  * PCIe downtime; these are gated by SLASH_TEST_DESTRUCTIVE=1.  All other
  * tests run on every invocation.
  *
@@ -40,7 +40,6 @@
 #include <sys/sysmacros.h>
 
 #define NODE_RECOVERY_TIMEOUT_S 10
-#define SBR_SETTLE_SECONDS 7
 
 #define SLASH_TEST_MAX_ACCELERATORS 16
 #define SYSFS_MISC_DIR "/sys/class/misc"
@@ -565,6 +564,13 @@ TEST_F(hotplug, toggle_sbr_no_upstream_bridge)
 						   "ffff:ff:00.0"));
 }
 
+TEST_F(hotplug, toggle_sbr_rejects_live_bus)
+{
+	EXPECT_EQ(-EBUSY,
+			  hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_TOGGLE_SBR,
+						   self->accels[0].pf0_bdf));
+}
+
 /* ====================================================================
  * Destructive (env-gated)
  * ==================================================================== */
@@ -616,9 +622,11 @@ TEST_F(hotplug, hotplug_size_below_struct_returns_einval)
 TEST_F(hotplug, full_sbr_cycle)
 {
 	if (getenv("SLASH_TEST_DESTRUCTIVE") == NULL)
-		SKIP(return, "full board reset (~10 s); "
+		SKIP(return, "full board reset (may take up to 30 s); "
 					 "set SLASH_TEST_DESTRUCTIVE=1 to run");
 
+	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
+							  self->accels[0].pf0_bdf));
 	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
 							  self->accels[0].pf1_bdf));
 	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_REMOVE,
@@ -626,8 +634,6 @@ TEST_F(hotplug, full_sbr_cycle)
 
 	ASSERT_EQ(0, hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_TOGGLE_SBR,
 							  self->accels[0].pf0_bdf));
-
-	sleep(SBR_SETTLE_SECONDS);
 
 	ASSERT_EQ(0, ioctl(self->hp_fd, SLASH_HOTPLUG_IOCTL_RESCAN));
 
