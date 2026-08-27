@@ -114,20 +114,39 @@ slash_detect_pkg_type() {
     esac
 }
 
+# Return success when the named package is installed.
+# Requires slash_detect_pkg_type to have run first.
+#
+# For dpkg this queries the payload status rather than parsing `dpkg -l`, because a
+# package placed on hold still reports its payload as "installed" while `dpkg -l`
+# shows a selection state other than "ii". Reading the selection state would report
+# a held package as missing.
+slash_package_installed() {
+    local status
+    if [[ "${SLASH_PKG_TYPE:-}" == "deb" ]]; then
+        status="$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null || true)"
+        [[ "${status}" == "installed" ]]
+    elif [[ "${SLASH_PKG_TYPE:-}" == "rpm" ]]; then
+        rpm -q "$1" &>/dev/null
+    else
+        echo "ERROR: slash_detect_pkg_type has not been called." >&2
+        return 1
+    fi
+}
+
 # Print the SLASH packages that are currently installed, one per line.
 # Requires slash_detect_pkg_type to have run first. Prints nothing when none are.
 slash_installed_packages() {
     local pkg
     if [[ "${SLASH_PKG_TYPE:-}" == "deb" ]]; then
         for pkg in "${DEB_PACKAGES[@]}"; do
-            if dpkg-query -W -f='${db:Status-Status}\n' "${pkg}" 2>/dev/null \
-                | grep -qx 'installed'; then
+            if slash_package_installed "${pkg}"; then
                 echo "${pkg}"
             fi
         done
     elif [[ "${SLASH_PKG_TYPE:-}" == "rpm" ]]; then
         for pkg in "${RPM_PACKAGES[@]}"; do
-            if rpm -q "${pkg}" &>/dev/null; then
+            if slash_package_installed "${pkg}"; then
                 echo "${pkg}"
             fi
         done

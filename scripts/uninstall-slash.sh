@@ -263,7 +263,7 @@ if [[ "${DO_PACKAGES}" -eq 1 ]]; then
     else
         echo "  Found: ${INSTALLED[*]}"
         if [[ "${SLASH_PKG_TYPE}" == "deb" ]]; then
-            run apt-get purge -y "${INSTALLED[@]}"
+            run apt-get purge -y --allow-change-held-packages "${INSTALLED[@]}"
             run apt-get autoremove --purge -y
         else
             run dnf remove -y --setopt='*.skip_if_unavailable=True' "${INSTALLED[@]}"

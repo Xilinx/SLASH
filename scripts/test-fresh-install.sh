@@ -86,7 +86,7 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
 
     if [[ ${#INSTALLED[@]} -gt 0 ]]; then
         echo "Purging: ${INSTALLED[*]}"
-        apt-get purge -y "${INSTALLED[@]}"
+        apt-get purge -y --allow-change-held-packages "${INSTALLED[@]}"
         apt-get autoremove --purge -y
     else
         echo "No SLASH packages currently installed."
@@ -105,7 +105,7 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
     echo "  Stage 2: Install SLASH packages from ${ARTIFACTS_DIR}"
     echo "========================================================================"
 
-    apt-get install -y "${ARTIFACTS_DIR}"/*.deb
+    apt-get install -y --allow-change-held-packages "${ARTIFACTS_DIR}"/*.deb
 
 # =========================================================================
 #  RPM workflow
@@ -165,22 +165,12 @@ else
 fi
 
 for pkg in "${PACKAGES[@]}"; do
-    if [[ "${PKG_TYPE}" == "deb" ]]; then
-        if dpkg -l "${pkg}" 2>/dev/null | grep -q '^ii'; then
-            RESULTS+=("${pkg}: INSTALLED")
-            PASS_COUNT=$((PASS_COUNT + 1))
-        else
-            RESULTS+=("${pkg}: MISSING")
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-        fi
+    if slash_package_installed "${pkg}"; then
+        RESULTS+=("${pkg}: INSTALLED")
+        PASS_COUNT=$((PASS_COUNT + 1))
     else
-        if rpm -q "${pkg}" &>/dev/null; then
-            RESULTS+=("${pkg}: INSTALLED")
-            PASS_COUNT=$((PASS_COUNT + 1))
-        else
-            RESULTS+=("${pkg}: MISSING")
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-        fi
+        RESULTS+=("${pkg}: MISSING")
+        FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 done
 
