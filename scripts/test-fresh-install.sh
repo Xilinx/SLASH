@@ -27,7 +27,7 @@ CLEAN_ONLY=false
 usage() {
     echo "Usage: $0 [--clean]"
     echo ""
-    echo "  --clean   Remove installed SLASH packages only (skip install and verification)"
+    echo "  --clean   Hand over to scripts/uninstall-slash.sh (skip install and verification)"
     exit 1
 }
 
@@ -50,85 +50,27 @@ if [[ $# -gt 0 ]]; then
     usage
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --clean is exactly what scripts/uninstall-slash.sh does, and more thoroughly: it also
+# stops vrtd and unloads the kernel modules. Hand over rather than keep a second, weaker
+# implementation of the same thing here.
+if [[ "${CLEAN_ONLY}" == "true" ]]; then
+    exec bash "${SCRIPT_DIR}/uninstall-slash.sh" --yes
+fi
+
 # SLASH root
 cd "$(dirname "$0")/.."
 
-# =========================================================================
-#  Detect package manager from /etc/os-release
-# =========================================================================
+# Package names and distro detection are shared with uninstall-slash.sh.
+# shellcheck source=scripts/slash-packages.sh
+source "${SCRIPT_DIR}/slash-packages.sh"
 
-if [[ ! -f /etc/os-release ]]; then
-    echo "ERROR: /etc/os-release not found. Cannot detect distribution."
-    exit 1
-fi
-
-source /etc/os-release
-
-case "${ID_LIKE:-$ID}" in
-    *debian*|*ubuntu*)
-        PKG_TYPE="deb"
-        ;;
-    *rhel*|*fedora*|*centos*|*suse*)
-        PKG_TYPE="rpm"
-        ;;
-    *)
-        # Fallback: check ID directly
-        case "${ID}" in
-            debian|ubuntu|linuxmint|pop)
-                PKG_TYPE="deb"
-                ;;
-            rhel|fedora|centos|rocky|alma|ol|sles|opensuse*)
-                PKG_TYPE="rpm"
-                ;;
-            *)
-                echo "ERROR: Unsupported distribution: ${ID} (ID_LIKE=${ID_LIKE:-unset})"
-                exit 1
-                ;;
-        esac
-        ;;
-esac
+slash_detect_pkg_type || exit 1
+PKG_TYPE="${SLASH_PKG_TYPE}"
+PRETTY_NAME="${SLASH_PKG_DISTRO}"
 
 echo "Detected package type: ${PKG_TYPE} (distro: ${PRETTY_NAME})"
-
-# =========================================================================
-#  Package lists
-# =========================================================================
-
-DEB_PACKAGES=(
-    slash
-    slash-dev
-    slash-sim-emu
-    slash-sim-emu-dev
-    slash-dkms
-    libslash
-    libslash-dev
-    vrtd
-    libvrtd
-    libvrtd-dev
-    libvrt
-    libvrt-dev
-    v80-smi
-    slashkit
-    ami
-)
-
-RPM_PACKAGES=(
-    slash
-    slash-devel
-    slash-sim-emu
-    slash-sim-emu-devel
-    slash-dkms
-    libslash
-    libslash-devel
-    vrtd
-    libvrtd
-    libvrtd-devel
-    libvrt
-    libvrt-devel
-    v80-smi
-    slashkit
-    ami
-)
 
 # =========================================================================
 #  DEB workflow
@@ -140,12 +82,7 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
     echo "  Stage 1: Purge existing SLASH packages (DEB)"
     echo "========================================================================"
 
-    INSTALLED=()
-    for pkg in "${DEB_PACKAGES[@]}"; do
-        if dpkg -l "${pkg}" 2>/dev/null | grep -q '^ii'; then
-            INSTALLED+=("${pkg}")
-        fi
-    done
+    mapfile -t INSTALLED < <(slash_installed_packages)
 
     if [[ ${#INSTALLED[@]} -gt 0 ]]; then
         echo "Purging: ${INSTALLED[*]}"
@@ -153,14 +90,6 @@ if [[ "${PKG_TYPE}" == "deb" ]]; then
         apt-get autoremove --purge -y
     else
         echo "No SLASH packages currently installed."
-    fi
-
-    if [[ "${CLEAN_ONLY}" == "true" ]]; then
-        echo ""
-        echo "========================================================================"
-        echo "  --clean enabled: stopping after Stage 1 purge"
-        echo "========================================================================"
-        exit 0
     fi
 
     ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/deb}"
@@ -188,26 +117,13 @@ elif [[ "${PKG_TYPE}" == "rpm" ]]; then
     echo "  Stage 1: Remove existing SLASH packages (RPM)"
     echo "========================================================================"
 
-    INSTALLED=()
-    for pkg in "${RPM_PACKAGES[@]}"; do
-        if rpm -q "${pkg}" &>/dev/null; then
-            INSTALLED+=("${pkg}")
-        fi
-    done
+    mapfile -t INSTALLED < <(slash_installed_packages)
 
     if [[ ${#INSTALLED[@]} -gt 0 ]]; then
         echo "Removing: ${INSTALLED[*]}"
         dnf remove -y --setopt='*.skip_if_unavailable=True' "${INSTALLED[@]}"
     else
         echo "No SLASH packages currently installed."
-    fi
-
-    if [[ "${CLEAN_ONLY}" == "true" ]]; then
-        echo ""
-        echo "========================================================================"
-        echo "  --clean enabled: stopping after Stage 1 removal"
-        echo "========================================================================"
-        exit 0
     fi
 
     ARTIFACTS_DIR="${ARTIFACTS_DIR:-$(pwd)/rpm}"

@@ -17,7 +17,6 @@ Task-oriented recipes for common operations.
    chain-streaming-kernels
    use-dcmac
    benchmark-memory
-   build-from-source
    offload-builds-to-a-cluster
    use-cmake-modules
    inspect-vrtbin-metadata

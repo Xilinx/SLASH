@@ -12,6 +12,10 @@ three areas of functionality:
 
 ## Building
 
+These instructions cover development on libslash itself. To install SLASH on a
+machine, build and install the packages: see
+[Build and Install SLASH](https://slash.readthedocs.io/en/latest/howto/install-from-packages.html).
+
 ```sh
 cmake -B build -S . -G Ninja
 cmake --build build
