@@ -132,11 +132,11 @@ TEST_P(DeviceTest, KernelRead) {
 TEST_P(DeviceTest, StubFetchesScalarByFunctionArgument) {
     constexpr uint64_t sizeAddress = 0x10000 + 0x28;
     constexpr uint32_t sizeValue = 17;
-    vrt::ZmqServer client("tcp://localhost:5555");
+    std::shared_ptr<vrt::ZmqServer> client = device.getHandle()->getZmqServer();
 
-    client.sendScalar(sizeAddress, sizeValue);
+    client->sendScalar(sizeAddress, sizeValue);
 
-    EXPECT_EQ(client.fetchScalar("vadd", "size"), sizeValue);
+    EXPECT_EQ(client->fetchScalar("vadd", "size"), sizeValue);
 }
 
 TEST_P(DeviceTest, BufferDDRConstruction) {
