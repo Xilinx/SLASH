@@ -38,9 +38,9 @@ Physical Setup
 
 Example 06 forms a loopback **between two ports**: whatever leaves ``eth_0`` must
 arrive at ``eth_2``, and vice versa. Connect QSFP cage 0 and QSFP cage 2 with a
-single 200 Gb/s cable (a QSFP56 DAC or an AOC/fiber pair). On the V80, **QSFP0 is
+single 200 Gb/s cable (a QSFP56 DAC or an AOC/fiber pair). On the V80, **QSFP3 is
 the cage closest to the PCIe connector / motherboard**; the cages number outward
-from there.
+from there (QSFP0 is farthest from PCIe).
 
 .. code-block:: text
 
