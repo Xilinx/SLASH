@@ -29,16 +29,13 @@
  *
  *   1. On first use, waits for the firmware to publish
  *      `magic == RP1_CTRL_MAGIC` and `rp1_state == READY`, then writes
- *      the control-block base addresses (node array, CQ, arg buffer,
- *      signal array) at the recommended `RP1_DEFAULT_*_OFFSET` layout.
+ *      the node, argument, signal, and trace base addresses at the
+ *      recommended `RP1_DEFAULT_*_OFFSET` layout.
  *   2. For each `submitAndWait()`:
  *        - Copies the node array, arg buffer, and signal clears into DDR.
- *        - Records the monotonic CQ cursor before incrementing `graph_seq`.
  *        - Memory-fences, bumps `graph_seq` by one, memory-fences again.
- *        - Polls by exact sequence equality and incrementally drains CQ so
- *          firmware can make progress through a full ring.
- *        - Surfaces ERROR/HALTED immediately with the complete terminal record.
- *   3. `drainCq()` returns the retained CQ evidence for final validation.
+ *        - Polls `graph_done_seq` by exact sequence equality.
+ *        - Reads and validates the committed protocol-v6 graph result.
  *
  * The submitter knows nothing about graphs, kernels, or VRT — it is a
  * mechanical adapter between a fully-realised RP1 graph image and the
@@ -57,6 +54,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -86,11 +84,6 @@ struct Rp1GraphImage {
     /// state left by an earlier graph.
     std::vector<std::uint32_t> clear_signal_slots;
 
-    /// Optional override of cq_size. Must be a power of 2 <= 4096. Zero means
-    /// "leave whatever was already programmed" (or use the submitter's
-    /// default on the first submission).
-    std::uint32_t cq_size_override = 0;
-
     /// Enable RP1 firmware trace-ring writes for this submission.
     bool trace_enable = false;
 
@@ -99,15 +92,125 @@ struct Rp1GraphImage {
 };
 
 /**
- * @brief Default CQ size for first submission (matches the `v80-smi debug
- *        rp1-ping` probe).
+ * @brief Append a complete SCALAR_WRITE operation as compact packets.
+ *
+ * Protocol v6 carries at most @c RP1_SCALAR_WRITE_MAX pairs per packet.
+ * This helper emits enough contiguous packets for every pair, applies
+ * @p awaitBucket / @p awaitMask to the whole sequence, and publishes
+ * @p setBucket / @p setMask only from the final packet. The flat RP1 scanner
+ * therefore performs every write before dependent work can activate.
+ *
+ * @throws std::logic_error for an empty list, a zero/unaligned address,
+ *         an invalid bucket, or a sequence that would exceed
+ *         @c RP1_MAX_NODES. The image is unchanged on error.
  */
-constexpr std::uint32_t kDefaultCqSize = 64u;
+void appendScalarWritePackets(
+    Rp1GraphImage& image,
+    const std::vector<rp1_write_pair_t>& writes,
+    std::uint8_t awaitBucket, std::uint32_t awaitMask,
+    std::uint8_t setBucket, std::uint32_t setMask);
 
 /**
  * @brief Default optional trace-ring size programmed by Rp1Submitter.
  */
 constexpr std::uint32_t kDefaultTraceSize = 256u;
+
+/**
+ * @brief Valid terminal outcomes returned by protocol-v6 firmware.
+ */
+enum class Rp1GraphOutcome : std::uint32_t {
+    /// Every reachable finite operation completed without a fatal error.
+    Success = RP1_GRAPH_RESULT_SUCCESS,
+    /// Firmware stopped activation after the first fatal graph error.
+    Failed = RP1_GRAPH_RESULT_FAILED,
+    /// An explicit @c RP1_OP_HALT terminated the graph.
+    Halted = RP1_GRAPH_RESULT_HALTED,
+};
+
+/**
+ * @brief Firmware's final knowledge of the programmed user image.
+ */
+enum class Rp1ImageState : std::uint32_t {
+    /// No image identity has been established by RP1.
+    None = RP1_IMAGE_STATE_NONE,
+    /// @c activeImageId names the image RP1 knows is installed.
+    Known = RP1_IMAGE_STATE_KNOWN,
+    /// A failed or timed-out reconfiguration made the image indeterminate.
+    Unknown = RP1_IMAGE_STATE_UNKNOWN,
+};
+
+/**
+ * @brief Terminal-node record carried by FAILED and HALTED results.
+ *
+ * HALTED uses a zero @c code and identifies its explicit HALT packet through
+ * @c node and @c opcode. FAILED uses the first-error-wins firmware record.
+ */
+struct Rp1TerminalError {
+    /// First terminal @c RP1_ERR_* code, or zero for explicit HALT.
+    std::uint32_t code = 0;
+    /// Failing or HALT node, or @c RP1_TERMINAL_ERROR_NODE_NONE.
+    std::uint32_t node = RP1_TERMINAL_ERROR_NODE_NONE;
+    /// Terminal opcode, or @c RP1_TERMINAL_OPCODE_NONE when unavailable.
+    std::uint32_t opcode = RP1_TERMINAL_OPCODE_NONE;
+    /// Error-specific primary detail.
+    std::uint32_t detail = 0;
+    /// Error-specific auxiliary detail.
+    std::uint32_t aux = 0;
+};
+
+/**
+ * @brief Counts recorded while firmware quiesces in-flight kernels.
+ */
+struct Rp1Quiescence {
+    /// Finite kernels that completed during terminal quiescence.
+    std::uint32_t finiteDone = 0;
+    /// Finite kernels that timed out during terminal quiescence.
+    std::uint32_t finiteTimeout = 0;
+    /// Infinite kernels that remain active after terminal publication.
+    std::uint32_t infinite = 0;
+};
+
+/**
+ * @brief Validated, sequence-tagged terminal result for one graph.
+ *
+ * This host-owned value contains no volatile BAR references and remains valid
+ * after another graph is submitted. FAILED and HALTED are determinate return
+ * values; transport/protocol corruption and host-side timeouts are exceptions.
+ */
+struct Rp1GraphResult {
+    /// Exact graph sequence accepted and completed by firmware.
+    std::uint32_t sequence = 0;
+    /// Terminal classification for the graph.
+    Rp1GraphOutcome outcome = Rp1GraphOutcome::Success;
+    /// Raw @c RP1_RESULT_* bit mask.
+    std::uint32_t flags = 0;
+    /// First terminal record for FAILED or HALTED; absent on SUCCESS.
+    std::optional<Rp1TerminalError> terminal;
+    /// Final known image id, or zero when @c imageState is not Known.
+    std::uint32_t activeImageId = 0;
+    /// Firmware's final image-identity state.
+    Rp1ImageState imageState = Rp1ImageState::None;
+    /// Number of successful operation executions, including loop repeats.
+    std::uint32_t completedOperations = 0;
+    /// PMU ticks spent executing graph work through GRAPH_DONE.
+    std::uint32_t graphElapsedTicks = 0;
+    /// PMU ticks through final trace flush and result preparation.
+    std::uint32_t publishElapsedTicks = 0;
+    /// Final monotonic trace producer cursor.
+    std::uint32_t traceWriteIndex = 0;
+    /// Decoded terminal quiescence counters.
+    Rp1Quiescence quiescence;
+
+    /// Return true only for @c Rp1GraphOutcome::Success.
+    bool succeeded() const noexcept {
+        return outcome == Rp1GraphOutcome::Success;
+    }
+
+    /// Return true when every bit in @p mask is present in @c flags.
+    bool hasFlags(std::uint32_t mask) const noexcept {
+        return (flags & mask) == mask;
+    }
+};
 
 /**
  * @brief Trace entries captured after an RP1 graph submission.
@@ -137,10 +240,17 @@ class Rp1TimeoutError : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+/**
+ * @brief Single-flight protocol-v6 graph submitter over one RP1 BAR window.
+ *
+ * The referenced window must outlive the submitter. A post-doorbell timeout or
+ * a terminal result reporting recovery-required or remaining infinite work
+ * permanently poisons the object; no later shared-state mutation is allowed.
+ */
 class Rp1Submitter {
    public:
-    explicit Rp1Submitter(Rp1BarWindow& window,
-                          std::uint32_t cq_size = kDefaultCqSize);
+    /// Bind one submitter to the exclusively owned RP1 BAR window @p window.
+    explicit Rp1Submitter(Rp1BarWindow& window);
 
     /**
      * @brief Wait for the firmware's READY signal and program the
@@ -173,38 +283,18 @@ class Rp1Submitter {
      *
      * Calls @c ensureReady() if it hasn't been called yet.
      *
+     * FAILED and HALTED are returned as determinate terminal results. The
+     * method throws only when host validation fails, BAR transport is corrupt,
+     * or @p timeout elapses without exact-sequence completion.
+     *
+     * @return A validated SUCCESS, FAILED, or HALTED result for this sequence.
      * @throws Rp1TimeoutError if @p timeout elapses without completion.
-     * @throws std::logic_error if @p image violates the protocol caps.
-     * @throws std::runtime_error if the firmware reports an error state.
+     * @throws std::logic_error if @p image violates the protocol contract.
+     * @throws std::runtime_error if firmware publication is inconsistent.
      */
-    void submitAndWait(const Rp1GraphImage& image,
-                       std::chrono::milliseconds timeout = kDefaultSubmitTimeout);
-
-    /**
-     * @brief Read the CQ entries written by the most recent
-     *        @c submitAndWait() invocation (excluding any silent nodes).
-     *
-     * Entries drained incrementally while the graph was running are retained
-     * here for final validation.
-     *
-     * @throws std::runtime_error if the CQ cursors are corrupt or any entry
-     *         reports an RP1 node error or timeout.
-     */
-    std::vector<rp1_cq_entry_t> drainCq();
-
-    /**
-     * @brief Drain CQ records without interpreting node status.
-     *
-     * This lets higher layers reconcile side effects that completed before a
-     * later node or transport failure. Ring/cursor corruption still throws.
-     */
-    std::vector<rp1_cq_entry_t> drainCqRaw();
-
-    /**
-     * @brief Validate statuses from a previously drained raw CQ batch.
-     */
-    static void validateCq(
-        const std::vector<rp1_cq_entry_t>& entries);
+    Rp1GraphResult submitAndWait(
+        const Rp1GraphImage& image,
+        std::chrono::milliseconds timeout = kDefaultSubmitTimeout);
 
     /**
      * @brief Read trace entries from the most recent @c submitAndWait().
@@ -229,48 +319,45 @@ class Rp1Submitter {
     }
 
     /**
-     * @brief True after an in-flight submission times out indeterminately.
+     * @brief True when the completed session cannot safely be reused.
      *
-     * A poisoned submitter rejects further BAR mutations and submissions.
-     * Callers must reset/recover the device and construct a new submitter.
+     * A timeout, recovery-required result, or remaining infinite work poisons
+     * the submitter. Callers must reset/recover the device and construct a new
+     * submitter before issuing another mutation.
      */
     bool poisoned() const noexcept {
         return poisoned_.load(std::memory_order_acquire);
     }
 
-    /**
-     * @brief CQ cursor at the latest submission/final drain boundary.
-     */
-    std::uint32_t lastCqStart() const noexcept { return last_cq_start_; }
-
    private:
+    /// Non-owning BAR accessor supplied at construction.
     Rp1BarWindow* window_;
-    std::uint32_t cq_size_;
+    /// True after the current firmware boot passed readiness validation.
     bool          ready_       = false;
+    /// Exact sequence written by the most recent accepted host submission.
     std::uint32_t last_graph_seq_ = 0;
-    std::uint32_t last_cq_start_  = 0;
+    /// Ring size used to decode the most recent optional trace capture.
     std::uint32_t last_trace_size_ = kDefaultTraceSize;
+    /// Host-local count advanced immediately after each graph doorbell.
     std::atomic_uint64_t submission_serial_{0};
     /*
-     * cq_cursor_ follows the monotonic firmware producer cursor; pending_cq_
-     * retains incrementally copied records until the caller consumes the graph.
-     */
-    std::uint32_t cq_cursor_ = 0;
-    std::vector<rp1_cq_entry_t> pending_cq_;
-    /*
-     * Poison closes an indeterminate post-doorbell session permanently;
+     * Poison closes an unsafe post-doorbell session permanently;
      * submission_active_ rejects only overlap and clears during stack unwind.
      */
     std::atomic_bool poisoned_{false};
     std::atomic_bool submission_active_{false};
 
+    /// Reject mutations after an unsafe post-doorbell terminal condition.
     void requireUsable() const;
+    /// Poll for the firmware's boot-contract commit magic.
     void waitForMagic(std::chrono::milliseconds timeout);
+    /// Poll for @p target while rejecting reset-only terminal firmware.
     void waitForState(std::uint32_t target, std::chrono::milliseconds timeout);
-    void waitForGraphDone(std::uint32_t want_seq, std::chrono::milliseconds timeout);
-    void drainAvailableCq();
-    [[noreturn]] void throwTerminalError(
-        std::uint32_t state, std::uint32_t graph_seq) const;
+    /// Wait for exact sequence completion and return its validated result.
+    Rp1GraphResult waitForGraphDone(
+        std::uint32_t want_seq, std::chrono::milliseconds timeout);
+    /// Snapshot and validate the committed result for @p want_seq.
+    Rp1GraphResult readGraphResult(std::uint32_t want_seq);
 };
 
 }  // namespace vrt::graph::fpga
