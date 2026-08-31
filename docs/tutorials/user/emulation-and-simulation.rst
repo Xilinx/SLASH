@@ -17,7 +17,7 @@ Prerequisites
 =============
 
 - The SLASH stack is installed (at minimum VRT and the CMake modules).
-  See :doc:`/howto/build-from-source` if building from source.
+  See :doc:`/howto/install-from-packages`.
 - AMD Vivado **2025.1** and Vitis HLS **2025.1** are installed and sourced in
   your shell:
 

@@ -15,7 +15,7 @@ Prerequisites
 
 - ``v80-smi`` is installed and on your ``PATH``.
 - You have a vrtbin file to inspect, **or** a V80 board with a loaded design.
-- See :doc:`/howto/build-from-source` for installation instructions.
+- See :doc:`/howto/install-from-packages` for installation instructions.
 
 Inspect a vrtbin File
 =====================

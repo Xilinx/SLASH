@@ -60,10 +60,22 @@ fi
 _prereq_ok=1
 
 if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
-    if ! command -v v++ >/dev/null 2>&1; then
+    # Under SLASH_TOOL_LAUNCHER the AMD tools run on another machine, so their absence
+    # here is not an error. The SMBus IP is read from this working tree either way.
+    #
+    # The condition is reported rather than skipped silently: a launcher that does not
+    # offload (scripts/lsf/lsf-run.sh runs the command directly when already inside a
+    # job) still requires the tools locally, and the failure would otherwise surface
+    # hours later inside Vivado rather than here.
+    if [[ -n "${SLASH_TOOL_LAUNCHER:-}" ]] && ! command -v v++ >/dev/null 2>&1; then
+        echo "NOTE: v++ is not in PATH, but SLASH_TOOL_LAUNCHER is set, so the tools are" >&2
+        echo "      expected to live on the execution host. Skipping the local check." >&2
+    fi
+
+    if [[ -z "${SLASH_TOOL_LAUNCHER:-}" ]] && ! command -v v++ >/dev/null 2>&1; then
         echo "ERROR: v++ not found in PATH. Source Vitis 2025.1 before building:" >&2
         echo "  source <path-to-vitis>/settings64.sh" >&2
-        echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
+        echo "See docs/howto/install-from-packages.rst for details." >&2
         _prereq_ok=0
     fi
 
@@ -71,7 +83,7 @@ if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
         echo "ERROR: SMBus IP (xilinx.com:ip:smbus:1.1) not found in linker/slashkit/resources/base/common/iprepo/." >&2
         echo "Download it from https://www.xilinx.com/member/v80.html and place the IP" >&2
         echo "directory into linker/slashkit/resources/base/common/iprepo/ before building." >&2
-        echo "See docs/tutorials/admin/platform-setup.rst for details." >&2
+        echo "See docs/howto/install-from-packages.rst for details." >&2
         _prereq_ok=0
     fi
 fi

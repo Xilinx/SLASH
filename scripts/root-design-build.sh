@@ -32,6 +32,20 @@ INSTALL_ARGS=(install --out-dir slashkit/resources)
 if [[ -n "${SLASH_ROOT_DESIGN_STAGE:-}" ]]; then
     INSTALL_ARGS+=(--stage "${SLASH_ROOT_DESIGN_STAGE}")
 fi
+
+# --vivado defaults to whatever `which vivado` finds on this machine, which is wrong when
+# SLASH_TOOL_LAUNCHER is sending the tool invocations to another machine: the submit host
+# need not have Vivado installed at all, and if it does, its path may not be the path the
+# execution host uses. Passing a bare binary name instead of an absolute path tells
+# slashkit to leave it unresolved and let PATH on the execution host decide.
+# SLASH_VIVADO_BIN overrides the name, for installs where it is not simply "vivado".
+if [[ -n "${SLASH_TOOL_LAUNCHER:-}" || -n "${SLASH_VIVADO_BIN:-}" ]]; then
+    INSTALL_ARGS+=(--vivado "${SLASH_VIVADO_BIN:-vivado}")
+fi
+
+# 8 is slashkit's own default; naming it here makes it adjustable for machines sized
+# differently from the developer workstation the default was chosen for.
+INSTALL_ARGS+=(--jobs "${SLASH_ROOT_DESIGN_JOBS:-8}")
 python3 -m slashkit "${INSTALL_ARGS[@]}" --shell-type service --build-dir install.prj
 python3 -m slashkit "${INSTALL_ARGS[@]}" --shell-type compute --build-dir install.prj.compute
 popd
