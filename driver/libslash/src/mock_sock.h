@@ -36,14 +36,13 @@ enum slash_mock_sock_endpoint {
  *
  * This function launches a background thread that supports most of the
  * functionality needed to test libSLASH users. User can thus mock-up a
- * connection to the QDMA, ctldev (BAR), and hotplugging subsystems, without
+ * connection to the QDMA or ctldev (BAR) subsystems, without
  * needing a running slash kernel module or the sysemu daemon.
  *
  * The only argument to this function is the endpoint type. However, out of the
- * offered endpoints, only @ref SLASH_MOCK_SOCK_ENDPOINT_QDMA, @ref
- * SLASH_MOCK_SOCK_ENDPOINT_CTLDEV, and @ref SLASH_MOCK_SOCK_ENDPOINT_HOTPLUG
- * are supported, since the other endpoint types are sub-endpoints that depend
- * on one of the previous endpoints.
+ * offered endpoints, only @ref SLASH_MOCK_SOCK_ENDPOINT_QDMA and @ref
+ * SLASH_MOCK_SOCK_ENDPOINT_CTLDEV are supported since the other endpoint types
+ * are sub-endpoints that depend on one of the previous endpoints.
  *
  * If successful, the return value of this function is a file descriptor to a
  * UNIX domain socket. Requests sent to this socket are serviced by a background
@@ -81,18 +80,18 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint);
  * from the following table. However, if this function fails, the (co-)ownership
  * remains with the caller, who then has to clean up the state struct themselves.
  *
- * | Endpoint                       | State type                  | Ownership |
- * |--------------------------------|-----------------------------|-----------|
- * | SLASH_MOCK_SOCK_ENDPOINT_QDMA  | slash_mock_sock_qdma_state  | Co-owned  |
- * | SLASH_MOCK_SOCK_ENDPOINT_QPAIR | slash_mock_sock_qpair_state | Owned     |
+ * | Endpoint                           | State type                    | Ownership |
+ * |------------------------------------|-------------------------------|-----------|
+ * | SLASH_MOCK_SOCK_ENDPOINT_QDMA      | slash_mock_sock_qdma_state    | Co-owned  |
+ * | SLASH_MOCK_SOCK_ENDPOINT_CTLDEV    | slash_mock_sock_ctldev_state  | Owned     |
+ * | SLASH_MOCK_SOCK_ENDPOINT_QPAIR     | slash_mock_sock_qpair_state   | Owned     |
  *
  * Possible errors:
  * * ENOMEM: Not enough memory available.
  * * All errors from `socketpair` and `pthread_create`
  *
  * @param endpoint The kind of endpoint to mock-up
- * @param endpoint_state Owned pointer to the necessary context for BAR and
- * QPAIR endpoints, or NULL for the QDMA, CTLDEV, and HOTPLUG endpoints.
+ * @param endpoint_state (Co-)Owned pointer to the necessary endpoint context.
  * @returns 0 on success, -1 on failure with errno set.
  */
 int slash_mock_sock_create_with_state(enum slash_mock_sock_endpoint endpoint,

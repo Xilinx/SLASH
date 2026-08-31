@@ -164,7 +164,7 @@ int slash_mock_sock_qdma_put_state(struct slash_mock_sock_qdma_state *state) {
  * @brief Execute the SLASH_QDMA_IOCTL_INFO operation
  *
  * This treats @ref arg as reference to a @ref slash_qdma_info struct and
- * populate it with data.
+ * populates it with data.
  *
  * @param arg Non-owning reference to the argument buffer to read and write.
  * @param arg_size Size of the argument buffer in bytes.

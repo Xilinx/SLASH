@@ -53,7 +53,7 @@ struct slash_hotplug {
 /**
  * @brief Open the hotplug control device.
  *
- * @param path Path to the character device, or NULL to use
+ * @param path Path to the character device, UNIX domain socket, or NULL to use
  *             SLASH_HOTPLUG_DEFAULT_PATH ("/dev/slash_hotplug").
  *
  * @return A heap-allocated handle on success, or NULL on failure

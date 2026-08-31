@@ -83,6 +83,15 @@ int slash_mock_sock_ctldev_release_state(
     }
 }
 
+/**
+ * @brief Execute the SLASH_CTLDEV_IOCTL_GET_BAR_INFO operation.
+ *
+ * This treats @ref arg as reference to a @ref slash_ioctl_bar_info struct and
+ * populates it with data.
+ *
+ * @param arg Non-owning reference to the argument buffer to read and write.
+ * @param arg_size Size of the argument buffer in bytes.
+ */
 static int ctldev_ioctl_get_bar_info(void *arg, size_t arg_size) {
     struct slash_ioctl_bar_info bar_info;
 
@@ -106,6 +115,15 @@ static int ctldev_ioctl_get_bar_info(void *arg, size_t arg_size) {
     return 0;
 }
 
+/**
+ * @brief Execute the SLASH_CTLDEV_IOCTL_GET_DEVICE_INFO operation.
+ *
+ * This treats @ref arg as reference to a @ref slash_ioctl_device_info struct and
+ * populates it with data.
+ *
+ * @param arg Non-owning reference to the argument buffer to read and write.
+ * @param arg_size Size of the argument buffer in bytes.
+ */
 static int ctldev_ioctl_get_device_info(void *arg, size_t arg_size) {
     struct slash_ioctl_device_info dev_info;
 
@@ -130,6 +148,24 @@ static int ctldev_ioctl_get_device_info(void *arg, size_t arg_size) {
     return 0;
 }
 
+/**
+ * @brief Execute the SLASH_CTLDEV_IOCTL_GET_BAR_FD operation.
+ *
+ * This treats @ref arg as reference to a @ref slash_ioctl_bar_fd_request struct and
+ * populates it with data.
+ *
+ * @param state The state of the CTLDEV endpoint, which contains our FDs to
+ * the BAR backing storage.
+ * @param arg Non-owning reference to the argument buffer to read and write.
+ * @param arg_size Size of the argument buffer in bytes.
+ * @param output_fds Non-owned array to write the BAR FD to, which is to be
+ * sent to the user
+ * @param n_output_fds Non-owned reference to the capacity/size of @ref
+ * output_fds. The original value is the capacity of the array in number of FDs,
+ * and this function sets it to the actual number of FDs emitted; I.e. one on
+ * success and zero on failure.
+ * @return Zero on success, and a negative errno on failure.
+ */
 static int
 ctldev_ioctl_bar_fd_request(struct slash_mock_sock_ctldev_state *state,
                             void *arg, size_t arg_size, int **output_fds,

@@ -13,8 +13,11 @@
  * User-kernel ABI for the slash control device and QDMA subsystem.
  *
  * This header defines the ioctl structures and command numbers used by
- * libslash to communicate with the slash kernel module. It covers two
- * areas of functionality:
+ * libslash to communicate with the slash kernel module. The system
+ * emulation daemon also uses these command numbers and structures; See
+ * "slash_sysemu.h" for details.
+ * 
+ * There are two covered areas of functionality:
  *
  *   1. **Control device operations** — querying PCIe BAR information,
  *      obtaining file descriptors for BAR mappings, and retrieving
@@ -30,6 +33,11 @@
  *
  * This file is shared between kernel and userspace (UAPI) and must
  * remain compatible with both build environments.
+ * 
+ * Also, in order to maintain compatibility with the system emulation
+ * daemon, future extensions to this interface must newer contain
+ * a pointer to user space data, since these can't be transferred over
+ * UNIX domain sockets.
  */
 
 

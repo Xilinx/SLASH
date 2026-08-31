@@ -353,7 +353,7 @@ int slash_mock_sock_create(enum slash_mock_sock_endpoint endpoint) {
         }
         break;
     default:
-        /* TODO: Implement other kinds of mock socks */
+        /* Unsupported endpoint type. */
         errno = ENOTSUP;
         return -1;
     }

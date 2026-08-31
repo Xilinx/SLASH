@@ -62,7 +62,6 @@ extern "C" {
  *
  * Determined at open time by stat()-ing the path:
  *   SLASH_TRANSPORT_IOCTL  — real character device (ioctl path)
- *   SLASH_TRANSPORT_MOCK   — in-memory mock ("\@mock")
  *   SLASH_TRANSPORT_SOCKET — AF_UNIX/SOCK_SEQPACKET daemon socket
  */
 enum slash_transport {
@@ -95,7 +94,7 @@ struct slash_bar_file {
 /**
  * @brief Open a slash control device.
  *
- * @param path Path to the character device node, or "\@mock" for mock mode.
+ * @param path Path to the character device node, UNIX domain socket, or "\@mock" for mock mode.
  *
  * @return A heap-allocated handle on success, NULL on failure.
  */

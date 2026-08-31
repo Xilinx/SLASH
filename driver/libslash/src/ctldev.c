@@ -19,9 +19,9 @@
  *
  * Implementation of the slash control device wrapper.
  *
- * Each public function either delegates to the mock implementation
- * (ctldev_mock.h) or issues a single ioctl/syscall against the real
- * character device. No caching or retry logic.
+ * Each public function either issues a single ioctl/syscall against the real
+ * character device or executes a @ref slash_sock_request against the system
+ * emulation socket. No caching or retry logic.
  *
  * Error handling follows POSIX conventions: -1 or NULL on failure
  * with errno set.
