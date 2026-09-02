@@ -70,6 +70,9 @@ TEST(ClockWizardLeafTest, DecodesOddAndHalfStepDividers) {
     }
 }
 
-TEST(ClockWizardLeafTest, DecodeNeverReturnsZero) {
-    EXPECT_EQ(clock_wizard_decode_leaf(0u, 0u), 1u);
+TEST(ClockWizardLeafTest, DecodeReportsAnEmptyLeafPairAsInvalid) {
+    // Regression for SLASH issue 207: a cleared leaf pair was clamped to a
+    // divider of 1, so an unresponsive register window reported f_out = f_VCO
+    // instead of being rejected.
+    EXPECT_EQ(clock_wizard_decode_leaf(0u, 0u), 0u);
 }

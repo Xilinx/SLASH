@@ -449,6 +449,16 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
     }
 
     /*
+     * The clock driver borrows d->ctl and holds its own mmap of the BAR window
+     * carrying the clock wizard registers. Both were established against the
+     * pre-PDI PF2 and are invalidated by the remove/rescan above. Tear the
+     * driver down before the handle it borrows, matching the order used by
+     * device_destroy().
+     */
+    cleanup_clock_driver(d->clock_driver);
+    d->clock_driver = NULL;
+
+    /*
      * The stable character-device path survives PF2 remove+rescan, but the
      * existing handle still refers to the pre-PDI device. Close it and reopen
      * the same path so subsequent BAR operations use the freshly-probed PF2.
@@ -492,6 +502,13 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
                     i, d->path);
             }
         }
+    }
+
+    /* Re-establish the clock driver against the freshly-probed PF2. */
+    d->clock_driver = clock_driver_create(d->ctl);
+    if (d->clock_driver == NULL) {
+        LOG(LOG_ERR, "device_refresh_pf2: failed to recreate clock driver on %s: %m", d->path);
+        return VRTD_RET_INTERNAL_ERROR;
     }
 
     return VRTD_RET_OK;

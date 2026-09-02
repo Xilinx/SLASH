@@ -119,7 +119,8 @@ void clock_wizard_encode_leaf(uint32_t o, uint32_t *ctrl_out, uint32_t *counts_o
  *
  * @param ctrl   First register of the leaf pair (flags).
  * @param counts Second register of the leaf pair (high/low counts).
- * @return Effective divider ratio (never 0).
+ * @return Effective divider ratio, or 0 if the register pair does not describe
+ *         a valid divider. Callers must reject 0 rather than divide by it.
  */
 uint32_t clock_wizard_decode_leaf(uint32_t ctrl, uint32_t counts);
 
