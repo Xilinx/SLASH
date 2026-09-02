@@ -104,7 +104,7 @@ void vrtd_log(int priority, const char *fmt, ...)
  */
 const char *uid_to_username(uid_t uid, char *buf, size_t bufsz);
 
-#if defined(__has_include)
+#if !defined(__cplusplus) && defined(__has_include)
 #  if __has_include(<stdbit.h>)
 #    include <stdbit.h>
 #    define HAVE_STDBIT 1
