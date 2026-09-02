@@ -138,6 +138,7 @@
 #include "hotplug.h"
 #include "reset.h"
 #include "serve.h"
+#include "shell_build_id.h"
 #include "utils.h"
 #include "state.h"
 #include "vrtd/wire.h"
@@ -502,6 +503,21 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
                     i, d->path);
             }
         }
+    }
+
+    /*
+     * A design write reconfigures the user region only; it cannot change the
+     * shell. If the device now reports a different shell than the one vrtd
+     * believes is loaded, the BAR window is not addressing the static shell we
+     * think it is, and every subsequent register access — starting with the
+     * clock driver recreated below — would be aimed at the wrong fabric.
+     */
+    if (build_id_check_shell(
+            d->bar_files[BUILD_ID_BAR_NUMBER],
+            d->current_shell,
+            "device_refresh_pf2"
+        ) != 0) {
+        return VRTD_RET_INTERNAL_ERROR;
     }
 
     /* Re-establish the clock driver against the freshly-probed PF2. */
