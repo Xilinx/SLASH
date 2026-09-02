@@ -75,11 +75,11 @@
  * Xilinx Clocking Wizard AXI register offsets.
  * Sourced from xclk_wiz_hw.h in the Xilinx driver headers.
  */
+#define XCLK_WIZ_STATUS_OFFSET   0x00000004u  /* Status register; bit 0 reports PLL/MMCM lock */
 #define XCLK_WIZ_RECONFIG_OFFSET 0x00000014u  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG1_OFFSET     0x00000330u  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG2_OFFSET     0x00000334u  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG3_OFFSET     0x00000338u  /* TODO(vserbu): explain this register offset/bit field */
-#define XCLK_WIZ_REG4_OFFSET     0x0000033Cu  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG11_OFFSET    0x00000378u  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG12_OFFSET    0x00000380u  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG13_OFFSET    0x00000384u  /* TODO(vserbu): explain this register offset/bit field */
@@ -94,7 +94,7 @@
 /*
  * Bit masks and shift constants for clock wizard register fields.
  */
-#define XCLK_WIZ_LOCK               0x1u       /* Lock status bit in REG4 */
+#define XCLK_WIZ_LOCK               0x1u       /* Lock bit in the status register */
 #define XCLK_WIZ_RECONFIG_LOAD      0x1u       /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_RECONFIG_SADDR     0x2u       /* TODO(vserbu): explain this register offset/bit field */
 
@@ -489,10 +489,7 @@ static void clock_driver_log_state(
     const char *stage
 )
 {
-    uint32_t leaf_off = (clock_id < 3)
-        ? (XCLK_WIZ_REG3_OFFSET + clock_id * 8u)
-        : (XCLK_WIZ_REG19_OFFSET + clock_id * 8u);
-    uint32_t leaf_reg_off = clock_driver_reg(wizard_offset, leaf_off);
+    uint32_t leaf_reg_off = clock_driver_reg(wizard_offset, clock_wizard_leaf_offset(clock_id));
 
     uint32_t reg1 = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG1_OFFSET));
     uint32_t reg2 = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG2_OFFSET));
@@ -500,7 +497,7 @@ static void clock_driver_log_state(
     uint32_t reg13 = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG13_OFFSET));
     uint32_t leaf0 = clock_driver_r32(clk, leaf_reg_off);
     uint32_t leaf1 = clock_driver_r32(clk, leaf_reg_off + 4u);
-    uint32_t status = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG4_OFFSET));
+    uint32_t status = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_STATUS_OFFSET));
     uint32_t reconfig = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_RECONFIG_OFFSET));
 
     uint64_t fvco_hz = clock_driver_get_vco_hz(clk, wizard_offset);
@@ -656,8 +653,8 @@ static int clock_driver_wait_for_lock(struct clock_driver *clk, uint32_t wizard_
     }
 
     for (;;) {
-        /* Check the LOCK bit in the status register (REG4). */
-        if ((clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG4_OFFSET)) & XCLK_WIZ_LOCK) != 0u) {
+        /* Check the LOCK bit in the status register. */
+        if ((clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_STATUS_OFFSET)) & XCLK_WIZ_LOCK) != 0u) {
             return 0;
         }
 
