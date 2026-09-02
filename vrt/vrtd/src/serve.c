@@ -1454,8 +1454,14 @@ static int client_finalize_pending_design_write(struct client *client)
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
         design_write_ret = device_refresh_pf2_after_design_write(d);
-        LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
-            (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        if (design_write_ret == VRTD_RET_OK) {
+            LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
+                (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        } else {
+            LOG(LOG_ERR, "Design write transferred but PF2 refresh failed (ret=%u) for "
+                "uid=%u conn_id=%llu", (unsigned int)design_write_ret,
+                (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        }
     } else {
         LOG(LOG_WARNING, "Design write failed (error=%d) for uid=%u conn_id=%llu",
             transfer_error, (unsigned int)client->uid, (unsigned long long)client->conn_id);

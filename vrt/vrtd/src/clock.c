@@ -105,6 +105,13 @@
 
 #define XCLK_WIZ_EDGE_MASK          (1u << 10) /* TODO(vserbu): explain this register offset/bit field */
 
+/*
+ * An MMIO read that does not reach the device completes with every bit set.
+ * None of the wizard registers this driver reads has all 32 bits defined, so
+ * the pattern identifies a register window that is not responding.
+ */
+#define XCLK_WIZ_REG_UNRESPONSIVE   0xFFFFFFFFu
+
 #define XCLK_WIZ_REG3_PREDIV2       (1u << 11) /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG3_USED          (1u << 12) /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG3_MX            (1u << 9)  /* TODO(vserbu): explain this register offset/bit field */
@@ -172,17 +179,14 @@ static int clock_driver_init(struct clock_driver *clk, struct slash_ctldev *ctl)
     };
 
     /*
-     * Open the BAR that holds the clock wizard register windows.
-     *
-     * TEMPORARY. Try BAR4 (service/legacy layout); if it is not
-     * present, fall back to BAR2 (compute-only platform layout). Drop the
-     * fallback once both platforms use the same BAR.
+     * Open the BAR that holds the clock wizard register windows. Both the
+     * compute and the service shell map the wizards into the static shell
+     * window on BAR4, at the same offsets, so there is exactly one BAR to
+     * open and a failure to open it is a failure to construct the driver.
      */
     clk->bar = slash_bar_file_open(ctl, CLOCK_DRIVER_BAR_NUMBER, O_CLOEXEC);
     if (clk->bar == NULL) {
-        clk->bar = slash_bar_file_open(ctl, CLOCK_DRIVER_BAR_NUMBER_FALLBACK, O_CLOEXEC);
-    }
-    if (clk->bar == NULL) {
+        LOG(LOG_ERR, "clock_driver: failed to open BAR%d: %m", CLOCK_DRIVER_BAR_NUMBER);
         return -1;
     }
 
@@ -293,6 +297,41 @@ static inline void clock_driver_w32(struct clock_driver *clk, uint32_t offset, u
 }
 
 /**
+ * Write a 32-bit value to a clock wizard register and confirm that it reads
+ * back unchanged.
+ *
+ * The M, D and O registers are plain read/write storage, so a readback that
+ * differs from the value written means the register window did not accept the
+ * access - typically because the BAR mapping no longer refers to the live
+ * device. Detecting that at the point of the write keeps a stale mapping from
+ * being mistaken for a successful reconfiguration.
+ *
+ * @param clk     Clock driver with valid regs pointer.
+ * @param offset  Byte offset into the BAR.
+ * @param value   Value to write.
+ * @return 0 if the readback matches, -1 with errno set to EIO otherwise.
+ */
+static int clock_driver_w32_verify(struct clock_driver *clk, uint32_t offset, uint32_t value)
+{
+    clock_driver_w32(clk, offset, value);
+
+    uint32_t readback = clock_driver_r32(clk, offset);
+    if (readback != value) {
+        LOG(
+            LOG_ERR,
+            "clock_driver: register 0x%08x read back as 0x%08x after writing 0x%08x",
+            offset,
+            readback,
+            value
+        );
+        errno = EIO;
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
  * Compute the absolute BAR offset for a register within a given clock
  * wizard instance.
  *
@@ -337,19 +376,31 @@ static uint64_t clock_driver_get_vco_hz(struct clock_driver *clk, uint32_t wizar
 {
     /* Read the multiplier (M) from REG1 (edge bit) and REG2 (low/high counts). */
     uint32_t reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG1_OFFSET));
+    if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
+        return 0;
+    }
     uint32_t edge = (reg & XCLK_WIZ_REG1_EDGE_MASK) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
 
     reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG2_OFFSET));
+    if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
+        return 0;
+    }
     uint32_t low = reg & XCLK_WIZ_CLKFBOUT_L_MASK;
     uint32_t high = (reg & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
     uint32_t mult = low + high + edge;
 
     /* Read the input divider (D) from REG13 (low/high counts) and REG12 (edge bit). */
     reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG13_OFFSET));
+    if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
+        return 0;
+    }
     low = reg & XCLK_WIZ_CLKFBOUT_L_MASK;
     high = (reg & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
 
     reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG12_OFFSET));
+    if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
+        return 0;
+    }
     edge = (reg & XCLK_WIZ_EDGE_MASK) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
 
     uint32_t div = low + high + edge;
@@ -444,6 +495,9 @@ static uint64_t clock_driver_get_rate_hz(struct clock_driver *clk, uint32_t wiza
 
     uint32_t ctrl = clock_driver_r32(clk, reg_off);
     uint32_t counts = clock_driver_r32(clk, reg_off + 4u);
+    if (ctrl == XCLK_WIZ_REG_UNRESPONSIVE || counts == XCLK_WIZ_REG_UNRESPONSIVE) {
+        return 0;
+    }
 
     uint32_t divo = clock_wizard_decode_leaf(ctrl, counts);
     if (fvco == 0u || divo == 0u) {
@@ -535,8 +589,9 @@ static void clock_driver_log_state(
  * @param clk            Clock driver with clk->o set to the desired O value.
  * @param wizard_offset  Base offset of the wizard instance.
  * @param clock_id       Output clock index.
+ * @return 0 on success, -1 if a register did not read back as written.
  */
-static void clock_driver_update_o(struct clock_driver *clk, uint32_t wizard_offset, uint32_t clock_id)
+static int clock_driver_update_o(struct clock_driver *clk, uint32_t wizard_offset, uint32_t clock_id)
 {
     uint32_t reg_off = clock_driver_reg(wizard_offset, clock_wizard_leaf_offset(clock_id));
 
@@ -544,8 +599,11 @@ static void clock_driver_update_o(struct clock_driver *clk, uint32_t wizard_offs
     uint32_t counts = 0;
     clock_wizard_encode_leaf(clk->o, &ctrl, &counts);
 
-    clock_driver_w32(clk, reg_off, ctrl);
-    clock_driver_w32(clk, reg_off + 4u, counts);
+    if (clock_driver_w32_verify(clk, reg_off, ctrl) != 0) {
+        return -1;
+    }
+
+    return clock_driver_w32_verify(clk, reg_off + 4u, counts);
 }
 
 /**
@@ -555,8 +613,9 @@ static void clock_driver_update_o(struct clock_driver *clk, uint32_t wizard_offs
  *
  * @param clk            Clock driver with clk->d set to the desired D value.
  * @param wizard_offset  Base offset of the wizard instance.
+ * @return 0 on success, -1 if a register did not read back as written.
  */
-static void clock_driver_update_d(struct clock_driver *clk, uint32_t wizard_offset)
+static int clock_driver_update_d(struct clock_driver *clk, uint32_t wizard_offset)
 {
     uint32_t d = clk->d;
     uint32_t high_time = d / 2u;
@@ -566,8 +625,11 @@ static void clock_driver_update_d(struct clock_driver *clk, uint32_t wizard_offs
     uint32_t div_edge = d % 2u;
     reg |= (div_edge << XCLK_WIZ_REG12_EDGE_SHIFT);
 
-    clock_driver_w32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG12_OFFSET), reg);
-    clock_driver_w32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG13_OFFSET), (high_time | (high_time << 8u)));  /* TODO(vserbu): explain this register offset/bit field */
+    if (clock_driver_w32_verify(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG12_OFFSET), reg) != 0) {
+        return -1;
+    }
+
+    return clock_driver_w32_verify(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG13_OFFSET), (high_time | (high_time << 8u)));  /* TODO(vserbu): explain this register offset/bit field */
 }
 
 /**
@@ -578,15 +640,18 @@ static void clock_driver_update_d(struct clock_driver *clk, uint32_t wizard_offs
  *
  * @param clk            Clock driver with clk->m set to the desired M value.
  * @param wizard_offset  Base offset of the wizard instance.
+ * @return 0 on success, -1 if a register did not read back as written.
  */
-static void clock_driver_update_m(struct clock_driver *clk, uint32_t wizard_offset)
+static int clock_driver_update_m(struct clock_driver *clk, uint32_t wizard_offset)
 {
     uint32_t m = clk->m;
     clock_driver_w32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG25_OFFSET), 0);  /* TODO(vserbu): explain this register offset/bit field */
 
     uint32_t div_edge = m % 2u;
     uint32_t high_time = m / 2u;
-    clock_driver_w32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG2_OFFSET), (high_time | (high_time << 8u)));  /* TODO(vserbu): explain this register offset/bit field */
+    if (clock_driver_w32_verify(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG2_OFFSET), (high_time | (high_time << 8u))) != 0) {  /* TODO(vserbu): explain this register offset/bit field */
+        return -1;
+    }
 
     uint32_t reg = XCLK_WIZ_REG1_PREDIV2 | XCLK_WIZ_REG1_EN | XCLK_WIZ_REG1_MX;  /* TODO(vserbu): explain this register offset/bit field */
     if (div_edge) {
@@ -594,7 +659,8 @@ static void clock_driver_update_m(struct clock_driver *clk, uint32_t wizard_offs
     } else {
         reg &= ~(1u << 8u);  /* TODO(vserbu): explain this register offset/bit field */
     }
-    clock_driver_w32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG1_OFFSET), reg);
+
+    return clock_driver_w32_verify(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG1_OFFSET), reg);
 }
 
 /**
@@ -696,7 +762,10 @@ static int clock_driver_wait_for_lock(struct clock_driver *clk, uint32_t wizard_
  * @param wizard_offset  Base offset of the wizard instance.
  * @param clock_id       Output clock index.
  * @param timeout_ms     Lock timeout in milliseconds.
- * @param ok             Output: set to 0 on success, remains -1 on failure.
+ * @param ok             Output: 0 on success, -1 if the configuration failed to
+ *                       lock within the timeout, -2 if the register window did
+ *                       not respond, in which case retrying another candidate
+ *                       is pointless.
  * @return Achieved output frequency in Hz (only valid when *ok == 0).
  */
 static uint64_t clock_driver_program_mdo_and_reconfig(
@@ -711,10 +780,19 @@ static uint64_t clock_driver_program_mdo_and_reconfig(
 
     clock_driver_w32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG25_OFFSET), 0);  /* TODO(vserbu): explain this register offset/bit field */
 
-    /* Program output divider, input divider, and feedback multiplier. */
-    clock_driver_update_o(clk, wizard_offset, clock_id);
-    clock_driver_update_d(clk, wizard_offset);
-    clock_driver_update_m(clk, wizard_offset);
+    /*
+     * Program output divider, input divider, and feedback multiplier. Each
+     * write is confirmed by readback, so a window that has stopped responding
+     * is reported here rather than after the reconfiguration has been
+     * triggered against an unknown register state.
+     */
+    if (clock_driver_update_o(clk, wizard_offset, clock_id) != 0
+        || clock_driver_update_d(clk, wizard_offset) != 0
+        || clock_driver_update_m(clk, wizard_offset) != 0) {
+        *ok = -2;
+        return 0;
+    }
+
     clock_driver_program_common_tail(clk, wizard_offset);
 
     /* Trigger the dynamic reconfiguration and wait for PLL lock. */
@@ -736,6 +814,7 @@ static uint64_t clock_driver_program_mdo_and_reconfig(
             clk->d,
             clk->o
         );
+        *ok = -2;
         errno = EIO;
         return 0;
     }
@@ -1104,6 +1183,19 @@ static int clock_driver_try_set_rate_hz(
 
             *rate_hz_inout = (uint32_t)reported;
             return 0;
+        }
+
+        if (ok == -2) {
+            LOG(
+                LOG_ERR,
+                "clock_driver: aborting set_rate request_hz=%u: wizard register window"
+                " is not responding (wiz=0x%08x clk=%u)",
+                *rate_hz_inout,
+                wizard_offset,
+                clock_id
+            );
+            errno = EIO;
+            return -1;
         }
 
         LOG(
