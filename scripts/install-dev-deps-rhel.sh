@@ -9,7 +9,7 @@
 #
 # Sources:
 #   packaging/rpm/slash.spec          (BuildRequires)
-#   docs/tutorials/admin/platform-setup.rst (build-machine prerequisites)
+#   docs/howto/install-from-packages.rst   (build-machine dependencies)
 #
 # Usage: sudo ./scripts/install-dev-deps-rhel.sh
 set -euo pipefail
@@ -36,7 +36,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # SLASH build dependencies (from packaging/rpm/slash.spec BuildRequires
-# and docs/tutorials/admin/platform-setup.rst)
+# and docs/howto/install-from-packages.rst)
 # ---------------------------------------------------------------------------
 $PM install -y \
     gcc \

@@ -9,7 +9,7 @@
 #
 # Sources:
 #   packaging/debian/control          (Build-Depends)
-#   docs/tutorials/admin/platform-setup.rst (build-machine prerequisites)
+#   docs/howto/install-from-packages.rst   (build-machine dependencies)
 #
 # Usage: sudo ./scripts/install-dev-deps-ubuntu.sh
 set -euo pipefail
@@ -23,7 +23,7 @@ apt-get update
 
 # ---------------------------------------------------------------------------
 # SLASH build dependencies (from packaging/debian/control Build-Depends
-# and docs/tutorials/admin/platform-setup.rst)
+# and docs/howto/install-from-packages.rst)
 # ---------------------------------------------------------------------------
 apt-get install -y \
     build-essential \

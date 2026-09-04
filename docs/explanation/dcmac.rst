@@ -47,12 +47,19 @@ transceiver (QSFP56 cages); they exchange 512-bit AXI4-Stream transactions in
 packet mode with the DCMAC, and the service layer handles segmentation, FEC,
 resets, and clocking.
 
+.. note::
+
+   The AMD V80 data sheet (`DS1013 Block Diagram
+   <https://docs.amd.com/r/en-US/ds1013-v80/Block-Diagram>`_) labels the QSFP56
+   cages **1–4** (1-indexed), while SLASH and the DCMAC IP use **0–3**
+   (0-indexed). QSFP1 in DS1013 corresponds to QSFP0 below, and so on.
+
 .. code-block:: text
 
-        V80 front panel   (QSFP0 nearest the PCIe edge → QSFP3 farthest)
+        V80 front panel   (QSFP3 nearest the PCIe edge → QSFP0 farthest)
         ┌─────────┬─────────┬─────────┬─────────┐
         │  QSFP0  │  QSFP1  │  QSFP2  │  QSFP3  │
-        └────┬────┴────┬────┴────┬────┴────┬────┘
+        └────┬────┴────┬────┴────┬────┴────┬────┘──────► PCIe
              │         ┊         │         ┊
   ═══════════│═════════┊═════════│═════════┊══════════  Service region
              │         ┊         │         ┊   ┊ = 2nd cage (dual, untested)

@@ -100,6 +100,30 @@ struct clock_driver {
 };
 
 /**
+ * @brief Encode an output divider O into the wizard "leaf" register pair.
+ *
+ * The leaf pair holds the divider as high/low counts plus edge and half-step
+ * flags. Exposed (rather than static) so the encode/decode pair can be
+ * round-tripped in unit tests without a device.
+ *
+ * @param o             Output divider (clamped to the hardware maximum).
+ * @param[out] ctrl_out   Receives the first register (flags). May be NULL.
+ * @param[out] counts_out Receives the second register (high/low counts). May be NULL.
+ */
+void clock_wizard_encode_leaf(uint32_t o, uint32_t *ctrl_out, uint32_t *counts_out);
+
+/**
+ * @brief Decode the effective output divider from a wizard "leaf" register pair.
+ *
+ * Inverse of @c clock_wizard_encode_leaf for every O the encoder produces.
+ *
+ * @param ctrl   First register of the leaf pair (flags).
+ * @param counts Second register of the leaf pair (high/low counts).
+ * @return Effective divider ratio (never 0).
+ */
+uint32_t clock_wizard_decode_leaf(uint32_t ctrl, uint32_t counts);
+
+/**
  * @brief Create and initialize a clock driver for the given device.
  *
  * Opens BAR4, maps the register region, and reads the primary input
