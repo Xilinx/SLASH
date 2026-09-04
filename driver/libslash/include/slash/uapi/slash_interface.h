@@ -48,10 +48,25 @@
 
 #ifdef __KERNEL__
 #include <linux/ioctl.h>
+#include <linux/stddef.h>
 #else
 #include <sys/ioctl.h>
 #include <stddef.h>
 #endif /* __KERNEL__ */
+
+/**
+ * @brief End offset of a struct member: the number of bytes a caller must
+ *        supply for @MEMBER to be fully present.
+ *
+ * Used to express the minimum accepted `size` of each ioctl. This is
+ * deliberately not `offsetof()` of the following member, because alignment
+ * padding between the two would overstate the requirement and reject callers
+ * that the previous ABI accepted. For example, `struct
+ * slash_ioctl_bar_fd_request` has four bytes of padding between `flags` and
+ * `length`, so `offsetof(length)` is 16 where the boundary is 12.
+ */
+#define SLASH_OFFSETOFEND(TYPE, MEMBER) \
+    (offsetof(TYPE, MEMBER) + sizeof(((TYPE *)0)->MEMBER))
 
 /**
  * ioctl number allocation
@@ -94,9 +109,9 @@ struct slash_ioctl_bar_info {
     __u64 length;        /**< [out] Size of the BAR region in bytes. */
 };
 #define SLASH_IOCTL_BAR_INFO_MIN_SIZE \
-    offsetof(struct slash_ioctl_bar_info, usable)
+    SLASH_OFFSETOFEND(struct slash_ioctl_bar_info, bar_number)
 #define SLASH_IOCTL_BAR_INFO_RESPONSE_SIZE \
-    sizeof(struct slash_ioctl_bar_info)
+    SLASH_OFFSETOFEND(struct slash_ioctl_bar_info, length)
 
 /**
  * @brief Obtain a file descriptor for a BAR.
@@ -120,9 +135,9 @@ struct slash_ioctl_bar_fd_request {
     __u64 length;        /**< [out] Size of the BAR region backing the returned fd. */
 };
 #define SLASH_IOCTL_BAR_FD_MIN_SIZE \
-    offsetof(struct slash_ioctl_bar_fd_request, length)
+    SLASH_OFFSETOFEND(struct slash_ioctl_bar_fd_request, flags)
 #define SLASH_IOCTL_BAR_FD_RESPONSE_SIZE \
-    sizeof(struct slash_ioctl_bar_fd_request)
+    SLASH_OFFSETOFEND(struct slash_ioctl_bar_fd_request, length)
 
 /** Maximum length (including NUL) of a PCI BDF string ("DDDD:BB:DD.F"). */
 #define SLASH_PCI_BDF_LEN 32
@@ -150,7 +165,7 @@ struct slash_ioctl_device_info {
  * back.
  */
 #define SLASH_IOCTL_DEVICE_INFO_MIN_SIZE \
-    offsetof(struct slash_ioctl_device_info, bdf)
+    SLASH_OFFSETOFEND(struct slash_ioctl_device_info, size)
 
 /** Query BAR properties.  Fills the kernel-to-userspace fields of slash_ioctl_bar_info. */
 #define SLASH_CTLDEV_IOCTL_GET_BAR_INFO _IOWR('v', 0x30, struct slash_ioctl_bar_info)
@@ -187,7 +202,7 @@ struct slash_qdma_info {
     char bdf[SLASH_PCI_BDF_LEN]; /**< [out] Full PF1 PCI BDF string, NUL-terminated. */
 };
 #define SLASH_QDMA_INFO_MIN_SIZE \
-    offsetof(struct slash_qdma_info, qsets_max)
+    SLASH_OFFSETOFEND(struct slash_qdma_info, size)
 
 /**
  * @brief AXI-MM / NoC channel selection for a queue pair.
@@ -243,7 +258,7 @@ struct slash_qdma_qpair_add {
     __u32 aperture_size; /**< [in]  0 = linear MM addressing, non-zero = keyhole aperture. */
 };
 #define SLASH_QDMA_QPAIR_ADD_MIN_SIZE \
-    offsetof(struct slash_qdma_qpair_add, qid)
+    SLASH_OFFSETOFEND(struct slash_qdma_qpair_add, cmpt_ring_sz)
 
 /**
  * Queue pair lifecycle operations, used in slash_qdma_qpair_op::op.
@@ -268,7 +283,7 @@ struct slash_qdma_qpair_op {
     __u32 op;   /**< [in] One of the SLASH_QDMA_QUEUE_OP_* constants. */
 };
 #define SLASH_QDMA_QPAIR_OP_MIN_SIZE \
-    sizeof(struct slash_qdma_qpair_op)
+    SLASH_OFFSETOFEND(struct slash_qdma_qpair_op, op)
 
 /**
  * @brief Maximum number of queue pairs a single transfer fd may own.
@@ -311,7 +326,7 @@ struct slash_qdma_qpair_fd_request {
                         *  this fd; the array index is the qpair_index. */
 };
 #define SLASH_QDMA_QPAIR_FD_REQUEST_MIN_SIZE \
-    offsetof(struct slash_qdma_qpair_fd_request, qpair_count)
+    SLASH_OFFSETOFEND(struct slash_qdma_qpair_fd_request, flags)
 
 /**
  * @brief Transfer direction for a registered-buffer DMA transfer.
@@ -369,7 +384,7 @@ struct slash_qdma_buf_create {
     __u32 transfer_hint; /**< [out] enum slash_qdma_transfer_hint. */
 };
 #define SLASH_QDMA_BUF_CREATE_MIN_SIZE \
-    offsetof(struct slash_qdma_buf_create, granule)
+    SLASH_OFFSETOFEND(struct slash_qdma_buf_create, length)
 
 /**
  * @brief One per-queue-pair sub-transfer within a transfer batch.
@@ -408,7 +423,7 @@ struct slash_qdma_transfer {
     struct slash_qdma_subxfer xfers[SLASH_QDMA_FD_MAX_QPAIRS]; /**< [in] Sub-transfers. */
 };
 #define SLASH_QDMA_TRANSFER_MIN_SIZE \
-    offsetof(struct slash_qdma_transfer, xfers)
+    SLASH_OFFSETOFEND(struct slash_qdma_transfer, count)
 
 /**
  * Encoded size of the original slash_qdma_info ABI.

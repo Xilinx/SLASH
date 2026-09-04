@@ -116,7 +116,7 @@ std::string makeExecFromBinaryDirCommand(const std::string& execPath) {
     if (dir.empty() || file.empty()) {
         return shellQuote(execPath);
     }
-    return "cd " + shellQuote(dir) + " && exec ./" + shellQuote(file) + " " + socket_path;
+    return "cd " + shellQuote(dir) + " && exec ./" + shellQuote(file) + " " + shellQuote(socket_path);
 }
 
 vrtd::ShellType toVrtdShellType(ShellType shellType) {

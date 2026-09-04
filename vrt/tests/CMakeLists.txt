@@ -19,7 +19,7 @@ add_custom_target(unit_tests)
 macro(add_vrt_test test_name test_source)
   add_executable(${test_name} ${test_source})
   target_link_libraries(${test_name} PRIVATE GTest::gtest_main GTest::gmock vrt::vrt)
-  gtest_discover_tests(${test_name} PROPERTIES RESOURCE_LOCK vrt_zmq_stub)
+  gtest_discover_tests(${test_name})
   add_dependencies(unit_tests ${test_name})
 endmacro()
 

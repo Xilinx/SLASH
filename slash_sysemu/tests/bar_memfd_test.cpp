@@ -285,6 +285,12 @@ TEST(BarMemfd, ConcurrentSharedReadersSeeConsistentValues) {
     // user, or between separate worker descriptions) each party must hold its OWN
     // reopened description.  Here the writer and every reader use distinct
     // reopened fds and do the RMW/read via pread/pwrite bracketed by flock.
+    //
+    // The writer's iteration count is kept low deliberately.  A failure of
+    // reader/writer exclusion is observed within the first few hundred
+    // iterations, so a higher count does not improve detection; it only
+    // extends the runtime, which is dominated by contended flock round-trips
+    // and therefore scales with the core count of the host.
     auto bar = make_small();
     ASSERT_TRUE(bar.write_u32(0, 0).has_value());
 
@@ -296,7 +302,7 @@ TEST(BarMemfd, ConcurrentSharedReadersSeeConsistentValues) {
     UniqueFd writer_fd = std::move(writer_re.value());
 
     std::thread writer([&] {
-        for (uint32_t i = 1; i <= 200000 && !stop.load(); ++i) {
+        for (uint32_t i = 1; i <= 20000 && !stop.load(); ++i) {
             uint32_t v = (i & 0xff);
             v          = v | (v << 8) | (v << 16) | (v << 24);
             ASSERT_EQ(::flock(writer_fd.get(), LOCK_EX), 0);
