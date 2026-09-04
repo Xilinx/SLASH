@@ -16,6 +16,10 @@ dispatch, and streaming DMA.
 
 ## Building
 
+These instructions cover development on VRT itself. To install SLASH on a
+machine, build and install the packages: see
+[Build and Install SLASH](https://slash.readthedocs.io/en/latest/howto/install-from-packages.html).
+
 ```sh
 cmake -B build -S . -G Ninja
 cmake --build build
@@ -57,9 +61,9 @@ target_link_libraries(myapp PRIVATE vrt::vrt)
 | ZLIB       | `zlib1g-dev`         | vrtbin archive decompression         |
 | vrtd       | (bundled or system)  | Low-level device access daemon       |
 
-```sh
-sudo apt install libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev
-```
+`scripts/install-dev-deps-ubuntu.sh` / `scripts/install-dev-deps-rhel.sh` from
+the repository root install these along with the rest of the build
+dependencies.
 
 ## API overview
 

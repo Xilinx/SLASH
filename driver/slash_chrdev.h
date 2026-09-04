@@ -32,7 +32,7 @@
 /** Reserve the shared device-number range and create /sys/class/slash. */
 int __init slash_chrdev_init(void);
 /** Destroy the shared class, range, and module-lifetime board map. */
-void __exit slash_chrdev_exit(void);
+void slash_chrdev_exit(void);
 
 /**
  * slash_chrdev_add() - Add one cdev and its BDF-specific class device.

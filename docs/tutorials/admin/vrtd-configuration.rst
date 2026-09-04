@@ -297,5 +297,5 @@ Next Steps
 - :doc:`/reference/vrtd/configuration` — full configuration reference.
 - :doc:`/reference/vrtd/client-flow` — how applications communicate with
   ``vrtd``.
-- :doc:`platform-setup` — initial platform installation.
+- :doc:`platform-setup` — initial board bring-up.
 - :doc:`device-management` — day-to-day device management.

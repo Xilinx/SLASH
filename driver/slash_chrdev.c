@@ -97,7 +97,7 @@ int __init slash_chrdev_init(void)
     return 0;
 }
 
-void __exit slash_chrdev_exit(void)
+void slash_chrdev_exit(void)
 {
     struct slash_board_slot *entry;
     struct slash_board_slot *tmp;

@@ -104,7 +104,6 @@
 #define XCLK_WIZ_CLKFBOUT_H_SHIFT   8u
 
 #define XCLK_WIZ_EDGE_MASK          (1u << 10) /* TODO(vserbu): explain this register offset/bit field */
-#define XCLK_WIZ_P5EN_MASK          (1u << 8)  /* TODO(vserbu): explain this register offset/bit field */
 
 #define XCLK_WIZ_REG3_PREDIV2       (1u << 11) /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG3_USED          (1u << 12) /* TODO(vserbu): explain this register offset/bit field */
@@ -114,8 +113,9 @@
 #define XCLK_WIZ_REG1_EN            (1u << 9)  /* TODO(vserbu): explain this register offset/bit field */
 #define XCLK_WIZ_REG1_MX            (1u << 10) /* TODO(vserbu): explain this register offset/bit field */
 
-#define XCLK_WIZ_CLKOUT0_P5EN_SHIFT    13u     /* TODO(vserbu): explain this register offset/bit field */
-#define XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT 15u     /* TODO(vserbu): explain this register offset/bit field */
+#define XCLK_WIZ_CLKOUT0_EDGE_SHIFT     8u     /* Leaf divider edge bit: adds 1 to (high + low) */
+#define XCLK_WIZ_CLKOUT0_P5EN_SHIFT    13u     /* Leaf divider half-step enable (odd divisors) */
+#define XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT 15u     /* Half-step falling edge: duty cycle only, not part of the divide */
 #define XCLK_WIZ_REG12_EDGE_SHIFT      10u     /* TODO(vserbu): explain this register offset/bit field */
 
 #define XCLK_MHZ 1000000ull
@@ -123,14 +123,18 @@
 /*
  * Versal MMCM/PLL parameter limits.
  * M = feedback multiplier, D = input divider, O = output divider.
- * VCO frequency must stay within [VCO_MIN, VCO_MAX] MHz.
+ * VCO frequency must stay within [VCO_MIN, VCO_MAX] MHz, and the phase
+ * frequency detector input (f_in / D) within [PFD_MIN, PFD_MAX] MHz.
+ * Values match the MMCM limits Vivado 2025.1 enforces for xcv80-lsva4737-2MHP.
  */
-#define XCLK_M_MIN 4u
+#define XCLK_M_MIN 5u
 #define XCLK_M_MAX 432u
 #define XCLK_D_MIN 1u
 #define XCLK_D_MAX 123u
 #define XCLK_VCO_MIN 2160u    /* Minimum VCO frequency in MHz */
 #define XCLK_VCO_MAX 4320u    /* Maximum VCO frequency in MHz */
+#define XCLK_PFD_MIN 10u      /* Minimum phase detector frequency in MHz */
+#define XCLK_PFD_MAX 500u     /* Maximum phase detector frequency in MHz */
 #define XCLK_O_MIN 2u
 #define XCLK_O_MAX 511u
 
@@ -359,15 +363,66 @@ static uint64_t clock_driver_get_vco_hz(struct clock_driver *clk, uint32_t wizar
 }
 
 /**
+ * Register offset of a clock output's "leaf" divider register pair.
+ *
+ * Clock outputs 0-2 are packed starting at REG3 (8 bytes apart);
+ * clock outputs 3+ start at REG19 (also 8 bytes apart).
+ *
+ * @param clock_id  Output clock index (0-based).
+ * @return Offset of the first register of the pair.
+ */
+static uint32_t clock_wizard_leaf_offset(uint32_t clock_id)
+{
+    return (clock_id < 3)
+        ? (XCLK_WIZ_REG3_OFFSET + clock_id * 8u)
+        : (XCLK_WIZ_REG19_OFFSET + (clock_id - 3u) * 8u);
+}
+
+void clock_wizard_encode_leaf(uint32_t o, uint32_t *ctrl_out, uint32_t *counts_out)
+{
+    if (o > XCLK_O_MAX) {
+        o = XCLK_O_MAX;
+    }
+
+    uint32_t high_time = o / 4u;
+    uint32_t div_edge = ((o % 4u) <= 1u) ? 0u : 1u;
+    uint32_t p5_enable = o % 2u;
+    uint32_t p5f_edge = o % 2u;
+
+    if (ctrl_out != NULL) {
+        *ctrl_out = XCLK_WIZ_REG3_PREDIV2 | XCLK_WIZ_REG3_USED | XCLK_WIZ_REG3_MX
+                  | (div_edge << XCLK_WIZ_CLKOUT0_EDGE_SHIFT)
+                  | (p5_enable << XCLK_WIZ_CLKOUT0_P5EN_SHIFT)
+                  | (p5f_edge << XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT);
+    }
+    if (counts_out != NULL) {
+        *counts_out = high_time | (high_time << 8u);
+    }
+}
+
+uint32_t clock_wizard_decode_leaf(uint32_t ctrl, uint32_t counts)
+{
+    uint32_t edge = (ctrl & (1u << XCLK_WIZ_CLKOUT0_EDGE_SHIFT)) ? 1u : 0u;
+    uint32_t p5en = (ctrl & (1u << XCLK_WIZ_CLKOUT0_P5EN_SHIFT)) ? 1u : 0u;
+    uint32_t prediv = (ctrl & XCLK_WIZ_REG3_PREDIV2) ? 1u : 0u;
+
+    uint32_t low = counts & XCLK_WIZ_CLKFBOUT_L_MASK;
+    uint32_t high = (counts & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
+
+    uint32_t leaf = high + low + edge;
+    uint32_t divo = (prediv + 1u) * leaf + (prediv * p5en);
+
+    return (divo == 0u) ? 1u : divo;
+}
+
+/**
  * Read the current output clock rate for a specific clock output.
  *
  * Computes:
  *   f_out = f_VCO / O_effective
  *
  * The output divider (O) is read from a per-clock-output "leaf" register
- * pair. The effective output divider accounts for prediv2, p5en, and edge
- * encoding:
- *   O_effective = (prediv + 1) * (high + low + edge) + (prediv * p5en)
+ * pair and decoded by clock_wizard_decode_leaf().
  *
  * @param clk            Clock driver.
  * @param wizard_offset  Base offset of the wizard instance.
@@ -379,73 +434,30 @@ static uint64_t clock_driver_get_rate_hz(struct clock_driver *clk, uint32_t wiza
 {
     uint64_t fvco = clock_driver_get_vco_hz(clk, wizard_offset);
 
-    /*
-     * Compute the register offset for this clock output's leaf divider.
-     * Clock outputs 0-2 are packed starting at REG3 (8 bytes apart);
-     * clock outputs 3+ start at REG19 (also 8 bytes apart).
-     */
-    uint32_t leaf_off = (clock_id < 3)
-        ? (XCLK_WIZ_REG3_OFFSET + clock_id * 8u)
-        : (XCLK_WIZ_REG19_OFFSET + clock_id * 8u);
-    uint32_t reg_off = clock_driver_reg(wizard_offset, leaf_off);
+    uint32_t reg_off = clock_driver_reg(wizard_offset, clock_wizard_leaf_offset(clock_id));
 
-    /* First register of the leaf pair: edge, p5en, prediv2 flags. */
-    uint32_t reg = clock_driver_r32(clk, reg_off);
-    uint32_t edge = (reg & (1u << XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT)) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
-    uint32_t p5en = (reg & XCLK_WIZ_P5EN_MASK) ? 1u : 0u;   /* TODO(vserbu): explain this register offset/bit field */
-    uint32_t prediv = (reg & XCLK_WIZ_REG3_PREDIV2) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
+    uint32_t ctrl = clock_driver_r32(clk, reg_off);
+    uint32_t counts = clock_driver_r32(clk, reg_off + 4u);
 
-    /* Second register of the leaf pair: low-time and high-time counts. */
-    uint32_t reg2 = clock_driver_r32(clk, reg_off + 4u);
-    uint32_t low = reg2 & XCLK_WIZ_CLKFBOUT_L_MASK;
-    uint32_t high = (reg2 & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
-
-    /*
-     * Decode the effective output divider from the register fields.
-     * leaf = high_count + low_count + edge
-     * divo = (prediv + 1) * leaf + (prediv * p5en)
-     */
-    uint32_t leaf = high + low + edge;
-    uint32_t divo = (prediv + 1u) * leaf + (prediv * p5en);
-    if (divo == 0) {
-        divo = 1;
-    }
-
-    return fvco / divo;
+    return fvco / clock_wizard_decode_leaf(ctrl, counts);
 }
 
 /**
  * Compute the effective output divider that will be produced by
- * programming a given O value into the clock wizard registers.
- *
- * This mirrors the encoding logic in clock_driver_update_o(): the O value
- * is decomposed into high_time, edge, and p5en fields, then the effective
- * divider is reconstructed as it would be read back from hardware:
- *   high_time = O / 4
- *   edge      = O % 2
- *   p5en      = (O % 4 <= 1) ? 0 : 1
- *   leaf      = high_time * 2 + edge
- *   divo      = 2 * leaf + p5en
+ * programming a given O value into the clock wizard registers, by running
+ * the value through the same encode/decode pair the hardware path uses.
  *
  * @param o  Raw output divider value (clamped to XCLK_O_MAX).
  * @return Effective divider ratio.
  */
 static uint32_t clock_driver_effective_divo_from_o(uint32_t o)
 {
-    if (o > XCLK_O_MAX) {
-        o = XCLK_O_MAX;
-    }
+    uint32_t ctrl = 0;
+    uint32_t counts = 0;
 
-    uint32_t high_time = o / 4u;
-    uint32_t edge = o % 2u;
-    uint32_t p5en = ((o % 4u) <= 1u) ? 0u : 1u;
-    uint32_t leaf = (high_time * 2u) + edge;
-    uint32_t divo = (2u * leaf) + p5en;
-    if (divo == 0) {
-        divo = 1u;
-    }
+    clock_wizard_encode_leaf(o, &ctrl, &counts);
 
-    return divo;
+    return clock_wizard_decode_leaf(ctrl, counts);
 }
 
 /**
@@ -518,31 +530,14 @@ static void clock_driver_log_state(
  */
 static void clock_driver_update_o(struct clock_driver *clk, uint32_t wizard_offset, uint32_t clock_id)
 {
-    uint32_t o = clk->o;
-    if (o > XCLK_O_MAX) {
-        o = XCLK_O_MAX;
-    }
+    uint32_t reg_off = clock_driver_reg(wizard_offset, clock_wizard_leaf_offset(clock_id));
 
-    /* Compute register offset for this clock output's leaf divider pair. */
-    uint32_t leaf_off = (clock_id < 3)
-        ? (XCLK_WIZ_REG3_OFFSET + clock_id * 8u)
-        : (XCLK_WIZ_REG19_OFFSET + clock_id * 8u);
-    uint32_t reg_off = clock_driver_reg(wizard_offset, leaf_off);
+    uint32_t ctrl = 0;
+    uint32_t counts = 0;
+    clock_wizard_encode_leaf(clk->o, &ctrl, &counts);
 
-    /* Encode O into high_time, div_edge, p5_enable, and p5f_edge fields. */
-    uint32_t high_time = o / 4u;
-    uint32_t reg = XCLK_WIZ_REG3_PREDIV2 | XCLK_WIZ_REG3_USED | XCLK_WIZ_REG3_MX;  /* TODO(vserbu): explain this register offset/bit field */
-
-    uint32_t div_edge = ((o % 4u) <= 1u) ? 0u : 1u;
-    reg |= (div_edge << 8u);  /* TODO(vserbu): explain this register offset/bit field */
-
-    uint32_t p5f_edge = o % 2u;
-    uint32_t p5_enable = o % 2u;
-    reg |= (p5_enable << XCLK_WIZ_CLKOUT0_P5EN_SHIFT) |
-           (p5f_edge << XCLK_WIZ_CLKOUT0_P5FEDGE_SHIFT);  /* TODO(vserbu): explain this register offset/bit field */
-
-    clock_driver_w32(clk, reg_off, reg);
-    clock_driver_w32(clk, reg_off + 4u, (high_time | (high_time << 8u)));  /* TODO(vserbu): explain this register offset/bit field */
+    clock_driver_w32(clk, reg_off, ctrl);
+    clock_driver_w32(clk, reg_off + 4u, counts);
 }
 
 /**
@@ -822,6 +817,8 @@ static size_t clock_driver_generate_candidates(
 
     uint64_t vco_min_hz = (uint64_t)XCLK_VCO_MIN * XCLK_MHZ;
     uint64_t vco_max_hz = (uint64_t)XCLK_VCO_MAX * XCLK_MHZ;
+    uint64_t pfd_min_hz = (uint64_t)XCLK_PFD_MIN * XCLK_MHZ;
+    uint64_t pfd_max_hz = (uint64_t)XCLK_PFD_MAX * XCLK_MHZ;
     size_t count = 0;
 
     /* Iterate over all valid (M, D) pairs. */
@@ -832,6 +829,15 @@ static size_t clock_driver_generate_candidates(
 
             /* Skip (M, D) pairs whose VCO falls outside allowed range. */
             if (fvco_hz < vco_min_hz || fvco_hz > vco_max_hz) {
+                continue;
+            }
+
+            /*
+             * Skip D values that drive the phase detector outside its range:
+             * such a candidate is not realizable and can never lock.
+             */
+            uint64_t pfd_hz = (uint64_t)clk->prim_in_hz / d;
+            if (pfd_hz < pfd_min_hz || pfd_hz > pfd_max_hz) {
                 continue;
             }
 
@@ -1000,11 +1006,12 @@ static int clock_driver_try_set_rate_hz(
         clock_driver_log_state(clk, wizard_offset, clock_id, "after_program");
 
         if (ok == 0) {
+            uint32_t request_hz = *rate_hz_inout;
             LOG(
                 LOG_INFO,
                 "clock_driver: set_rate request_hz=%u reported_hz=%" PRIu64
                 " m=%u d=%u o=%u candidate=%zu/%zu",
-                *rate_hz_inout,
+                request_hz,
                 reported,
                 clk->m,
                 clk->d,
@@ -1012,6 +1019,32 @@ static int clock_driver_try_set_rate_hz(
                 i + 1u,
                 count
             );
+
+            /*
+             * The first candidate that locks wins, which may be well below the
+             * request if better-ranked candidates failed. Say so: the caller
+             * still gets the achieved rate, but silence here reads as success.
+             */
+            uint64_t delta_hz = (reported > request_hz)
+                ? (reported - request_hz)
+                : ((uint64_t)request_hz - reported);
+            if (delta_hz > clk->min_err_hz) {
+                LOG(
+                    LOG_WARNING,
+                    "clock_driver: achieved rate differs from request: request_hz=%u"
+                    " achieved_hz=%" PRIu64 " delta_hz=%" PRIu64
+                    " m=%u d=%u o=%u candidate=%zu/%zu",
+                    request_hz,
+                    reported,
+                    delta_hz,
+                    clk->m,
+                    clk->d,
+                    clk->o,
+                    i + 1u,
+                    count
+                );
+            }
+
             *rate_hz_inout = (uint32_t)reported;
             return 0;
         }

@@ -14,10 +14,9 @@ Prerequisites
 
 Before you begin, ensure:
 
-- The SLASH stack is installed (kernel module, libslash, vrtd, VRT, v80-smi).
-  The recommended way is to install pre-built packages — see
-  :doc:`/tutorials/admin/platform-setup`. To build from source instead, see
-  :doc:`/howto/build-from-source`.
+- The SLASH stack is installed (kernel module, libslash, vrtd, VRT, v80-smi)
+  and the board has been brought up — see :doc:`/howto/install-from-packages`
+  and :doc:`/tutorials/admin/platform-setup`.
 - A V80 board is installed and visible (run ``v80-smi list`` to check).
 - The ``vrtd`` daemon is running (``sudo systemctl enable --now vrtd``).
 - AMD Vivado **2025.1** and Vitis HLS **2025.1** are installed and sourced in

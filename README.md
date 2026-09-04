@@ -107,12 +107,15 @@ add_vbin(TARGET "axilite_sim" PLATFORM "sim" CFG "${CFG_FILE}" KERNELS ${_KERNEL
 
 **Library dependencies:**
 
+Install the build dependencies for your distribution:
+
 ```bash
-sudo apt install cmake pkg-config ninja-build \
-  libxml2-dev libzmq3-dev libjsoncpp-dev zlib1g-dev \
-  libsystemd-dev libinih-dev libcli11-dev \
-  linux-headers-$(uname -r)
+sudo ./scripts/install-dev-deps-ubuntu.sh    # Ubuntu
+sudo ./scripts/install-dev-deps-rhel.sh      # RHEL / Rocky / AlmaLinux
 ```
+
+The equivalent package lists, for manual installation, are documented in
+[Build and Install SLASH](https://slash.readthedocs.io/en/latest/howto/install-from-packages.html).
 
 **Clone and submodules:**
 
@@ -141,45 +144,32 @@ git submodule update --init --checkout \
     submodules/xilinx-qemu submodules/qemu-devicetrees
 ```
 
-## Quick Start
+## Getting Started
 
-### 1. Build the stack
-
-Components must be built in dependency order:
-
-```bash
-# Kernel module
-cd driver && make && sudo insmod slash.ko && cd ..
-
-# libslash (kernel module client library)
-cd driver/libslash && cmake -S . -B build -G Ninja && cmake --build build && sudo cmake --install build && cd ../..
-
-# vrtd (daemon + client libraries)
-cd vrt/vrtd && cmake -S . -B build -G Ninja && cmake --build build && sudo cmake --install build && cd ../..
-
-# VRT (runtime library)
-cd vrt && cmake -S . -B build -G Ninja && cmake --build build && sudo cmake --install build && cd ..
-
-# v80-smi (CLI tool)
-cd smi && cmake -S . -B build -G Ninja && cmake --build build && sudo cmake --install build && cd ..
-```
-
-### 2. Start the daemon
+SLASH is installed from packages built from this repository. Pre-built releases
+are not distributed, and there is no separate build-from-source flow. A single
+script produces every package, including the FPGA static shell:
 
 ```bash
-sudo vrtd                              # manual
-sudo systemctl enable --now vrtd       # production (systemd)
+./scripts/package-deb.sh     # Ubuntu, writes ./deb/
+./scripts/package-rpm.sh     # RHEL / Rocky / AlmaLinux, writes ./rpm/
 ```
 
-### 3. Verify
+This requires Vivado and Vitis 2025.1 with a Vivado Enterprise license, and
+takes approximately **17 hours**, most of it Vivado synthesising and
+implementing the two static shells.
 
-```bash
-v80-smi list
-```
+[Build and Install SLASH](https://slash.readthedocs.io/en/latest/howto/install-from-packages.html)
+documents the full procedure: dependencies, the separately downloaded SMBus IP,
+offloading the shell build to a cluster, package installation, and building an
+individual component during development.
+[Bring Up a V80 Board](https://slash.readthedocs.io/en/latest/tutorials/admin/platform-setup.html)
+covers the steps that follow installation: programming and validating the board.
 
-All four readiness checks (PF0, PF1, PF2, VRTD) should pass for each board.
+To remove an installation, `sudo scripts/uninstall-slash.sh` stops the
+services, unloads the modules and purges the packages.
 
-### 4. Build and run an example
+## Build and Run an Example
 
 ```bash
 cd examples/00_axilite
@@ -316,7 +306,7 @@ against each component's `doc/Doxyfile` and renders the XML via Breathe.
 The complete documentation is published at **[slash-fpga.readthedocs.io](https://slash-fpga.readthedocs.io/)** and covers:
 
 - **Tutorials** — getting started, writing kernels, the graph API, buffers and memory, emulation/simulation, platform setup, device management, vrtd configuration
-- **How-To Guides** — multiple boards, clock frequency, streaming chains, memory benchmarking, building from source, CMake modules, vrtbin inspection, mock mode
+- **How-To Guides** — multiple boards, clock frequency, streaming chains, memory benchmarking, building and installing, CMake modules, vrtbin inspection, mock mode
 - **API Reference** — VRT, `vrt::graph` (devices, bridges, rendering), libslash, libvrtd, libvrtdpp, vrtd, v80-smi, CMake modules
 - **Architecture** — stack overview, graph API architecture, memory model, PCIe topology, platform modes, vrtbin format
 

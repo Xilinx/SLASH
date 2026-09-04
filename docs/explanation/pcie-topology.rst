@@ -177,6 +177,7 @@ can be opened, used, and closed independently.
 See Also
 ========
 
+- :doc:`bar-address-map` — what each BAR exposes and where.
 - :doc:`architecture` — full SLASH stack overview.
 - :doc:`/tutorials/admin/device-management` — managing V80 boards in
   practice.

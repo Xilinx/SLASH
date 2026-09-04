@@ -18,6 +18,10 @@ hardware, write the static shell, and validate memory integrity and bandwidth.
 
 ## Building
 
+These instructions cover development on `v80-smi` itself. To install SLASH on
+a machine, build and install the packages: see
+[Build and Install SLASH](https://slash.readthedocs.io/en/latest/howto/install-from-packages.html).
+
 ```sh
 cmake -B build -S . -G Ninja
 cmake --build build

@@ -15,7 +15,7 @@ binds to via the ``ami`` kernel driver.
 When you need this tutorial
 ===========================
 
-The rest of the SLASH platform-setup flow — including
+The rest of the board bring-up flow — including
 ``v80-smi write-static-shell --flash`` for writing the SLASH static shell —
 requires that ``ami`` is already bound to PF0. That, in turn, requires
 a valid AVED image in the V80's OSPI flash. Follow this tutorial when:
@@ -157,14 +157,14 @@ AVED archive's ``version.json``.
    If you are following the package build flow on a fresh board, you
    will not have the ``ami`` driver or ``ami_tool`` installed yet. That
    is expected at this stage — confirming that the board enumerates on
-   PCIe via ``lspci`` is sufficient. Continue on to :doc:`platform-setup`
-   to install the SLASH stack, which brings in ``ami`` and ``ami_tool``.
+   PCIe via ``lspci`` is sufficient. Installing the SLASH packages, per
+   :doc:`/howto/install-from-packages`, brings in ``ami`` and ``ami_tool``.
 
 Next Steps
 ==========
 
-With AVED bootstrapped and PF0 visible, continue with the regular
-platform-setup flow:
+With AVED bootstrapped and PF0 visible, continue with the regular bring-up
+flow:
 
-- :doc:`platform-setup` — install the SLASH stack and program the
+- :doc:`platform-setup` — verify the install and program the
   SLASH static shell over PCIe with ``v80-smi write-static-shell --flash``.

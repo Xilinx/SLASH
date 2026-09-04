@@ -58,12 +58,14 @@ Key responsibilities:
 
 ## Building
 
-**Prerequisites:** libslash must be installed first (or built in-tree
-with `-DVRTD_INCLUDE_LIBSLASH=ON`). System dependencies:
+These instructions cover development on vrtd itself. To install SLASH on a
+machine, build and install the packages: see
+[Build and Install SLASH](https://slash.readthedocs.io/en/latest/howto/install-from-packages.html).
 
-```bash
-sudo apt install cmake pkg-config libsystemd-dev libinih-dev
-```
+**Prerequisites:** libslash must be installed first (or built in-tree
+with `-DVRTD_INCLUDE_LIBSLASH=ON`). System dependencies come from
+`scripts/install-dev-deps-ubuntu.sh` / `scripts/install-dev-deps-rhel.sh` in
+the repository root.
 
 **Build:**
 
