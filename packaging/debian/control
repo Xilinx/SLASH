@@ -43,7 +43,7 @@ Description: SLASH/VRT System for simulation and emulation (development files)
 
 Package: slash-sim-emu
 Architecture: all
-Depends: libvrt (= ${binary:Version})
+Depends: libvrt (= ${binary:Version}), slash-sysemu (= ${binary:Version}), vrtd (= ${binary:Version})
 Description: SLASH/VRT System for simulation and emulation
 
 Package: slash-dkms
@@ -66,6 +66,14 @@ Package: vrtd
 Architecture: any
 Depends: libslash (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
 Description: VRTd daemon for managing VRT devices
+
+Package: slash-sysemu
+Architecture: any
+Depends: systemd-sysusers, ${shlibs:Depends}, ${misc:Depends}
+Description: SLASH system-emulation daemon
+ Emulates the system around one or more accelerators (PCIe, BARs, QDMA, and
+ hotplug) in user space, presenting the same interfaces as the SLASH kernel
+ driver so applications, VRT, and vrtd can run without real hardware.
 
 Package: libvrtd
 Architecture: any

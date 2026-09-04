@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <cstdlib>
 
 #include "sim_exec_log.hpp"
 
@@ -104,17 +105,32 @@ bool Loader::port_is_input(int port_number) {
             xsiInputPort);
 }
 
+static void report_ld_library_path_error() {
+    char* ld_library_path = getenv("LD_LIBRARY_PATH");
+    if (ld_library_path == NULL) {
+        std::cerr << "A possible reason for is that LD_LIBRARY_PATH is not set.\n";
+        std::cerr << "Please set it to the path of your Vivado installation, e.g.\n";
+        std::cerr << "/tools/Xilinx/2025.1/Vivado/lib/lnx64.o/" << std::endl;
+    } else {
+        std::cerr << "A common cause for this error is that LD_LIBRARY_PATH doesn't contain your Vivado installation.\n";
+        std::cerr << "The current LD_LIBARY_PATH is " << ld_library_path << ".\n";
+        std::cerr << "The default path for the Vivado libraries is /tools/Xilinx/2025.1/Vivado/lib/lnx64.o/." << std::endl;
+    }
+}
+
 bool Loader::initialize() {
     // Load ISIM design shared library
     if (!_design_lib.load(_design_libname)) {
         std::cerr << "Could not load XSI simulation shared library (" << _design_libname
                   << "): " << _design_lib.error() << std::endl;
+        report_ld_library_path_error();
         return false;
     }
 
     if (!_simkernel_lib.load(_simkernel_libname)) {
         std::cerr << "Could not load simulation kernel library (" << _simkernel_libname
                   << ") :" << _simkernel_lib.error() << "\n";
+        report_ld_library_path_error();
         return false;
     }
 

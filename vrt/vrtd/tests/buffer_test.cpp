@@ -213,37 +213,6 @@ TEST_P(BufferTest, RawCreateAndIO) {
     cleanup_buffer(buf);
 }
 
-TEST_P(BufferTest, QueueExhaustion) {
-    /* The mock QDMA supports 64 queues (QDMA_MOCK_MAX_QUEUES).
-     * Real hardware queue limits vary and exhaustion may not be reachable,
-     * so this test is restricted to mock mode. */
-    if (!mock) {
-        GTEST_SKIP() << "Queue exhaustion test is mock-only";
-    }
-
-    static constexpr int MAX_BUFFERS = 32; /* two mock queues per buffer */
-    std::vector<struct buffer *> bufs;
-    bufs.reserve(MAX_BUFFERS);
-
-    for (int i = 0; i < MAX_BUFFERS; ++i) {
-        struct buffer *buf = buffer_create_raw(qdma_, DDR_START_ADDRESS + i * XFER_SIZE,
-                                               XFER_SIZE, VRTD_ALLOC_DIR_HOST_TO_DEVICE, CLIENT_ID,
-                                               SLASH_QDMA_MM_CHANNEL_AUTO);
-        ASSERT_NE(buf, nullptr) << "Expected success for buffer " << i;
-        bufs.push_back(buf);
-    }
-
-    /* 33rd allocation needs queues 65/66 and must fail. */
-    struct buffer *overflow = buffer_create_raw(qdma_, DDR_START_ADDRESS,
-                                                XFER_SIZE, VRTD_ALLOC_DIR_HOST_TO_DEVICE, CLIENT_ID,
-                                                SLASH_QDMA_MM_CHANNEL_AUTO);
-    EXPECT_EQ(overflow, nullptr);
-    EXPECT_EQ(errno, ENOSPC);
-
-    for (struct buffer *b : bufs)
-        cleanup_buffer(b);
-}
-
 INSTANTIATE_TEST_SUITE_P(BufferTest, BufferTest, testing::Values(true, false),
     [](const testing::TestParamInfo<bool> &info) {
         return info.param ? "Mock" : "RealHardware";

@@ -1,0 +1,67 @@
+# ##################################################################################################
+#  The MIT License (MIT)
+#  Copyright (c) 2026 Advanced Micro Devices, Inc. All rights reserved.
+#
+#  Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+#  and associated documentation files (the "Software"), to deal in the Software without restriction,
+#  including without limitation the rights to use, copy, modify, merge, publish, distribute,
+#  sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
+#
+#  The above copyright notice and this permission notice shall be included in all copies or
+#  substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+# NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+# ##################################################################################################
+
+[Unit]
+Description=SLASH system-emulation daemon
+Documentation=man:slash_sysemud
+After=network.target
+
+[Service]
+Type=notify
+EnvironmentFile=-/etc/slash_sysemu/slash_sysemu.env
+ExecStart=/usr/bin/slash_sysemud -c ${SLASH_SYSEMU_CONFIG} $SLASH_SYSEMU_EXTRA_ARGS
+
+# Identity: run unprivileged.  The daemon creates its AF_UNIX sockets under the
+# RuntimeDirectory; they inherit this user/group, and UMask sets their mode
+# (0117 -> 0660: owner+group rw, so clients in the vrt group can connect).
+User=slash-sysemu
+Group=vrt
+UMask=0117
+
+# /run/slash_sysemu, created on start and wiped on stop (replaces the daemon's
+# own base-dir creation and cold-reboot cleanup).
+RuntimeDirectory=slash_sysemu
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+
+# Health-gated watchdog: the daemon pings only while its hotplug lifecycle lock
+# is free, so a lifecycle deadlock lets systemd restart us.
+WatchdogSec=60s
+Restart=on-failure
+RestartSec=2s
+
+# Hardening.  Note: the daemon fork/execs the model process (vpp_sim) extracted
+# from a VBIN, so MemoryDenyWriteExecute / a locked-down exec are deliberately
+# NOT set; PrivateTmp is fine because VBINs extract under the RuntimeDirectory.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

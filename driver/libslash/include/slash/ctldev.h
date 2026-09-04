@@ -47,20 +47,35 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include <linux/dma-buf.h>
+#include <sys/file.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
 
 /**
+ * @brief Transport selector for a slash handle.
+ *
+ * Determined at open time by stat()-ing the path:
+ *   SLASH_TRANSPORT_IOCTL  — real character device (ioctl path)
+ *   SLASH_TRANSPORT_SOCKET — AF_UNIX/SOCK_SEQPACKET daemon socket
+ */
+enum slash_transport {
+    SLASH_TRANSPORT_IOCTL,
+    SLASH_TRANSPORT_SOCKET
+};
+
+/**
  * @brief Handle to an open slash control device.
  */
 struct slash_ctldev {
-    int fd;    /**< File descriptor for the control character device. */
-    bool mock; /**< True if this is a mock device (no real hardware). */
+    int fd;                    /**< File descriptor (char device or socket). */
+    enum slash_transport transport; /**< Transport selector. */
+    uint32_t seq;              /**< Next sequence id for socket requests. */
 };
 
 /**
@@ -72,20 +87,14 @@ struct slash_ctldev {
 struct slash_bar_file {
     void *map;    /**< Pointer to the mmap'd BAR region. */
     size_t len;   /**< Size of the mapping in bytes. */
-    int fd;       /**< The dma-buf file descriptor backing the mapping. */
-    bool mock;    /**< True if backed by a mock file instead of real hardware. */
-    /**
-     * Path to the backing file (mock mode only); NULL otherwise.
-     * Allocated by slash_bar_file_open() (mock path) and freed
-     * by slash_bar_file_close().  NULL in non-mock mode.
-     */
-    char *mock_path;
+    int fd;       /**< The dma-buf or memfd file descriptor backing the mapping. */
+    enum slash_transport transport; /**< Transport selector (matches parent ctldev). */
 };
 
 /**
  * @brief Open a slash control device.
  *
- * @param path Path to the character device node, or "\@mock" for mock mode.
+ * @param path Path to the character device node, UNIX domain socket, or "\@mock" for mock mode.
  *
  * @return A heap-allocated handle on success, NULL on failure.
  */
@@ -167,18 +176,51 @@ int slash_bar_file_close(struct slash_bar_file *bar_file);
  */
 static __inline__ int slash_bar_file_sync(struct slash_bar_file *bar_file, unsigned int flags)
 {
-    struct dma_buf_sync sync = { .flags = flags };
+    struct dma_buf_sync sync;
+    int how;
+    int ret;
 
-    if (bar_file->mock) {
-        return 0;
+    if (bar_file == NULL) {
+        errno = EINVAL;
+        return -1;
     }
 
-    int ret = ioctl(bar_file->fd, DMA_BUF_IOCTL_SYNC, &sync);
-    if (ret == -1) {
-        fprintf(stderr, "slash_bar_file_sync: DMA_BUF_IOCTL_SYNC failed (flags=0x%x, fd=%d, errno=%d)\n",
-                flags, bar_file->fd, errno);
+    if (bar_file->transport == SLASH_TRANSPORT_SOCKET) {
+        /*
+         * Translate DMA_BUF_SYNC_* into flock(2) operations.
+         *
+         * DMA_BUF_SYNC_END (bit 2) set   → LOCK_UN (release any lock).
+         * DMA_BUF_SYNC_END clear:
+         *   DMA_BUF_SYNC_WRITE (bit 1) set → LOCK_EX (exclusive, START+WRITE)
+         *   else                            → LOCK_SH (shared,    START+READ)
+         *
+         * flock operates on open file descriptions; each slash_bar_file_open()
+         * call receives a distinct memfd description (daemon reopens via
+         * /proc/self/fd), so two clients sharing the same BAR can correctly
+         * exclude each other.
+         */
+        if (flags & DMA_BUF_SYNC_END) {
+            how = LOCK_UN;
+        } else if (flags & DMA_BUF_SYNC_WRITE) {
+            how = LOCK_EX;
+        } else {
+            how = LOCK_SH;
+        }
+        do {
+            ret = flock(bar_file->fd, how);
+        } while (ret == -1 && errno == EINTR);
+        return ret;
+    } else {
+        /* IOCTL path: issue DMA_BUF_IOCTL_SYNC against the dma-buf fd. */
+        sync.flags = flags;
+        ret = ioctl(bar_file->fd, DMA_BUF_IOCTL_SYNC, &sync);
+        if (ret == -1) {
+            fprintf(stderr, "slash_bar_file_sync: DMA_BUF_IOCTL_SYNC failed "
+                    "(flags=0x%x, fd=%d, errno=%d)\n",
+                    flags, bar_file->fd, errno);
+        }
+        return ret;
     }
-    return ret;
 }
 
 /** Acquire write access to the BAR mapping. Equivalent to slash_bar_file_sync(bar_file, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE). */

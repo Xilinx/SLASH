@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<SystemMap><Platform>Emulation</Platform>
+<Kernel><Name>k</Name><BaseAddress>0x1000</BaseAddress><Range>0x100</Range>
+<register offset="0x0" name="CTRL" access="RW" range="notanumber"/></Kernel></SystemMap>
