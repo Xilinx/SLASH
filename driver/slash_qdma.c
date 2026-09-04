@@ -31,8 +31,8 @@
  *   add -> start -> I/O (via anon_inode fd) -> stop -> del
  *
  * Key design decisions:
- *   - **Poll mode** (no interrupts): avoids interrupt overhead for
- *     streaming workloads; the host polls HW-written completion status.
+ *   - **Indirect interrupt mode**: QDMA writes queue events to an interrupt
+ *     aggregation ring and raises MSI-X for transfer completion.
  *   - **Synchronous transfers**: qdma_request_submit() blocks until the
  *     DMA completes or times out (10 s default).
  *   - **XArray for qpair tracking**: provides dynamic ID allocation,
@@ -250,8 +250,8 @@ struct slash_qdma_dev;
  * @dir_mask:   Bitmask of active directions (SLASH_QDMA_DIR_H2C, etc.).
  *              Updated as individual queues are added or removed.
  * @mode:       Queue operating mode (QDMA_Q_MODE_MM or QDMA_Q_MODE_ST).
- * @irq_mode:   Interrupt mode.  Currently always 0 (poll mode).
- * @irq_vector: MSI-X vector assignment.  Currently unused (poll mode).
+ * @irq_mode:   Reserved; libqdma configures interrupt mode per device.
+ * @irq_vector: Reserved; libqdma owns queue-to-vector assignment.
  */
 struct slash_qdma_qpair_entry {
     struct kref ref;
@@ -1123,7 +1123,8 @@ static int slash_qdma_program_host_profiles(struct slash_qdma_dev *device)
  * the control function handled by slash_ctldev).  Then:
  *   1. Allocates and initialises a slash_qdma_dev structure.
  *   2. Configures and opens the libqdma device via qdma_device_open().
- *   3. Registers the management character device (/dev/slash_qdma_ctlN).
+ *   3. Sets the global completion-writeback interval before queues exist.
+ *   4. Registers the management character device (/dev/slash_qdma_ctlN).
  *
  * On any failure, the partially-constructed device is torn down and
  * the probe returns the error.
@@ -1172,6 +1173,22 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
                           "qdma_device_open done: handle=%lu\n",
                           device->qdma_handle);
     device->have_qdma_handle = true;
+
+    /*
+     * SLASH MM buffers use one 4 KiB scatter-gather entry per descriptor.
+     * The largest hardware interval therefore requests periodic completion
+     * writebacks every 2 MiB instead of libqdma's 512 KiB default. Pending
+     * checks still report short and final partial batches.
+     */
+    err = qdma_set_cmpl_status_acc(device->qdma_handle,
+                                   QDMA_WRB_INTERVAL_512);
+    if (err) {
+        dev_err(&pdev->dev,
+                "slash: qdma: could not set writeback interval: %d", err);
+        goto err_free;
+    }
+    dev_info(&pdev->dev,
+             "slash: qdma: writeback interval set to 512 descriptors\n");
 
     /*
      * Program the CPM5 Host Profiles before exposing the character device, so
@@ -1415,19 +1432,17 @@ static void slash_qdma_dev_release(struct kref *ref)
  *     SLASH_QDMA_MAX_QPAIRS).
  *   - zerolen_dma = 0: zero-length transfers are disallowed.
  *   - master_pf = 1: this is the master physical function.
- *   - qdma_drv_mode = POLL_MODE: avoids interrupt overhead for
- *     streaming workloads.  The host polls HW-written completion
- *     status in memory instead of waiting for MSI-X interrupts.
+ *   - qdma_drv_mode = INDIRECT_INTR_MODE: QDMA reports transfer completion
+ *     through an interrupt aggregation ring and MSI-X.
  *   - msix_qvec_max = 32: Versal-specific MSI-X vector limit for
- *     queues.  Even though we use poll mode, libqdma still needs
- *     a non-zero value here for internal setup.
+ *     queues.
  *   - intr_rngsz = INTR_RING_SZ_4KB: interrupt ring size from the
  *     reference driver defaults.
  *   - bar_num_config = 0: BAR 0 is the configuration BAR.
  *   - bar_num_user / bar_num_bypass = -1: not used in this design.
  *   - qsets_base = -1: let libqdma auto-assign the queue set base.
- *   - All optional callbacks (ISR handlers, FLR resource free) are
- *     set to NULL since we operate in poll mode.
+ *   - Optional callbacks remain NULL so libqdma's default data interrupt
+ *     handler services completed queues.
  */
 static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *pdev)
 {
@@ -1444,7 +1459,7 @@ static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *
     conf->user_msix_qvec_max = 1;
     conf->data_msix_qvec_max = 5;
 
-    conf->qdma_drv_mode      = POLL_MODE; // TODO: experiment with this
+    conf->qdma_drv_mode      = INDIRECT_INTR_MODE;
     conf->uld                = 0;
 
     conf->bar_num_config     = 0;
@@ -1852,19 +1867,19 @@ rollback:
  *   - qconf.st: 1 for streaming mode (QDMA_Q_MODE_ST), 0 for memory-
  *     mapped (QDMA_Q_MODE_MM).  Streaming uses AXI-Stream for data
  *     transfer; MM uses AXI Memory Mapped.
- *   - qconf.irq_en = 0: interrupts disabled — we use poll mode.
- *   - qconf.cmpl_en_intr = 0: no completion interrupts — poll mode.
- *   - qconf.cmpl_trig_mode = TRIG_MODE_DISABLE: no automatic completion
- *     trigger; the host explicitly polls for completion status.
+ *   - qconf.irq_en = 1: enable MM descriptor-completion interrupts.
+ *   - qconf.cmpl_en_intr = 1: keep completion interrupts enabled when
+ *     libqdma reconfigures the queue for indirect interrupt mode.
+ *   - qconf.cmpl_trig_mode = TRIG_MODE_DISABLE: completion-ring trigger modes
+ *     apply to unsupported ST/CMPT queues, not the current MM queues.
  *   - qconf.wb_status_en = 1: enables HW write-back of completion status
- *     to host memory, which is how the poll-mode driver detects transfer
- *     completion.
+ *     to host memory so libqdma can account for completed descriptors.
  *   - qconf.cmpl_status_acc_en = 1: accumulate completion status entries
- *     (required for poll-mode operation per the reference driver).
+ *     for completion tracking.
  *   - qconf.cmpl_status_pend_chk = 1: check for pending completions
- *     (required for poll-mode operation per the reference driver).
+ *     before reporting completion.
  *   - qconf.cmpl_stat_en = 1: enable completion status generation
- *     (required for poll-mode operation per the reference driver).
+ *     for the completion path.
  *   - qconf.aperture_size: zero disables libqdma keyhole mode so MM
  *     transfers advance linearly through endpoint memory.  Non-zero values
  *     enable keyhole mode and wrap addresses within that byte aperture.
@@ -1901,13 +1916,13 @@ static int slash_qdma_ioctl_qpair_add_q(struct slash_qdma_dev *qdma_dev,
     qconf.qidx = req->qid;                          /* Use xarray-assigned ID as HW queue index */
     qconf.q_type = qtype;
     qconf.st = (req->mode == QDMA_Q_MODE_ST);       /* Streaming vs memory-mapped */
-    qconf.irq_en = 0;                               /* Poll mode: no interrupts */
-    qconf.cmpl_en_intr = 0;                         /* Poll mode: no completion interrupts */
-    qconf.cmpl_trig_mode = TRIG_MODE_DISABLE;       /* No auto-trigger; we poll explicitly */
+    qconf.irq_en = 1;                               /* MM descriptor completion interrupts */
+    qconf.cmpl_en_intr = 1;                         /* Enabled by indirect interrupt mode */
+    qconf.cmpl_trig_mode = TRIG_MODE_DISABLE;       /* ST/CMPT trigger mode; unused for MM */
 
     qconf.wb_status_en = 1;                         /* HW writes completion status to host memory */
-    qconf.cmpl_status_acc_en = 1;                   /* Accumulate completion status (poll-mode req) */
-    qconf.cmpl_status_pend_chk = 1;                 /* Check pending completions (poll-mode req) */
+    qconf.cmpl_status_acc_en = 1;                   /* Accumulate completion status */
+    qconf.cmpl_status_pend_chk = 1;                 /* Check pending completions */
     qconf.cmpl_stat_en = 1;                         /* Enable completion status generation */
 
     qconf.aperture_size = req->aperture_size;       /* 0 = linear MM; non-zero = keyhole aperture */
