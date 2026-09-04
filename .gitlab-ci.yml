@@ -182,6 +182,12 @@ build 05_perf:
     EXAMPLE_NO: "05"
     EXAMPLE_NAME: "perf"
 
+build 06_dcmac:
+  extends: .vbin_build
+  variables:
+    EXAMPLE_NO: "06"
+    EXAMPLE_NAME: "dcmac"
+
 package_rpm:
   tags:
     - otus
