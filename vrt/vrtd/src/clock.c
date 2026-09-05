@@ -354,6 +354,21 @@ static int clock_driver_check_wizard_bounds(const struct clock_driver *clk, uint
 }
 
 /**
+ * Outcome of reading a clock configuration out of the wizard registers.
+ *
+ * The wizard's reconfiguration register file resets to zero and only reflects
+ * values software has written into it; the frequency a design comes up with is
+ * fixed at synthesis and is not readable through it. Cleared registers are
+ * therefore an ordinary state meaning "no rate has been programmed", and are
+ * distinct from a register window that is not answering at all.
+ */
+enum clock_read {
+    CLOCK_READ_OK = 0,            /**< Registers hold a valid configuration. */
+    CLOCK_READ_UNCONFIGURED = 1,  /**< Registers are cleared; nothing programmed yet. */
+    CLOCK_READ_FAULT = -1,        /**< Register window did not respond. */
+};
+
+/**
  * Read the current VCO frequency from the clock wizard registers.
  *
  * Computes VCO frequency as:
@@ -368,22 +383,28 @@ static int clock_driver_check_wizard_bounds(const struct clock_driver *clk, uint
  *
  * @param clk            Clock driver.
  * @param wizard_offset  Base offset of the wizard instance in BAR4.
- * @return VCO frequency in Hz, or 0 if the multiplier or divider decodes to
- *         zero, which indicates registers that are unprogrammed or a register
- *         window that is not responding.
+ * @param[out] fvco_out  Receives the VCO frequency in Hz, or 0 unless the
+ *                       result is @c CLOCK_READ_OK.
+ * @return See @c enum clock_read.
  */
-static uint64_t clock_driver_get_vco_hz(struct clock_driver *clk, uint32_t wizard_offset)
+static enum clock_read clock_driver_get_vco_hz(
+    struct clock_driver *clk,
+    uint32_t wizard_offset,
+    uint64_t *fvco_out
+)
 {
+    *fvco_out = 0;
+
     /* Read the multiplier (M) from REG1 (edge bit) and REG2 (low/high counts). */
     uint32_t reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG1_OFFSET));
     if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
-        return 0;
+        return CLOCK_READ_FAULT;
     }
     uint32_t edge = (reg & XCLK_WIZ_REG1_EDGE_MASK) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
 
     reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG2_OFFSET));
     if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
-        return 0;
+        return CLOCK_READ_FAULT;
     }
     uint32_t low = reg & XCLK_WIZ_CLKFBOUT_L_MASK;
     uint32_t high = (reg & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
@@ -392,14 +413,14 @@ static uint64_t clock_driver_get_vco_hz(struct clock_driver *clk, uint32_t wizar
     /* Read the input divider (D) from REG13 (low/high counts) and REG12 (edge bit). */
     reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG13_OFFSET));
     if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
-        return 0;
+        return CLOCK_READ_FAULT;
     }
     low = reg & XCLK_WIZ_CLKFBOUT_L_MASK;
     high = (reg & XCLK_WIZ_CLKFBOUT_H_MASK) >> XCLK_WIZ_CLKFBOUT_H_SHIFT;
 
     reg = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_REG12_OFFSET));
     if (reg == XCLK_WIZ_REG_UNRESPONSIVE) {
-        return 0;
+        return CLOCK_READ_FAULT;
     }
     edge = (reg & XCLK_WIZ_EDGE_MASK) ? 1u : 0u;  /* TODO(vserbu): explain this register offset/bit field */
 
@@ -407,15 +428,17 @@ static uint64_t clock_driver_get_vco_hz(struct clock_driver *clk, uint32_t wizar
 
     /*
      * A zero multiplier or divider is not a valid configuration. Substituting
-     * 1 for either would turn an unprogrammed or unreadable register window
-     * into a plausible-looking frequency; report the reading as invalid.
+     * 1 for either would turn cleared registers into a plausible-looking
+     * frequency equal to the reference clock, which is how an unprogrammed
+     * wizard came to be reported as a working 100 MHz.
      */
     if (mult == 0u || div == 0u) {
-        return 0;
+        return CLOCK_READ_UNCONFIGURED;
     }
 
     /* f_VCO = f_primary_in * M / D */
-    return ((uint64_t)clk->prim_in_hz * mult) / div;
+    *fvco_out = ((uint64_t)clk->prim_in_hz * mult) / div;
+    return CLOCK_READ_OK;
 }
 
 /**
@@ -483,28 +506,40 @@ uint32_t clock_wizard_decode_leaf(uint32_t ctrl, uint32_t counts)
  * @param wizard_offset  Base offset of the wizard instance.
  * @param clock_id       Output clock index (0-based). Outputs 0-2 use REG3-based
  *                       offsets; outputs 3+ use REG19-based offsets.
- * @return Output frequency in Hz, or 0 if the VCO or output divider decodes to
- *         zero, which indicates registers that are unprogrammed or a register
- *         window that is not responding.
+ * @param[out] rate_out  Receives the output frequency in Hz, or 0 unless the
+ *                       result is @c CLOCK_READ_OK.
+ * @return See @c enum clock_read.
  */
-static uint64_t clock_driver_get_rate_hz(struct clock_driver *clk, uint32_t wizard_offset, uint32_t clock_id)
+static enum clock_read clock_driver_get_rate_hz(
+    struct clock_driver *clk,
+    uint32_t wizard_offset,
+    uint32_t clock_id,
+    uint64_t *rate_out
+)
 {
-    uint64_t fvco = clock_driver_get_vco_hz(clk, wizard_offset);
+    *rate_out = 0;
+
+    uint64_t fvco = 0;
+    enum clock_read vco_status = clock_driver_get_vco_hz(clk, wizard_offset, &fvco);
+    if (vco_status != CLOCK_READ_OK) {
+        return vco_status;
+    }
 
     uint32_t reg_off = clock_driver_reg(wizard_offset, clock_wizard_leaf_offset(clock_id));
 
     uint32_t ctrl = clock_driver_r32(clk, reg_off);
     uint32_t counts = clock_driver_r32(clk, reg_off + 4u);
     if (ctrl == XCLK_WIZ_REG_UNRESPONSIVE || counts == XCLK_WIZ_REG_UNRESPONSIVE) {
-        return 0;
+        return CLOCK_READ_FAULT;
     }
 
     uint32_t divo = clock_wizard_decode_leaf(ctrl, counts);
-    if (fvco == 0u || divo == 0u) {
-        return 0;
+    if (divo == 0u) {
+        return CLOCK_READ_UNCONFIGURED;
     }
 
-    return fvco / divo;
+    *rate_out = fvco / divo;
+    return CLOCK_READ_OK;
 }
 
 /**
@@ -554,8 +589,10 @@ static void clock_driver_log_state(
     uint32_t status = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_STATUS_OFFSET));
     uint32_t reconfig = clock_driver_r32(clk, clock_driver_reg(wizard_offset, XCLK_WIZ_RECONFIG_OFFSET));
 
-    uint64_t fvco_hz = clock_driver_get_vco_hz(clk, wizard_offset);
-    uint64_t rate_hz = clock_driver_get_rate_hz(clk, wizard_offset, clock_id);
+    uint64_t fvco_hz = 0;
+    uint64_t rate_hz = 0;
+    (void) clock_driver_get_vco_hz(clk, wizard_offset, &fvco_hz);
+    (void) clock_driver_get_rate_hz(clk, wizard_offset, clock_id, &rate_hz);
 
     LOG(
         LOG_INFO,
@@ -802,8 +839,8 @@ static uint64_t clock_driver_program_mdo_and_reconfig(
         return 0;
     }
 
-    uint64_t rate_hz = clock_driver_get_rate_hz(clk, wizard_offset, clock_id);
-    if (rate_hz == 0u) {
+    uint64_t rate_hz = 0;
+    if (clock_driver_get_rate_hz(clk, wizard_offset, clock_id, &rate_hz) != CLOCK_READ_OK) {
         LOG(
             LOG_ERR,
             "clock_driver: wizard registers unreadable after reconfiguration"
@@ -1235,16 +1272,22 @@ int clock_driver_get_service_region_rate_hz(struct clock_driver *clk, uint32_t *
         return -1;
     }
 
-    uint64_t rate = clock_driver_get_rate_hz(
+    uint64_t rate = 0;
+    enum clock_read status = clock_driver_get_rate_hz(
         clk,
         CLOCK_DRIVER_SERVICE_REGION_WIZARD_OFFSET,
-        CLOCK_DRIVER_WIZARD_CLKOUT_ID
+        CLOCK_DRIVER_WIZARD_CLKOUT_ID,
+        &rate
     );
-    if (rate == 0u) {
+    if (status == CLOCK_READ_FAULT) {
         LOG(LOG_ERR, "clock_driver: service region wizard registers unreadable");
         errno = EIO;
         return -1;
     }
+    if (status == CLOCK_READ_UNCONFIGURED) {
+        LOG(LOG_INFO, "clock_driver: service region clock has not been configured");
+    }
+    /* Zero reports "unconfigured" to the caller; it is not a realizable rate. */
     *rate_hz_out = (uint32_t)rate;
     return 0;
 }
@@ -1303,16 +1346,22 @@ int clock_driver_get_user_region_rate_hz(struct clock_driver *clk, uint32_t *rat
         return -1;
     }
 
-    uint64_t rate = clock_driver_get_rate_hz(
+    uint64_t rate = 0;
+    enum clock_read status = clock_driver_get_rate_hz(
         clk,
         CLOCK_DRIVER_USER_REGION_WIZARD_OFFSET,
-        CLOCK_DRIVER_WIZARD_CLKOUT_ID
+        CLOCK_DRIVER_WIZARD_CLKOUT_ID,
+        &rate
     );
-    if (rate == 0u) {
+    if (status == CLOCK_READ_FAULT) {
         LOG(LOG_ERR, "clock_driver: user region wizard registers unreadable");
         errno = EIO;
         return -1;
     }
+    if (status == CLOCK_READ_UNCONFIGURED) {
+        LOG(LOG_INFO, "clock_driver: user region clock has not been configured");
+    }
+    /* Zero reports "unconfigured" to the caller; it is not a realizable rate. */
     *rate_hz_out = (uint32_t)rate;
     return 0;
 }

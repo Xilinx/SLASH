@@ -144,9 +144,15 @@ void cleanup_clock_driverp(struct clock_driver **clkp)
 
 /**
  * @brief Read the current service-region clock frequency.
+ *
+ * A rate of 0 means the wizard has not been programmed since the device came
+ * up: its reconfiguration registers reset to zero and only reflect what
+ * software has written, so there is no rate to report rather than an error.
+ *
  * @param clk          The clock driver instance.
- * @param[out] rate_hz_out Receives the current frequency in Hz.
- * @return 0 on success, -1 on error.
+ * @param[out] rate_hz_out Receives the current frequency in Hz, or 0 if the
+ *                         clock is unconfigured.
+ * @return 0 on success, -1 if the register window did not respond.
  */
 int clock_driver_get_service_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_out);
 
@@ -166,9 +172,14 @@ int clock_driver_set_service_region_rate_hz(struct clock_driver *clk, uint32_t *
 
 /**
  * @brief Read the current user-region clock frequency.
+ *
+ * As with the service region, a rate of 0 means unconfigured rather than
+ * failed. See @c clock_driver_get_service_region_rate_hz.
+ *
  * @param clk          The clock driver instance.
- * @param[out] rate_hz_out Receives the current frequency in Hz.
- * @return 0 on success, -1 on error.
+ * @param[out] rate_hz_out Receives the current frequency in Hz, or 0 if the
+ *                         clock is unconfigured.
+ * @return 0 on success, -1 if the register window did not respond.
  */
 int clock_driver_get_user_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_out);
 

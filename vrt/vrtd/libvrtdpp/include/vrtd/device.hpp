@@ -325,7 +325,8 @@ public:
      * @brief Get the clock rate for a region.
      *
      * @param region Clock region.
-     * @return Current rate in Hz.
+     * @return Current rate in Hz, or 0 if the region's clock has not been
+     *         configured since the device came up.
      * @throws vrtd::Error on error.
      */
     uint32_t getClockRate(ClockRegion region) const;
