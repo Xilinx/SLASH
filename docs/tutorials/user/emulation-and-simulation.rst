@@ -93,7 +93,10 @@ hardware is accessed. Under the hood VRT:
 1. Extracts the vrtbin and reads ``system_map.xml``.
 2. Detects ``Platform::EMULATION``.
 3. Launches the ``vpp_emu`` process in a background thread.
-4. Connects to the C-model via ZeroMQ on ``tcp://localhost:5555``.
+4. Connects to the C-model via ZeroMQ on a per-device endpoint,
+   ``ipc://<vrtbin-extraction-dir>/zmq.socket``, which VRT supplies to the
+   model executable as its sole command-line argument. The per-device
+   endpoint permits multiple emulated devices to run concurrently.
 5. Translates ``setArg()``, ``start()``, ``wait()``, and ``sync()`` calls
    into JSON commands sent over ZeroMQ.
 

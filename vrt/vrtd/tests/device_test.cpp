@@ -128,8 +128,8 @@ TEST(DeviceCleanupTest, CleanupWithBars) {
     d->bar_files[0] = slash_bar_file_open(d->ctl, 0, O_CLOEXEC);
     ASSERT_NE(d->bar_files[0], nullptr);
 
-    /* BARs 1-5 are not usable in the mock — populate bar_info only (no bar_file). */
-    for (int i = 1; i < 6; ++i) {
+    /* Odd-numbered BARs are not usable — populate bar_info only (no bar_file). */
+    for (int i = 1; i < 6; i += 2) {
         d->bar_info[i] = slash_bar_info_read(d->ctl, i);
         ASSERT_NE(d->bar_info[i], nullptr);
         EXPECT_FALSE(d->bar_info[i]->usable);

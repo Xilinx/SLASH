@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!--
+  Default system map shipped inside the daemon's default VBIN.
+
+  It describes a bare accelerator whose model (vpp_sim) supports round-trip
+  BAR/HBM/DDR reads and writes but runs no compute kernels.  A single control
+  register is exposed so the address space is non-empty and parseable; a fresh
+  accelerator boots against this map until the user reconfigures it with a real
+  design VBIN.
+-->
+<SystemMap>
+  <Platform>Simulation</Platform>
+  <ClockFrequency>100000000</ClockFrequency>
+  <Kernel>
+    <Name>defaultk</Name>
+    <BaseAddress>0x0</BaseAddress>
+    <Range>0x1000</Range>
+    <register offset="0x00" name="CTRL" access="RW" description="Control register" range="32"/>
+  </Kernel>
+</SystemMap>

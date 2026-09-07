@@ -1,0 +1,2 @@
+#!/bin/sh
+echo vpp_emu stub

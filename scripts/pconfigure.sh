@@ -43,3 +43,4 @@ COMMON_CMAKE_OPTIONS=(
 
 cmake -B pbuild/smi -S smi -G Ninja -DSMI_INCLUDE_VRT=ON -DVRT_INCLUDE_VRTD=ON -DVRTD_INCLUDE_LIBSLASH=ON "${COMMON_CMAKE_OPTIONS[@]}"
 cmake -B pbuild/cmake-tools -S cmake -G Ninja "${COMMON_CMAKE_OPTIONS[@]}"
+cmake -B pbuild/slash_sysemu -S slash_sysemu -G Ninja -DSLASH_SYSEMU_BUILD_TESTS=OFF "${COMMON_CMAKE_OPTIONS[@]}"

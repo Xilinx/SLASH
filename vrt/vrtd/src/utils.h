@@ -136,7 +136,7 @@ static inline uint64_t bit_ceil_u64(uint64_t n) {
  * @return Smallest power of two >= n, or 0 if not representable.
  */
 static inline uint32_t bit_ceil_u32(uint32_t n) {
-    if (n == 0) return 1u;
+    if (n == 0 || n == 1) return 1u;
     if (n > 0x80000000u) return 0u;                 // not representable
     return 1u << (32 - __builtin_clz(n - 1));       // GCC/Clang
 }
@@ -146,7 +146,7 @@ static inline uint32_t bit_ceil_u32(uint32_t n) {
  * @return Smallest power of two >= n, or 0 if not representable.
  */
 static inline uint64_t bit_ceil_u64(uint64_t n) {
-    if (n == 0) return 1ull;
+    if (n == 0 || n == 1) return 1ull;
     if (n > 0x8000000000000000ull) return 0ull;     // not representable
     return 1ull << (64 - __builtin_clzll(n - 1));
 }

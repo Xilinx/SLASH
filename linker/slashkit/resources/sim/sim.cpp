@@ -524,10 +524,10 @@ void fetchScalar(ap_uint<64> addr, uint32_t& data) {
     }
 }
 
-void zmq_ctx_setup_and_run() {
+void zmq_ctx_setup_and_run(std::string url) {
     zmq::context_t context(1);
     zmq::socket_t socket(context, ZMQ_REP);
-    socket.bind("tcp://*:5555");
+    socket.bind(url);
 
     while (!stop) {
         zmq::message_t request;
@@ -606,7 +606,13 @@ void zmq_ctx_setup_and_run() {
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        SIM_EXEC_LOG(std::cerr << "Usage: " << argv[0] <<" <ZMQ URL>" << std::endl);
+        return 1;
+    }
+    std::string zmq_url = std::string(argv[1]);
+
     std::string simengine_libname = "libxv_simulator_kernel.so";
     std::string design_libname = "xsim.dir/top_wrapper_behav/xsimk.so";
     SIM_EXEC_LOG(std::cout << "Sim Engine DLL: " << simengine_libname << std::endl);
@@ -619,7 +625,9 @@ int main() {
     SIM_EXEC_LOG(std::cout << "Cycle count after reset: " << dut.get_cycle_count() << std::endl);
     signal(SIGINT, finish);
 
-    std::thread worker(zmq_ctx_setup_and_run);
+    std::thread worker([=]() {
+        zmq_ctx_setup_and_run(zmq_url);
+    });
 
     while (!stop) {
         control_read_fsm(&dut, axiReadAddr, axiReadVal);

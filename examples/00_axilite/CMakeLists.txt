@@ -33,11 +33,19 @@ if(SLASH_USE_REPO)
   add_subdirectory(${REPO_ROOT}/vrt ${CMAKE_CURRENT_BINARY_DIR}/vrt)
   set(_VRT_INCLUDES "")
   set(_VRT_LIBS vrt)
+  # libslash for the raw (VRT-free) example; guard against a double add if some
+  # other subdirectory (e.g. vrtd) already pulled it in.
+  if(NOT TARGET slash)
+    add_subdirectory(${REPO_ROOT}/driver/libslash ${CMAKE_CURRENT_BINARY_DIR}/libslash)
+  endif()
+  set(_SLASH_LIB slash)
 else()
   find_package(vrt REQUIRED CONFIG)
   find_package(SlashTools REQUIRED)
+  find_package(slash REQUIRED CONFIG)
   set(_VRT_INCLUDES "")
   set(_VRT_LIBS vrt::vrt)
+  set(_SLASH_LIB slash::slash)
 endif()
 
 # --- HLS kernels ---
@@ -62,3 +70,9 @@ add_vbin(TARGET "axilite_emu" PLATFORM "emu" CFG "${CFG_FILE}" KERNELS ${_KERNEL
 add_executable(${PROJECT_NAME} 00_axilite.cpp)
 target_include_directories(${PROJECT_NAME} PRIVATE ${_VRT_INCLUDES})
 target_link_libraries(${PROJECT_NAME} PRIVATE ${_VRT_LIBS})
+
+# --- Raw example: libSLASH-only end-to-end integration test ---
+# Drives the system-emulation daemon through libslash directly (no VRT/VRTD),
+# to exercise the daemon with as little software stack as possible.
+add_executable(00_axilite_raw 00_axilite_raw.cpp)
+target_link_libraries(00_axilite_raw PRIVATE ${_SLASH_LIB})

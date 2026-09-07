@@ -21,6 +21,7 @@
 import json
 import struct
 import zmq
+import sys
 
 # Kernel base addresses (must match system_map.xml)
 VADD_BASE = 0x10000
@@ -58,11 +59,14 @@ def reconstruct_64bit(registers, base, offset):
 
 
 def main():
-    """Serve the VRT emulation and simulation test protocol."""
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <ZMQ address>", file=sys.stderr)
+        sys.exit(1)
+
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     socket.setsockopt(zmq.LINGER, 0)
-    socket.bind("tcp://*:5555")
+    socket.bind(sys.argv[1])
 
     buffers = {}
     streams = {}
