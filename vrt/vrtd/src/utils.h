@@ -104,10 +104,15 @@ void vrtd_log(int priority, const char *fmt, ...)
  */
 const char *uid_to_username(uid_t uid, char *buf, size_t bufsz);
 
-#if !defined(__cplusplus) && defined(__has_include)
+#define HAVE_STDBIT 0
+
+#if defined(__has_include)
 #  if __has_include(<stdbit.h>)
 #    include <stdbit.h>
-#    define HAVE_STDBIT 1
+#    if defined(__STDC_VERSION_STDBIT_H__) && __STDC_VERSION_STDBIT_H__ >= 202311L
+#      undef HAVE_STDBIT
+#      define HAVE_STDBIT 1
+#    endif
 #  endif
 #endif
 
