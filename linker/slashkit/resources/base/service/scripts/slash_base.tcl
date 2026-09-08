@@ -40,6 +40,10 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 # START
 ################################################################
 
+# slash_add_hbm_boundary_slices, called from create_root_design below.
+source [file join [file dirname [file normalize [info script]]] \
+        ".." ".." "common" "scripts" "hbm_boundary_slices.tcl"]
+
 # To test this script, run the following commands from Vivado Tcl console:
 # source slash_base_script.tcl
 
@@ -3767,6 +3771,11 @@ proc create_root_design { parentCell } {
   [get_bd_pins dcmac_axis_noc_s_5/M00_AXIS_tready] \
   [get_bd_pins dcmac_axis_noc_s_6/M00_AXIS_tready] \
   [get_bd_pins dcmac_axis_noc_s_7/M00_AXIS_tready]
+
+  # Pipeline the SmartConnect -> HBM port boundary. Runs before the address
+  # segments below because it re-routes each channel through a register slice,
+  # and the addresses have to be assigned against the final topology.
+  slash_add_hbm_boundary_slices
 
   # Create address segments
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_64/Data_m_axi_gmem0] [get_bd_addr_segs M00_INI/Reg] -force
