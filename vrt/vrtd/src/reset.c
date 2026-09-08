@@ -98,6 +98,7 @@
 
 #include "device.h"
 #include "hotplug.h"
+#include "shell_build_id.h"
 #include "utils.h"
 
 #define GPIO_ALLOW_SBR 0x1040000
@@ -497,6 +498,21 @@ uint16_t reset_with_ami_partition_progress(
     for (size_t i = 0; i < devices->len; i++) {
         struct device *new_device = devices->d[i];
         if (new_device != NULL && strcmp(new_device->pci_info.bdf, target_bdf) == 0) {
+            /*
+             * The boot partition states which shell was intended. Confirm the
+             * device agrees before recording it: a partition that did not take
+             * effect would otherwise leave vrtd asserting a shell the hardware
+             * is not running, and every later decision keyed on the shell —
+             * whether a reset is required, which register windows exist — would
+             * be made against the wrong design.
+             */
+            if (build_id_check_shell(
+                    new_device->bar_files[BUILD_ID_BAR_NUMBER],
+                    booted_shell,
+                    "reset_with_ami"
+                ) != 0) {
+                return VRTD_RET_INTERNAL_ERROR;
+            }
             new_device->current_shell = booted_shell;
             break;
         }

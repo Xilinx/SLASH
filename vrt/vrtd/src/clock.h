@@ -46,16 +46,6 @@
 #define CLOCK_DRIVER_BAR_NUMBER 4
 
 /**
- * @brief Fallback BAR index for the clock wizard registers.
- *
- * TEMPORARY. The compute-only platform exposes the clock wizards
- * on BAR2 rather than BAR4. Until the platforms agree on one BAR (or the BAR
- * is discovered from metadata), the driver tries BAR4 first and falls back
- * to this one.
- */
-#define CLOCK_DRIVER_BAR_NUMBER_FALLBACK 2
-
-/**
  * @name Clock wizard region offsets within BAR4.
  * Each region contains the AXI register set for one clock wizard instance.
  * @{
@@ -119,7 +109,8 @@ void clock_wizard_encode_leaf(uint32_t o, uint32_t *ctrl_out, uint32_t *counts_o
  *
  * @param ctrl   First register of the leaf pair (flags).
  * @param counts Second register of the leaf pair (high/low counts).
- * @return Effective divider ratio (never 0).
+ * @return Effective divider ratio, or 0 if the register pair does not describe
+ *         a valid divider. Callers must reject 0 rather than divide by it.
  */
 uint32_t clock_wizard_decode_leaf(uint32_t ctrl, uint32_t counts);
 
@@ -153,9 +144,15 @@ void cleanup_clock_driverp(struct clock_driver **clkp)
 
 /**
  * @brief Read the current service-region clock frequency.
+ *
+ * A rate of 0 means the wizard has not been programmed since the device came
+ * up: its reconfiguration registers reset to zero and only reflect what
+ * software has written, so there is no rate to report rather than an error.
+ *
  * @param clk          The clock driver instance.
- * @param[out] rate_hz_out Receives the current frequency in Hz.
- * @return 0 on success, -1 on error.
+ * @param[out] rate_hz_out Receives the current frequency in Hz, or 0 if the
+ *                         clock is unconfigured.
+ * @return 0 on success, -1 if the register window did not respond.
  */
 int clock_driver_get_service_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_out);
 
@@ -175,9 +172,14 @@ int clock_driver_set_service_region_rate_hz(struct clock_driver *clk, uint32_t *
 
 /**
  * @brief Read the current user-region clock frequency.
+ *
+ * As with the service region, a rate of 0 means unconfigured rather than
+ * failed. See @c clock_driver_get_service_region_rate_hz.
+ *
  * @param clk          The clock driver instance.
- * @param[out] rate_hz_out Receives the current frequency in Hz.
- * @return 0 on success, -1 on error.
+ * @param[out] rate_hz_out Receives the current frequency in Hz, or 0 if the
+ *                         clock is unconfigured.
+ * @return 0 on success, -1 if the register window did not respond.
  */
 int clock_driver_get_user_region_rate_hz(struct clock_driver *clk, uint32_t *rate_hz_out);
 

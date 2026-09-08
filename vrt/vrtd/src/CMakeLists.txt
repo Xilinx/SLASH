@@ -34,6 +34,7 @@ add_library(vrtd_core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/hotplug.c
   ${CMAKE_CURRENT_SOURCE_DIR}/reset.c
   ${CMAKE_CURRENT_SOURCE_DIR}/serve.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/shell_build_id.c
   ${CMAKE_CURRENT_SOURCE_DIR}/signals.c
   ${CMAKE_CURRENT_SOURCE_DIR}/utils.c
 )
