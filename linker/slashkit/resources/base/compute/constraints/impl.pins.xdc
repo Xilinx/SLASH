@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
- xcv80-lsva4737-2MHP-e-S pins constraints XDC
+# xcv80-lsva4737-2MHP-e-S pins constraints XDC
 
 set_property -dict { PACKAGE_PIN BR15    IOSTANDARD SSTL12                            } [get_ports "CH0_DDR4_0_0_act_n[0]"]     ;# Bank 700 VCCO  - VR_1V2_VCCO_DDR4 -Net CH0_DDR4_0_0_ACT_B - IO_L18N_XCC_N6P1_M0P37_700
 set_property -dict { PACKAGE_PIN BP15    IOSTANDARD SSTL12                            } [get_ports "CH0_DDR4_0_0_adr[0]"]       ;# Bank 700 VCCO  - VR_1V2_VCCO_DDR4 -Net CH0_DDR4_0_0_A0 - IO_L18P_XCC_N6P0_M0P36_700

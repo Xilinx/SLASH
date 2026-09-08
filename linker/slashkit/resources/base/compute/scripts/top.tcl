@@ -40,6 +40,7 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 # START
 ################################################################
 
+
 # To test this script, run the following commands from Vivado Tcl console:
 # source top_script.tcl
 
@@ -2633,6 +2634,61 @@ proc create_hier_cell_static_region { parentCell nameHier } {
   create_hier_cell_aved $hier_obj aved
 
   # Create instance: clk_wizard_0, and set properties
+  # clk_out1 is the HBM/NoC clock: it leaves the static region as clk_out1 and
+  # becomes the reconfigurable partition's static_region_clk, so it sets the rate
+  # of every kernel-to-HBM channel. It had been held at 360 MHz because the
+  # SmartConnect exit could not reach the hardened NoC master unit in one cycle.
+  # That path is now pipelined (base/common/scripts/hbm_boundary_slices.tcl).
+  #
+  # 375 MHz - chosen deliberately, with a KNOWN thin margin. Read this before
+  # raising or lowering it.
+  #
+  # 375 MHz (2.6667 ns) clears the worst compute draw seen (2.665 ns) by 2 ps.
+  # That is not a margin; it means a bad synthesis draw will fail the build. It
+  # was picked knowingly over 370 MHz (+38 ps), trading reproducibility for
+  # frequency. If CI fails here intermittently, that is this decision, not a
+  # regression - drop to 370.
+  #
+  # (original note, still the evidence base:)
+  # Set by the WORST synthesis draw rather than the best, because only
+  # sources ship: whoever rebuilds gets a fresh draw and it has to close.
+  #
+  # Seven clean compute builds, achieved critical path, all optimised against the
+  # same effective 2.4997 ns target at implementation:
+  #
+  #   2.4996  380 PLL          2.5470  380 MMCM+synth-strategy
+  #   2.5250  375 MMCM         2.6260  395 MMCM
+  #   2.5320  380 MMCM         2.6600  390 PLL
+  #                            2.6650  380 PLL
+  #
+  # Worst is 2.665 ns. Margin against it: 370 MHz +38 ps, 375 MHz +2 ps, 380 MHz
+  # -33 ps. Only 370 has a margin worth the name.
+  #
+  # Note the spread is NOT explained by the clock target. Four builds at clock 380
+  # produced 2.4996, 2.532, 2.547 and 2.665 - a 0.165 ns range at a FIXED clock.
+  # Two theories were tried on this data and both failed: that the spread is
+  # random synthesis noise of ~0.04 ns (it is four times that), and that a tighter
+  # BD clock systematically degrades the netlist (the 380 builds span nearly the
+  # whole range on their own). The cause is still unknown, and it is the single
+  # largest term in this design - larger than every optimisation found here
+  # combined. Understanding it is worth more than any further timing work.
+  #
+  # Clocking primitive: PLL, overriding the auto-selected MMCM. The MMCM's
+  # discrete jitter is the second-largest term in the HBM miss after the fixed
+  # RP->NMU boundary wire: timing-matrix/FINDINGS.md measures the HBM clock's
+  # uncertainty at 0.143 ns and attributes it to MMCM jitter (CJ 0.285), not
+  # input jitter, and characterises MMCM->PLL as cutting it to 0.116 ns - about
+  # +0.027 ns of WNS. That study never ran the change (00_MASTER_HANDOFF section
+  # 6 lists it as outstanding) and noted an earlier attempt disturbed BUFG_PS
+  # placement, so if this build misbehaves look at the BUFG_PS range in
+  # constraints/impl.xdc first.
+  #
+  # OVERRIDE_PRIMITIVE must be true for PRIMITIVE_TYPE to take effect; setting
+  # PRIMITIVE_TYPE alone leaves AUTO_PRIMITIVE (MMCM) in charge.
+  #
+  # Verify: the routed timing report should show a SMALLER inherent clock
+  # uncertainty on the HBM domain than the 0.117 ns measured with the MMCM. If it
+  # still reads 0.117, the primitive did not change.
   set clk_wizard_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wizard:1.0 clk_wizard_0 ]
   set_property -dict [list \
     CONFIG.CLKOUT_DRIVES {No_buffer,BUFG,BUFG,BUFG,BUFG,BUFG,BUFG} \
@@ -2641,11 +2697,13 @@ proc create_hier_cell_static_region { parentCell nameHier } {
     CONFIG.CLKOUT_MATCHED_ROUTING {false,false,false,false,false,false,false} \
     CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3,clk_out4,clk_out5,clk_out6,clk_out7} \
     CONFIG.CLKOUT_REQUESTED_DUTY_CYCLE {50.000,50.000,50.000,50.000,50.000,50.000,50.000} \
-    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {360,100.000,100.000,100.000,100.000,100.000,100.000} \
+    CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {375,100.000,100.000,100.000,100.000,100.000,100.000} \
     CONFIG.CLKOUT_REQUESTED_PHASE {0.000,0.000,0.000,0.000,0.000,0.000,0.000} \
     CONFIG.CLKOUT_USED {true,false,false,false,false,false,false} \
     CONFIG.RESET_TYPE {ACTIVE_LOW} \
     CONFIG.USE_DYN_RECONFIG {false} \
+    CONFIG.OVERRIDE_PRIMITIVE {true} \
+    CONFIG.PRIMITIVE_TYPE {PLL} \
   ] $clk_wizard_0
 
 
@@ -3268,6 +3326,7 @@ PRESENT 0} RID {WIDTH 0 PRESENT 0} RDATA {WIDTH 256 PRESENT 1} RRESP {WIDTH 2 PR
   connect_bd_intf_net -intf_net dfx_decoupler_0_s_intf_61 [get_bd_intf_pins dfx_decoupler_0/s_intf_61] [get_bd_intf_pins noc/HBM61_AXI]
   connect_bd_intf_net -intf_net dfx_decoupler_0_s_intf_62 [get_bd_intf_pins dfx_decoupler_0/s_intf_62] [get_bd_intf_pins noc/HBM62_AXI]
   connect_bd_intf_net -intf_net dfx_decoupler_0_s_intf_63 [get_bd_intf_pins dfx_decoupler_0/s_intf_63] [get_bd_intf_pins noc/HBM63_AXI]
+
   connect_bd_intf_net -intf_net noc_M00_AXI [get_bd_intf_pins noc/M00_AXI] [get_bd_intf_pins aved/s_axi_pcie_mgmt_slr0]
   connect_bd_intf_net -intf_net noc_M02_AXI [get_bd_intf_pins noc/M02_AXI] [get_bd_intf_pins aved/NOC_PMC_AXI_0]
 
