@@ -121,14 +121,12 @@ class FpgaDevice : public IDevice,
    public:
     FpgaDevice(std::string                       id,
                std::shared_ptr<fpga::Rp1BarWindow> window,
-               FpgaKernelLocationLookup           lookup,
-               std::uint32_t                      cq_size = fpga::kDefaultCqSize);
+               FpgaKernelLocationLookup           lookup);
 
     FpgaDevice(std::string                       id,
                std::shared_ptr<fpga::Rp1BarWindow> window,
                std::shared_ptr<fpga::FpgaVbinSpec> vbinSpec,
-               std::string                       initialImageId = "",
-               std::uint32_t                     cq_size = fpga::kDefaultCqSize);
+               std::string                       initialImageId = "");
 
     ~FpgaDevice() override;
 

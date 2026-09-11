@@ -14,6 +14,7 @@ This directory contains the example projects for VRT. Each example demonstrates 
 | `graph/00_multi_image_pipeline` | VRT graph FPGA backend (`vrt::graph`) | End-to-end HSA graph demo: CPU + FPGA kernels in one `vrt::graph::Graph`, one-call device bring-up via `Graph::addFpga(...)`, explicit `PDI_LOAD` reprogram nodes, and a fixed-count loop carrying state. See [graph/00_multi_image_pipeline/README.md](graph/00_multi_image_pipeline/README.md). |
 | `graph/01_edge_detection` | `vrt::graph` tutorial, Algorithm 1 | Basic graph authoring: CPU/FPGA kernels, buffers, scalars, and one reprogram gating three kernels (two of which run concurrently) in a single vbin image. See [graph/01_edge_detection/README.md](graph/01_edge_detection/README.md). |
 | `graph/02_sharpen_loop` | `vrt::graph` tutorial, Algorithm 2 | Loops and conditionals: a fixed-count loop carrying state through an FPGA kernel, run in parallel with a CPU reduction, followed by a post-loop conditional. See [graph/02_sharpen_loop/README.md](graph/02_sharpen_loop/README.md). |
+| `extra/rp1_latency` | RP1 command processor latency microbenchmarks | Not a tutorial: compares the RP1 dispatch path against the legacy host-driven VRT path on one no-op kernel. Standalone build, see [extra/rp1_latency/README.md](extra/rp1_latency/README.md). |
 
 ## How to run the examples
 

@@ -64,6 +64,12 @@ _RP1_REQUIRED_RESOURCES = (
     "include/slash/uapi/rp1_protocol.h",
     "tools/generate_platform_config.py",
 )
+# Packaged custom-PLM build used to carry the XilPLMI sparse-IPI fix.
+_PLM_RESOURCE_DIRECTORY = "plm"
+_PLM_REQUIRED_RESOURCES = (
+    "build-plm.sh",
+    "tools/patch_xilplmi.py",
+)
 
 
 # Host toolchain flags injected by dpkg-buildpackage (e.g. -mno-omit-leaf-frame-pointer,
@@ -207,6 +213,35 @@ def _rp1_resource_root():
     return root
 
 
+def _plm_resource_root():
+    """Return the complete packaged custom-PLM resource tree."""
+    try:
+        root = resources.files(_RP1_RESOURCE_PACKAGE)
+    except ModuleNotFoundError as error:
+        raise FileNotFoundError(
+            "Required packaged PLM firmware resources are unavailable; "
+            "reinstall slashkit from a complete wheel or source archive"
+        ) from error
+
+    root = root.joinpath(_PLM_RESOURCE_DIRECTORY)
+    if not root.is_dir():
+        raise FileNotFoundError(
+            "Required packaged PLM firmware resource tree is missing: "
+            f"{_PLM_RESOURCE_DIRECTORY}"
+        )
+
+    missing = [
+        name for name in _PLM_REQUIRED_RESOURCES
+        if not root.joinpath(*name.split("/")).is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Required packaged PLM firmware resources are missing: "
+            + ", ".join(missing)
+        )
+    return root
+
+
 def _copy_rp1_resource_tree(source, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     for entry in source.iterdir():
@@ -231,6 +266,41 @@ def _copy_rp1_sources_to_aved(aved_dir: Path) -> None:
     if rp1_dest_dir.exists():
         shutil.rmtree(rp1_dest_dir)
     _copy_rp1_resource_tree(rp1_resources, rp1_dest_dir)
+
+
+def _copy_plm_sources_to_aved(aved_dir: Path) -> None:
+    """Replace AVED's generated PLM build directory with packaged sources."""
+    plm_resources = _plm_resource_root()
+    plm_dest_dir = aved_dir / "fw" / "PLM"
+    if plm_dest_dir.exists():
+        shutil.rmtree(plm_dest_dir)
+    _copy_rp1_resource_tree(plm_resources, plm_dest_dir)
+
+
+def _build_patched_plm(aved_dir: Path, xsa: Path) -> Path:
+    """Build the custom PLM, reusing AMC's SDT when one already exists."""
+    plm_dir = aved_dir / "fw" / "PLM"
+    output = plm_dir / "build" / "plm.elf"
+    env = _clean_cross_build_env()
+    env["XSA"] = str(xsa)
+
+    amc_sdt = (
+        aved_dir / "fw" / "AMC" / "amc_bsp" /
+        "versal_sdt" / "system-top.dts"
+    )
+    if amc_sdt.is_file():
+        env["PLM_SDT"] = str(amc_sdt)
+
+    subprocess.run(
+        ["bash", "build-plm.sh"],
+        cwd=str(plm_dir),
+        env=env,
+        check=True,
+    )
+    if not output.is_file():
+        raise FileNotFoundError(
+            f"Expected patched PLM output not found: {output}")
+    return output
 
 
 def _add_init_files(path: Path) -> None:
@@ -283,15 +353,12 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
         "src" / "profiles" / "v80"
 
     _copy_rp1_sources_to_aved(aved_dir)
+    _copy_plm_sources_to_aved(aved_dir)
 
     logger.info("Starting AVED base build for %s", config.project_name)
     aved_build_dir.mkdir(parents=True, exist_ok=True)
 
     static_impl_dir = config.build_dir / "slash.runs" / "impl_1"
-    regenerated_top_wrapper_pdi = _generate_top_wrapper_pdi_with_bootgen(
-        static_impl_dir)
-    _copy_checked(regenerated_top_wrapper_pdi,
-                  aved_build_dir / "top_wrapper.pdi")
 
     files_to_copy = [("build_all.sh", aved_hw_dir), ("profile_hal.h", aved_fw_profile_dir),
                      ("pdi_combine.bif", aved_fpt_dir), (f"{AVED_DESIGN_NAME}.xsa", aved_build_dir)]
@@ -299,6 +366,19 @@ def generate_base_pdi_with_aved(config: CommandConfiguration) -> tuple[Path, Pat
     for (file_name, target_dir) in files_to_copy:
         with resources.path("slashkit.resources.aved", file_name) as in_path:
             _copy_checked(in_path, target_dir / file_name)
+
+    xsa = aved_build_dir / f"{AVED_DESIGN_NAME}.xsa"
+    patched_plm = _build_patched_plm(aved_dir, xsa)
+    _copy_checked(patched_plm, aved_build_dir / "plm.elf")
+    _copy_checked(
+        patched_plm,
+        static_impl_dir / "gen_files" / "plm.elf",
+    )
+
+    regenerated_top_wrapper_pdi = _generate_top_wrapper_pdi_with_bootgen(
+        static_impl_dir)
+    _copy_checked(regenerated_top_wrapper_pdi,
+                  aved_build_dir / "top_wrapper.pdi")
 
     # build_all.sh and the four files staged above all live in the AVED clone,
     # so offloading this step needs nothing installed on the execution host
@@ -779,6 +859,7 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
         aved_build_dir / "top_wrapper.pdi",
         aved_build_dir / f"{AVED_DESIGN_NAME}.xsa",
         aved_build_dir / "amc.elf",
+        aved_build_dir / "plm.elf",
         aved_build_dir / "fpt.bin",
         aved_fpt_dir / "pdi_combine.bif",
         aved_fpt_dir / "fpt_pdi_gen.py",
@@ -806,7 +887,8 @@ def _install_static_shell_rp1_firmware(config: InstallerConfiguration,
 
     nofpt_pdi = aved_build_dir / f"{AVED_DESIGN_NAME}_nofpt.pdi"
     logger.info(
-        "Repacking %s with existing AMC/FPT and rebuilt RP1", nofpt_pdi.name)
+        "Repacking %s with existing PLM/AMC/FPT and rebuilt RP1",
+        nofpt_pdi.name)
     # As in _generate_top_wrapper_pdi_with_bootgen, the paths inside the BIF are
     # relative, so aved_hw_dir is part of the contract and travels in
     # SLASH_TOOL_CWD.

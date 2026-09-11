@@ -40,10 +40,10 @@ rp1_pdi_result_t rp1_pdi_load(uint32_t addr_lo, uint32_t addr_hi,
     rp1_mmio_write32(RP1_PDI_IPI_REQUEST_BASE + 4u, RP1_PDI_SRC_DDR);
     rp1_mmio_write32(RP1_PDI_IPI_REQUEST_BASE + 8u, addr_hi);
     rp1_mmio_write32(RP1_PDI_IPI_REQUEST_BASE + 12u, addr_lo);
-    rp1_barrier();
+    rp1_dmb_st();
 
     rp1_mmio_write32(RP1_PDI_IPI_TRIGGER_REG, RP1_PDI_IPI_TARGET_MASK);
-    rp1_barrier();
+    rp1_dsb_st();
 
     /*
      * Phase 2: the target observation bit owns the request until it clears.
@@ -57,11 +57,11 @@ rp1_pdi_result_t rp1_pdi_load(uint32_t addr_lo, uint32_t addr_hi,
         if (rp1_timeout_elapsed(start, timeout, rp1_cycles()))
             return result;
     }
-    rp1_barrier();
+    rp1_dmb_sy();
 
     /*
      * Phase 3: acknowledgement releases both unsigned response words. Preserve
-     * them verbatim so CQ and terminal diagnostics retain PLM-specific detail.
+     * them verbatim so terminal diagnostics retain PLM-specific detail.
      */
     result.status = rp1_mmio_read32(RP1_PDI_IPI_RESPONSE_BASE + 0u);
     result.detail = rp1_mmio_read32(RP1_PDI_IPI_RESPONSE_BASE + 4u);
