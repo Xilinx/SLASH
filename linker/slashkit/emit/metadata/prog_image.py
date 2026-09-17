@@ -68,7 +68,8 @@ def build_vbin(config: LinkerConfiguration) -> Path:
     # this is an error rather than a quiet omission.
     #
     # When no [debug] nets are configured the file is legitimately absent.
-    debug_nets = getattr(getattr(config.configuration, "debug", None), "nets", None) or []
+    debug_cfg = getattr(config.configuration, "debug", None)
+    debug_nets = getattr(debug_cfg, "nets", None) or []
     if debug_nets:
         if not slash_ltx_path.exists():
             raise FileNotFoundError(

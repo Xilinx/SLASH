@@ -25,11 +25,12 @@ def _make_config(tmp_path: Path, *, debug_nets, with_ltx: bool):
     images.mkdir(parents=True)
 
     # The artifacts build_vbin always requires.
-    (images / f"top_i_slash_slash_{project}_inst_0_partial.pdi").write_text("pdi")
+    prefix = f"top_i_slash_slash_{project}_inst_0"
+    (images / f"{prefix}_partial.pdi").write_text("pdi")
     (build_dir / f"report_utilization_{project}.xml").write_text("<x/>")
     (build_dir / "system_map.xml").write_text("<x/>")
     if with_ltx:
-        (images / f"top_i_slash_slash_{project}_inst_0_hw_probes.ltx").write_text("ltx")
+        (images / f"{prefix}_hw_probes.ltx").write_text("ltx")
 
     return SimpleNamespace(
         build_dir=build_dir,
