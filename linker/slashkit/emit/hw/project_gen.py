@@ -699,9 +699,12 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
 
     if config.shell_type == ShellType.SERVICE:
         # debug_nets.ltx is auto-emitted by Vivado because the service base shell
-        # instantiates the debug hub. It is the full debug probe file
-        # (FULL_PROBES.FILE) that must be loaded before a user region's partial
-        # probe file in the Vivado Hardware Manager.
+        # instantiates the debug hub. It is the base debug probe file, loaded as
+        # PROBES.FILE and refreshed before a user region's partial probe file in
+        # the Vivado Hardware Manager. It must NOT also be assigned to
+        # FULL_PROBES.FILE -- that makes run_hw_ila fail with Labtools 27-188
+        # while the core still arms and triggers, which presents as an ILA whose
+        # waveform never updates. See docs/howto/debug-with-ila.rst.
         install_sources = (
             impl_dir / "static_shell_slash.dcp",
             impl_dir / "static_shell_service_layer.dcp",
@@ -723,9 +726,12 @@ def _install_static_shell_base(config: InstallerConfiguration, static_shell_dir:
 
     else:  # ShellType.COMPUTE
         # debug_nets.ltx is auto-emitted by Vivado because the compute base shell
-        # instantiates the debug hub. It is the full debug probe file
-        # (FULL_PROBES.FILE) that must be loaded before a user region's partial
-        # probe file in the Vivado Hardware Manager.
+        # instantiates the debug hub. It is the base debug probe file, loaded as
+        # PROBES.FILE and refreshed before a user region's partial probe file in
+        # the Vivado Hardware Manager. It must NOT also be assigned to
+        # FULL_PROBES.FILE -- that makes run_hw_ila fail with Labtools 27-188
+        # while the core still arms and triggers, which presents as an ILA whose
+        # waveform never updates. See docs/howto/debug-with-ila.rst.
         install_sources = (
             impl_dir / "static_shell_slash.dcp",
             impl_dir / "debug_nets.ltx",

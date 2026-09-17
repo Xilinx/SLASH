@@ -60,8 +60,28 @@ def build_vbin(config: LinkerConfiguration) -> Path:
         if not file.exists():
             raise FileNotFoundError(file)
 
-    # The partial debug probe file is only produced when the design has [debug] nets.
-    if slash_ltx_path.exists():
+    # Debug probes. A design that declares [debug] nets MUST ship its .ltx: without
+    # it the vbin still programs and the ILA still arms and triggers - the debug hub
+    # is self-describing, so Vivado finds the core regardless - but there is no probe
+    # metadata, so the waveform never populates. That failure looks like a hardware
+    # or trigger problem and sends people hunting in the wrong place, which is why
+    # this is an error rather than a quiet omission.
+    #
+    # When no [debug] nets are configured the file is legitimately absent.
+    debug_nets = getattr(getattr(config.configuration, "debug", None), "nets", None) or []
+    if debug_nets:
+        if not slash_ltx_path.exists():
+            raise FileNotFoundError(
+                f"{len(debug_nets)} [debug] net(s) are configured but the debug probe "
+                f"file was not produced: {slash_ltx_path}\n"
+                "Without it the ILA will arm and trigger but its waveform will stay "
+                "empty in the hardware manager. This is a build failure, not an "
+                "optional artifact."
+            )
+        files.append(slash_ltx_path)
+    elif slash_ltx_path.exists():
+        # No [debug] nets but a probe file exists anyway - ship it rather than
+        # silently drop something the build produced.
         files.append(slash_ltx_path)
 
     logger.info("Creating vbin archive: %s", config.out_path)
