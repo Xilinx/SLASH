@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ClockFrequency>100000000</ClockFrequency>
+  <Kernel><Name>k</Name><BaseAddress>0x1000</BaseAddress><Range>0x100</Range></Kernel>
+</SystemMap>

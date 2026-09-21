@@ -42,15 +42,17 @@ class ZmqServer {
    private:
     zmq::context_t context;  ///< ZeroMQ context for managing socket connections.
     zmq::socket_t socket;    ///< ZeroMQ socket for communication.
-    std::string address = "tcp://localhost:5555";  ///< Default server address.
+    std::string address;     ///< Server address.
 
    public:
     /**
      * @brief Constructor for ZmqServer.
      *
-     * Initializes a new ZeroMQ server connection with the default address.
+     * Initializes a new ZeroMQ server connection with the given address.
      */
-    ZmqServer();
+    ZmqServer(std::string address);
+
+    ZmqServer() = delete;
 
     /**
      * @brief Sends a named buffer to the server.

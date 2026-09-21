@@ -73,6 +73,8 @@ SLASH/VRT System Full (development files)
 %package -n     slash-sim-emu
 Summary:        SLASH/VRT System for simulation and emulation
 Requires:       libvrt = %{version}-%{release}
+Requires:       slash-sysemu = %{version}-%{release}
+Requires:       vrtd = %{version}-%{release}
 BuildArch:      noarch
 
 %description -n slash-sim-emu
@@ -118,6 +120,15 @@ Requires:       libslash = %{version}-%{release}
 
 %description -n vrtd
 VRTd daemon for managing VRT devices
+
+%package -n     slash-sysemu
+Summary:        SLASH system-emulation daemon
+%{?systemd_requires}
+
+%description -n slash-sysemu
+Emulates the system around one or more accelerators (PCIe, BARs, QDMA, and
+hotplug) in user space, presenting the same interfaces as the SLASH kernel
+driver so applications, VRT, and vrtd can run without real hardware.
 
 %package -n     libvrtd
 Summary:        Library for interacting with the VRTd daemon
@@ -202,6 +213,19 @@ install -D -m 0644 vrt/vrtd/sysusers/vrtd.conf \
 install -D -m 0644 vrt/vrtd/conf/vrtd.conf \
     %{buildroot}%{_sysconfdir}/vrt/vrtd.conf
 install -d %{buildroot}%{_sysconfdir}/vrt/vrtd.conf.d
+
+# slash-sysemu systemd unit, sysusers, config, and environment file.
+# (The slash_sysemud binary and default VBIN are installed by scripts/pinstall.sh.)
+install -D -m 0644 slash_sysemu/packaging/systemd/slash-sysemu.service \
+    %{buildroot}%{_unitdir}/slash-sysemu.service
+install -D -m 0644 slash_sysemu/packaging/sysusers/slash-sysemu.conf \
+    %{buildroot}%{_sysusersdir}/slash-sysemu.conf
+install -D -m 0644 slash_sysemu/packaging/systemd/70-slash-sysemu.preset \
+    %{buildroot}%{_presetdir}/70-slash-sysemu.preset
+install -D -m 0644 slash_sysemu/packaging/conf/slash_sysemu.conf \
+    %{buildroot}%{_sysconfdir}/slash_sysemu/slash_sysemu.conf
+install -D -m 0644 slash_sysemu/packaging/conf/slash_sysemu.env \
+    %{buildroot}%{_sysconfdir}/slash_sysemu/slash_sysemu.env
 
 # udev rules (mirrors debian/vrtd.udev)
 install -D -m 0644 vrt/vrtd/udev/99-vrtd.rules \
@@ -288,6 +312,28 @@ udevadm control --reload-rules && udevadm trigger 2>/dev/null || :
 %{_sysusersdir}/vrtd.conf
 %config(noreplace) %{_sysconfdir}/vrt/vrtd.conf
 %dir %{_sysconfdir}/vrt/vrtd.conf.d
+
+%pre -n slash-sysemu
+%sysusers_create_package slash-sysemu slash_sysemu/packaging/sysusers/slash-sysemu.conf
+
+%post -n slash-sysemu
+%systemd_post slash-sysemu.service
+
+%preun -n slash-sysemu
+%systemd_preun slash-sysemu.service
+
+%postun -n slash-sysemu
+%systemd_postun_with_restart slash-sysemu.service
+
+%files -n slash-sysemu
+%{_bindir}/slash_sysemud
+%{_prefix}/lib/slash-sysemu/default.vbin
+%{_unitdir}/slash-sysemu.service
+%{_presetdir}/70-slash-sysemu.preset
+%{_sysusersdir}/slash-sysemu.conf
+%config(noreplace) %{_sysconfdir}/slash_sysemu/slash_sysemu.conf
+%config(noreplace) %{_sysconfdir}/slash_sysemu/slash_sysemu.env
+%dir %{_sysconfdir}/slash_sysemu
 
 %files -n libvrtd
 %{_libdir}/libvrtd.so

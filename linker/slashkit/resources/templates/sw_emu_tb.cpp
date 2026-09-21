@@ -107,11 +107,17 @@ void emuExecDebug(const char* scope, const std::string& msg) {
   }
 }
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc != 2) {
+    emuExecLog("startup", std::string("Usage: ") + std::string(argv[0]) + std::string(" <ZMQ URL>"));
+    return 1;
+  }
+  std::string zmq_url = std::string(argv[1]);
+
   zmq::context_t context(1);
   zmq::socket_t socket(context, ZMQ_REP);
-  socket.bind("tcp://*:5555");
-  emuExecLog("startup", std::string("bound REP socket to tcp://*:5555")
+  socket.bind(zmq_url);
+  emuExecLog("startup", std::string("bound REP socket to ") + zmq_url +
                         + (emuExecVerboseEnabled() ? " (verbose=on)" : " (verbose=off)"));
 
   std::map<std::string, void*> buffers;

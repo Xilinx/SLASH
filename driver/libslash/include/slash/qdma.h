@@ -21,6 +21,11 @@
  * while the control device (ctldev) is created for PF2.  Each PCI
  * function gets at most one of each.  Device nodes appear at
  * /dev/slash_qdma_ctl0, /dev/slash_qdma_ctl1, etc.
+ * 
+ * The system emulation daemon also creates an analogous UNIX domain
+ * socket under /run/slash_sysemu/slash_qdma_ctl<N>, which supports the same
+ * operations to transfer data between the host application and the model
+ * process.
  *
  * Queue pair lifecycle:
  *   1. slash_qdma_open()         — open the QDMA device
@@ -52,6 +57,7 @@
 #define LIBSLASH_QDMA_H
 
 #include "uapi/slash_interface.h"
+#include "ctldev.h"  /* enum slash_transport */
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -62,20 +68,18 @@ extern "C" {
 
 /**
  * @brief Handle to an open QDMA device.
- *
- * \@priv is NULL for real hardware handles.  When slash_qdma_open() is
- * called with "\@mock", it points to an internal slash_qdma_mock context;
- * callers should treat it as opaque.
  */
 struct slash_qdma {
-    int fd;     /**< File descriptor for the QDMA character device (-1 in mock mode). */
-    void *priv; /**< Opaque mock context, or NULL for real hardware. */
+    int fd;                      /**< File descriptor (char device or socket). */
+    enum slash_transport transport; /**< Transport selector (IOCTL or SOCKET). */
+    uint32_t seq;                /**< Next sequence id for socket requests. */
 };
 
 /**
  * @brief Open a QDMA device.
  *
- * @param path Path to the character device node. NULL returns NULL/EINVAL.
+ * @param path Path to the character device node, UNIX domain socket,
+ * or "@mock" for mock mode. NULL returns NULL/EINVAL.
  *
  * @return Heap-allocated handle on success, NULL on failure.
  */
@@ -201,6 +205,8 @@ struct slash_qdma_buffer {
  * Allocates @length bytes of kernel memory (DMA-mapped once), returns a buffer
  * fd, and mmaps it into @buf_out->addr for CPU access.  The buffer is bound to
  * @qdma's device; transfers must use a queue-pair fd of the same device.
+ * 
+ * With the system emulation daemon, the returned FD points to a simple memfd.
  *
  * @param qdma    Open QDMA handle.
  * @param length  Buffer length in bytes (non-zero multiple of the page size).

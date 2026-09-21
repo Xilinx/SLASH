@@ -40,7 +40,7 @@ zmq::message_t receiveReply(zmq::socket_t& socket, const char* operation) {
 
 }  // namespace
 
-ZmqServer::ZmqServer() : context(1), socket(context, ZMQ_REQ) {
+ZmqServer::ZmqServer(std::string address) : context(1), socket(context, ZMQ_REQ), address(address) {
     socket.set(zmq::sockopt::linger, 0);
     socket.set(zmq::sockopt::rcvtimeo, ZmqReplyTimeoutMs);
     socket.set(zmq::sockopt::sndtimeo, ZmqReplyTimeoutMs);

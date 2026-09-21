@@ -115,29 +115,6 @@ static inline const void *slash_qdma_uring_cmd_payload(struct io_uring_cmd *cmd)
                              SLASH_QDMA_DIR_CMPT)
 
 /*
- * Minimum user_size accepted by each QDMA ioctl. For input-bearing ioctls
- * this is the end-offset of the trailing input field — callers with a
- * smaller user_size would silently send zero-filled inputs after the
- * versioned copy-in, so the handler must refuse with -EINVAL before
- * acting on them. QDMA_IOCTL_INFO has no input fields beyond `size`, so
- * its minimum is the size field on its own — a caller passing size==0
- * has either forgotten to initialise the struct or claimed an incoherent
- * "my struct has zero bytes", both of which the kernel rejects.
- */
-#define SLASH_QDMA_INFO_MIN_SIZE \
-    offsetofend(struct slash_qdma_info, size)
-#define SLASH_QDMA_QPAIR_ADD_MIN_SIZE \
-    offsetofend(struct slash_qdma_qpair_add, cmpt_ring_sz)
-#define SLASH_QDMA_QPAIR_OP_MIN_SIZE \
-    offsetofend(struct slash_qdma_qpair_op, op)
-#define SLASH_QDMA_QPAIR_GET_FD_MIN_SIZE \
-    offsetofend(struct slash_qdma_qpair_fd_request, flags)
-#define SLASH_QDMA_BUF_CREATE_MIN_SIZE \
-    offsetofend(struct slash_qdma_buf_create, length)
-#define SLASH_QDMA_TRANSFER_MIN_SIZE \
-    offsetofend(struct slash_qdma_transfer, count)
-
-/*
  * CPM5 Host Profile indirect-context programming.
  *
  * The Host Profile context tells the CPM5 QDMA how to route AXI4-MM
@@ -1641,18 +1618,19 @@ static int slash_qdma_ioctl_info_w(struct slash_qdma_dev *qdma_dev,
  * @qdma_dev:  QDMA device whose PF1 identity is reported.
  * @qdma_info: [out] Structure to fill with capability data.
  *
- * Currently returns zeroes for all fields.  This is a placeholder for
- * future capability reporting (e.g., querying qdma_device_capabilities).
+ * The capability fields are placeholders (zeroed) pending future reporting
+ * (e.g., querying qdma_device_capabilities).  @bdf is filled with the QDMA
+ * PF's PCI BDF string so userspace can discover the device's PCI identity
+ * without reading sysfs.
  */
 static void slash_qdma_ioctl_info(struct slash_qdma_dev *qdma_dev,
                                   struct slash_qdma_info *qdma_info)
 {
-    strscpy(qdma_info->bdf, pci_name(qdma_dev->pdev),
-            sizeof(qdma_info->bdf));
     qdma_info->qsets_max = 0;
     qdma_info->msix_qvecs = 0;
     qdma_info->vf_max = 0;
     qdma_info->caps = 0;
+    strscpy(qdma_info->bdf, pci_name(qdma_dev->pdev), sizeof(qdma_info->bdf));
 }
 
 /* ─────────────────────────────────────────────────────────────────────
@@ -3451,7 +3429,7 @@ static int slash_qdma_ioctl_qpair_get_fd_w(struct slash_qdma_dev *qdma_dev,
     if (copy_from_user(&user_size, uarg, sizeof(user_size)))
         return -EFAULT;
 
-    if (user_size < SLASH_QDMA_QPAIR_GET_FD_MIN_SIZE) {
+    if (user_size < SLASH_QDMA_QPAIR_FD_REQUEST_MIN_SIZE) {
         dev_warn(&qdma_dev->pdev->dev,
                  "qdma: QPAIR_GET_FD size too small (%u)\n", user_size);
         return -EINVAL;

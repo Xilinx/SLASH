@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<SystemMap><Platform>Emulation</Platform>
+<Kernel><Name>k</Name><Range>0x100</Range></Kernel></SystemMap>

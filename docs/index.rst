@@ -40,6 +40,7 @@ management, and memory operations.
    reference/libvrtd-api/index
    reference/libvrtdpp-api/index
    reference/vrtd/index
+   reference/model-protocol/index
    reference/smi/index
    reference/cmake/index
 
@@ -55,6 +56,7 @@ management, and memory operations.
    explanation/pcie-topology
    explanation/bar-address-map
    explanation/platform-modes
+   explanation/system-emulation
 
 .. toctree::
    :maxdepth: 1

@@ -4,11 +4,73 @@ Userspace C library for the SLASH kernel driver.  libslash provides a
 thin, type-safe wrapper around the driver's ioctl interface, covering
 three areas of functionality:
 
-| Module   | Header            | Device node              | PCI function |
-|----------|-------------------|--------------------------|--------------|
-| Control  | `slash/ctldev.h`  | `/dev/slash_ctl<N>`      | PF2          |
-| QDMA     | `slash/qdma.h`    | `/dev/slash_qdma_ctl<N>` | PF1          |
-| Hotplug  | `slash/hotplug.h` | `/dev/slash_hotplug`     | —            |
+| Module   | Header            | Device node / socket                    | PCI function |
+|----------|-------------------|-----------------------------------------|--------------|
+| Control  | `slash/ctldev.h`  | `/dev/slash_ctl<N>` or socket           | PF2          |
+| QDMA     | `slash/qdma.h`    | `/dev/slash_qdma_ctl<N>` or socket      | PF1          |
+| Hotplug  | `slash/hotplug.h` | `/dev/slash_hotplug` or socket          | —            |
+
+## Socket transport
+
+Starting with Step 12, every libslash open call (`slash_ctldev_open`,
+`slash_qdma_open`, `slash_hotplug_open`) accepts either a character-device
+path or an `AF_UNIX`/`SOCK_SEQPACKET` socket path interchangeably.
+Transport is selected at open time using `stat(2)`:
+
+- `S_ISSOCK` → socket transport: `connect(2)` to the daemon; all ioctls
+  are forwarded as framed datagrams over the socket.
+- otherwise → ioctl transport: the existing `open(O_RDWR)` + `ioctl(2)` path.
+
+The `"@mock"` magic path for the control device is unaffected.
+
+### Daemon socket paths
+
+The `slash_sysemu` daemon exposes one socket per subsystem under
+`/run/slash_sysemu/` (the `RuntimeDirectory` managed by systemd):
+
+| Subsystem | Socket path                               |
+|-----------|-------------------------------------------|
+| Control   | `/run/slash_sysemu/slash_ctl<N>`          |
+| QDMA      | `/run/slash_sysemu/slash_qdma_ctl<N>`     |
+| Hotplug   | `/run/slash_sysemu/slash_hotplug`         |
+
+Pass these paths directly to the open calls:
+
+```c
+struct slash_ctldev  *dev  = slash_ctldev_open("/run/slash_sysemu/slash_ctl0");
+struct slash_qdma    *qdma = slash_qdma_open("/run/slash_sysemu/slash_qdma_ctl0");
+struct slash_hotplug *hp   = slash_hotplug_open("/run/slash_sysemu/slash_hotplug");
+```
+
+The same consumer code that works against `/dev/slash_*` character devices
+works unchanged over sockets — no API changes required.
+
+### BAR file sync over sockets
+
+When a BAR is obtained via the socket transport (`slash_bar_file_open` over a
+socket-backed ctldev), the daemon returns a memfd via `SCM_RIGHTS`.
+`slash_bar_file_start_write` / `slash_bar_file_end_write` and
+`slash_bar_file_start_read` / `slash_bar_file_end_read` translate the
+`DMA_BUF_IOCTL_SYNC` calls into `flock(2)` operations on the memfd:
+
+| API call                  | flock operation             |
+|---------------------------|-----------------------------|
+| `slash_bar_file_start_write` | `flock(LOCK_EX)`          |
+| `slash_bar_file_end_write`   | `flock(LOCK_UN)`          |
+| `slash_bar_file_start_read`  | `flock(LOCK_SH)`          |
+| `slash_bar_file_end_read`    | `flock(LOCK_UN)`          |
+
+The daemon hands a distinct open file description (via `reopen()`) for each
+`GET_BAR_FD` call, so flock semantics are correct: multiple clients each hold
+their own file description on the same memfd inode, and `LOCK_EX` from one
+client excludes `LOCK_SH` from another.
+
+### Error mapping
+
+Any transport-layer failure (daemon disconnect, send/recv error, datagram
+truncation, sequence/op mismatch, timeout) maps to `errno = ENODEV` and a
+`-1` / `NULL` return value, consistent with the forced-disconnect contract
+defined in the architecture.
 
 ## Building
 
@@ -182,11 +244,39 @@ on these files instead of real MMIO.
 
 ```sh
 cmake --build build
-cd build && ctest
+cd build/tests && ctest
 ```
 
 Tests run in mock mode and do not require hardware or the kernel module
-to be loaded.
+to be loaded.  The in-process `SysemuTestServer` provides hermetic coverage
+of all three socket-transport paths (ctldev, qdma, hotplug) without a daemon.
+
+### BYO-daemon E2E tests
+
+An opt-in suite (`tests/libslash_e2e_test.cpp`) drives a realistic consumer
+flow against a real, already-running `slash_sysemu` daemon.  Every test
+`GTEST_SKIP()`s cleanly when the environment variables are unset, so `ctest`
+stays green with no daemon present.
+
+**The suite never spawns the daemon itself.**  Launch it separately before
+setting the variables.
+
+| Variable           | Daemon socket path (typical)                    |
+|--------------------|-------------------------------------------------|
+| `SLASH_E2E_CTL`    | `/run/slash_sysemu/slash_ctl0`                  |
+| `SLASH_E2E_QDMA`   | `/run/slash_sysemu/slash_qdma_ctl0`             |
+| `SLASH_E2E_HOTPLUG`| `/run/slash_sysemu/slash_hotplug`               |
+
+```sh
+export SLASH_E2E_CTL=/run/slash_sysemu/slash_ctl0
+export SLASH_E2E_QDMA=/run/slash_sysemu/slash_qdma_ctl0
+export SLASH_E2E_HOTPLUG=/run/slash_sysemu/slash_hotplug
+cd build/tests && ctest -R E2E
+```
+
+E2E coverage: ctldev device_info + bar_info + `GET_BAR_FD` mmap + flock
+write/read round-trip; QDMA INFO (BDF, qsets_max), qpair add/start/get_fd,
+BUF_CREATE, H2C→C2H round-trip asserting A==B; hotplug RESCAN.
 
 ## Project layout
 
@@ -197,18 +287,28 @@ libslash/
     qdma.h                Public API — QDMA
     hotplug.h             Public API — hotplug
     uapi/
-      slash_interface.h   User-kernel ABI (ctldev + QDMA ioctls)
-      slash_hotplug.h     User-kernel ABI (hotplug ioctls)
+      slash_interface.h     User-kernel ABI (ctldev + QDMA ioctls)
+      slash_hotplug.h       User-kernel ABI (hotplug ioctls)
+      slash_sysemu.h        Socket-protocol ABI (shared with slash_sysemu daemon)
   src/
-    ctldev.c              Control device implementation
-    ctldev_mock.c         Mock-mode BAR backing
-    qdma.c                QDMA implementation
-    hotplug.c             Hotplug implementation
+    ctldev.c                Control device implementation (ioctl + socket)
+    ctldev_mock.c           Mock-mode BAR backing
+    qdma.c                  QDMA implementation (ioctl + socket)
+    hotplug.c               Hotplug implementation (ioctl + socket)
+    sock_transport.c/h      AF_UNIX/SOCK_SEQPACKET client transport (private)
   examples/
-    01_bar/print_bar.c    Enumerate and read/write BARs
-    02_test/some_tb.c     Multi-core HBM transfer testbench
+    01_bar/print_bar.c      Enumerate and read/write BARs
+    02_test/some_tb.c       Multi-core HBM transfer testbench
   tests/
-    slash_mock_tests.c    Unit tests (mock mode)
+    sysemu_test_server.h/cpp  In-process SEQPACKET daemon stub (shared fixture)
+    ctldev_sysemu_test.cpp    ctldev socket-transport tests
+    qdma_sysemu_test.cpp      QDMA socket-transport tests
+    hotplug_sysemu_test.cpp   Hotplug socket-transport tests
+    libslash_e2e_test.cpp     Opt-in BYO-daemon E2E tests (skip when unset)
+    ctldev_test.cpp           ctldev mock + null-arg tests
+    qdma_test.cpp             QDMA mock + null-arg tests
+    hotplug_test.cpp          Hotplug null-arg tests
+    sock_transport_test.cpp   sock_transport unit tests
 ```
 
 ## License

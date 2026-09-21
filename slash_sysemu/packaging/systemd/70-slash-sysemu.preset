@@ -1,0 +1,5 @@
+# slash-sysemu ships disabled by default: the default configuration declares no
+# [device.*] section, so the daemon would exit immediately (and, with
+# Restart=on-failure, loop).  The admin edits /etc/slash_sysemu/slash_sysemu.conf
+# then runs `systemctl enable --now slash-sysemu`.
+disable slash-sysemu.service
