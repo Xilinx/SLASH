@@ -138,6 +138,7 @@
 #include "hotplug.h"
 #include "reset.h"
 #include "serve.h"
+#include "shell_build_id.h"
 #include "utils.h"
 #include "state.h"
 #include "vrtd/wire.h"
@@ -449,6 +450,16 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
     }
 
     /*
+     * The clock driver borrows d->ctl and holds its own mmap of the BAR window
+     * carrying the clock wizard registers. Both were established against the
+     * pre-PDI PF2 and are invalidated by the remove/rescan above. Tear the
+     * driver down before the handle it borrows, matching the order used by
+     * device_destroy().
+     */
+    cleanup_clock_driver(d->clock_driver);
+    d->clock_driver = NULL;
+
+    /*
      * The stable character-device path survives PF2 remove+rescan, but the
      * existing handle still refers to the pre-PDI device. Close it and reopen
      * the same path so subsequent BAR operations use the freshly-probed PF2.
@@ -492,6 +503,28 @@ static uint16_t device_refresh_pf2_after_design_write(struct device *d)
                     i, d->path);
             }
         }
+    }
+
+    /*
+     * A design write reconfigures the user region only; it cannot change the
+     * shell. If the device now reports a different shell than the one vrtd
+     * believes is loaded, the BAR window is not addressing the static shell we
+     * think it is, and every subsequent register access — starting with the
+     * clock driver recreated below — would be aimed at the wrong fabric.
+     */
+    if (build_id_check_shell(
+            d->bar_files[BUILD_ID_BAR_NUMBER],
+            d->current_shell,
+            "device_refresh_pf2"
+        ) != 0) {
+        return VRTD_RET_INTERNAL_ERROR;
+    }
+
+    /* Re-establish the clock driver against the freshly-probed PF2. */
+    d->clock_driver = clock_driver_create(d->ctl);
+    if (d->clock_driver == NULL) {
+        LOG(LOG_ERR, "device_refresh_pf2: failed to recreate clock driver on %s: %m", d->path);
+        return VRTD_RET_INTERNAL_ERROR;
     }
 
     return VRTD_RET_OK;
@@ -1437,8 +1470,14 @@ static int client_finalize_pending_design_write(struct client *client)
     uint16_t design_write_ret = VRTD_RET_OK;
     if (transfer_error == 0) {
         design_write_ret = device_refresh_pf2_after_design_write(d);
-        LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
-            (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        if (design_write_ret == VRTD_RET_OK) {
+            LOG(LOG_INFO, "Design write completed successfully for uid=%u conn_id=%llu",
+                (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        } else {
+            LOG(LOG_ERR, "Design write transferred but PF2 refresh failed (ret=%u) for "
+                "uid=%u conn_id=%llu", (unsigned int)design_write_ret,
+                (unsigned int)client->uid, (unsigned long long)client->conn_id);
+        }
     } else {
         LOG(LOG_WARNING, "Design write failed (error=%d) for uid=%u conn_id=%llu",
             transfer_error, (unsigned int)client->uid, (unsigned long long)client->conn_id);

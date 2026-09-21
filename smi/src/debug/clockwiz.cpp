@@ -155,6 +155,13 @@ int Clockwiz::run(const Options& options) {
 
     if (options.getMode) {
         const uint32_t currentRate = device.getClockRate(region);
+        if (currentRate == 0) {
+            // The wizard's reconfiguration registers reset to zero and only
+            // hold what software has written, so nothing has set this clock
+            // yet. Printing a number here would be inventing one.
+            std::cout << "unconfigured\n";
+            return 0;
+        }
         printValue(currentRate, options.hexMode);
         return 0;
     }

@@ -539,7 +539,12 @@ struct vrtd_req_clock_op {
 } __attribute__((packed));
 
 struct vrtd_resp_clock_op {
-    uint32_t rate_hz; ///< Current/achieved rate for GET/SET.
+    /**
+     * Current/achieved rate for GET/SET. For GET, 0 means the region's clock
+     * has not been configured since the device came up; it is never a
+     * realizable rate, and SET rejects it as an argument.
+     */
+    uint32_t rate_hz;
 } __attribute__((packed));
 
 /**
