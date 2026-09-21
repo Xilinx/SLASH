@@ -42,8 +42,7 @@ class FakeBar {
         bar_.map = storage_.data();
         bar_.len = storage_.size();
         bar_.fd = -1;
-        bar_.mock = true;
-        bar_.mock_path = nullptr;
+        bar_.transport = SLASH_TRANSPORT_IOCTL;
     }
 
     const struct slash_bar_file *get() const { return &bar_; }
