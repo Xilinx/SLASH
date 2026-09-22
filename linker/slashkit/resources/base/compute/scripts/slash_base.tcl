@@ -134,7 +134,6 @@ xilinx.com:ip:smartconnect:1.0\
 xilinx.com:ip:axi_noc:1.1\
 xilinx.com:ip:c_shift_ram:12.0\
 xilinx.com:inline_hdl:ilreduced_logic:1.0\
-xilinx.com:ip:util_ds_buf:2.2\
 "
 
    set list_ips_missing ""
@@ -2449,6 +2448,31 @@ proc create_root_design { parentCell } {
   ] $c_shift_ram_0
 
 
+
+  # Per-family replicas of the reset spine. Driven from one register the spine is
+  # a single very high fanout net crossing every SLR; split per family, the
+  # placer gets three independent registers it can place at three different load
+  # centroids. All three are fed from the same source register on the same clock,
+  # so every load still leaves reset on the same cycle -- only the absolute
+  # deassert moves one cycle later.
+  set rst_repl_hbm_sc [ create_bd_cell -type ip -vlnv xilinx.com:ip:c_shift_ram:12.0 rst_repl_hbm_sc ]
+  set_property -dict [list \
+    CONFIG.Depth {1} \
+    CONFIG.Width {1} \
+  ] $rst_repl_hbm_sc
+
+  set rst_repl_hbm_bw [ create_bd_cell -type ip -vlnv xilinx.com:ip:c_shift_ram:12.0 rst_repl_hbm_bw ]
+  set_property -dict [list \
+    CONFIG.Depth {1} \
+    CONFIG.Width {1} \
+  ] $rst_repl_hbm_bw
+
+  set rst_repl_misc [ create_bd_cell -type ip -vlnv xilinx.com:ip:c_shift_ram:12.0 rst_repl_misc ]
+  set_property -dict [list \
+    CONFIG.Depth {1} \
+    CONFIG.Width {1} \
+  ] $rst_repl_misc
+
   # Create instance: ilreduced_logic_0, and set properties
   set ilreduced_logic_0 [ create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilreduced_logic:1.0 ilreduced_logic_0 ]
   set_property -dict [list \
@@ -2457,9 +2481,6 @@ proc create_root_design { parentCell } {
   ] $ilreduced_logic_0
 
 
-  # Create instance: util_ds_buf_0, and set properties
-  set util_ds_buf_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 util_ds_buf_0 ]
-  set_property CONFIG.C_BUF_TYPE {BUFG_FABRIC} $util_ds_buf_0
 
 
   # Create instance: ddr_bandwidth_68, and set properties
@@ -2954,8 +2975,21 @@ proc create_root_design { parentCell } {
   # Create port connections
   connect_bd_net -net arstn_1  [get_bd_ports arstn] \
   [get_bd_pins c_shift_ram_0/D]
+  # The reconfigurable region's interconnect_aresetn spine.
+  #
+  # arstn arrives already registered by the static shell (slash_rst_pipe_slr0)
+  # and is registered again here before fanning out to every smartconnect,
+  # kernel and NoC bridge in the region.
+  #
+  # This used to run through a util_ds_buf BUFG_FABRIC. A fabric clock buffer is
+  # a single fixed site: the placer cannot move it toward the loads and cannot
+  # replicate it, so every load paid the round trip to and from that one site.
+  # On a routed design the resulting arc measured 6.212 ns, of which 6.104 ns
+  # (98.3%) was pure routing over a single logic level -- the buffer itself --
+  # and it was the critical path of the whole region, with and without a debug
+  # ILA present.
   connect_bd_net -net c_shift_ram_0_Q  [get_bd_pins c_shift_ram_0/Q] \
-  [get_bd_pins util_ds_buf_0/BUFG_FABRIC_I]
+  [get_bd_pins ilreduced_logic_0/Op1]
   connect_bd_net -net clk_wizard_0_clk_out1  [get_bd_ports user_clk] \
   [get_bd_pins ddr_noc_0/aclk0] \
   [get_bd_pins ddr_noc_3/aclk0] \
@@ -3121,6 +3155,9 @@ proc create_root_design { parentCell } {
   [get_bd_pins axi_noc_1/aclk0] \
   [get_bd_pins axi_noc_0/aclk0] \
   [get_bd_pins c_shift_ram_0/CLK] \
+  [get_bd_pins rst_repl_hbm_sc/CLK] \
+  [get_bd_pins rst_repl_hbm_bw/CLK] \
+  [get_bd_pins rst_repl_misc/CLK] \
   [get_bd_pins ddr_noc_4/aclk0] \
   [get_bd_pins ddr_noc_5/aclk0] \
   [get_bd_pins ddr_noc_6/aclk0] \
@@ -3138,17 +3175,75 @@ proc create_root_design { parentCell } {
   [get_bd_pins ddr_bandwidth_74/ap_clk] \
   [get_bd_pins ddr_bandwidth_75/ap_clk]
   connect_bd_net -net proc_sys_reset_0_interconnect_aresetn  [get_bd_pins ilreduced_logic_0/Res] \
-  [get_bd_pins smartconnect_0/aresetn] \
-  [get_bd_pins smartconnect_1/aresetn] \
-  [get_bd_pins smartconnect_2/aresetn] \
-  [get_bd_pins smartconnect_3/aresetn] \
-  [get_bd_pins smartconnect_4/aresetn] \
-  [get_bd_pins smartconnect_5/aresetn] \
-  [get_bd_pins axi_dbg_hub_0/aresetn] \
-  [get_bd_pins ddr_bandwidth_64/ap_rst_n] \
-  [get_bd_pins ddr_bandwidth_65/ap_rst_n] \
-  [get_bd_pins ddr_bandwidth_66/ap_rst_n] \
-  [get_bd_pins ddr_bandwidth_67/ap_rst_n] \
+  [get_bd_pins rst_repl_hbm_sc/D] \
+  [get_bd_pins rst_repl_hbm_bw/D] \
+  [get_bd_pins rst_repl_misc/D]
+  connect_bd_net -net rst_repl_hbm_sc_Q  [get_bd_pins rst_repl_hbm_sc/Q] \
+  [get_bd_pins hbm_sc_00/aresetn] \
+  [get_bd_pins hbm_sc_01/aresetn] \
+  [get_bd_pins hbm_sc_02/aresetn] \
+  [get_bd_pins hbm_sc_03/aresetn] \
+  [get_bd_pins hbm_sc_04/aresetn] \
+  [get_bd_pins hbm_sc_05/aresetn] \
+  [get_bd_pins hbm_sc_06/aresetn] \
+  [get_bd_pins hbm_sc_07/aresetn] \
+  [get_bd_pins hbm_sc_08/aresetn] \
+  [get_bd_pins hbm_sc_09/aresetn] \
+  [get_bd_pins hbm_sc_10/aresetn] \
+  [get_bd_pins hbm_sc_11/aresetn] \
+  [get_bd_pins hbm_sc_12/aresetn] \
+  [get_bd_pins hbm_sc_13/aresetn] \
+  [get_bd_pins hbm_sc_14/aresetn] \
+  [get_bd_pins hbm_sc_15/aresetn] \
+  [get_bd_pins hbm_sc_16/aresetn] \
+  [get_bd_pins hbm_sc_17/aresetn] \
+  [get_bd_pins hbm_sc_18/aresetn] \
+  [get_bd_pins hbm_sc_19/aresetn] \
+  [get_bd_pins hbm_sc_20/aresetn] \
+  [get_bd_pins hbm_sc_21/aresetn] \
+  [get_bd_pins hbm_sc_22/aresetn] \
+  [get_bd_pins hbm_sc_23/aresetn] \
+  [get_bd_pins hbm_sc_24/aresetn] \
+  [get_bd_pins hbm_sc_25/aresetn] \
+  [get_bd_pins hbm_sc_26/aresetn] \
+  [get_bd_pins hbm_sc_27/aresetn] \
+  [get_bd_pins hbm_sc_28/aresetn] \
+  [get_bd_pins hbm_sc_29/aresetn] \
+  [get_bd_pins hbm_sc_30/aresetn] \
+  [get_bd_pins hbm_sc_31/aresetn] \
+  [get_bd_pins hbm_sc_32/aresetn] \
+  [get_bd_pins hbm_sc_33/aresetn] \
+  [get_bd_pins hbm_sc_34/aresetn] \
+  [get_bd_pins hbm_sc_35/aresetn] \
+  [get_bd_pins hbm_sc_36/aresetn] \
+  [get_bd_pins hbm_sc_37/aresetn] \
+  [get_bd_pins hbm_sc_38/aresetn] \
+  [get_bd_pins hbm_sc_39/aresetn] \
+  [get_bd_pins hbm_sc_40/aresetn] \
+  [get_bd_pins hbm_sc_41/aresetn] \
+  [get_bd_pins hbm_sc_42/aresetn] \
+  [get_bd_pins hbm_sc_43/aresetn] \
+  [get_bd_pins hbm_sc_44/aresetn] \
+  [get_bd_pins hbm_sc_45/aresetn] \
+  [get_bd_pins hbm_sc_46/aresetn] \
+  [get_bd_pins hbm_sc_47/aresetn] \
+  [get_bd_pins hbm_sc_48/aresetn] \
+  [get_bd_pins hbm_sc_49/aresetn] \
+  [get_bd_pins hbm_sc_50/aresetn] \
+  [get_bd_pins hbm_sc_51/aresetn] \
+  [get_bd_pins hbm_sc_52/aresetn] \
+  [get_bd_pins hbm_sc_53/aresetn] \
+  [get_bd_pins hbm_sc_54/aresetn] \
+  [get_bd_pins hbm_sc_55/aresetn] \
+  [get_bd_pins hbm_sc_56/aresetn] \
+  [get_bd_pins hbm_sc_57/aresetn] \
+  [get_bd_pins hbm_sc_58/aresetn] \
+  [get_bd_pins hbm_sc_59/aresetn] \
+  [get_bd_pins hbm_sc_60/aresetn] \
+  [get_bd_pins hbm_sc_61/aresetn] \
+  [get_bd_pins hbm_sc_62/aresetn] \
+  [get_bd_pins hbm_sc_63/aresetn]
+  connect_bd_net -net rst_repl_hbm_bw_Q  [get_bd_pins rst_repl_hbm_bw/Q] \
   [get_bd_pins hbm_bandwidth_0/ap_rst_n] \
   [get_bd_pins hbm_bandwidth_10/ap_rst_n] \
   [get_bd_pins hbm_bandwidth_11/ap_rst_n] \
@@ -3220,72 +3315,20 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_bandwidth_71/ap_rst_n] \
   [get_bd_pins hbm_bandwidth_7/ap_rst_n] \
   [get_bd_pins hbm_bandwidth_8/ap_rst_n] \
-  [get_bd_pins hbm_bandwidth_9/ap_rst_n] \
+  [get_bd_pins hbm_bandwidth_9/ap_rst_n]
+  connect_bd_net -net rst_repl_misc_Q  [get_bd_pins rst_repl_misc/Q] \
+  [get_bd_pins smartconnect_0/aresetn] \
+  [get_bd_pins smartconnect_1/aresetn] \
+  [get_bd_pins smartconnect_2/aresetn] \
+  [get_bd_pins smartconnect_3/aresetn] \
+  [get_bd_pins smartconnect_4/aresetn] \
+  [get_bd_pins smartconnect_5/aresetn] \
+  [get_bd_pins axi_dbg_hub_0/aresetn] \
+  [get_bd_pins ddr_bandwidth_64/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_65/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_66/ap_rst_n] \
+  [get_bd_pins ddr_bandwidth_67/ap_rst_n] \
   [get_bd_pins traffic_virt_4/ap_rst_n] \
-  [get_bd_pins hbm_sc_00/aresetn] \
-  [get_bd_pins hbm_sc_01/aresetn] \
-  [get_bd_pins hbm_sc_02/aresetn] \
-  [get_bd_pins hbm_sc_03/aresetn] \
-  [get_bd_pins hbm_sc_04/aresetn] \
-  [get_bd_pins hbm_sc_05/aresetn] \
-  [get_bd_pins hbm_sc_06/aresetn] \
-  [get_bd_pins hbm_sc_07/aresetn] \
-  [get_bd_pins hbm_sc_08/aresetn] \
-  [get_bd_pins hbm_sc_09/aresetn] \
-  [get_bd_pins hbm_sc_10/aresetn] \
-  [get_bd_pins hbm_sc_11/aresetn] \
-  [get_bd_pins hbm_sc_12/aresetn] \
-  [get_bd_pins hbm_sc_13/aresetn] \
-  [get_bd_pins hbm_sc_14/aresetn] \
-  [get_bd_pins hbm_sc_15/aresetn] \
-  [get_bd_pins hbm_sc_16/aresetn] \
-  [get_bd_pins hbm_sc_17/aresetn] \
-  [get_bd_pins hbm_sc_18/aresetn] \
-  [get_bd_pins hbm_sc_19/aresetn] \
-  [get_bd_pins hbm_sc_20/aresetn] \
-  [get_bd_pins hbm_sc_21/aresetn] \
-  [get_bd_pins hbm_sc_22/aresetn] \
-  [get_bd_pins hbm_sc_23/aresetn] \
-  [get_bd_pins hbm_sc_24/aresetn] \
-  [get_bd_pins hbm_sc_25/aresetn] \
-  [get_bd_pins hbm_sc_26/aresetn] \
-  [get_bd_pins hbm_sc_27/aresetn] \
-  [get_bd_pins hbm_sc_28/aresetn] \
-  [get_bd_pins hbm_sc_29/aresetn] \
-  [get_bd_pins hbm_sc_30/aresetn] \
-  [get_bd_pins hbm_sc_31/aresetn] \
-  [get_bd_pins hbm_sc_32/aresetn] \
-  [get_bd_pins hbm_sc_33/aresetn] \
-  [get_bd_pins hbm_sc_34/aresetn] \
-  [get_bd_pins hbm_sc_35/aresetn] \
-  [get_bd_pins hbm_sc_36/aresetn] \
-  [get_bd_pins hbm_sc_37/aresetn] \
-  [get_bd_pins hbm_sc_38/aresetn] \
-  [get_bd_pins hbm_sc_39/aresetn] \
-  [get_bd_pins hbm_sc_40/aresetn] \
-  [get_bd_pins hbm_sc_41/aresetn] \
-  [get_bd_pins hbm_sc_42/aresetn] \
-  [get_bd_pins hbm_sc_43/aresetn] \
-  [get_bd_pins hbm_sc_44/aresetn] \
-  [get_bd_pins hbm_sc_45/aresetn] \
-  [get_bd_pins hbm_sc_46/aresetn] \
-  [get_bd_pins hbm_sc_47/aresetn] \
-  [get_bd_pins hbm_sc_48/aresetn] \
-  [get_bd_pins hbm_sc_49/aresetn] \
-  [get_bd_pins hbm_sc_50/aresetn] \
-  [get_bd_pins hbm_sc_51/aresetn] \
-  [get_bd_pins hbm_sc_52/aresetn] \
-  [get_bd_pins hbm_sc_53/aresetn] \
-  [get_bd_pins hbm_sc_54/aresetn] \
-  [get_bd_pins hbm_sc_55/aresetn] \
-  [get_bd_pins hbm_sc_56/aresetn] \
-  [get_bd_pins hbm_sc_57/aresetn] \
-  [get_bd_pins hbm_sc_58/aresetn] \
-  [get_bd_pins hbm_sc_59/aresetn] \
-  [get_bd_pins hbm_sc_60/aresetn] \
-  [get_bd_pins hbm_sc_61/aresetn] \
-  [get_bd_pins hbm_sc_62/aresetn] \
-  [get_bd_pins hbm_sc_63/aresetn] \
   [get_bd_pins ddr_bandwidth_68/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_69/ap_rst_n] \
   [get_bd_pins ddr_bandwidth_70/ap_rst_n] \
@@ -3359,8 +3402,6 @@ proc create_root_design { parentCell } {
   [get_bd_pins hbm_sc_61/aclk1] \
   [get_bd_pins hbm_sc_62/aclk1] \
   [get_bd_pins hbm_sc_63/aclk1]
-  connect_bd_net -net util_ds_buf_0_BUFG_FABRIC_O  [get_bd_pins util_ds_buf_0/BUFG_FABRIC_O] \
-  [get_bd_pins ilreduced_logic_0/Op1]
 
   # Create address segments
   assign_bd_address -offset 0x060000000000 -range 0x000800000000 -target_address_space [get_bd_addr_spaces ddr_bandwidth_64/Data_m_axi_gmem0] [get_bd_addr_segs M00_INI/Reg] -force
