@@ -78,16 +78,16 @@ Then program your ``.vbin`` and load the partial probes file:
 The ILA cores declared in ``[debug]`` then appear under the device and can be
 triggered and captured as usual.
 
-Pause the host so the ILA can be armed before the kernel runs -- but place the pause
+Pause the host (e.g. with a sleep, or a prompt for user input) so the ILA can be armed before the kernel runs -- but place the pause
 **after** any ``setFrequency()`` call, not immediately after ``.vbin`` programming.
 Arming first and changing the clock afterwards breaks the capture (see the warning
 below). The working order is:
 
 1. program the ``.vbin``
 2. set the user clock (host ``setFrequency()``, or ``v80-smi debug clockwiz --set``)
-3. pause the host
+3. pause the host (sleep, or request user input)
 4. arm the ILA and set triggers
-5. release the host
+5. release the host (wait for sleep to expire, or provide user input)
 
 .. important::
 
