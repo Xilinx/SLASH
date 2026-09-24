@@ -1330,6 +1330,13 @@ connect_bd_intf_net [get_bd_intf_pins {{ debug_axis_ila_name }}/{{ s.slot_pin }}
 {% endfor %}
 {% endif %}
 
+# === HBM boundary pipelining ===
+# Registers the address channels between each SmartConnect exit and its HBM
+# port, on a reset synchronised into the HBM clock domain. Defined in
+# base/common/scripts/hbm_boundary_slices.tcl, sourced by slash_project_build.tcl.
+# Runs before the address map: the slices change the path to each HBM port.
+slash_add_hbm_boundary_slices
+
 # === AXI-Lite address map ===
 {% for a in axilite_addr %}
 assign_bd_address -offset {{ "0x%012X"|format(a.offset) }} -range {{ "0x%08X"|format(a.range)  }} -target_address_space [get_bd_addr_spaces {{ a.addr_space }}] [get_bd_addr_segs {{ a.inst }}/{{ a.busif }}/{{ a.segment }}] -force
