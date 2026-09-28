@@ -42,6 +42,7 @@
 #include "clock.h"
 #include "design_writer.h"
 #include "hotplug.h"
+#include "shell_build_id.h"
 #include "utils.h"
 
 #include <assert.h>
@@ -198,6 +199,7 @@ static int devices_open(struct device_ptr_array *devices, size_t pathc, char **p
  *      open the matching numbered QDMA path.
  *   7. If QDMA is available, create the design writer (bitstream programming).
  *   8. Probe all six PCI BARs: read bar_info and mmap usable BARs.
+ *   9. Read the loaded shell from the build-ID register in the mapped BARs.
  *
  * On success, ownership of the device is transferred to *out.
  * On failure, all partially-initialized resources are cleaned up automatically
@@ -289,11 +291,33 @@ static int device_open(struct device **out, const char *path)
         }
     }
 
+    /*
+     * Step 5: Recover the loaded shell from hardware.
+     *
+     * Leaving this UNKNOWN is not a neutral default: shell_reset_required()
+     * treats an unknown shell as grounds for a reset, so the first design
+     * write after every daemon start would reboot and SBR the card purely
+     * because vrtd had forgotten what was already loaded -- even when the
+     * running shell is the one being asked for. The build-ID register
+     * answers the question directly, and reports UNKNOWN itself when the
+     * BAR is absent or does not respond, so a failed read is no worse than
+     * the value it replaces.
+     */
+    d->current_shell = build_id_read_shell(d->bar_files[BUILD_ID_BAR_NUMBER]);
+
     /* Transfer ownership to caller; set local to NULL to prevent cleanup. */
     *out = d;
     d = NULL;
 
     return 0;
+}
+
+bool device_is_fully_initialized(const struct device *d)
+{
+    return d != NULL
+        && d->bar_files[BUILD_ID_BAR_NUMBER] != NULL
+        && d->qdma != NULL
+        && d->design_writer != NULL;
 }
 
 /**

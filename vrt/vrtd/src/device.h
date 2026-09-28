@@ -116,4 +116,23 @@ DECLARE_OWNING_PTR_ARRAY(device_ptr_array, struct device *, cleanup_device);
  */
 int devices_discover_and_open(struct device_ptr_array *devices);
 
+/**
+ * @brief Report whether a device exposes every resource it needs to be usable.
+ *
+ * device_open() is deliberately tolerant: a BAR the kernel has not marked
+ * usable, or a QDMA node that has not appeared yet, is logged and skipped
+ * rather than failing the open.  That is right at daemon startup, but it means
+ * a device opened too early -- while the kernel, the drivers and udev are still
+ * bringing it up after a PCIe rescan -- is added to the device array with those
+ * pointers left NULL, and devices_open() then skips it forever as already
+ * present.  Callers that re-discover a device against a deadline use this to
+ * tell a device that is merely incomplete from one that is ready, so they can
+ * drop the incomplete one and open it again.
+ *
+ * @param d Device to inspect. May be NULL.
+ * @return true when @p d is non-NULL and has the build-ID BAR mapped, a QDMA
+ *         handle, and a design writer.
+ */
+bool device_is_fully_initialized(const struct device *d);
+
 #endif // VRTD_DEVICE_H
