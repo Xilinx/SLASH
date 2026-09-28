@@ -55,6 +55,65 @@ TEST(ResetShellTest, ShellResetNotRequiredForMatch) {
     EXPECT_FALSE(shell_reset_required(VRTD_SHELL_COMPUTE, VRTD_SHELL_COMPUTE));
 }
 
+TEST(ResetReadyTest, WaitsWhileTheDeviceHasNotComeBack) {
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/false, /*fully_initialized=*/false,
+            VRTD_SHELL_UNKNOWN, VRTD_SHELL_SERVICE),
+        RESET_READY_WAIT);
+}
+
+TEST(ResetReadyTest, WaitsWhileTheDeviceIsStillOpening) {
+    /*
+     * The device node is back but the kernel has not finished with it: the
+     * build-ID BAR, the QDMA node or the design writer is still missing.
+     */
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/true, /*fully_initialized=*/false,
+            VRTD_SHELL_UNKNOWN, VRTD_SHELL_SERVICE),
+        RESET_READY_WAIT);
+}
+
+TEST(ResetReadyTest, WaitsWhileTheBuildIdRegisterIsUnreadable) {
+    /*
+     * The regression behind issue #227: this was a single-shot check that
+     * failed the whole reset instead of being re-read a moment later.
+     */
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/true, /*fully_initialized=*/true,
+            VRTD_SHELL_UNKNOWN, VRTD_SHELL_SERVICE),
+        RESET_READY_WAIT);
+}
+
+TEST(ResetReadyTest, MismatchedShellFailsImmediatelyRatherThanWaiting) {
+    /* A register that answers with a different shell will not change its mind. */
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/true, /*fully_initialized=*/true,
+            VRTD_SHELL_COMPUTE, VRTD_SHELL_SERVICE),
+        RESET_READY_SHELL_MISMATCH);
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/true, /*fully_initialized=*/true,
+            VRTD_SHELL_SERVICE, VRTD_SHELL_COMPUTE),
+        RESET_READY_SHELL_MISMATCH);
+}
+
+TEST(ResetReadyTest, ReadyWhenTheReportedShellMatchesTheBootedPartition) {
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/true, /*fully_initialized=*/true,
+            VRTD_SHELL_SERVICE, VRTD_SHELL_SERVICE),
+        RESET_READY_OK);
+    EXPECT_EQ(
+        reset_ready_classify(
+            /*device_present=*/true, /*fully_initialized=*/true,
+            VRTD_SHELL_COMPUTE, VRTD_SHELL_COMPUTE),
+        RESET_READY_OK);
+}
+
 TEST(ResetShellTest, JtagBlocksShellSwitchResetOnlyWhenResetWouldBeRequired) {
     EXPECT_TRUE(shell_switch_blocked_by_jtag(
         VRTD_SHELL_SERVICE, VRTD_SHELL_COMPUTE, true));

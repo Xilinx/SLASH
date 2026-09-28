@@ -312,6 +312,14 @@ static int device_open(struct device **out, const char *path)
     return 0;
 }
 
+bool device_is_fully_initialized(const struct device *d)
+{
+    return d != NULL
+        && d->bar_files[BUILD_ID_BAR_NUMBER] != NULL
+        && d->qdma != NULL
+        && d->design_writer != NULL;
+}
+
 /**
  * Read PCI identification info from the kernel driver via ioctl.
  *

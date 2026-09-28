@@ -45,6 +45,7 @@ extern "C" {
 #include "buffer.h"
 #include "design_writer.h"
 #include "device.h"
+#include "shell_build_id.h"
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -157,6 +158,95 @@ TEST(DeviceCleanupTest, CleanupWithBuffers) {
     ASSERT_EQ(ret, 0);
     EXPECT_EQ(buf, nullptr);     /* ownership transferred */
     EXPECT_EQ(d->buffers.len, 1u);
+
+    cleanup_device(d);
+}
+
+// ─── device_is_fully_initialized() tests (mock handles only) ─────────────────
+
+/**
+ * Build a device with everything device_is_fully_initialized() looks for, so
+ * individual tests can knock one resource out and check it is detected.
+ */
+static struct device *alloc_complete_mock_device(void)
+{
+    struct device *d = alloc_mock_device();
+    if (d == nullptr)
+        return nullptr;
+
+    d->ctl = slash_ctldev_open("@mock");
+    if (d->ctl == nullptr)
+        return d;
+
+    d->qdma = slash_qdma_open("@mock");
+    if (d->qdma == nullptr)
+        return d;
+
+    d->design_writer = design_writer_create(d->qdma);
+
+    d->bar_info[BUILD_ID_BAR_NUMBER] = slash_bar_info_read(d->ctl, BUILD_ID_BAR_NUMBER);
+    if (d->bar_info[BUILD_ID_BAR_NUMBER] != nullptr
+        && d->bar_info[BUILD_ID_BAR_NUMBER]->usable) {
+        d->bar_files[BUILD_ID_BAR_NUMBER] =
+            slash_bar_file_open(d->ctl, BUILD_ID_BAR_NUMBER, O_CLOEXEC);
+    }
+
+    return d;
+}
+
+TEST(DeviceReadyTest, NullIsNotFullyInitialized) {
+    EXPECT_FALSE(device_is_fully_initialized(nullptr));
+}
+
+TEST(DeviceReadyTest, BareDeviceIsNotFullyInitialized) {
+    /* Nothing opened yet — the state a device is in partway through a reset. */
+    struct device *d = alloc_mock_device();
+    ASSERT_NE(d, nullptr);
+
+    EXPECT_FALSE(device_is_fully_initialized(d));
+
+    cleanup_device(d);
+}
+
+TEST(DeviceReadyTest, CompleteDeviceIsFullyInitialized) {
+    struct device *d = alloc_complete_mock_device();
+    ASSERT_NE(d, nullptr);
+    ASSERT_NE(d->bar_files[BUILD_ID_BAR_NUMBER], nullptr)
+        << "mock ctldev must expose a usable BAR " << BUILD_ID_BAR_NUMBER;
+
+    EXPECT_TRUE(device_is_fully_initialized(d));
+
+    cleanup_device(d);
+}
+
+TEST(DeviceReadyTest, MissingBuildIdBarIsNotFullyInitialized) {
+    /*
+     * device_open() only warns when it cannot map a BAR, so this is exactly
+     * what a device opened before the kernel finished probing looks like — and
+     * what issue #227 hit at the build-ID read.
+     */
+    struct device *d = alloc_complete_mock_device();
+    ASSERT_NE(d, nullptr);
+    ASSERT_NE(d->bar_files[BUILD_ID_BAR_NUMBER], nullptr);
+
+    slash_bar_file_close(d->bar_files[BUILD_ID_BAR_NUMBER]);
+    d->bar_files[BUILD_ID_BAR_NUMBER] = nullptr;
+
+    EXPECT_FALSE(device_is_fully_initialized(d));
+
+    cleanup_device(d);
+}
+
+TEST(DeviceReadyTest, MissingDesignWriterIsNotFullyInitialized) {
+    /* A device that cannot be programmed is not ready, however well it maps. */
+    struct device *d = alloc_complete_mock_device();
+    ASSERT_NE(d, nullptr);
+    ASSERT_NE(d->design_writer, nullptr);
+
+    cleanup_design_writer(d->design_writer);
+    d->design_writer = nullptr;
+
+    EXPECT_FALSE(device_is_fully_initialized(d));
 
     cleanup_device(d);
 }

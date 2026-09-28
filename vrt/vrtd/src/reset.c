@@ -72,10 +72,12 @@
  *      slash_hotplug_toggle_sbr().
  *   9. Wait 5 seconds for the device to complete reconfiguration and
  *      re-train the PCIe link.
- *  10. Rescan the PCI bus via slash_hotplug_rescan() to re-enumerate all PFs.
- *  11. Verify the device is back by calling ami_dev_find() on PF0.
- *  12. Run device discovery to re-add the reset device to vrtd's tracked
- *      device list.
+ *  10. Poll until the device is usable again, rescanning the PCI bus as we go:
+ *      PF0 must answer ami_dev_find(), device discovery must re-add the device
+ *      with all its resources open, and the build-ID register must report the
+ *      shell the selected boot partition should have loaded.  See
+ *      reset_wait_for_device().
+ *  11. Record that shell on the re-discovered device.
  */
 
 #define _GNU_SOURCE
@@ -85,6 +87,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
@@ -155,6 +158,263 @@ bool shell_switch_blocked_by_jtag(
 )
 {
     return jtag && shell_reset_required(current_shell, required_shell);
+}
+
+enum reset_ready_state reset_ready_classify(
+    bool device_present,
+    bool fully_initialized,
+    enum vrtd_shell_type reported_shell,
+    enum vrtd_shell_type booted_shell
+)
+{
+    if (!device_present || !fully_initialized) {
+        return RESET_READY_WAIT;
+    }
+
+    if (reported_shell == VRTD_SHELL_UNKNOWN) {
+        return RESET_READY_WAIT;
+    }
+
+    if (reported_shell != booted_shell) {
+        return RESET_READY_SHELL_MISMATCH;
+    }
+
+    return RESET_READY_OK;
+}
+
+/* Monotonic microseconds: deadline arithmetic must not follow wall-clock steps. */
+static uint64_t monotonic_us(void)
+{
+    struct timespec ts = {0};
+
+    (void) clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return (uint64_t) ts.tv_sec * 1000000u + (uint64_t) ts.tv_nsec / 1000u;
+}
+
+/* Locate a tracked device by BDF, or NULL when it is not (yet) present. */
+static struct device *reset_find_device_by_bdf(
+    struct device_ptr_array *devices,
+    const char *bdf
+)
+{
+    for (size_t i = 0; i < devices->len; i++) {
+        struct device *d = devices->d[i];
+
+        if (d != NULL && strcmp(d->pci_info.bdf, bdf) == 0) {
+            return d;
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Budget for the readiness poll below.  The total (5 s settle + 60 s polling)
+ * is deliberately just under the ~67 s the previous fixed-sleep sequence could
+ * spend, so no host that completes a reset today can start timing out.
+ */
+#define RESET_READY_TIMEOUT_US   60000000
+#define RESET_READY_POLL_US        250000
+#define RESET_RESCAN_INTERVAL_US  3000000
+
+/**
+ * Wait for a device to come back after SBR, and confirm which shell it booted.
+ *
+ * Coming back is not one event but several, each landing at its own moment:
+ * the kernel must re-enumerate the PFs, hand them to the slash and ami drivers,
+ * let those drivers create device nodes, and let udev set permissions on them;
+ * only then can the BARs be mapped and the build-ID register read.  How long
+ * that takes varies with the host -- device count, udev load, how big the
+ * partition being loaded is.
+ *
+ * The previous implementation slept a fixed 10 s and then tested each of those
+ * conditions exactly once, so a host slower than the guess failed a reset that
+ * would have succeeded moments later.  That is the shared cause behind issues
+ * #222 and #227: three separate single-shot gates, each returning
+ * VRTD_RET_INTERNAL_ERROR, which users see as "Internal error in vrtd daemon or
+ * local libvrtd".
+ *
+ * So poll the whole conjunction against a deadline instead.  A healthy host
+ * converges in well under a second rather than paying the 10 s sleep; a slow
+ * one keeps getting retried until the deadline.  A device reporting the wrong
+ * shell still fails immediately -- see reset_ready_classify().
+ *
+ * @param devices      Tracked device array; the target is re-added here.
+ * @param pf0_bdf      PF0 address, used to ask AMI whether the card is back.
+ * @param target_bdf   Address of the device being reset.
+ * @param booted_shell Shell the selected boot partition should have loaded.
+ * @param progress_cb  Progress sink, kept fed so the v80-smi UI still advances.
+ * @param progress_ctx Opaque context for @p progress_cb.
+ * @param[out] out     Receives the re-discovered device on success.
+ * @return VRTD_RET_OK, or a VRTD_RET_* error code.
+ */
+static uint16_t reset_wait_for_device(
+    struct device_ptr_array *devices,
+    const char *pf0_bdf,
+    const char *target_bdf,
+    enum vrtd_shell_type booted_shell,
+    cfgmem_progress_callback progress_cb,
+    void *progress_ctx,
+    struct device **out
+)
+{
+    const uint64_t start = monotonic_us();
+    const uint64_t deadline = start + RESET_READY_TIMEOUT_US;
+
+    uint64_t last_rescan_us = 0;
+    bool rescanned = false;
+
+    /* Remembered so a timeout can name the gate that never opened. */
+    bool ami_seen = false;
+    bool node_seen = false;
+    bool device_completed = false;
+
+    for (;;) {
+        uint64_t now = monotonic_us();
+
+        if (!rescanned || now - last_rescan_us >= RESET_RESCAN_INTERVAL_US) {
+            reset_emit_progress(
+                progress_cb,
+                progress_ctx,
+                VRTD_CFGMEM_PROGRAM_PHASE_RESCANNING_PCIE
+            );
+
+            if (slash_hotplug_rescan(g_hotplug) != 0) {
+                LOG(LOG_ERR, "reset_with_ami: hotplug rescan failed: %m");
+                return hotplug_errno_to_vrtd_ret(errno);
+            }
+
+            last_rescan_us = now;
+            rescanned = true;
+        }
+
+        /*
+         * Ask AMI whether PF0 is back.  The handle is released on every pass,
+         * including failed ones: this loop runs far more often than the old
+         * five-attempt version, so anything it retains would accumulate.
+         */
+        struct ami_device *ami_device = NULL;
+        int find_ret = ami_dev_find(pf0_bdf, &ami_device);
+        if (ami_device != NULL) {
+            ami_dev_delete(&ami_device);
+        }
+
+        if (find_ret == AMI_STATUS_OK) {
+            ami_seen = true;
+
+            reset_emit_progress(
+                progress_cb,
+                progress_ctx,
+                VRTD_CFGMEM_PROGRAM_PHASE_REDISCOVERING_DEVICE
+            );
+
+            if (devices_discover_and_open(devices) != 0) {
+                LOG(LOG_WARNING, "reset_with_ami: device discovery failed, will retry");
+            }
+
+            struct device *d = reset_find_device_by_bdf(devices, target_bdf);
+            const bool present = d != NULL;
+            const bool complete = device_is_fully_initialized(d);
+
+            node_seen = node_seen || present;
+            device_completed = device_completed || complete;
+
+            /*
+             * A device opened before the kernel had finished bringing it up
+             * keeps whatever happened to be ready at the time -- device_open()
+             * only warns about a BAR it cannot map or a missing QDMA node --
+             * and every later discovery pass then skips it as already present.
+             * Drop it so the next pass opens it again with everything in place.
+             */
+            if (present && !complete) {
+                device_ptr_array_rm_by_reference(devices, d);
+                d = NULL;
+            }
+
+            const enum vrtd_shell_type reported = complete
+                ? build_id_read_shell(d->bar_files[BUILD_ID_BAR_NUMBER])
+                : VRTD_SHELL_UNKNOWN;
+
+            switch (reset_ready_classify(present, complete, reported, booted_shell)) {
+            case RESET_READY_OK:
+                LOG(
+                    LOG_INFO,
+                    "reset_with_ami: device %s ready %u ms after SBR settle, "
+                    "running the %s shell",
+                    target_bdf,
+                    (unsigned int)((monotonic_us() - start) / 1000u),
+                    build_id_shell_name(booted_shell)
+                );
+                *out = d;
+                return VRTD_RET_OK;
+
+            case RESET_READY_SHELL_MISMATCH:
+                LOG(
+                    LOG_ERR,
+                    "reset_with_ami: hardware reports the %s shell but booting the "
+                    "partition for the %s shell was requested",
+                    build_id_shell_name(reported),
+                    build_id_shell_name(booted_shell)
+                );
+                return VRTD_RET_INTERNAL_ERROR;
+
+            case RESET_READY_WAIT:
+                break;
+            }
+        }
+
+        if (monotonic_us() >= deadline) {
+            break;
+        }
+
+        usleep(RESET_READY_POLL_US);
+    }
+
+    /*
+     * Name the gate that never opened.  A single "internal error" for four
+     * distinct causes is what made issues #222 and #227 expensive to diagnose.
+     */
+    if (!ami_seen) {
+        LOG(
+            LOG_ERR,
+            "reset_with_ami: PF0 %s did not reappear within %u s of the reset: %s",
+            pf0_bdf,
+            (unsigned int)(RESET_READY_TIMEOUT_US / 1000000u),
+            ami_get_last_error()
+        );
+    } else if (!node_seen) {
+        LOG(
+            LOG_ERR,
+            "reset_with_ami: PF0 %s came back but no device node for %s appeared "
+            "within %u s",
+            pf0_bdf,
+            target_bdf,
+            (unsigned int)(RESET_READY_TIMEOUT_US / 1000000u)
+        );
+    } else if (!device_completed) {
+        LOG(
+            LOG_ERR,
+            "reset_with_ami: device %s reappeared but never finished initialising "
+            "within %u s (build-ID BAR%d, QDMA or design writer never became available)",
+            target_bdf,
+            (unsigned int)(RESET_READY_TIMEOUT_US / 1000000u),
+            BUILD_ID_BAR_NUMBER
+        );
+    } else {
+        LOG(
+            LOG_ERR,
+            "reset_with_ami: device %s opened but its build-ID register at BAR%d+0x%x "
+            "never reported the %s shell within %u s",
+            target_bdf,
+            BUILD_ID_BAR_NUMBER,
+            BUILD_ID_REG_HI,
+            build_id_shell_name(booted_shell),
+            (unsigned int)(RESET_READY_TIMEOUT_US / 1000000u)
+        );
+    }
+
+    return VRTD_RET_INTERNAL_ERROR;
 }
 
 /**
@@ -409,114 +669,35 @@ uint16_t reset_with_ami_partition_progress(
     usleep(5000000);
 
     /*
-     * Step 10-12: Rescan the PCI bus and verify the device reappears.
-     * The rescan re-enumerates all functions (PF0, PF1, PF2), then we wait
-     * for the kernel, drivers, and udev to fully initialize device nodes.
-     * If the device has not reappeared, retry the rescan after 3 seconds,
-     * up to 5 attempts total.
-     */
-    #define RESCAN_MAX_RETRIES 5
-    #define RESCAN_RETRY_DELAY_US 3000000
-
-    for (int attempt = 1; attempt <= RESCAN_MAX_RETRIES; attempt++) {
-        reset_emit_progress(
-            progress_cb,
-            progress_ctx,
-            VRTD_CFGMEM_PROGRAM_PHASE_RESCANNING_PCIE
-        );
-        ret = slash_hotplug_rescan(g_hotplug);
-        if (ret != 0) {
-            LOG(LOG_ERR, "reset_with_ami: hotplug rescan failed: %m");
-            return hotplug_errno_to_vrtd_ret(errno);
-        }
-        LOG(LOG_INFO, "reset_with_ami: rescan complete (attempt %d/%d)",
-            attempt, RESCAN_MAX_RETRIES);
-
-        /*
-         * After a rescan the following things need to happen:
-         *
-         * * The kernel needs to detect the device on the PCIe bus.
-         * * The kernel needs to hand that device to the slash and ami drivers.
-         * * The slash and ami drivers need to create device nodes.
-         * * The kernel needs to signal to userspace systemd-udev that the device node was created.
-         * * systemd-udev needs to set permisions on the device node.
-         *
-         * That all takes time, so we wait a generous 10 seconds for all of that to occur.
-         *
-         * TODO: A much more robust method would be to remove all the code bellow this
-         * and rework how devices are discovered. We could bring in libudev.
-         * This would allow us to get netlink notifications on device events, such as new devices
-         * appearing. Then we could attempt to open these devices only after the userspace has configured them.
-         */
-        usleep(10000000);
-
-        ret = ami_dev_find(pf0_bdf, &ami_device);
-        if (ret == AMI_STATUS_OK) {
-            LOG(LOG_INFO, "reset_with_ami: device %s found after reset", pf0_bdf);
-            break;
-        }
-
-        if (attempt < RESCAN_MAX_RETRIES) {
-            LOG(LOG_WARNING, "reset_with_ami: ami_dev_find(%s) failed (attempt %d/%d): %s, retrying in 3s",
-                pf0_bdf, attempt, RESCAN_MAX_RETRIES, ami_get_last_error());
-            usleep(RESCAN_RETRY_DELAY_US);
-        } else {
-            LOG(LOG_ERR, "reset_with_ami: post-reset ami_dev_find(%s) failed after %d attempts: %s",
-                pf0_bdf, RESCAN_MAX_RETRIES, ami_get_last_error());
-            return VRTD_RET_INTERNAL_ERROR;
-        }
-    }
-
-    #undef RESCAN_MAX_RETRIES
-    #undef RESCAN_RETRY_DELAY_US
-
-    ami_dev_delete(&ami_device);
-
-    /*
-     * Step 13: Run device discovery to re-add the reset device to vrtd's
-     * tracked device list.  This opens the QDMA function, sets up queues,
-     * and makes the device available for user requests again.
-     */
-    // We now rescan for the reset device
-    reset_emit_progress(
-        progress_cb,
-        progress_ctx,
-        VRTD_CFGMEM_PROGRAM_PHASE_REDISCOVERING_DEVICE
-    );
-    ret = devices_discover_and_open(devices);
-    if (ret != 0) {
-        LOG(LOG_ERR, "reset_with_ami: devices_discover_and_open failed after reset");
-        return VRTD_RET_INTERNAL_ERROR;
-    }
-
-    /*
-     * Record the shell that is now booted so callers (e.g. v80-smi list) can
-     * report it.  Rediscovery creates a fresh device struct with an UNKNOWN
-     * shell, so without this the shell would be lost after every reset.
+     * Steps 10-13: Rescan the bus and wait for the device to become usable,
+     * then record the shell it booted.
+     *
+     * Rediscovery creates a fresh device struct with an UNKNOWN shell, so the
+     * shell has to be written back here or it would be lost after every reset.
+     * The boot partition states which shell was intended, and the build-ID
+     * register confirms the hardware agrees: a partition that did not take
+     * effect would otherwise leave vrtd asserting a shell the card is not
+     * running, and every later decision keyed on the shell -- whether a reset
+     * is required, which register windows exist -- would be made against the
+     * wrong design.
      */
     enum vrtd_shell_type booted_shell = shell_from_boot_partition(partition);
-    for (size_t i = 0; i < devices->len; i++) {
-        struct device *new_device = devices->d[i];
-        if (new_device != NULL && strcmp(new_device->pci_info.bdf, target_bdf) == 0) {
-            /*
-             * The boot partition states which shell was intended. Confirm the
-             * device agrees before recording it: a partition that did not take
-             * effect would otherwise leave vrtd asserting a shell the hardware
-             * is not running, and every later decision keyed on the shell —
-             * whether a reset is required, which register windows exist — would
-             * be made against the wrong design.
-             */
-            if (build_id_check_shell(
-                    new_device->bar_files[BUILD_ID_BAR_NUMBER],
-                    booted_shell,
-                    "reset_with_ami"
-                ) != 0) {
-                return VRTD_RET_INTERNAL_ERROR;
-            }
-            new_device->current_shell = booted_shell;
-            break;
-        }
+    struct device *new_device = NULL;
+
+    uint16_t wait_ret = reset_wait_for_device(
+        devices,
+        pf0_bdf,
+        target_bdf,
+        booted_shell,
+        progress_cb,
+        progress_ctx,
+        &new_device
+    );
+    if (wait_ret != VRTD_RET_OK) {
+        return wait_ret;
     }
+
+    new_device->current_shell = booted_shell;
 
     return VRTD_RET_OK;
 }
