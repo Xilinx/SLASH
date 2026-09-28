@@ -395,10 +395,13 @@ int main(int argc, char *argv[])
     std::vector<float> host_input(kSize);
     std::mt19937 gen(12345);  /* fixed seed: reproducible runs. */
     std::uniform_real_distribution<float> dis(0.0f, 1.0f);
-    float golden = 0.0f;
+    /* Reference in double: the kernel's float reduction is pipelined at II=1 over a
+     * multi-cycle fadd, so HLS reassociates it into partial accumulators. A float
+     * reference would add a second, independent rounding of the same magnitude. */
+    double golden = 0.0;
     for (uint32_t i = 0; i < kSize; ++i) {
         host_input[i] = dis(gen);
-        golden += host_input[i] + 1.0f;  /* increment adds 1, accumulate sums. */
+        golden += static_cast<double>(host_input[i]) + 1.0;  /* increment adds 1, accumulate sums. */
     }
 
     /* ── 6. Transfer the host buffer to card memory (HBM) over QDMA ─────────── */
@@ -437,10 +440,12 @@ int main(int argc, char *argv[])
     float result;
     std::memcpy(&result, &raw, sizeof(result));
 
-    const float abs_err = std::fabs(golden - result);
-    constexpr float kAbsTol = 1e-3f;
-    constexpr float kRelTol = 1e-6f;
-    const float tol = std::max(kAbsTol, kRelTol * std::fabs(golden));
+    const double abs_err = std::fabs(golden - static_cast<double>(result));
+    /* Summing kSize floats carries up to kSize*u ~ 6.1e-5 relative rounding error
+     * (u = 5.96e-8); 1e-5 stays well under the smallest real defect (6.5e-4). */
+    constexpr double kAbsTol = 1e-3;
+    constexpr double kRelTol = 1e-5;
+    const double tol = std::max(kAbsTol, kRelTol * std::fabs(golden));
 
     std::cout << std::setprecision(10);
     std::cout << "Expected: " << golden << "\nGot: " << result << "\n";

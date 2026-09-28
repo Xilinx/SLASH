@@ -52,13 +52,18 @@ int main(int argc, char* argv[]) {
         std::mt19937 gen(rd());
         std::uniform_real_distribution<> dis(0.0, 1.0);
 
-        float goldenModel = 0;
+        // Reference sum in double. The kernel's float reduction is pipelined at II=1
+        // over a multi-cycle fadd, so HLS reassociates it into several partial
+        // accumulators. A float reference would add a second, independent rounding of
+        // the same magnitude, making this check compare two roundings of the sum
+        // rather than measure the kernel's error against the exact value.
+        double goldenModel = 0;
         std::vector<float> hostInput(size);
         std::cout << "Generating data...\n";
         for(uint32_t i = 0; i < size; i++) {
             buffer[i] = static_cast<float>(dis(gen));
             hostInput[i] = buffer[i];
-            goldenModel += buffer[i] + 1;
+            goldenModel += static_cast<double>(buffer[i]) + 1.0;
         }
 
         buffer.sync(vrt::SyncType::HOST_TO_DEVICE);
@@ -96,10 +101,13 @@ int main(int argc, char* argv[]) {
         uint32_t val = accumulate.read(0x18);
         float floatVal;
         std::memcpy(&floatVal, &val, sizeof(float));
-        const float absError = std::fabs(goldenModel - floatVal);
-        constexpr float kAbsTolerance = 1e-3f;
-        constexpr float kRelTolerance = 1e-6f;
-        const float effectiveTolerance =
+        const double absError = std::fabs(goldenModel - static_cast<double>(floatVal));
+        // Summing `size` floats carries up to size*u ~ 6.1e-5 relative rounding error
+        // (u = 5.96e-8). 1e-5 sits below that bound yet ~65x under the smallest real
+        // defect this test can see (a single dropped "+1" shifts the sum by 6.5e-4).
+        constexpr double kAbsTolerance = 1e-3;
+        constexpr double kRelTolerance = 1e-5;
+        const double effectiveTolerance =
             std::max(kAbsTolerance, kRelTolerance * std::fabs(goldenModel));
         if ((outCtrl & 0x1u) == 0u) {
             std::cerr << "Test failed!" << std::endl;
