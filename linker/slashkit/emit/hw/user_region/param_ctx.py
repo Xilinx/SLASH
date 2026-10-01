@@ -33,8 +33,8 @@ def _param_name_for_busif(busif: str) -> str:
 def build_data_width_param_context(
     instances: Dict[str, KernelInstance],
     *,
-    domains_of_interest=("HBM", "VIRT"),
-    default_width_by_domain={"HBM": 256, "VIRT": 512}
+    domains_of_interest=("VIRT",),
+    default_width_by_domain={"VIRT": 512}
 ) -> dict:
     """
     For every instance and each AXI4FULL port that is mapped (via cfg.sps/defaults)
@@ -44,6 +44,10 @@ def build_data_width_param_context(
     Width resolution order:
       1) Use the port width parsed from component.xml if present (Port.width).
       2) Fallback to default_width_by_domain[domain].
+
+    HBM keeps the packaged kernel interface unchanged. Its explicit CDC/width
+    converters adapt the real interface, including non-HLS AXI masters without
+    a C_<BUSIF>_DATA_WIDTH customization parameter.
     """
     out: List[dict] = []
 
