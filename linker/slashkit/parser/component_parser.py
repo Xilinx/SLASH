@@ -131,6 +131,37 @@ def _aximm_width_from_params(params: Dict[str, str]) -> Optional[int]:
         return int(dw)
     return None
 
+
+def _aximm_width_from_ports(
+    root: ET.Element, port_maps: Dict[str, str], busif_name: str
+) -> Optional[int]:
+    # HLS may omit bus-interface DATA_WIDTH while supplying resolved vector
+    # bounds on the mapped model ports (including parameter-dependent ports).
+    model_ports = {
+        _text(p.find("spirit:name", NS)): p
+        for p in root.findall("spirit:model/spirit:ports/spirit:port", NS)
+    }
+    widths = set()
+    for logical in ("RDATA", "WDATA"):
+        physical = port_maps.get(logical)
+        if physical is None:
+            continue
+        port = model_ports.get(physical)
+        if port is None:
+            return None
+        vector = port.find("spirit:wire/spirit:vector", NS)
+        if vector is None:
+            return None
+        left = _int(vector.find("spirit:left", NS))
+        right = _int(vector.find("spirit:right", NS))
+        if left is None or right is None:
+            return None
+        widths.add(abs(left - right) + 1)
+    if len(widths) > 1:
+        raise ValueError(
+            f"{busif_name}: inconsistent AXI RDATA/WDATA widths: {sorted(widths)}")
+    return next(iter(widths), None)
+
 # ---------- memory map parsing ----------
 
 
@@ -239,6 +270,8 @@ def parse_component_xml(path: str | Path) -> Kernel:
             width = _axis_width_from_params(params)
         elif ptype in (BusType.AXILITE, BusType.AXI4FULL):
             width = _aximm_width_from_params(params)
+            if width is None:
+                width = _aximm_width_from_ports(root, port_maps, busif_name)
         else:
             width = 1
 

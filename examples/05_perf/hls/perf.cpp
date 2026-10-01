@@ -21,16 +21,17 @@
 #include <ap_int.h>
 #include <stdint.h>
 
-#define DATA_WIDTH 256
-typedef ap_uint<DATA_WIDTH> uint256_t;
-#define LENGTH 0x1000000
+#define DATA_WIDTH 512
+typedef ap_uint<DATA_WIDTH> uint512_t;
+// 512 MiB in 64-byte words.
+#define LENGTH 0x800000
 
-extern "C" void perf(
-    uint256_t* hbm_ptr,
+void perf(
+    uint512_t* hbm_ptr,
     ap_uint<32> wr,
     ap_uint<32>& out_acc
 ) {
-#pragma HLS INTERFACE m_axi port=hbm_ptr offset=slave bundle=gmem0 max_read_burst_length=64 max_write_burst_length=64 depth=536870912
+#pragma HLS INTERFACE m_axi port=hbm_ptr offset=slave bundle=gmem0 max_read_burst_length=64 max_write_burst_length=64 depth=8388608
 #pragma HLS INTERFACE s_axilite port=hbm_ptr   bundle=control
 #pragma HLS INTERFACE s_axilite port=wr        bundle=control
 #pragma HLS INTERFACE s_axilite port=out_acc        bundle=control
@@ -45,7 +46,7 @@ extern "C" void perf(
     } else {
         for (uint32_t i = 0; i < LENGTH; i++) {
         #pragma HLS PIPELINE II=1
-            uint256_t val = hbm_ptr[i];
+            uint512_t val = hbm_ptr[i];
             acc ^= val.range(31, 0);
         }
         out_acc = acc;

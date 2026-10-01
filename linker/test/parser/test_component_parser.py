@@ -139,6 +139,66 @@ def component_xml(tmp_path: Path):
 # Tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize(
+    "bounds, expected",
+    [
+        ({"RDATA": (511, 0), "WDATA": (511, 0)}, 512),
+        ({"RDATA": (255, 0), "WDATA": (255, 0)}, 256),
+        ({"RDATA": (0, 127)}, 128),
+        ({"WDATA": (95, 32)}, 64),
+        ({"RDATA": ("unresolved", 0)}, None),
+        ({}, None),
+    ],
+)
+def test_aximm_width_from_model_ports(component_xml, bounds, expected):
+    path = _component_with_axi_vectors(component_xml, bounds)
+    kernel = parse_component_xml(path)
+    assert kernel.ports["m_axi_gmem0"].width == expected
+    assert kernel.buses["m_axi_gmem0"].width == expected
+
+
+def _component_with_axi_vectors(component_xml, bounds):
+    path = component_xml()
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    def child(parent, name, text=None, **attrs):
+        el = ET.SubElement(parent, f"{{{_NS_SPIRIT}}}{name}", attrs)
+        if text is not None:
+            el.text = str(text)
+        return el
+
+    busif = child(root.find(f"{{{_NS_SPIRIT}}}busInterfaces"), "busInterface")
+    child(busif, "name", "m_axi_gmem0")
+    child(busif, "busType", **{
+        f"{{{_NS_SPIRIT}}}{key}": value
+        for key, value in dict(vendor="xilinx.com", library="interface", name="aximm").items()
+    })
+    child(busif, "master")
+    maps = child(busif, "portMaps")
+    ports = child(child(root, "model"), "ports")
+    for logical, (left, right) in bounds.items():
+        physical = f"m_axi_gmem0_{logical}"
+        mapping = child(maps, "portMap")
+        child(child(mapping, "logicalPort"), "name", logical)
+        child(child(mapping, "physicalPort"), "name", physical)
+        port = child(ports, "port")
+        child(port, "name", physical)
+        vector = child(child(port, "wire"), "vector")
+        child(vector, "left", left)
+        child(vector, "right", right)
+    tree.write(path, encoding="utf-8")
+    return path
+
+
+def test_aximm_rejects_mismatched_data_vectors(component_xml):
+    path = _component_with_axi_vectors(
+        component_xml, {"RDATA": (511, 0), "WDATA": (255, 0)}
+    )
+    with pytest.raises(ValueError, match="inconsistent AXI RDATA/WDATA widths"):
+        parse_component_xml(path)
+
+
 class TestParseComponentXml:
     def test_kernel_name(self, component_xml):
         path = component_xml(name="my_kernel")

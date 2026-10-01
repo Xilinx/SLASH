@@ -1045,7 +1045,7 @@ update_compile_order -fileset sources_1
 set {{ name }} [ create_bd_cell -type ip -vlnv {{ inst.kernel.vlnv }} {{ name }} ]
 {% endfor %}
 
-# === Per-kernel AXI-MM data width tweaks for HBM/VIRT ===
+# === Per-kernel AXI-MM data width tweaks for VIRT (HBM preserves packaged width) ===
 {% for p in data_width_params %}
 #set_property {{ p.param }} {{ "{" ~ p.value ~ "}" }} [get_bd_cells {{ p.inst }}]
 {% endfor %}
@@ -1099,55 +1099,71 @@ connect_bd_intf_net [get_bd_intf_pins {{ sc.name }}/M{{ "%02d"|format(m.slot) }}
 
 {% endfor %}
 
-# === HBM AXI-MM connections ===
+# HBM: merge CDC and width conversion for single full-width sources.
+{% if hbm_root_create|default([]) %}
+set hbm_reset_one [create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 hbm_reset_one]
+set_property -dict [list CONFIG.CONST_WIDTH {1} CONFIG.CONST_VAL {1}] $hbm_reset_one
+set hbm_reset_zero [create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 hbm_reset_zero]
+set_property -dict [list CONFIG.CONST_WIDTH {1} CONFIG.CONST_VAL {0}] $hbm_reset_zero
+{% for domain, clock in [('user', 'user_clk'), ('static', 'static_region_clk')] %}
+set hbm_reset_{{ domain }} [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 hbm_reset_{{ domain }}]
+# arstn is active-low; the unused auxiliary reset is tied low (inactive).
+set_property CONFIG.C_AUX_RESET_HIGH {1} $hbm_reset_{{ domain }}
+connect_bd_net [get_bd_ports {{ clock }}] [get_bd_pins hbm_reset_{{ domain }}/slowest_sync_clk]
+connect_bd_net [get_bd_ports arstn] [get_bd_pins hbm_reset_{{ domain }}/ext_reset_in]
+connect_bd_net [get_bd_pins hbm_reset_one/dout] [get_bd_pins hbm_reset_{{ domain }}/dcm_locked]
+connect_bd_net [get_bd_pins hbm_reset_zero/dout] [get_bd_pins hbm_reset_{{ domain }}/aux_reset_in] [get_bd_pins hbm_reset_{{ domain }}/mb_debug_sys_rst]
+{% endfor %}
+{% endif %}
 
-# === HBM reduction nodes (internal fan-in) ===
 {% for n in hbm_reduce_nodes|default([]) %}
-# {{ n.name }} (NUM_SI={{ n.num_si }}, NUM_MI=1)
-set {{ n.name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 {{ n.name }} ]
-set_property -dict [list \
-  CONFIG.NUM_CLKS {1} \
-  CONFIG.NUM_MI   {1} \
-  CONFIG.NUM_SI   {{ "{" ~ n.num_si ~ "}" }} \
-] ${{ n.name }}
-connect_bd_net [get_bd_pins {{ n.name }}/aclk]    [get_bd_pins {{ n.clk }}]
-connect_bd_net [get_bd_pins {{ n.name }}/aresetn] [get_bd_pins {{ n.rst }}]
+set {{ n.name }} [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 {{ n.name }}]
+set_property -dict [list CONFIG.NUM_CLKS {1} CONFIG.NUM_MI {1} CONFIG.NUM_SI {{ '{' ~ n.num_si ~ '}' }}] ${{ n.name }}
+connect_bd_net [get_bd_ports user_clk] [get_bd_pins {{ n.name }}/aclk]
+connect_bd_net [get_bd_pins hbm_reset_user/interconnect_aresetn] [get_bd_pins {{ n.name }}/aresetn]
 {% for si in n.si %}
-connect_bd_intf_net \
-  [get_bd_intf_pins {{ si.src }}] \
-  [get_bd_intf_pins {{ n.name }}/S{{ "%02d"|format(si.slot) }}_AXI]
+connect_bd_intf_net [get_bd_intf_pins {{ si.src }}] [get_bd_intf_pins {{ n.name }}/S{{ '%02d'|format(si.slot) }}_AXI]
 {% endfor %}
 {% endfor %}
 
-# === HBM root SmartConnects (instantiate only for channels with writers) ===
 {% for r in hbm_root_create|default([]) %}
-# {{ r.name }} drives HBM{{ "%02d"|format(r.idx) }}
-set {{ r.name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 {{ r.name }} ]
-set_property -dict [list \
-  CONFIG.NUM_CLKS {2} \
-  CONFIG.NUM_MI   {1} \
-  CONFIG.NUM_SI   {1} \
-] ${{ r.name }}
-# Clocks / reset
-connect_bd_net [get_bd_pins {{ r.name }}/aclk]   [get_bd_pins {{ r.clk0 }}]
-connect_bd_net [get_bd_pins {{ r.name }}/aclk1]  {{ r.clk1 }}
-connect_bd_net [get_bd_pins {{ r.name }}/aresetn] [get_bd_pins {{ r.rst }}]
+# SmartConnect retains the source-width asynchronous payload and adapts it
+# to the HBM interface. Shared/upsized paths keep an explicit wide boundary.
+set {{ r.name }} [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 {{ r.name }}]
+set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {2}] ${{ r.name }}
+connect_bd_net [get_bd_ports user_clk] [get_bd_pins {{ r.name }}/aclk]
+connect_bd_net [get_bd_ports static_region_clk] [get_bd_pins {{ r.name }}/aclk1]
+connect_bd_net [get_bd_pins hbm_reset_user/interconnect_aresetn] [get_bd_pins {{ r.name }}/aresetn]
+{% if r.merged %}
+# Register the narrow HBM boundary in its own clock domain. Do not pin ID or
+# USER widths: let propagation preserve the endpoint's AXI sidebands.
+set {{ r.name }}_out [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 {{ r.name }}_out]
+set_property -dict [list CONFIG.DATA_WIDTH {256} CONFIG.ADDR_WIDTH {64} CONFIG.PROTOCOL {AXI4} CONFIG.REG_AR {1} CONFIG.REG_AW {1} CONFIG.REG_W {1} CONFIG.REG_R {1} CONFIG.REG_B {1}] ${{ r.name }}_out
+connect_bd_net [get_bd_ports static_region_clk] [get_bd_pins {{ r.name }}_out/aclk]
+connect_bd_net [get_bd_pins hbm_reset_static/interconnect_aresetn] [get_bd_pins {{ r.name }}_out/aresetn]
+connect_bd_intf_net [get_bd_intf_pins {{ r.name }}/M00_AXI] [get_bd_intf_pins {{ r.name }}_out/S_AXI]
+{% endif %}
+{% if not r.merged %}
+set {{ r.name }}_wide [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 {{ r.name }}_wide]
+set_property -dict [list CONFIG.DATA_WIDTH {{ '{' ~ r.width ~ '}' }} CONFIG.ADDR_WIDTH {64} CONFIG.PROTOCOL {AXI4} CONFIG.NUM_READ_OUTSTANDING {16} CONFIG.NUM_WRITE_OUTSTANDING {16} CONFIG.SUPPORTS_NARROW_BURST {1} CONFIG.REG_AR {1} CONFIG.REG_AW {1} CONFIG.REG_W {1} CONFIG.REG_R {1} CONFIG.REG_B {1}] ${{ r.name }}_wide
+connect_bd_net [get_bd_ports static_region_clk] [get_bd_pins {{ r.name }}_wide/aclk]
+connect_bd_net [get_bd_pins hbm_reset_static/interconnect_aresetn] [get_bd_pins {{ r.name }}_wide/aresetn]
+connect_bd_intf_net [get_bd_intf_pins {{ r.name }}/M00_AXI] [get_bd_intf_pins {{ r.name }}_wide/S_AXI]
+{% if r.dwidth_name %}
+set {{ r.dwidth_name }} [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 {{ r.dwidth_name }}]
+set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] ${{ r.dwidth_name }}
+connect_bd_net [get_bd_ports static_region_clk] [get_bd_pins {{ r.dwidth_name }}/aclk]
+connect_bd_net [get_bd_pins hbm_reset_static/interconnect_aresetn] [get_bd_pins {{ r.dwidth_name }}/aresetn]
+connect_bd_intf_net [get_bd_intf_pins {{ r.name }}_wide/M_AXI] [get_bd_intf_pins {{ r.dwidth_name }}/S00_AXI]
+{% endif %}
+{% endif %}
 {% endfor %}
-
-# === Wire into the root (either single source or last reduction MI) ===
 {% for w in hbm_root_in|default([]) %}
-connect_bd_intf_net \
-  [get_bd_intf_pins {{ w.src_pin }}] \
-  [get_bd_intf_pins {{ w.dst_pin }}]
+connect_bd_intf_net [get_bd_intf_pins {{ w.src_pin }}] [get_bd_intf_pins {{ w.dst_pin }}]
 {% endfor %}
-
-# === Root MI -> real HBM port ===
 {% for o in hbm_root_out|default([]) %}
-connect_bd_intf_net \
-  [get_bd_intf_pins {{ o.src_pin }}] \
-  [get_bd_intf_ports {{ o.dst_port }}]
+connect_bd_intf_net [get_bd_intf_pins {{ o.src_pin }}] [get_bd_intf_ports {{ o.dst_port }}]
 {% endfor %}
-
 
 # === DDR AXI-MM connections (via Versal NoC) ===
 
@@ -1339,6 +1355,107 @@ assign_bd_address -offset {{ "0x%012X"|format(a.offset) }} -range {{ "0x%08X"|fo
 assign_bd_address
 validate_bd_design
 save_bd_design
+# Run after BD propagation: report actual interface properties, not assumptions
+# about clock frequency inferred from the HBM memory's physical clock.
+{% if hbm_root_create|default([]) %}
+foreach domain {user static} {
+    if {[get_property CONFIG.C_EXT_RESET_HIGH [get_bd_cells hbm_reset_$domain]] != 0 ||
+        [get_property CONFIG.C_AUX_RESET_HIGH [get_bd_cells hbm_reset_$domain]] != 1} {
+        error "HBM reset requires active-low arstn and active-high auxiliary reset tied low"
+    }
+}
+# Inspect the expanded SmartConnect sub-design, not just its external pins.
+# Both integer and fractional clock ratios must use the asynchronous FIFO.
+# Fail closed on a tool-version change instead of silently accepting a narrow
+# FIFO or a synchronous crossing that becomes unsafe after runtime downclocking.
+proc slash_check_hbm_cdc {cell width target_width} {
+    set parent [current_bd_design]
+    set component [get_property CONFIG.Component_Name [get_bd_cells $cell]]
+    set nested [get_files -all -quiet */${component}/bd_0/*.bd]
+    if {[llength $nested] != 1} {
+        error "HBM: cannot find expanded SmartConnect for $cell"
+    }
+    set design [file rootname [file tail [lindex $nested 0]]]
+    try {
+        current_bd_design [get_bd_designs $design]
+        foreach channel {ar aw w r b} {
+            set node [get_bd_cells s00_nodes/s00_${channel}_node]
+            if {[get_property CONFIG.ACLK_RELATIONSHIP $node] != 0 ||
+                [get_property CONFIG.SYNCHRONIZATION_STAGES $node] < 3} {
+                error "HBM $cell/$channel: expected asynchronous CDC with >=3 synchronization stages"
+            }
+        }
+        set converter [get_bd_cells s00_entry_pipeline/s00_si_converter]
+        foreach direction {R W} {
+            if {[get_property CONFIG.${direction}DATA_WIDTH $converter] != $width ||
+                [get_property CONFIG.MSC000_${direction}DATA_WIDTH $converter] != $target_width} {
+                error "HBM $cell: unexpected $direction converter widths"
+            }
+        }
+        # USER_WIDTH describes AXI sideband storage, not the data payload.
+        foreach channel {r w} {
+            if {8 * [get_property CONFIG.MAX_PAYLD_BYTES [get_bd_cells s00_nodes/s00_${channel}_node]] != $width} {
+                error "HBM $cell/$channel: asynchronous payload width changed"
+            }
+        }
+        puts "HBM_CDC $cell: verified asynchronous CDC on all five AXI channels; read/write payload width $width"
+    } finally {
+        current_bd_design $parent
+    }
+}
+{% endif %}
+{% for r in hbm_root_create|default([]) %}
+slash_check_hbm_cdc {{ r.name }} {{ r.width }} {{ 256 if r.merged else r.width }}
+{% if r.merged %}
+foreach endpoint { {{ r.name }}_out/S_AXI {{ r.name }}_out/M_AXI } {
+    if {[get_property CONFIG.DATA_WIDTH [get_bd_intf_pins $endpoint]] != 256 ||
+        [get_property CONFIG.FREQ_HZ [get_bd_intf_pins $endpoint]] != [get_property CONFIG.FREQ_HZ [get_bd_ports static_region_clk]]} {
+        error "HBM{{ r.idx }}: output slice must be 256-bit in the static clock domain"
+    }
+}
+foreach channel {AR AW W R B} {
+    if {[get_property CONFIG.REG_$channel [get_bd_cells {{ r.name }}_out]] != 1} {
+        error "HBM{{ r.idx }}: output slice $channel must be fully registered"
+    }
+}
+if {[get_bd_nets -of_objects [get_bd_pins {{ r.name }}_out/aclk]] ne [get_bd_nets -of_objects [get_bd_ports static_region_clk]] ||
+    [get_bd_nets -of_objects [get_bd_pins {{ r.name }}_out/aresetn]] ne [get_bd_nets -of_objects [get_bd_pins hbm_reset_static/interconnect_aresetn]]} {
+    error "HBM{{ r.idx }}: output slice clock/reset wiring changed"
+}
+if {[get_property CONFIG.DATA_WIDTH [get_bd_intf_pins {{ r.name }}/S00_AXI]] != {{ r.width }} ||
+    [get_property CONFIG.DATA_WIDTH [get_bd_intf_pins {{ r.name }}/M00_AXI]] != 256 ||
+    [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{ r.name }}/S00_AXI]] != [get_property CONFIG.FREQ_HZ [get_bd_ports user_clk]] ||
+    [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{ r.name }}/M00_AXI]] != [get_property CONFIG.FREQ_HZ [get_bd_ports static_region_clk]]} {
+    error "HBM{{ r.idx }}: merged SmartConnect interface contract changed"
+}
+{% else %}
+foreach endpoint { {{ r.name }}/M00_AXI {{ r.name }}_wide/S_AXI {{ r.name }}_wide/M_AXI } {
+    if {[get_property CONFIG.DATA_WIDTH [get_bd_intf_pins $endpoint]] != {{ r.width }}} {
+        error "HBM{{ r.idx }}: wide CDC boundary changed at $endpoint"
+    }
+}
+{% if r.dwidth_name %}
+if {[get_property CONFIG.DATA_WIDTH [get_bd_intf_pins {{ r.dwidth_name }}/S00_AXI]] != {{ r.width }} ||
+    [get_property CONFIG.DATA_WIDTH [get_bd_intf_pins {{ r.dwidth_name }}/M00_AXI]] != 256 ||
+    [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{ r.dwidth_name }}/S00_AXI]] != [get_property CONFIG.FREQ_HZ [get_bd_ports static_region_clk]] ||
+    [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{ r.dwidth_name }}/M00_AXI]] != [get_property CONFIG.FREQ_HZ [get_bd_ports static_region_clk]]} {
+    error "HBM{{ r.idx }}: width conversion must run entirely at the static clock"
+}
+{% endif %}
+{% endif %}
+if {[get_property CONFIG.DATA_WIDTH [get_bd_intf_ports {{ r.dst_port }}]] != 256} {
+    error "HBM{{ r.idx }}: incompatible static shell data width"
+}
+set hbm_static_hz [get_property CONFIG.FREQ_HZ [get_bd_ports static_region_clk]]
+{% for s in r.sources %}
+set hbm_source_hz [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{ s.src }}]]
+if {[get_property CONFIG.DATA_WIDTH [get_bd_intf_pins {{ s.src }}]] != {{ s.width }}} {
+    error "{{ s.src }}: interface width differs from component.xml"
+}
+set hbm_limit_gbs [expr {min({{ s.width }} * double($hbm_source_hz), 256 * double($hbm_static_hz)) / 8e9}]
+puts "HBM_PATH {{ s.src }}: {{ s.width }} bit @ $hbm_source_hz Hz -> {{ r.width }}-bit async CDC -> {{ "merged SmartConnect + 256-bit output register slice" if r.merged else "static-domain conversion" }} -> {{ r.dst_port }}: 256 bit @ $hbm_static_hz Hz; single-source ceiling $hbm_limit_gbs GB/s (BD frequencies; shared channel, protocol and memory efficiency excluded)"
+{% endfor %}
+{% endfor %}
 
 # current_bd_design [get_bd_designs top]
 # validate_bd_design
