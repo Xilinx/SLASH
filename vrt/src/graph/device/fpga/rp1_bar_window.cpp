@@ -250,9 +250,8 @@ void Rp1BarWindow::readSignal(std::uint32_t slot, rp1_signal_slot_t& out,
            &out, sizeof(out));
 }
 
-void Rp1BarWindow::readCq(std::uint32_t idx, rp1_cq_entry_t& out,
-                          std::uint32_t cq_offset) {
-    readAt(cq_offset + idx * sizeof(rp1_cq_entry_t),
+void Rp1BarWindow::readGraphResult(rp1_graph_result_t& out) {
+    readAt(static_cast<std::uint32_t>(offsetof(rp1_ctrl_t, result)),
            &out, sizeof(out));
 }
 

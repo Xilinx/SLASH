@@ -5,8 +5,8 @@
  * End-to-end graph tests for the RP1 flat scanner, running under Xilinx
  * QEMU with ARM semihosting.  Each test builds a tiny graph in shared
  * DDR, hands it to rp1_run() via the on_scan_pass / on_graph_done hooks
- * defined in rp1_loop.h, and asserts on the resulting node statuses,
- * barriers, signal slots, CQ entries, and dispatch order.
+ * defined in rp1_loop.h, and asserts on node state, barriers, signal slots,
+ * terminal graph results, and dispatch order.
  *
  * The hook completes fake "kernels" by OR-ing 0x2 (ap_done) into the
  * ctrl-reg word of each in-flight kernel after activate_nodes() has
@@ -33,15 +33,13 @@
  *
  * Mirrors the protocol defaults so the test environment matches what the
  * host stack will eventually program into the control block.  The
- * control block sits at RP1_CTRL_PHYS_ADDR; nodes / CQ / args / signals
- * follow at the documented offsets.
+ * control block sits at RP1_CTRL_PHYS_ADDR; nodes, args, signals, and trace
+ * storage follow at the documented offsets.
  * ---------------------------------------------------------------------- */
 
 #define G_CTRL  ((volatile rp1_ctrl_t *)(uintptr_t)(RP1_CTRL_PHYS_ADDR))
 #define G_NODES ((rp1_node_t *)(uintptr_t) \
                  (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_NODE_ARRAY_OFFSET))
-#define G_CQ    ((volatile rp1_cq_entry_t *)(uintptr_t) \
-                 (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_CQ_OFFSET))
 #define G_ARGS  ((uint32_t *)(uintptr_t) \
                  (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_ARG_BUF_OFFSET))
 #define G_SIGS  ((volatile rp1_signal_slot_t *)(uintptr_t) \
@@ -49,7 +47,6 @@
 #define G_TRACE ((volatile rp1_trace_entry_t *)(uintptr_t) \
                  (RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET))
 
-#define TEST_CQ_SIZE  64u
 #define TEST_TRACE_SIZE 128u
 
 /* Fake AXI-Lite kernel: 256-byte page per kernel, word 0 is the
@@ -90,9 +87,7 @@ static uint32_t s_node_count;
 static int      s_graph_done_returns;
 static uint32_t s_pass_count;
 static uint32_t s_skip_completion_node;
-static uint32_t s_drain_cq;
-static rp1_cq_entry_t s_cq_capture[128];
-static uint32_t s_cq_capture_count;
+static uint32_t s_pending_graph_seq;
 
 /* WAIT-arming: after s_wait_after scan passes, write s_wait_value into signal
  * slot s_wait_slot.  s_wait_seen_slot captures the witness slot's value at the
@@ -112,38 +107,20 @@ static void hook_reset(uint32_t node_count)
     s_graph_done_returns = 1;   /* default: exit rp1_run after one graph */
     s_pass_count = 0;
     s_skip_completion_node = RP1_TERMINAL_ERROR_NODE_NONE;
-    s_drain_cq = 0;
-    s_cq_capture_count = 0;
     s_wait_armed = 0;
     s_wait_after = 0;
     s_wait_slot = 0;
     s_wait_value = 0;
     s_wait_witness_slot = 0;
     s_wait_witness_at_fire = 0xFFFFFFFFu;
+    s_pending_graph_seq = 1u;
     for (uint32_t i = 0; i < TRACE_MAX / 32u; i++) s_seen[i] = 0;
     for (uint32_t i = 0; i < TRACE_MAX; i++) s_trace[i] = 0;
-    for (uint32_t i = 0; i < 128u; i++) {
-        s_cq_capture[i].node_index = 0;
-        s_cq_capture[i].status = 0;
-        s_cq_capture[i].error_detail = 0;
-        s_cq_capture[i].timestamp = 0;
-    }
 }
 
 static void hook_on_scan_pass(void)
 {
     s_pass_count++;
-
-    if (s_drain_cq) {
-        uint32_t cursor = G_CTRL->cq_read_idx;
-        uint32_t end = G_CTRL->cq_write_idx;
-        while (cursor != end && s_cq_capture_count < 128u) {
-            s_cq_capture[s_cq_capture_count++] =
-                G_CQ[cursor & (G_CTRL->cq_size - 1u)];
-            cursor++;
-        }
-        G_CTRL->cq_read_idx = end;
-    }
 
     /* Cross-queue producer simulation: raise the awaited signal after a few
      * passes, recording the witness slot first to prove the WAIT held off its
@@ -158,7 +135,7 @@ static void hook_on_scan_pass(void)
 
     for (uint32_t i = 0; i < s_node_count && i < TRACE_MAX; i++) {
         if (s_seen[i >> 5] & (1u << (i & 31u))) continue;
-        uint8_t st = g_node_status[i];
+        uint8_t st = rp1_node_get_status(&g_nodes[i]);
         if (st == RP1_NODE_DISPATCHED || st == RP1_NODE_DONE) {
             s_seen[i >> 5] |= (1u << (i & 31u));
             s_trace[s_trace_count++] = i;
@@ -181,10 +158,45 @@ static int hook_on_graph_done(int result)
     return s_graph_done_returns;
 }
 
+/*
+ * Model a host that waits for firmware readiness before ringing the doorbell.
+ * setup_graph() records the sequence because startup deliberately clears DDR.
+ */
+static int submit_on_idle(void)
+{
+    if (s_pending_graph_seq != 0u) {
+        G_CTRL->graph_seq = s_pending_graph_seq;
+        s_pending_graph_seq = 0u;
+    }
+    return 0;
+}
+
 static const rp1_hooks_t s_hooks = {
     .on_scan_pass  = hook_on_scan_pass,
     .on_graph_done = hook_on_graph_done,
-    .on_idle       = 0,
+    .on_idle       = submit_on_idle,
+};
+
+/*
+ * Model a later submission in one still-running firmware instance. QEMU tests
+ * call rp1_run() as a bounded harness, so seed the previously installed image
+ * after startup initialization but before ringing this graph's doorbell.
+ */
+static int submit_known_image_on_idle(void)
+{
+    if (s_pending_graph_seq != 0u) {
+        g_active_image_id = 7u;
+        g_active_image_state = RP1_IMAGE_STATE_KNOWN;
+        G_CTRL->graph_seq = s_pending_graph_seq;
+        s_pending_graph_seq = 0u;
+    }
+    return 0;
+}
+
+static const rp1_hooks_t s_known_image_hooks = {
+    .on_scan_pass  = hook_on_scan_pass,
+    .on_graph_done = hook_on_graph_done,
+    .on_idle       = submit_known_image_on_idle,
 };
 
 static void make_signal(rp1_node_t *n,
@@ -203,7 +215,6 @@ static int wrap_on_graph_done(int result)
         make_signal(&G_NODES[0], 1u, 0x2222u, RP1_SIGOP_SET,
                     0, 0u, 0, 1u);
         G_CTRL->node_count = 1u;
-        G_CTRL->cq_read_idx = G_CTRL->cq_write_idx;
         G_CTRL->graph_seq = 0u;
         return 0;
     }
@@ -213,7 +224,7 @@ static int wrap_on_graph_done(int result)
 static const rp1_hooks_t s_wrap_hooks = {
     .on_scan_pass = hook_on_scan_pass,
     .on_graph_done = wrap_on_graph_done,
-    .on_idle = 0,
+    .on_idle = submit_on_idle,
 };
 
 static uint32_t s_terminal_idle_calls;
@@ -231,6 +242,8 @@ static int terminal_resubmit_on_done(int result)
 
 static int terminal_exit_on_idle(void)
 {
+    if (s_pending_graph_seq != 0u)
+        return submit_on_idle();
     s_terminal_idle_calls++;
     return s_terminal_idle_calls >= 2u;
 }
@@ -241,18 +254,39 @@ static const rp1_hooks_t s_terminal_hooks = {
     .on_idle = terminal_exit_on_idle,
 };
 
+static uint32_t s_boot_graphs;
+
+/* Record an unexpected stale graph execution and stop the firmware loop. */
+static int boot_graph_done(int result)
+{
+    (void)result;
+    s_boot_graphs++;
+    return 1;
+}
+
+/* Stop after startup reaches its first idle observation. */
+static int boot_exit_on_idle(void)
+{
+    return 1;
+}
+
+static const rp1_hooks_t s_boot_hooks = {
+    .on_scan_pass = hook_on_scan_pass,
+    .on_graph_done = boot_graph_done,
+    .on_idle = boot_exit_on_idle,
+};
+
 /* -------------------------------------------------------------------------
  * Graph setup
  * ---------------------------------------------------------------------- */
 
 static void setup_graph(uint32_t node_count, uint32_t fake_kernel_count)
 {
-    /* Wipe only the regions we touch.  rp1_run() resets the BTCM state
-     * (barriers, node_status, loop_iters, inflight) on each new graph
-     * submission via rp1_store_init(). */
+    /* Wipe only the regions we touch. rp1_run() replaces the BTCM node
+     * snapshot and resets barriers, loop counters, and inflight state through
+     * rp1_store_init() for each new graph. */
     tmemzero((volatile void *)G_CTRL,  sizeof(rp1_ctrl_t));
     tmemzero((volatile void *)G_NODES, node_count * sizeof(rp1_node_t));
-    tmemzero((volatile void *)G_CQ,    TEST_CQ_SIZE * sizeof(rp1_cq_entry_t));
     tmemzero((volatile void *)G_ARGS,  64u * sizeof(uint32_t));
     tmemzero((volatile void *)G_SIGS,  64u * sizeof(rp1_signal_slot_t));
     tmemzero((volatile void *)G_TRACE, TEST_TRACE_SIZE * sizeof(rp1_trace_entry_t));
@@ -261,10 +295,8 @@ static void setup_graph(uint32_t node_count, uint32_t fake_kernel_count)
                  fake_kernel_count * FAKE_KERNEL_STRIDE);
     }
 
-    G_CTRL->cq_size           = TEST_CQ_SIZE;
     G_CTRL->node_count        = node_count;
     G_CTRL->node_base_lo      = (uint32_t)(uintptr_t)G_NODES;
-    G_CTRL->cq_base_lo        = (uint32_t)(uintptr_t)G_CQ;
     G_CTRL->arg_buf_base_lo   = (uint32_t)(uintptr_t)G_ARGS;
     G_CTRL->sig_array_base_lo = (uint32_t)(uintptr_t)G_SIGS;
     G_CTRL->trace_base_lo     = (uint32_t)(uintptr_t)G_TRACE;
@@ -283,18 +315,26 @@ static void setup_graph(uint32_t node_count, uint32_t fake_kernel_count)
  * which can lower to a memset call under -ffreestanding -nostdlib.
  * ---------------------------------------------------------------------- */
 
+/* Initialize one compact header with firmware-owned status set to PENDING. */
+static void make_header(rp1_node_t *n, uint8_t opcode, uint8_t flags,
+                        uint8_t aw_b, uint32_t aw_m,
+                        uint8_t st_b, uint32_t st_m)
+{
+    rp1_node_set_control(
+        n, rp1_node_make_control(opcode, flags, RP1_NODE_PENDING));
+    n->barrier_await_mask = aw_m;
+    n->barrier_set_mask = st_m;
+    n->barrier_await_bucket = aw_b;
+    n->barrier_set_bucket = st_b;
+}
+
 static void make_kernel(rp1_node_t *n, uint32_t kernel_idx,
                         uint8_t aw_b, uint32_t aw_m,
                         uint8_t st_b, uint32_t st_m,
                         uint32_t arg_buf_offset, uint16_t arg_count)
 {
-    n->opcode               = RP1_OP_KERNEL_DISPATCH;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_KERNEL_DISPATCH, 0u,
+                aw_b, aw_m, st_b, st_m);
 
     n->payload.kernel_dispatch.kernel_base_addr  = (uint32_t)FAKE_KERNEL(kernel_idx);
     n->payload.kernel_dispatch.arg_buffer_offset = arg_buf_offset;
@@ -308,30 +348,19 @@ static void make_signal(rp1_node_t *n,
                         uint8_t aw_b, uint32_t aw_m,
                         uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_SIGNAL;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_SIGNAL, 0u, aw_b, aw_m, st_b, st_m);
 
-    n->payload.signal.target_slot = slot;
     n->payload.signal.value       = value;
-    n->payload.signal.operation   = op;
+    n->payload.signal.target_slot = (uint8_t)slot;
+    n->payload.signal.operation   = (uint8_t)op;
 }
 
 static void make_scalar_write(rp1_node_t *n, uint32_t addr, uint32_t value,
                               uint8_t aw_b, uint32_t aw_m,
                               uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_SCALAR_WRITE;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_SCALAR_WRITE, 0u,
+                aw_b, aw_m, st_b, st_m);
 
     n->payload.scalar_write.writes[0].addr  = addr;
     n->payload.scalar_write.writes[0].value = value;
@@ -341,16 +370,11 @@ static void make_scalar_read(rp1_node_t *n, uint32_t source_addr, uint32_t targe
                              uint8_t aw_b, uint32_t aw_m,
                              uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_SCALAR_READ;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_SCALAR_READ, 0u,
+                aw_b, aw_m, st_b, st_m);
 
     n->payload.scalar_read.source_addr = source_addr;
-    n->payload.scalar_read.target_slot = target_slot;
+    n->payload.scalar_read.target_slot = (uint8_t)target_slot;
 }
 
 static void make_wait(rp1_node_t *n,
@@ -358,17 +382,11 @@ static void make_wait(rp1_node_t *n,
                       uint8_t aw_b, uint32_t aw_m,
                       uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_WAIT;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_WAIT, 0u, aw_b, aw_m, st_b, st_m);
 
-    n->payload.wait.condition_signal = cond_signal;
     n->payload.wait.condition_value  = cond_val;
-    n->payload.wait.condition_op     = cond_op;
+    n->payload.wait.condition_signal = (uint8_t)cond_signal;
+    n->payload.wait.condition_op     = (uint8_t)cond_op;
 }
 
 static void make_loop(rp1_node_t *n,
@@ -379,20 +397,14 @@ static void make_loop(rp1_node_t *n,
                       uint8_t aw_b, uint32_t aw_m,
                       uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_LOOP;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_LOOP, 0u, aw_b, aw_m, st_b, st_m);
 
-    n->payload.loop.body_start         = body_start;
-    n->payload.loop.body_end           = body_end;
+    n->payload.loop.body_start         = (uint16_t)body_start;
+    n->payload.loop.body_end           = (uint16_t)body_end;
     n->payload.loop.max_iterations     = max_iter;
-    n->payload.loop.condition_signal   = cond_signal;
     n->payload.loop.condition_value    = cond_val;
-    n->payload.loop.condition_op       = cond_op;
+    n->payload.loop.condition_signal   = (uint8_t)cond_signal;
+    n->payload.loop.condition_op       = (uint8_t)cond_op;
     n->payload.loop.bucket_clear_start = bucket_clear_start;
     n->payload.loop.bucket_clear_end   = bucket_clear_end;
     n->payload.loop.loop_id            = loop_id;
@@ -402,15 +414,9 @@ static void make_rerun(rp1_node_t *n, uint32_t target_node,
                        uint8_t aw_b, uint32_t aw_m,
                        uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_RERUN;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_RERUN, 0u, aw_b, aw_m, st_b, st_m);
 
-    n->payload.rerun.target_node = target_node;
+    n->payload.rerun.target_node = (uint16_t)target_node;
     n->payload.rerun.rerun_flags = 0;
     n->payload.rerun.loop_id     = 0;
 }
@@ -423,38 +429,26 @@ static void make_cond(rp1_node_t *n,
                       uint8_t aw_b, uint32_t aw_m,
                       uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_COND;
-    n->flags                = 0;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_COND, 0u, aw_b, aw_m, st_b, st_m);
 
-    n->payload.cond.condition_signal   = cond_signal;
     n->payload.cond.condition_value    = cond_val;
-    n->payload.cond.condition_op       = cond_op;
+    n->payload.cond.condition_signal   = (uint8_t)cond_signal;
+    n->payload.cond.condition_op       = (uint8_t)cond_op;
     n->payload.cond.bucket_clear_start = bucket_clear_start;
     n->payload.cond.bucket_clear_end   = bucket_clear_end;
-    n->payload.cond.body_start         = body_start;
-    n->payload.cond.body_end           = body_end;
+    n->payload.cond.body_start         = (uint16_t)body_start;
+    n->payload.cond.body_end           = (uint16_t)body_end;
     n->payload.cond.done_bucket        = done_bucket;
     n->payload.cond.done_mask          = done_mask;
 }
 
 static void make_pdi_load(rp1_node_t *n,
                           uint32_t addr_lo, uint32_t addr_hi,
-                          uint32_t timeout_cycles, uint16_t flags,
+                          uint32_t timeout_cycles, uint8_t flags,
                           uint8_t aw_b, uint32_t aw_m,
                           uint8_t st_b, uint32_t st_m)
 {
-    n->opcode               = RP1_OP_PDI_LOAD;
-    n->flags                = flags;
-    n->barrier_await_mask   = aw_m;
-    n->barrier_set_mask     = st_m;
-    n->barrier_await_bucket = aw_b;
-    n->barrier_set_bucket   = st_b;
-    n->status               = RP1_NODE_PENDING;
+    make_header(n, RP1_OP_PDI_LOAD, flags, aw_b, aw_m, st_b, st_m);
 
     n->payload.pdi_load.pdi_addr_lo    = addr_lo;
     n->payload.pdi_load.pdi_addr_hi    = addr_hi;
@@ -487,6 +481,14 @@ static uint32_t s_fake_cycles;
 static uint32_t s_cycle_step;
 static pdi_access_t s_pdi_access[PDI_ACCESS_MAX];
 static uint32_t s_pdi_access_count;
+static uint32_t s_publication_watch;
+static uint32_t s_publication_started;
+static uint32_t s_publication_phase;
+static uint32_t s_publication_violation;
+/* Optional fake control port whose reads emulate HLS ap_done clear-on-read. */
+static uintptr_t s_watched_kernel_ctrl;
+/* Number of MMIO reads observed at s_watched_kernel_ctrl. */
+static uint32_t s_watched_kernel_ctrl_reads;
 
 static void record_pdi_access(uint32_t kind, uintptr_t address, uint32_t value)
 {
@@ -515,6 +517,14 @@ static uint32_t test_mmio_read32(uintptr_t address, void *context)
         record_pdi_access(PDI_ACCESS_READ, address, s_pdi_detail);
         return s_pdi_detail;
     }
+    if (address == s_watched_kernel_ctrl) {
+        volatile uint32_t *control = (volatile uint32_t *)address;
+        uint32_t value = *control;
+
+        s_watched_kernel_ctrl_reads++;
+        *control = value & ~0x2u;
+        return value;
+    }
     return *(volatile uint32_t *)address;
 }
 
@@ -538,10 +548,32 @@ static void test_mmio_write32(uintptr_t address, uint32_t value, void *context)
     *(volatile uint32_t *)address = value;
 }
 
-static void test_barrier(void *context)
+static void test_barrier(rp1_barrier_kind_t barrier, void *context)
 {
     (void)context;
-    record_pdi_access(PDI_ACCESS_BARRIER, 0u, 0u);
+    record_pdi_access(PDI_ACCESS_BARRIER, 0u, (uint32_t)barrier);
+
+    if (!s_publication_watch)
+        return;
+    if (G_CTRL->rp1_state == RP1_STATE_RUNNING)
+        s_publication_started = 1u;
+    if (!s_publication_started)
+        return;
+
+    if (G_CTRL->graph_done_seq == G_CTRL->graph_seq) {
+        if (G_CTRL->result.magic != RP1_GRAPH_RESULT_MAGIC ||
+            G_CTRL->rp1_state == RP1_STATE_RUNNING ||
+            s_publication_phase < 2u)
+            s_publication_violation = 1u;
+        s_publication_phase = 3u;
+    } else if (G_CTRL->rp1_state != RP1_STATE_RUNNING) {
+        if (G_CTRL->result.magic != RP1_GRAPH_RESULT_MAGIC ||
+            s_publication_phase < 1u)
+            s_publication_violation = 1u;
+        s_publication_phase = 2u;
+    } else if (G_CTRL->result.magic == RP1_GRAPH_RESULT_MAGIC) {
+        s_publication_phase = 1u;
+    }
 }
 
 static uint32_t test_cycles(void *context)
@@ -572,7 +604,216 @@ static void pdi_override_reset(void)
     s_fake_cycles = 0;
     s_cycle_step = 1u;
     s_pdi_access_count = 0;
+    s_publication_watch = 0u;
+    s_publication_started = 0u;
+    s_publication_phase = 0u;
+    s_publication_violation = 0u;
+    s_watched_kernel_ctrl = 0u;
+    s_watched_kernel_ctrl_reads = 0u;
     rp1_hal_set_hooks(&s_hal_hooks);
+}
+
+/*
+ * Count control reads for one fake CU and model the clear-on-read ap_done bit.
+ * The normal scan hook still decides when the fake invocation completes.
+ */
+static void watch_kernel_ctrl(uintptr_t address)
+{
+    s_watched_kernel_ctrl = address;
+    s_watched_kernel_ctrl_reads = 0u;
+}
+
+/* Verify each public barrier primitive preserves its distinct HAL identity. */
+static int test_barrier_variants(void)
+{
+    pdi_override_reset();
+
+    rp1_dsb_st();
+    rp1_dsb_sy();
+    rp1_dmb_st();
+    rp1_dmb_sy();
+    rp1_hal_reset_hooks();
+
+    CHECK_EQ32(s_pdi_access_count, 4u, "barriers: all variants observed");
+    CHECK_EQ32(s_pdi_access[0].value, RP1_BARRIER_DSB_ST,
+               "barriers: dsb st");
+    CHECK_EQ32(s_pdi_access[1].value, RP1_BARRIER_DSB_SY,
+               "barriers: dsb sy");
+    CHECK_EQ32(s_pdi_access[2].value, RP1_BARRIER_DMB_ST,
+               "barriers: dmb st");
+    CHECK_EQ32(s_pdi_access[3].value, RP1_BARRIER_DMB_SY,
+               "barriers: dmb sy");
+    return 0;
+}
+
+/*
+ * Observe each firmware barrier and require the release sequence to progress
+ * from committed result, to terminal state, to graph_done_seq.
+ */
+static int test_result_publication_order(void)
+{
+    setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
+    pdi_override_reset();
+    make_signal(&G_NODES[0], 0u, 0xABCDu, RP1_SIGOP_SET,
+                0, 0u, 0, 1u);
+    s_publication_watch = 1u;
+
+    int rc = rp1_run(&s_hooks);
+    s_publication_watch = 0u;
+    rp1_hal_reset_hooks();
+
+    CHECK_EQ32(rc, 0u, "publish_order: rp1_run rc");
+    CHECK_EQ32(s_publication_violation, 0u,
+               "publish_order: no release-order violation");
+    CHECK_EQ32(s_publication_phase, 3u,
+               "publish_order: completion sequence observed");
+    return 0;
+}
+
+/*
+ * A firmware reload must discard both sequence words before publishing magic.
+ * Otherwise the stale host doorbell can execute the previous graph immediately.
+ */
+static int test_boot_sequence_baseline(void)
+{
+    setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
+    make_signal(&G_NODES[0], 0u, 0xABCDu, RP1_SIGOP_SET,
+                0, 0u, 0, 1u);
+    G_CTRL->graph_seq = 41u;
+    G_CTRL->graph_done_seq = 40u;
+    s_boot_graphs = 0u;
+
+    int rc = rp1_run(&s_boot_hooks);
+
+    CHECK_EQ32(rc, 0u, "boot_baseline: idle return");
+    CHECK_EQ32(G_CTRL->graph_seq, 0u, "boot_baseline: graph_seq reset");
+    CHECK_EQ32(G_CTRL->graph_done_seq, 0u,
+               "boot_baseline: graph_done_seq reset");
+    CHECK_EQ32(s_boot_graphs, 0u, "boot_baseline: stale graph not executed");
+    CHECK_EQ32(G_SIGS[0].value, 0u, "boot_baseline: stale graph had no effect");
+    CHECK_EQ32(G_CTRL->rp1_state, RP1_STATE_READY,
+               "boot_baseline: firmware ready");
+    return 0;
+}
+
+/*
+ * Protocol-v6 hosts must zero every former CQ control word. Rejecting stale
+ * v4 configuration prevents an old host from submitting under the new ABI.
+ */
+static int test_reserved_cq_config_rejected(void)
+{
+    setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
+    make_signal(&G_NODES[0], 0u, 0xABCDu, RP1_SIGOP_SET,
+                0, 0u, 0, 1u);
+    G_CTRL->_reserved_cq_size = 64u;
+
+    int rc = rp1_run(&s_hooks);
+
+    CHECK(rc == -1, "reserved_cq: graph failed");
+    CHECK_EQ32(G_CTRL->result.magic, RP1_GRAPH_RESULT_MAGIC,
+               "reserved_cq: result committed");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_FAILED,
+               "reserved_cq: failed outcome");
+    CHECK_EQ32(G_CTRL->result.error_code, RP1_ERR_INVALID_CONFIG,
+               "reserved_cq: invalid config");
+    CHECK_EQ32(G_CTRL->result.error_detail, RP1_CONFIG_RESERVED_CQ,
+               "reserved_cq: detail");
+    CHECK_EQ32(G_CTRL->result.error_aux, 1u,
+               "reserved_cq: size bit reported");
+    CHECK_EQ32(G_SIGS[0].value, 0u,
+               "reserved_cq: graph had no side effect");
+    return 0;
+}
+
+/*
+ * Firmware must execute only the BTCM snapshot. Mutating every meaningful DDR
+ * field after rp1_store_init() must not redirect execution or receive status
+ * writeback from the scanner.
+ */
+static int test_btcm_node_snapshot(void)
+{
+    setup_graph(/* node_count */ 1u, /* fake_kernels */ 0u);
+    make_signal(&G_NODES[0], 4u, 0x11112222u, RP1_SIGOP_SET,
+                0u, 0u, 0u, 1u);
+    for (uint32_t i = 8u; i < sizeof(G_NODES[0].payload.raw); i++)
+        G_NODES[0].payload.raw[i] = (uint8_t)(0x80u + i);
+    rp1_node_set_status(&G_NODES[0], RP1_NODE_ERROR);
+    uint8_t expected_payload[sizeof(G_NODES[0].payload.raw)];
+    for (uint32_t i = 0u; i < sizeof(expected_payload); i++)
+        expected_payload[i] = G_NODES[0].payload.raw[i];
+
+    uint32_t detail = 0u;
+    uint32_t aux = 0u;
+    CHECK_EQ32(rp1_store_init(&detail, &aux), 0u,
+               "snapshot: store accepted");
+    CHECK_EQ32(g_node_count, 1u, "snapshot: local count cached");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_PENDING,
+               "snapshot: stale DDR status discarded");
+    CHECK_EQ32(rp1_node_get_status(&G_NODES[0]), RP1_NODE_ERROR,
+               "snapshot: DDR status not initialized");
+    for (uint32_t i = 0u; i < sizeof(expected_payload); i++)
+        CHECK_EQ32(g_nodes[0].payload.raw[i], expected_payload[i],
+                   "snapshot: every payload byte copied");
+
+    /* Replace the source packet after the snapshot and execute directly. */
+    make_signal(&G_NODES[0], 5u, 0x33334444u, RP1_SIGOP_SET,
+                0u, 0u, 0u, 2u);
+    rp1_node_set_status(&G_NODES[0], RP1_NODE_ERROR);
+    uint16_t ddr_control = G_NODES[0].control;
+    int rc = rp1_loop(&s_hooks);
+
+    CHECK_EQ32(rc, 0u, "snapshot: scanner result");
+    CHECK_EQ32(G_SIGS[4].value, 0x11112222u,
+               "snapshot: BTCM payload executed");
+    CHECK_EQ32(G_SIGS[5].value, 0u,
+               "snapshot: changed DDR payload ignored");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_DONE,
+               "snapshot: BTCM status mutated");
+    CHECK_EQ32(G_NODES[0].control, ddr_control,
+               "snapshot: DDR control never written");
+    CHECK_EQ32(G_NODES[0].payload.signal.value, 0x33334444u,
+               "snapshot: DDR payload never written");
+    return 0;
+}
+
+/* Accept exactly 1024 packets, execute their BTCM copies, and reject 1025. */
+static int test_exact_node_limit(void)
+{
+    setup_graph(RP1_MAX_NODES, 0u);
+    for (uint32_t i = 0u; i < RP1_MAX_NODES; i++)
+        make_header(&G_NODES[i], RP1_OP_NOP, 0u, 0u, 0u, 0u, 0u);
+    G_NODES[0].payload.raw[0] = 0x11u;
+    G_NODES[RP1_MAX_NODES - 1u].payload.raw[19] = 0xEEu;
+
+    uint32_t detail = 0u;
+    uint32_t aux = 0u;
+    CHECK_EQ32(rp1_store_init(&detail, &aux), 0u,
+               "node_limit: exact maximum accepted");
+    CHECK_EQ32(g_node_count, RP1_MAX_NODES,
+               "node_limit: exact maximum cached");
+    CHECK_EQ32(g_nodes[0].payload.raw[0], 0x11u,
+               "node_limit: first packet copied");
+    CHECK_EQ32(g_nodes[RP1_MAX_NODES - 1u].payload.raw[19], 0xEEu,
+               "node_limit: last packet copied");
+    CHECK_EQ32(rp1_loop(&s_hooks), 0u,
+               "node_limit: exact maximum executed");
+    CHECK_EQ32(g_completed_operations, RP1_MAX_NODES,
+               "node_limit: every packet completed");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[RP1_MAX_NODES - 1u]),
+               RP1_NODE_DONE, "node_limit: last packet done");
+
+    setup_graph(RP1_MAX_NODES + 1u, 0u);
+    detail = 0u;
+    aux = 0u;
+    CHECK(rp1_store_init(&detail, &aux) != 0,
+          "node_limit: maximum plus one rejected");
+    CHECK_EQ32(detail, RP1_CONFIG_NODE_COUNT,
+               "node_limit: count rejection detail");
+    CHECK_EQ32(aux, RP1_MAX_NODES + 1u,
+               "node_limit: rejected count preserved");
+    CHECK_EQ32(g_node_count, 0u,
+               "node_limit: rejected graph has no active snapshot");
+    return 0;
 }
 
 static void prepare_diamond_graph(void)
@@ -606,7 +847,7 @@ static void prepare_diamond_graph(void)
  *   - KERNEL_DISPATCH writes args to FAKE_K + 0x10 and ap_start to + 0x00.
  *   - barrier AND ({B,C} done) gates D.
  *   - parallel dispatch: B and C are both in flight at some point.
- *   - the CQ is populated in the natural dispatch order.
+ *   - one sequence-tagged successful graph result is committed.
  * ---------------------------------------------------------------------- */
 
 static int test_diamond_dag(void)
@@ -623,39 +864,76 @@ static int test_diamond_dag(void)
     CHECK_EQ32(s_trace[3],    3u, "diamond: D last");
     CHECK(s_max_inflight >= 2u, "diamond: B and C in flight together");
 
-    CHECK_EQ32(G_CTRL->cq_write_idx,   4u,                 "diamond: cq entries");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u,                 "diamond: graph_done_seq");
     CHECK_EQ32(G_CTRL->rp1_state,      RP1_STATE_READY,    "diamond: rp1_state");
+    CHECK_EQ32(G_CTRL->result.magic, RP1_GRAPH_RESULT_MAGIC,
+               "diamond: result committed");
+    CHECK_EQ32(G_CTRL->result.graph_seq, 1u,
+               "diamond: result sequence");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_SUCCESS,
+               "diamond: successful outcome");
+    CHECK_EQ32(G_CTRL->result.flags, 0u,
+               "diamond: no exceptional flags");
+    CHECK_EQ32(G_CTRL->result.error_code, 0u,
+               "diamond: no terminal error");
+    CHECK_EQ32(G_CTRL->result.terminal_node,
+               RP1_TERMINAL_ERROR_NODE_NONE,
+               "diamond: no terminal node");
+    CHECK_EQ32(G_CTRL->result.terminal_opcode,
+               RP1_TERMINAL_OPCODE_NONE,
+               "diamond: no terminal opcode");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_NONE,
+               "diamond: no active image");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 4u,
+               "diamond: four successful operations");
+    CHECK_EQ32(G_CTRL->result.quiescence, 0u,
+               "diamond: no quiescence work");
+    CHECK(G_CTRL->result.publish_elapsed_ticks >=
+          G_CTRL->result.graph_elapsed_ticks,
+          "diamond: publication follows graph completion");
 
     for (uint32_t i = 0; i < 4; i++) {
         volatile uint32_t *ctrl = (volatile uint32_t *)(uintptr_t)FAKE_KERNEL(i);
         CHECK_EQ32(ctrl[0],        0x3u, "diamond: ctrl reg ap_start|ap_done");
         CHECK_EQ32(ctrl[0x10 / 4], i,    "diamond: kernel arg[0]");
+        CHECK_EQ32(rp1_node_get_status(&g_nodes[i]), RP1_NODE_DONE,
+                   "diamond: BTCM status is authoritative");
+        CHECK_EQ32(rp1_node_get_status(&G_NODES[i]), RP1_NODE_PENDING,
+                   "diamond: DDR packet remains unchanged");
     }
     return 0;
 }
 
-static int test_cq_timestamps(void)
+/*
+ * Independent dispatches to one CU must serialize. The second invocation
+ * reuses the completion read as its ap_done clear, while a subsequent PDI
+ * transition invalidates that knowledge and restores the first-use clear.
+ */
+static int test_cu_clean_tracking(void)
 {
-    prepare_diamond_graph();
+    setup_graph(/* node_count */ 4u, /* fake_kernels */ 1u);
+    pdi_override_reset();
+    watch_kernel_ctrl(FAKE_KERNEL(0));
+
+    make_kernel(&G_NODES[0], 0u, 0u, 0u, 0u, 1u, 0u, 0u);
+    make_kernel(&G_NODES[1], 0u, 0u, 0u, 0u, 2u, 0u, 0u);
+    make_pdi_load(&G_NODES[2], 0x10000000u, 0u, 20u,
+                  0u, 0u, 3u, 0u, 4u);
+    make_kernel(&G_NODES[3], 0u, 0u, 4u, 0u, 8u, 0u, 0u);
 
     int rc = rp1_run(&s_hooks);
-    CHECK_EQ32(rc, 0u, "cq_ts: first rp1_run rc");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 4u, "cq_ts: first cq entries");
+    uint32_t control_reads = s_watched_kernel_ctrl_reads;
+    rp1_hal_reset_hooks();
 
-    for (uint32_t i = 1; i < G_CTRL->cq_write_idx; i++)
-        CHECK(G_CQ[i].timestamp >= G_CQ[i - 1u].timestamp,
-              "cq_ts: timestamps non-decreasing");
-    CHECK(G_CQ[3].timestamp > G_CQ[0].timestamp,
-          "cq_ts: timestamps advanced");
-
-    uint32_t first_last = G_CQ[3].timestamp;
-
-    prepare_diamond_graph();
-    rc = rp1_run(&s_hooks);
-    CHECK_EQ32(rc, 0u, "cq_ts: second rp1_run rc");
-    CHECK(G_CQ[0].timestamp < first_last,
-          "cq_ts: second graph timestamp baseline reset");
+    CHECK_EQ32(rc, 0u, "cu_clean: rp1_run rc");
+    CHECK_EQ32(s_max_inflight, 1u,
+               "cu_clean: same-CU dispatches serialized");
+    CHECK_EQ32(s_pdi_call_count, 1u, "cu_clean: PDI issued once");
+    CHECK_EQ32(control_reads, 8u,
+               "cu_clean: reused clear skipped and PDI invalidated cache");
+    for (uint32_t i = 0u; i < 4u; i++)
+        CHECK_EQ32(rp1_node_get_status(&g_nodes[i]), RP1_NODE_DONE,
+                   "cu_clean: every node completed");
     return 0;
 }
 
@@ -666,6 +944,10 @@ static int test_trace_disabled_by_default(void)
     int rc = rp1_run(&s_hooks);
     CHECK_EQ32(rc, 0u, "trace_default: rp1_run rc");
     CHECK_EQ32(G_CTRL->trace_write_idx, 0u, "trace_default: trace disabled");
+    CHECK_EQ32(G_CTRL->result.trace_write_idx, 0u,
+               "trace_default: result cursor zero");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_TRACE_ENABLED) == 0u,
+          "trace_default: result trace flag clear");
     return 0;
 }
 
@@ -685,6 +967,10 @@ static int test_trace_queue(void)
                "trace_queue: graph start node");
     CHECK_EQ32(G_TRACE[writes - 1u].event, RP1_TRACE_GRAPH_DONE,
                "trace_queue: last event graph done");
+    CHECK_EQ32(G_CTRL->result.trace_write_idx, writes,
+               "trace_queue: result cursor is final");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_TRACE_ENABLED) != 0u,
+          "trace_queue: result reports tracing");
 
     uint32_t launch_count = 0;
     uint32_t done_count = 0;
@@ -702,6 +988,53 @@ static int test_trace_queue(void)
 
     CHECK_EQ32(launch_count, 4u, "trace_queue: launch entries");
     CHECK_EQ32(done_count, 4u, "trace_queue: done entries");
+    return 0;
+}
+
+/*
+ * Fill one BTCM trace page and prove the synchronous DDR copy is bracketed by
+ * adjacent FLUSH_START/END events.
+ */
+static int test_trace_btcm_flush(void)
+{
+    const uint32_t node_count = 260u;
+    const uint32_t trace_size = 512u;
+    setup_graph(node_count, 0);
+    tmemzero((volatile void *)G_TRACE,
+             trace_size * sizeof(rp1_trace_entry_t));
+    G_CTRL->trace_enable = 1u;
+    G_CTRL->trace_size = trace_size;
+
+    for (uint32_t i = 0; i < node_count; i++) {
+        make_header(&G_NODES[i], RP1_OP_NOP, 0u, 0, 0u, 0, 0u);
+    }
+
+    int rc = rp1_run(&s_hooks);
+    CHECK_EQ32(rc, 0u, "trace_flush: rp1_run rc");
+    CHECK_EQ32(G_CTRL->trace_write_idx, 264u,
+               "trace_flush: events plus flush markers");
+    CHECK_EQ32(G_TRACE[0].event, RP1_TRACE_GRAPH_START,
+               "trace_flush: graph start first");
+    CHECK_EQ32(G_TRACE[255].event, RP1_TRACE_FLUSH_START,
+               "trace_flush: full page ends with flush start");
+    CHECK_EQ32(G_TRACE[256].event, RP1_TRACE_FLUSH_END,
+               "trace_flush: fresh page begins with flush end");
+    CHECK_EQ32(G_TRACE[263].event, RP1_TRACE_GRAPH_DONE,
+               "trace_flush: final partial page ends with graph done");
+    CHECK_EQ32(G_CTRL->result.trace_write_idx, 264u,
+               "trace_flush: result captures final cursor");
+    CHECK_EQ32(G_CTRL->result.completed_operations, node_count,
+               "trace_flush: all NOP operations counted");
+    CHECK_EQ32(G_TRACE[255].aux0, RP1_TRACE_STAGING_ENTRIES,
+               "trace_flush: start reports page entries");
+    CHECK_EQ32(G_TRACE[255].aux1, 0u,
+               "trace_flush: start reports old DDR cursor");
+    CHECK_EQ32(G_TRACE[256].aux0, RP1_TRACE_STAGING_ENTRIES,
+               "trace_flush: end reports page entries");
+    CHECK_EQ32(G_TRACE[256].aux1, RP1_TRACE_STAGING_ENTRIES,
+               "trace_flush: end reports new DDR cursor");
+    CHECK(G_TRACE[256].timestamp >= G_TRACE[255].timestamp,
+          "trace_flush: end follows start");
     return 0;
 }
 
@@ -735,9 +1068,12 @@ static int test_kernel_unblocks_signal(void)
 
     CHECK_EQ32(G_SIGS[0].value, 0xBEEFBEEFu, "kernel_chain: pre signal");
     CHECK_EQ32(G_SIGS[1].value, 0xCAFEBABEu, "kernel_chain: post signal");
-    CHECK_EQ32(g_node_status[0], RP1_NODE_DONE, "kernel_chain: node 0 DONE");
-    CHECK_EQ32(g_node_status[1], RP1_NODE_DONE, "kernel_chain: node 1 DONE");
-    CHECK_EQ32(g_node_status[2], RP1_NODE_DONE, "kernel_chain: node 2 DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_DONE,
+               "kernel_chain: node 0 DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[1]), RP1_NODE_DONE,
+               "kernel_chain: node 1 DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[2]), RP1_NODE_DONE,
+               "kernel_chain: node 2 DONE");
     CHECK_EQ32(g_barriers[0] & 0x7u, 0x7u, "kernel_chain: barriers raised");
 
     CHECK_EQ32(s_trace_count, 3u, "kernel_chain: nodes traced");
@@ -745,10 +1081,8 @@ static int test_kernel_unblocks_signal(void)
     CHECK_EQ32(s_trace[1],    1u, "kernel_chain: kernel second");
     CHECK_EQ32(s_trace[2],    2u, "kernel_chain: post third");
 
-    CHECK_EQ32(G_CTRL->cq_write_idx, 3u, "kernel_chain: cq entries");
-    CHECK_EQ32(G_CQ[0].node_index,   0u, "kernel_chain: CQ[0] pre");
-    CHECK_EQ32(G_CQ[1].node_index,   1u, "kernel_chain: CQ[1] kernel");
-    CHECK_EQ32(G_CQ[2].node_index,   2u, "kernel_chain: CQ[2] post");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 3u,
+               "kernel_chain: operations counted");
 
     volatile uint32_t *ctrl = (volatile uint32_t *)(uintptr_t)FAKE_KERNEL(0);
     CHECK_EQ32(ctrl[0],        0x3u,        "kernel_chain: ctrl ap_start|ap_done");
@@ -763,7 +1097,7 @@ static int test_kernel_unblocks_signal(void)
  *
  * Pure-scanner sanity check: no kernels, only immediate-completion
  * SIGNAL ops chained via single-bit barrier dependencies in bucket 0.
- * Exercises the DDR-resolved pointers (g_nodes, g_signals, g_cq).
+ * Exercises the DDR-resolved node and signal pointers.
  * ---------------------------------------------------------------------- */
 
 static int test_signal_chain(void)
@@ -784,103 +1118,9 @@ static int test_signal_chain(void)
     CHECK_EQ32(G_SIGS[3].value, 0xD003u, "chain: slot 3");
 
     CHECK_EQ32(s_trace_count,        4u, "chain: nodes traced");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 4u, "chain: cq entries");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 4u,
+               "chain: operations counted");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u, "chain: graph_done_seq");
-    return 0;
-}
-
-static int test_cq_flow_control(void)
-{
-    setup_graph(/* node_count */ 12, /* fake_kernels */ 0);
-    G_CTRL->cq_size = 4u;
-    G_CQ[4].node_index = 0xA1A2A3A4u;
-    G_CQ[4].status = 0xB1B2B3B4u;
-    G_CQ[4].error_detail = 0xC1C2C3C4u;
-    G_CQ[4].timestamp = 0xD1D2D3D4u;
-    for (uint32_t i = 0; i < 12u; i++) {
-        make_signal(&G_NODES[i], i, 0x100u + i, RP1_SIGOP_SET,
-                    0, 0u, 0, 1u << (i & 31u));
-    }
-    s_drain_cq = 1u;
-
-    int rc = rp1_run(&s_hooks);
-    CHECK_EQ32(rc, 0u, "cq_flow: rp1_run rc");
-    CHECK_EQ32(s_cq_capture_count, 12u,
-               "cq_flow: all entries incrementally drained");
-    for (uint32_t i = 0; i < 12u; i++)
-        CHECK_EQ32(s_cq_capture[i].node_index, i,
-                   "cq_flow: lossless node order");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 12u, "cq_flow: producer cursor");
-    CHECK_EQ32(G_CTRL->cq_read_idx, 12u, "cq_flow: consumer cursor");
-    CHECK_EQ32(G_CQ[4].node_index, 0xA1A2A3A4u,
-               "cq_flow: canary node");
-    CHECK_EQ32(G_CQ[4].status, 0xB1B2B3B4u,
-               "cq_flow: canary status");
-    CHECK_EQ32(G_CQ[4].error_detail, 0xC1C2C3C4u,
-               "cq_flow: canary detail");
-    CHECK_EQ32(G_CQ[4].timestamp, 0xD1D2D3D4u,
-               "cq_flow: canary timestamp");
-    return 0;
-}
-
-static int test_cq_config_validation(void)
-{
-    setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
-    make_signal(&G_NODES[0], 0, 1u, RP1_SIGOP_SET,
-                0, 0u, 0, 1u);
-    G_CTRL->cq_size = 3u;
-    int rc = rp1_run(&s_hooks);
-    CHECK_EQ32((uint32_t)(rc + 1), 0u,
-               "cq_config: non-power-of-two rejected");
-    CHECK_EQ32(G_CTRL->terminal_error_detail, RP1_CONFIG_CQ_SIZE,
-               "cq_config: size detail");
-    CHECK_EQ32(G_CTRL->terminal_error_aux, 3u,
-               "cq_config: invalid size value");
-
-    setup_graph(1, 0);
-    make_signal(&G_NODES[0], 0, 1u, RP1_SIGOP_SET,
-                0, 0u, 0, 1u);
-    G_CTRL->cq_size = RP1_MAX_CQ_ENTRIES * 2u;
-    rc = rp1_run(&s_hooks);
-    CHECK_EQ32((uint32_t)(rc + 1), 0u,
-               "cq_config: oversize rejected");
-    CHECK_EQ32(G_CTRL->terminal_error_detail, RP1_CONFIG_CQ_SIZE,
-               "cq_config: oversize detail");
-
-    setup_graph(1, 0);
-    make_signal(&G_NODES[0], 0, 1u, RP1_SIGOP_SET,
-                0, 0u, 0, 1u);
-    G_CTRL->cq_size = RP1_MAX_CQ_ENTRIES;
-    rc = rp1_run(&s_hooks);
-    CHECK_EQ32(rc, 0u, "cq_config: maximum accepted");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 1u,
-               "cq_config: maximum ring wrote entry");
-    return 0;
-}
-
-static int test_cq_cursor_wrap(void)
-{
-    setup_graph(/* node_count */ 3, /* fake_kernels */ 0);
-    G_CTRL->cq_size = 4u;
-    G_CTRL->cq_write_idx = 0xFFFFFFFEu;
-    G_CTRL->cq_read_idx = 0xFFFFFFFEu;
-    for (uint32_t i = 0; i < 3u; i++) {
-        make_signal(&G_NODES[i], i, i + 1u, RP1_SIGOP_SET,
-                    0, 0u, 0, 1u << i);
-    }
-
-    uint32_t detail = 0u;
-    uint32_t aux = 0u;
-    CHECK_EQ32(rp1_store_init(&detail, &aux), 0u,
-               "cq_wrap: store init");
-    g_graph_start_cycles = rp1_cycles();
-    int rc = rp1_loop(&s_hooks);
-    CHECK_EQ32(rc, 0u, "cq_wrap: scanner result");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 1u,
-               "cq_wrap: producer wrapped");
-    CHECK_EQ32(G_CQ[2].node_index, 0u, "cq_wrap: slot 2");
-    CHECK_EQ32(G_CQ[3].node_index, 1u, "cq_wrap: slot 3");
-    CHECK_EQ32(G_CQ[0].node_index, 2u, "cq_wrap: slot 0");
     return 0;
 }
 
@@ -889,7 +1129,7 @@ static int test_graph_sequence_wrap(void)
     setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
     make_signal(&G_NODES[0], 0u, 0x1111u, RP1_SIGOP_SET,
                 0, 0u, 0, 1u);
-    G_CTRL->graph_seq = 0xFFFFFFFFu;
+    s_pending_graph_seq = 0xFFFFFFFFu;
     s_wrap_graphs = 0u;
 
     int rc = rp1_run(&s_wrap_hooks);
@@ -897,6 +1137,12 @@ static int test_graph_sequence_wrap(void)
     CHECK_EQ32(s_wrap_graphs, 2u, "seq_wrap: both graphs ran");
     CHECK_EQ32(G_CTRL->graph_done_seq, 0u,
                "seq_wrap: equality completion wrapped");
+    CHECK_EQ32(G_CTRL->result.magic, RP1_GRAPH_RESULT_MAGIC,
+               "seq_wrap: wrapped result committed");
+    CHECK_EQ32(G_CTRL->result.graph_seq, 0u,
+               "seq_wrap: result sequence wrapped");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_SUCCESS,
+               "seq_wrap: wrapped graph succeeded");
     CHECK_EQ32(G_SIGS[0].value, 0x1111u,
                "seq_wrap: pre-wrap graph ran");
     CHECK_EQ32(G_SIGS[1].value, 0x2222u,
@@ -904,51 +1150,60 @@ static int test_graph_sequence_wrap(void)
     return 0;
 }
 
-static int test_signal_slot_validation(void)
+/*
+ * Every uint8_t signal value names one of the 256 slots, so protocol-v6 slot
+ * encoding has no invalid value. Retain all-or-nothing validation coverage
+ * with the remaining compact discriminants.
+ */
+static int test_compact_operation_validation(void)
 {
-    static const uint16_t opcodes[] = {
+    static const uint8_t opcodes[] = {
         RP1_OP_SIGNAL,
         RP1_OP_WAIT,
-        RP1_OP_SCALAR_READ,
-        RP1_OP_SCALAR_COPY,
-        RP1_OP_LOOP,
-        RP1_OP_COND,
+        14u,
+        RP1_OP_NOP,
+        RP1_OP_NOP,
+        RP1_OP_NOP,
+    };
+    static const uint8_t flags[] = {
+        0u,
+        0u,
+        0u,
+        0x2u,
+        0u,
+        RP1_FLAG_INFINITE,
+    };
+    static const uint16_t reserved[] = {
+        0u,
+        0u,
+        0u,
+        0u,
+        0x1000u,
+        0u,
+    };
+    static const uint16_t bad_values[] = {
+        RP1_SIGOP_AND + 1u,
+        RP1_COP_AND_Z + 1u,
+        14u,
+        0x20u,
+        0x1000u,
+        0x10u,
     };
 
     for (uint32_t test = 0; test < sizeof(opcodes) / sizeof(opcodes[0]);
          test++) {
         setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
         rp1_node_t *node = &G_NODES[0];
-        node->opcode = opcodes[test];
-        node->status = RP1_NODE_PENDING;
-        switch (node->opcode) {
+        make_header(node, opcodes[test], flags[test],
+                    0u, 0u, 0u, 0u);
+        rp1_node_set_control(
+            node, (uint16_t)(rp1_node_get_control(node) | reserved[test]));
+        switch (opcodes[test]) {
         case RP1_OP_SIGNAL:
-            node->payload.signal.target_slot = RP1_MAX_SIGNALS;
-            node->payload.signal.operation = RP1_SIGOP_SET;
+            node->payload.signal.operation = (uint8_t)bad_values[test];
             break;
         case RP1_OP_WAIT:
-            node->payload.wait.condition_signal = RP1_MAX_SIGNALS;
-            node->payload.wait.condition_op = RP1_COP_EQ;
-            break;
-        case RP1_OP_SCALAR_READ:
-            node->payload.scalar_read.target_slot = RP1_MAX_SIGNALS;
-            break;
-        case RP1_OP_SCALAR_COPY:
-            node->payload.scalar_copy.source_slot = RP1_MAX_SIGNALS;
-            break;
-        case RP1_OP_LOOP:
-            node->payload.loop.condition_signal = RP1_MAX_SIGNALS;
-            node->payload.loop.condition_op = RP1_COP_EQ;
-            node->payload.loop.body_start = 0u;
-            node->payload.loop.body_end = 0u;
-            break;
-        case RP1_OP_COND:
-            node->payload.cond.condition_signal = RP1_MAX_SIGNALS;
-            node->payload.cond.condition_op = RP1_COP_EQ;
-            node->payload.cond.body_start = 1u;
-            node->payload.cond.body_end = 0u;
-            node->payload.cond.bucket_clear_start = 1u;
-            node->payload.cond.bucket_clear_end = 0u;
+            node->payload.wait.condition_op = (uint8_t)bad_values[test];
             break;
         default:
             break;
@@ -956,16 +1211,104 @@ static int test_signal_slot_validation(void)
 
         int rc = rp1_run(&s_hooks);
         CHECK_EQ32((uint32_t)(rc + 1), 0u,
-                   "slot_validation: graph rejected");
+                   "operation_validation: graph rejected");
         CHECK_EQ32(G_CTRL->terminal_error_node, 0u,
-                   "slot_validation: node latched");
+                   "operation_validation: node latched");
         CHECK_EQ32(G_CTRL->terminal_error_detail,
-                   RP1_NODE_BAD_SIGNAL_SLOT,
-                   "slot_validation: detail");
-        CHECK_EQ32(G_CTRL->terminal_error_aux, RP1_MAX_SIGNALS,
-                   "slot_validation: bad slot preserved");
-        CHECK_EQ32(G_CQ[0].status, RP1_CQ_ERROR,
-                   "slot_validation: CQ evidence");
+                   RP1_NODE_BAD_OPERATION,
+                   "operation_validation: detail");
+        CHECK_EQ32(G_CTRL->terminal_error_aux, bad_values[test],
+                   "operation_validation: bad value preserved");
+        CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_FAILED,
+                   "operation_validation: failed result");
+        CHECK_EQ32(G_CTRL->result.terminal_opcode, opcodes[test],
+                   "operation_validation: opcode preserved");
+        CHECK_EQ32(G_CTRL->result.completed_operations, 0u,
+                   "operation_validation: no operation started");
+        CHECK((G_CTRL->result.flags &
+               RP1_RESULT_EFFECTS_MAY_BE_PARTIAL) == 0u,
+              "operation_validation: no partial effects");
+    }
+    return 0;
+}
+
+/*
+ * Phase-1 DMA and compact control validation must reject every field the
+ * executor would otherwise ignore. A trailing SIGNAL proves validation
+ * completes before any graph side effect.
+ */
+static int test_phase1_payload_validation(void)
+{
+    enum {
+        BAD_DMA_COPY_HIGH,
+        BAD_DMA_COPY_TYPE,
+        BAD_DMA_COPY_RANGE,
+        BAD_DMA_FILL_HIGH,
+        BAD_DMA_FILL_TYPE,
+        BAD_DMA_FILL_RANGE,
+        BAD_DISPATCH_FLAGS,
+        BAD_RERUN_FLAGS,
+        BAD_CASE_COUNT,
+    };
+    static const uint32_t expected_detail[BAD_CASE_COUNT] = {
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_ARGUMENTS,
+        RP1_NODE_BAD_TARGET,
+    };
+
+    for (uint32_t test = 0u; test < BAD_CASE_COUNT; test++) {
+        setup_graph(/* node_count */ 2u, /* fake_kernels */ 1u);
+        rp1_node_t *node = &G_NODES[0];
+
+        if (test <= BAD_DMA_COPY_RANGE) {
+            make_header(node, RP1_OP_DMA_COPY, 0u, 0u, 0u, 0u, 0u);
+            node->payload.dma_copy.src_addr_lo = 0x1000u;
+            node->payload.dma_copy.dst_addr_lo = 0x2000u;
+            node->payload.dma_copy.length_types =
+                rp1_dma_pack(8u, 0u, 0u);
+            if (test == BAD_DMA_COPY_HIGH)
+                node->payload.dma_copy.src_addr_hi = 1u;
+            else if (test == BAD_DMA_COPY_TYPE)
+                node->payload.dma_copy.length_types =
+                    rp1_dma_pack(8u, 1u, 0u);
+            else
+                node->payload.dma_copy.src_addr_lo = 0xFFFFFFFCu;
+        } else if (test <= BAD_DMA_FILL_RANGE) {
+            make_header(node, RP1_OP_DMA_FILL, 0u, 0u, 0u, 0u, 0u);
+            node->payload.dma_fill.dst_addr_lo = 0x2000u;
+            node->payload.dma_fill.length = 8u;
+            if (test == BAD_DMA_FILL_HIGH)
+                node->payload.dma_fill.dst_addr_hi = 1u;
+            else if (test == BAD_DMA_FILL_TYPE)
+                node->payload.dma_fill.dst_type = 1u;
+            else
+                node->payload.dma_fill.dst_addr_lo = 0xFFFFFFFCu;
+        } else if (test == BAD_DISPATCH_FLAGS) {
+            make_kernel(node, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+            node->payload.kernel_dispatch.ctrl_flags = 1u;
+        } else {
+            make_rerun(node, 0u, 0u, 0u, 0u, 0u);
+            node->payload.rerun.rerun_flags = 0x2u;
+        }
+        make_signal(&G_NODES[1], 63u, 0xBAD0u, RP1_SIGOP_SET,
+                    0u, 0u, 0u, 1u);
+
+        int rc = rp1_run(&s_hooks);
+        CHECK_EQ32((uint32_t)(rc + 1), 0u,
+                   "phase1_validation: graph rejected");
+        CHECK_EQ32(G_CTRL->terminal_error_node, 0u,
+                   "phase1_validation: bad node latched");
+        CHECK_EQ32(G_CTRL->terminal_error_detail, expected_detail[test],
+                   "phase1_validation: detail");
+        CHECK_EQ32(G_CTRL->result.completed_operations, 0u,
+                   "phase1_validation: no operation started");
+        CHECK_EQ32(G_SIGS[63].value, 0u,
+                   "phase1_validation: sentinel did not run");
     }
     return 0;
 }
@@ -990,8 +1333,7 @@ static int test_signal_slot_validation(void)
  *     the exit condition (loop_iters[0] is incremented before the check,
  *     so it lands at 4 on exit).
  *   - finalize fires after the LOOP node sets its own barrier on exit.
- *   - CQ entries: init + 3*(body SIGNAL + body RERUN) + LOOP_exit + final = 9.
- *     (LOOP does NOT write CQ on the continue path, only on exit.)
+ *   - successful operation count includes all four LOOP evaluations: 12.
  * ---------------------------------------------------------------------- */
 
 static int test_loop_decrement(void)
@@ -1016,7 +1358,8 @@ static int test_loop_decrement(void)
     CHECK_EQ32(G_SIGS[0].value,        0u,          "loop: slot[0] reached 0");
     CHECK_EQ32(G_SIGS[10].value,       0xCAFEBABEu, "loop: finalize ran");
     CHECK_EQ32(g_loop_iters[0],        4u,          "loop: iteration counter");
-    CHECK_EQ32(G_CTRL->cq_write_idx,   9u,          "loop: cq entries");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 12u,
+               "loop: successful operation count");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u,          "loop: graph_done_seq");
     return 0;
 }
@@ -1032,7 +1375,7 @@ static int test_loop_decrement(void)
  *  Node 3: SIGNAL  slot=21 SET 0xBBBB  await=0/0x20  (only on met)
  *
  * Avoids the if/else-via-body pattern from ARCHITECTURE.md § E (which
- * relies on body_clear + node_status reset to gate body execution and
+ * relies on body_clear + packed BTCM status reset to gate body execution and
  * isn't airtight when body-await masks are zero) and instead exercises
  * COND as a pure boolean: condition evaluation, the always-set
  * barrier_set_mask, and the conditional done_mask in done_bucket.
@@ -1061,7 +1404,8 @@ static int test_cond_boolean(void)
     CHECK_EQ32(rc, 0u, "cond[met]: rp1_run rc");
     CHECK_EQ32(G_SIGS[20].value,     0xAAAAu, "cond[met]: 'always' branch ran");
     CHECK_EQ32(G_SIGS[21].value,     0xBBBBu, "cond[met]: 'met-only' branch ran");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 4u,      "cond[met]: cq entries");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 4u,
+               "cond[met]: successful operation count");
 
     /* ---- Run 2: condition NOT met (slot[5] == 99) ---- */
     setup_graph(4, 0);
@@ -1080,8 +1424,11 @@ static int test_cond_boolean(void)
     CHECK_EQ32(rc, 0u, "cond[nomet]: rp1_run rc");
     CHECK_EQ32(G_SIGS[20].value,     0xAAAAu, "cond[nomet]: 'always' branch ran");
     CHECK_EQ32(G_SIGS[21].value,     0u,      "cond[nomet]: 'met-only' silent");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 3u,      "cond[nomet]: cq entries");
-    CHECK_EQ32(g_node_status[3],     RP1_NODE_PENDING,
+    CHECK_EQ32(G_CTRL->result.completed_operations, 3u,
+               "cond[nomet]: successful operation count");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_UNREACHED_NODES) != 0u,
+          "cond[nomet]: skipped node reported");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[3]), RP1_NODE_PENDING,
                "cond[nomet]: node 3 stayed PENDING");
     return 0;
 }
@@ -1102,7 +1449,7 @@ static int test_cond_boolean(void)
  * the condition-exit + signal-body path; this covers max_iterations + a kernel.
  *
  * Expected: body runs 3 times (loop_iters lands at 4 on exit), finalize fires.
- * CQ = 3*(kernel + rerun) + loop_exit + finalize = 8.
+ * Successful operations include all four LOOP evaluations: 11.
  * ---------------------------------------------------------------------- */
 
 static int test_loop_fixed_count(void)
@@ -1127,8 +1474,10 @@ static int test_loop_fixed_count(void)
 
     CHECK_EQ32(g_loop_iters[0],        4u,       "loop_fixed: 3 body runs (iters=4)");
     CHECK_EQ32(G_SIGS[10].value,       0xD05Eu,  "loop_fixed: finalize ran on exit");
-    CHECK_EQ32(G_CTRL->cq_write_idx,   8u,       "loop_fixed: cq entries");
-    CHECK_EQ32(g_node_status[3],       RP1_NODE_DONE, "loop_fixed: finalize DONE");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 11u,
+               "loop_fixed: successful operation count");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[3]), RP1_NODE_DONE,
+               "loop_fixed: finalize DONE");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u,       "loop_fixed: graph_done_seq");
     return 0;
 }
@@ -1158,7 +1507,8 @@ static int test_scalar_read(void)
     CHECK_EQ32(rc, 0u, "scalar_read: rp1_run rc");
 
     CHECK_EQ32(G_SIGS[6].value,        0x1234ABCDu, "scalar_read: slot captured reg");
-    CHECK_EQ32(g_node_status[1],       RP1_NODE_DONE, "scalar_read: node DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[1]), RP1_NODE_DONE,
+               "scalar_read: node DONE");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u,          "scalar_read: graph_done_seq");
     return 0;
 }
@@ -1196,10 +1546,13 @@ static int test_wait_blocks(void)
     CHECK_EQ32(s_wait_witness_at_fire, 0u,
                "wait: downstream stayed blocked until the signal arrived");
     CHECK_EQ32(G_SIGS[20].value,     0xF00Du,        "wait: downstream ran after release");
-    CHECK_EQ32(g_node_status[0],     RP1_NODE_DONE,  "wait: WAIT node DONE");
-    CHECK_EQ32(g_node_status[1],     RP1_NODE_DONE,  "wait: downstream DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_DONE,
+               "wait: WAIT node DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[1]), RP1_NODE_DONE,
+               "wait: downstream DONE");
     CHECK_EQ32(g_barriers[0] & 0x3u, 0x3u,           "wait: both barriers raised");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 2u,             "wait: cq entries");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 2u,
+               "wait: operations counted after wake");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u,           "wait: graph_done_seq");
     CHECK(s_pass_count > s_wait_after, "wait: scanner kept polling while parked");
     return 0;
@@ -1230,12 +1583,18 @@ static int test_pdi_mmio_contract(void)
                "pdi_mmio: request command address");
     CHECK_EQ32(s_pdi_access[4].kind, PDI_ACCESS_BARRIER,
                "pdi_mmio: request barrier");
+    CHECK_EQ32(s_pdi_access[4].value, RP1_BARRIER_DMB_ST,
+               "pdi_mmio: request stores ordered before trigger");
     CHECK_EQ32(s_pdi_access[5].address, RP1_PDI_IPI_TRIGGER_REG,
                "pdi_mmio: generated trigger address");
     CHECK_EQ32(s_pdi_access[5].value, RP1_PDI_IPI_TARGET_MASK,
                "pdi_mmio: generated target mask");
+    CHECK_EQ32(s_pdi_access[6].value, RP1_BARRIER_DSB_ST,
+               "pdi_mmio: trigger completed before deadline starts");
     CHECK_EQ32(s_pdi_access[7].address, RP1_PDI_IPI_OBSERVATION_REG,
                "pdi_mmio: generated observation address");
+    CHECK_EQ32(s_pdi_access[8].value, RP1_BARRIER_DMB_SY,
+               "pdi_mmio: acknowledgement ordered before response");
     CHECK_EQ32(s_pdi_access[9].address, RP1_PDI_IPI_RESPONSE_BASE,
                "pdi_mmio: response status address");
     CHECK_EQ32(s_pdi_access[10].address, RP1_PDI_IPI_RESPONSE_BASE + 4u,
@@ -1276,7 +1635,6 @@ static int test_kernel_timeout_invariant(void)
     pdi_override_reset();
     s_cycle_step = 1u;
     make_kernel(&G_NODES[0], 0, 0, 0u, 0, 1u, 0u, 0u);
-    G_NODES[0].flags = RP1_FLAG_HALT_ON_ERROR;
     G_NODES[0].payload.kernel_dispatch.timeout_cycles = 12u;
     s_skip_completion_node = 0u;
     int slow = rp1_run(&s_hooks);
@@ -1286,7 +1644,6 @@ static int test_kernel_timeout_invariant(void)
     pdi_override_reset();
     s_cycle_step = 4u;
     make_kernel(&G_NODES[0], 0, 0, 0u, 0, 1u, 0u, 0u);
-    G_NODES[0].flags = RP1_FLAG_HALT_ON_ERROR;
     G_NODES[0].payload.kernel_dispatch.timeout_cycles = 12u;
     s_skip_completion_node = 0u;
     int fast = rp1_run(&s_hooks);
@@ -1300,26 +1657,15 @@ static int test_kernel_timeout_invariant(void)
           "kernel_deadline: scanner poll count does not define timeout");
     CHECK_EQ32(G_CTRL->terminal_error_aux, 12u,
                "kernel_deadline: requested PMU deadline retained");
-    return 0;
-}
-
-static int test_silent_pdi_rejected(void)
-{
-    setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
-    pdi_override_reset();
-    make_pdi_load(&G_NODES[0], 0x10000000u, 0u, 10u,
-                  RP1_FLAG_SILENT, 0, 0u, 0, 1u);
-
-    int rc = rp1_run(&s_hooks);
-    CHECK_EQ32((uint32_t)(rc + 1), 0u,
-               "pdi_silent: graph rejected");
-    CHECK_EQ32(s_pdi_call_count, 0u,
-               "pdi_silent: IPI was not triggered");
-    CHECK_EQ32(G_CTRL->terminal_error_detail,
-               RP1_NODE_PDI_WITHOUT_CQ,
-               "pdi_silent: validation detail");
-    CHECK_EQ32(G_CQ[0].status, RP1_CQ_ERROR,
-               "pdi_silent: forced CQ evidence");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_FAILED,
+               "kernel_deadline: failed result");
+    CHECK_EQ32(G_CTRL->result.terminal_opcode, RP1_OP_KERNEL_DISPATCH,
+               "kernel_deadline: terminal opcode");
+    CHECK_EQ32(G_CTRL->result.quiescence,
+               RP1_QUIESCE_PACK(0u, 1u, 0u),
+               "kernel_deadline: finite timeout classified");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_RECOVERY_REQUIRED) != 0u,
+          "kernel_deadline: timeout requires recovery");
     return 0;
 }
 
@@ -1328,7 +1674,7 @@ static int test_silent_pdi_rejected(void)
  *
  *   Single PDI_LOAD node, override returns success.
  *   Verifies the scanner forwards the payload to rp1_pdi_load() verbatim
- *   and marks the node DONE / writes an OK CQ entry on return.
+ *   with a zero flags nibble.
  * ---------------------------------------------------------------------- */
 
 static int test_pdi_load_basic(void)
@@ -1340,7 +1686,7 @@ static int test_pdi_load_basic(void)
                   /* addr_lo */ 0x10000000u,
                   /* addr_hi */ 0x00000001u,
                   /* timeout */ 12345u,
-                  /* flags   */ 0,
+                  /* flags   */ 0u,
                   /* await   */ 0, 0x00,
                   /* set     */ 0, 0x01);
 
@@ -1350,28 +1696,28 @@ static int test_pdi_load_basic(void)
     CHECK_EQ32(s_pdi_call_count,       1u,          "pdi_basic: invoked once");
     CHECK_EQ32(s_pdi_last_addr_lo,     0x10000000u, "pdi_basic: addr_lo forwarded");
     CHECK_EQ32(s_pdi_last_addr_hi,     0x00000001u, "pdi_basic: addr_hi forwarded");
-    CHECK_EQ32(g_node_status[0],       RP1_NODE_DONE, "pdi_basic: node DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_DONE,
+               "pdi_basic: node DONE");
     CHECK_EQ32(g_barriers[0] & 0x1u,   0x1u,          "pdi_basic: barrier set");
-    CHECK_EQ32(G_CTRL->cq_write_idx,   1u,            "pdi_basic: one CQ entry");
-    CHECK_EQ32(G_CQ[0].status,         RP1_CQ_OK,     "pdi_basic: CQ status OK");
-    CHECK_EQ32(G_CQ[0].node_index,     0u,            "pdi_basic: CQ node_index");
     CHECK_EQ32(G_CTRL->rp1_state,      RP1_STATE_READY, "pdi_basic: rp1_state");
     CHECK_EQ32(G_CTRL->rp1_error_code, 0u,            "pdi_basic: no error");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_SUCCESS,
+               "pdi_basic: success result");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 1u,
+               "pdi_basic: operation counted");
     return 0;
 }
 
 /* -------------------------------------------------------------------------
  * test_pdi_load_timeout
  *
- *   Two passes: first with HALT_ON_ERROR cleared (graph continues, barrier
- *   still raised so downstream can run), second with HALT_ON_ERROR set
- *   (scanner aborts via rp1_state = ERROR).  In both cases rp1_pdi_load()
- *   returns -1, which the scanner must surface as ERR_PDI_TIMEOUT (3).
+ *   Every PDI transport timeout or PLM rejection is fatal. The active image
+ *   becomes UNKNOWN, no dependent is activated, and the structured response
+ *   remains intact in both the legacy latch and committed result.
  * ---------------------------------------------------------------------- */
 
 static int test_pdi_load_timeout(void)
 {
-    /* ---- Run 1: non-fatal timeout (no HALT_ON_ERROR) ---- */
     setup_graph(/* node_count */ 2, /* fake_kernels */ 0);
     pdi_override_reset();
     s_pdi_force_timeout = 1u;
@@ -1379,43 +1725,35 @@ static int test_pdi_load_timeout(void)
     make_pdi_load(&G_NODES[0],
                   0xDEAD0000u, 0u, 3u, /* flags */ 0,
                   0, 0x00, 0, 0x01);
-    /* Downstream SIGNAL gated on the PDI's set bit — verifies the
-     * scanner still raises barriers on non-fatal timeout. */
     make_signal(&G_NODES[1], 30, 0xFEEDBEEFu, RP1_SIGOP_SET,
                 0, 0x01, 0, 0x02);
 
     int rc = rp1_run(&s_hooks);
-    CHECK_EQ32(rc, 0u, "pdi_timeout[non-fatal]: rp1_run rc");
+    CHECK_EQ32((uint32_t)(rc + 1), 0u,
+               "pdi_timeout: rp1_run returned -1");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_ERROR,
+               "pdi_timeout: node ERROR");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[1]), RP1_NODE_PENDING,
+               "pdi_timeout: downstream blocked");
+    CHECK_EQ32(G_SIGS[30].value, 0u,
+               "pdi_timeout: downstream had no effect");
+    CHECK_EQ32(G_CTRL->rp1_state, RP1_STATE_ERROR,
+               "pdi_timeout: terminal state");
+    CHECK_EQ32(G_CTRL->result.error_code, RP1_ERR_PDI_TIMEOUT,
+               "pdi_timeout: result error");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_UNKNOWN,
+               "pdi_timeout: image state unknown");
+    CHECK_EQ32(G_CTRL->result.active_image_id, 0u,
+               "pdi_timeout: unknown image has no id");
+    CHECK((G_CTRL->result.flags &
+           RP1_RESULT_EFFECTS_MAY_BE_PARTIAL) != 0u,
+          "pdi_timeout: started operation may have partial effects");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_RECOVERY_REQUIRED) != 0u,
+          "pdi_timeout: delayed response requires recovery");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_UNREACHED_NODES) != 0u,
+          "pdi_timeout: dependent is unreached");
 
-    CHECK_EQ32(g_node_status[0],       RP1_NODE_ERROR,  "pdi_timeout[non-fatal]: node ERROR");
-    CHECK_EQ32(G_CTRL->rp1_error_code, 3u,              "pdi_timeout[non-fatal]: err code 3");
-    CHECK_EQ32(G_CQ[0].status,         RP1_CQ_TIMEOUT,  "pdi_timeout[non-fatal]: CQ TIMEOUT");
-    CHECK_EQ32(g_barriers[0] & 0x1u,   0x1u,            "pdi_timeout[non-fatal]: barrier still set");
-    CHECK_EQ32(G_SIGS[30].value,       0xFEEDBEEFu,     "pdi_timeout[non-fatal]: downstream ran");
-    CHECK_EQ32(G_CTRL->rp1_state,      RP1_STATE_READY, "pdi_timeout[non-fatal]: rp1_state");
-
-    /* ---- Run 2: fatal timeout (HALT_ON_ERROR set) ---- */
-    setup_graph(/* node_count */ 2, /* fake_kernels */ 0);
-    pdi_override_reset();
-    s_pdi_force_timeout = 1u;
-
-    make_pdi_load(&G_NODES[0],
-                  0xDEAD0000u, 0u, 3u,
-                  /* flags */ RP1_FLAG_HALT_ON_ERROR,
-                  0, 0x00, 0, 0x01);
-    make_signal(&G_NODES[1], 30, 0xFEEDBEEFu, RP1_SIGOP_SET,
-                0, 0x01, 0, 0x02);
-
-    rc = rp1_run(&s_hooks);
-    CHECK_EQ32((uint32_t)(rc + 1), 0u, "pdi_timeout[fatal]: rp1_run returned -1");
-
-    CHECK_EQ32(g_node_status[0],       RP1_NODE_ERROR,  "pdi_timeout[fatal]: node ERROR");
-    CHECK_EQ32(g_node_status[1],       RP1_NODE_PENDING,"pdi_timeout[fatal]: downstream blocked");
-    CHECK_EQ32(G_SIGS[30].value,       0u,              "pdi_timeout[fatal]: downstream silent");
-    CHECK_EQ32(G_CTRL->rp1_state,      RP1_STATE_ERROR, "pdi_timeout[fatal]: rp1_state ERROR");
-    CHECK_EQ32(G_CTRL->rp1_error_code, 3u,              "pdi_timeout[fatal]: err code 3");
-
-    /* ---- Run 3: PLM completed the command with an error response ---- */
+    /* PLM completed the command with an error response. */
     setup_graph(/* node_count */ 1, /* fake_kernels */ 0);
     pdi_override_reset();
     s_pdi_status = 0x80002001u;
@@ -1423,21 +1761,23 @@ static int test_pdi_load_timeout(void)
 
     make_pdi_load(&G_NODES[0],
                   0xDEAD0000u, 0u, 0u,
-                  /* flags */ RP1_FLAG_HALT_ON_ERROR,
+                  /* flags */ 0u,
                   0, 0x00, 0, 0x01);
 
     rc = rp1_run(&s_hooks);
     CHECK_EQ32((uint32_t)(rc + 1), 0u, "pdi_error: rp1_run returned -1");
     CHECK_EQ32(G_CTRL->rp1_error_code, RP1_ERR_PDI_FAILED,
                "pdi_error: PLM failure code");
-    CHECK_EQ32(G_CQ[0].status, RP1_CQ_ERROR,
-               "pdi_error: CQ status ERROR");
-    CHECK_EQ32(G_CQ[0].error_detail, 0x80002001u,
-               "pdi_error: CQ preserves high-bit PLM status");
     CHECK_EQ32(G_CTRL->terminal_error_detail, 0x80002001u,
                "pdi_error: terminal record preserves PLM status");
     CHECK_EQ32(G_CTRL->terminal_error_aux, 0xDEADCAFEu,
                "pdi_error: terminal record preserves PLM detail");
+    CHECK_EQ32(G_CTRL->result.error_detail, 0x80002001u,
+               "pdi_error: result preserves PLM status");
+    CHECK_EQ32(G_CTRL->result.error_aux, 0xDEADCAFEu,
+               "pdi_error: result preserves PLM detail");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_UNKNOWN,
+               "pdi_error: rejected load leaves unknown image");
     return 0;
 }
 
@@ -1467,6 +1807,7 @@ static int test_pdi_load_chained(void)
                   /* flags   */ 0,
                   /* await   */ 0, 0x00,
                   /* set     */ 0, 0x01);
+    G_NODES[0].payload.pdi_load.image_id = 1u;
     make_pdi_load(&G_NODES[1],
                   /* addr_lo */ 0x22220000u,
                   /* addr_hi */ 0x00000002u,
@@ -1474,6 +1815,7 @@ static int test_pdi_load_chained(void)
                   /* flags   */ 0,
                   /* await   */ 0, 0x01,
                   /* set     */ 0, 0x02);
+    G_NODES[1].payload.pdi_load.image_id = 2u;
 
     int rc = rp1_run(&s_hooks);
     CHECK_EQ32(rc, 0u, "pdi_chain: rp1_run rc");
@@ -1483,12 +1825,51 @@ static int test_pdi_load_chained(void)
     CHECK_EQ32(s_pdi_last_addr_lo,     0x22220000u,   "pdi_chain: last addr_lo (node 1)");
     CHECK_EQ32(s_pdi_last_addr_hi,     0x00000002u,   "pdi_chain: last addr_hi (node 1)");
 
-    CHECK_EQ32(g_node_status[0],     RP1_NODE_DONE, "pdi_chain: node 0 DONE");
-    CHECK_EQ32(g_node_status[1],     RP1_NODE_DONE, "pdi_chain: node 1 DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_DONE,
+               "pdi_chain: node 0 DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[1]), RP1_NODE_DONE,
+               "pdi_chain: node 1 DONE");
     CHECK_EQ32(g_barriers[0] & 0x3u, 0x3u,          "pdi_chain: both barriers raised");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 2u,            "pdi_chain: two CQ entries");
-    CHECK_EQ32(G_CQ[0].node_index,   0u,            "pdi_chain: CQ[0] is node 0");
-    CHECK_EQ32(G_CQ[1].node_index,   1u,            "pdi_chain: CQ[1] is node 1");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 2u,
+               "pdi_chain: both operations counted");
+    CHECK_EQ32(G_CTRL->result.active_image_id, 2u,
+               "pdi_chain: final image id");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_KNOWN,
+               "pdi_chain: final image is known");
+    return 0;
+}
+
+/*
+ * A successful PDI is durable evidence even if a later kernel fails. The
+ * failed graph remains partial, but its result still names the installed
+ * image so the host can reconcile physical state before surfacing the error.
+ */
+static int test_image_survives_later_error(void)
+{
+    setup_graph(/* node_count */ 2, /* fake_kernels */ 1);
+    pdi_override_reset();
+    make_pdi_load(&G_NODES[0], 0x12340000u, 0u, 20u, 0u,
+                  0, 0u, 0, 1u);
+    G_NODES[0].payload.pdi_load.image_id = 42u;
+    make_kernel(&G_NODES[1], 0, 0, 1u, 0, 2u, 0u, 0u);
+    G_NODES[1].payload.kernel_dispatch.expected_image_id = 42u;
+    G_NODES[1].payload.kernel_dispatch.timeout_cycles = 3u;
+    s_skip_completion_node = 1u;
+
+    int rc = rp1_run(&s_hooks);
+    CHECK_EQ32((uint32_t)(rc + 1), 0u,
+               "image_later_error: fatal kernel result");
+    CHECK_EQ32(G_CTRL->result.error_code, RP1_ERR_KERNEL_TIMEOUT,
+               "image_later_error: kernel error retained");
+    CHECK_EQ32(G_CTRL->result.active_image_id, 42u,
+               "image_later_error: installed image retained");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_KNOWN,
+               "image_later_error: installed image remains known");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 1u,
+               "image_later_error: successful PDI counted");
+    CHECK((G_CTRL->result.flags &
+           RP1_RESULT_EFFECTS_MAY_BE_PARTIAL) != 0u,
+          "image_later_error: failed graph reports partial effects");
     return 0;
 }
 
@@ -1496,13 +1877,14 @@ static int test_pdi_load_chained(void)
  * test_image_guard
  *
  * Exercises the expected-image guard. g_active_image_id persists across graph
- * submissions (it mirrors physical reconfig state and is not cleared by
- * rp1_store_reset_graph), so the three sub-runs below share it:
+ * submissions in one firmware instance. The bounded QEMU harness re-enters
+ * rp1_run() for each sub-run, so Run 2 seeds the prior known image from its
+ * idle hook after startup; Run 3 deliberately verifies reboot state:
  *
  *   Run 1 (match):      PDI_LOAD{image_id=7} -> DISPATCH{expected=7} launches.
  *   Run 2 (mismatch):   DISPATCH{expected=9} with active image still 7 fails
- *                       fast -- NODE_ERROR, ERR_IMAGE_MISMATCH, CQ ERROR, and
- *                       the kernel is never launched (ctrl reg untouched).
+ *                       fast and reports the still-known image; the kernel is
+ *                       never launched.
  *   Run 3 (unguarded):  DISPATCH{expected=0} launches regardless of image.
  * ---------------------------------------------------------------------- */
 
@@ -1526,12 +1908,19 @@ static int test_image_guard(void)
     int rc = rp1_run(&s_hooks);
     CHECK_EQ32(rc, 0u, "image_guard[match]: rp1_run rc");
     CHECK_EQ32(g_active_image_id, 7u, "image_guard[match]: active image recorded");
-    CHECK_EQ32(g_node_status[1], RP1_NODE_DONE, "image_guard[match]: dispatch DONE");
+    CHECK_EQ32(g_active_image_state, RP1_IMAGE_STATE_KNOWN,
+               "image_guard[match]: image state known");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[1]), RP1_NODE_DONE,
+               "image_guard[match]: dispatch DONE");
     {
         volatile uint32_t *ctrl = (volatile uint32_t *)(uintptr_t)FAKE_KERNEL(0);
         CHECK_EQ32(ctrl[0], 0x3u, "image_guard[match]: kernel launched (ap_start|ap_done)");
     }
     CHECK_EQ32(G_CTRL->rp1_error_code, 0u, "image_guard[match]: no error");
+    CHECK_EQ32(G_CTRL->result.active_image_id, 7u,
+               "image_guard[match]: result image id");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_KNOWN,
+               "image_guard[match]: result image known");
 
     /* ---- Run 2: separate submission, stale expected image -> fail fast. ---- */
     setup_graph(/* node_count */ 1, /* fake_kernels */ 1);
@@ -1541,14 +1930,24 @@ static int test_image_guard(void)
                 /* arg_buf_offset */ 0u, /* arg_count */ 0);
     G_NODES[0].payload.kernel_dispatch.expected_image_id = 9u;  /* active is still 7 */
 
-    rc = rp1_run(&s_hooks);
-    CHECK_EQ32(rc, 0u, "image_guard[mismatch]: rp1_run rc (non-fatal)");
+    rc = rp1_run(&s_known_image_hooks);
+    CHECK_EQ32((uint32_t)(rc + 1), 0u,
+               "image_guard[mismatch]: fatal result");
     CHECK_EQ32(g_active_image_id, 7u, "image_guard[mismatch]: active image unchanged");
-    CHECK_EQ32(g_node_status[0], RP1_NODE_ERROR, "image_guard[mismatch]: node ERROR");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_ERROR,
+               "image_guard[mismatch]: node ERROR");
     CHECK_EQ32(G_CTRL->rp1_error_code, RP1_ERR_IMAGE_MISMATCH,
                "image_guard[mismatch]: err code");
-    CHECK_EQ32(G_CQ[0].status, RP1_CQ_ERROR, "image_guard[mismatch]: CQ ERROR");
-    CHECK_EQ32(G_CQ[0].error_detail, 7u, "image_guard[mismatch]: CQ carries active image");
+    CHECK_EQ32(G_CTRL->result.error_detail, 9u,
+               "image_guard[mismatch]: expected image detail");
+    CHECK_EQ32(G_CTRL->result.error_aux, 7u,
+               "image_guard[mismatch]: active image detail");
+    CHECK_EQ32(G_CTRL->result.active_image_id, 7u,
+               "image_guard[mismatch]: known image survives later failure");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_KNOWN,
+               "image_guard[mismatch]: known state survives later failure");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 0u,
+               "image_guard[mismatch]: no operation completed");
     {
         volatile uint32_t *ctrl = (volatile uint32_t *)(uintptr_t)FAKE_KERNEL(0);
         CHECK_EQ32(ctrl[0], 0u, "image_guard[mismatch]: kernel NOT launched");
@@ -1564,11 +1963,55 @@ static int test_image_guard(void)
 
     rc = rp1_run(&s_hooks);
     CHECK_EQ32(rc, 0u, "image_guard[unguarded]: rp1_run rc");
-    CHECK_EQ32(g_node_status[0], RP1_NODE_DONE, "image_guard[unguarded]: dispatch DONE");
+    CHECK_EQ32(rp1_node_get_status(&g_nodes[0]), RP1_NODE_DONE,
+               "image_guard[unguarded]: dispatch DONE");
+    CHECK_EQ32(G_CTRL->result.active_image_id, 0u,
+               "image_guard[unguarded]: reboot forgets prior image id");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_NONE,
+               "image_guard[unguarded]: reboot image state is none");
     {
         volatile uint32_t *ctrl = (volatile uint32_t *)(uintptr_t)FAKE_KERNEL(0);
         CHECK_EQ32(ctrl[0], 0x3u, "image_guard[unguarded]: kernel launched");
     }
+    return 0;
+}
+
+/*
+ * Explicit HALT is a committed HALTED outcome, not an error. Activation stops
+ * at the HALT node even when a later command is already barrier-ready.
+ */
+static int test_explicit_halt(void)
+{
+    setup_graph(/* node_count */ 3, /* fake_kernels */ 0);
+    make_signal(&G_NODES[0], 0u, 0x1111u, RP1_SIGOP_SET,
+                0, 0u, 0, 1u);
+    make_header(&G_NODES[1], RP1_OP_HALT, 0u, 0u, 1u, 0u, 0u);
+    make_signal(&G_NODES[2], 1u, 0x2222u, RP1_SIGOP_SET,
+                0, 1u, 0, 2u);
+
+    int rc = rp1_run(&s_hooks);
+    CHECK_EQ32((uint32_t)(rc + 2), 0u, "halt: rp1_run returned -2");
+    CHECK_EQ32(G_CTRL->rp1_state, RP1_STATE_HALTED,
+               "halt: terminal state");
+    CHECK_EQ32(G_CTRL->rp1_error_code, 0u,
+               "halt: no error code");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_HALTED,
+               "halt: distinct outcome");
+    CHECK_EQ32(G_CTRL->result.terminal_node, 1u,
+               "halt: terminal node");
+    CHECK_EQ32(G_CTRL->result.terminal_opcode, RP1_OP_HALT,
+               "halt: terminal opcode");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 2u,
+               "halt: signal and HALT counted");
+    CHECK_EQ32(G_CTRL->result.quiescence, 0u,
+               "halt: no inflight work");
+    CHECK((G_CTRL->result.flags &
+           RP1_RESULT_EFFECTS_MAY_BE_PARTIAL) != 0u,
+          "halt: prior effects may be partial");
+    CHECK((G_CTRL->result.flags & RP1_RESULT_UNREACHED_NODES) != 0u,
+          "halt: later node reported unreached");
+    CHECK_EQ32(G_SIGS[1].value, 0u,
+               "halt: later ready node was not activated");
     return 0;
 }
 
@@ -1582,7 +2025,6 @@ static int test_fatal_kernel_quiesce_and_reject(void)
     setup_graph(/* node_count */ 3, /* fake_kernels */ 2);
     pdi_override_reset();
     make_kernel(&G_NODES[0], 0, 0, 0u, 0, 1u, 0u, 0u);
-    G_NODES[0].flags = RP1_FLAG_HALT_ON_ERROR;
     G_NODES[0].payload.kernel_dispatch.timeout_cycles = 3u;
     make_kernel(&G_NODES[1], 1, 0, 0u, 0, 2u, 0u, 0u);
     G_NODES[1].payload.kernel_dispatch.timeout_cycles = 100u;
@@ -1596,10 +2038,9 @@ static int test_fatal_kernel_quiesce_and_reject(void)
                "fatal_kernel: terminal error result");
     CHECK_EQ32(G_CTRL->rp1_state, RP1_STATE_ERROR,
                "fatal_kernel: terminal state");
-    CHECK_EQ32(G_CTRL->rp1_error_code & RP1_ERR_CODE_MASK,
-               RP1_ERR_KERNEL_TIMEOUT,
+    CHECK_EQ32(G_CTRL->rp1_error_code, RP1_ERR_KERNEL_TIMEOUT,
                "fatal_kernel: first error code");
-    CHECK((G_CTRL->rp1_error_code & RP1_ERR_RECOVERY_REQUIRED) != 0u,
+    CHECK((G_CTRL->result.flags & RP1_RESULT_RECOVERY_REQUIRED) != 0u,
           "fatal_kernel: unresponsive work requires recovery");
     CHECK_EQ32(G_CTRL->terminal_error_node, 0u,
                "fatal_kernel: failing node latched");
@@ -1609,14 +2050,18 @@ static int test_fatal_kernel_quiesce_and_reject(void)
                "fatal_kernel: timeout ticks");
     CHECK_EQ32(G_SIGS[40].value, 0u,
                "fatal_kernel: sentinel did not run");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 2u,
-               "fatal_kernel: error and quiesced CQ evidence");
-    CHECK_EQ32(G_CQ[0].status, RP1_CQ_TIMEOUT,
-               "fatal_kernel: timeout evidence first");
-    CHECK_EQ32(G_CQ[1].node_index, 1u,
-               "fatal_kernel: finite peer quiesced");
-    CHECK_EQ32(G_CQ[1].status, RP1_CQ_OK,
-               "fatal_kernel: finite peer completion retained");
+    CHECK_EQ32(G_CTRL->result.outcome, RP1_GRAPH_RESULT_FAILED,
+               "fatal_kernel: failed graph result");
+    CHECK_EQ32(G_CTRL->result.terminal_opcode, RP1_OP_KERNEL_DISPATCH,
+               "fatal_kernel: terminal opcode");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 1u,
+               "fatal_kernel: finite peer completed during quiescence");
+    CHECK_EQ32(G_CTRL->result.quiescence,
+               RP1_QUIESCE_PACK(1u, 1u, 0u),
+               "fatal_kernel: quiescence counts");
+    CHECK((G_CTRL->result.flags &
+           RP1_RESULT_EFFECTS_MAY_BE_PARTIAL) != 0u,
+          "fatal_kernel: started graph may have partial effects");
     CHECK_EQ32(G_CTRL->graph_seq, 2u,
                "fatal_kernel: later graph was submitted");
     CHECK_EQ32(G_CTRL->graph_done_seq, 1u,
@@ -1636,10 +2081,10 @@ static int test_fatal_pdi_quiesce_and_recovery(void)
     make_kernel(&G_NODES[0], 0, 0, 0u, 0, 1u, 0u, 0u);
     G_NODES[0].payload.kernel_dispatch.timeout_cycles = 100u;
     make_kernel(&G_NODES[1], 1, 0, 0u, 0, 2u, 0u, 0u);
-    G_NODES[1].flags = RP1_FLAG_INFINITE;
+    rp1_node_set_flags(&G_NODES[1], RP1_FLAG_INFINITE);
     G_NODES[1].payload.kernel_dispatch.timeout_cycles = 100u;
     make_pdi_load(&G_NODES[2], 0x10000000u, 0u, 20u,
-                  RP1_FLAG_HALT_ON_ERROR, 0, 0u, 0, 4u);
+                  0u, 0, 0u, 0, 4u);
     make_signal(&G_NODES[3], 41u, 0x51514E54u, RP1_SIGOP_SET,
                 0, 7u, 0, 8u);
     s_skip_completion_node = 1u;
@@ -1647,10 +2092,9 @@ static int test_fatal_pdi_quiesce_and_recovery(void)
     int rc = rp1_run(&s_hooks);
     CHECK_EQ32((uint32_t)(rc + 1), 0u,
                "fatal_pdi: terminal error result");
-    CHECK_EQ32(G_CTRL->rp1_error_code & RP1_ERR_CODE_MASK,
-               RP1_ERR_PDI_FAILED,
+    CHECK_EQ32(G_CTRL->rp1_error_code, RP1_ERR_PDI_FAILED,
                "fatal_pdi: first error remains PDI");
-    CHECK((G_CTRL->rp1_error_code & RP1_ERR_RECOVERY_REQUIRED) != 0u,
+    CHECK((G_CTRL->result.flags & RP1_RESULT_RECOVERY_REQUIRED) != 0u,
           "fatal_pdi: infinite kernel requires recovery");
     CHECK_EQ32(G_CTRL->terminal_error_node, 2u,
                "fatal_pdi: failing node latched");
@@ -1660,14 +2104,18 @@ static int test_fatal_pdi_quiesce_and_recovery(void)
                "fatal_pdi: full PLM detail");
     CHECK_EQ32(G_SIGS[41].value, 0u,
                "fatal_pdi: sentinel did not run");
-    CHECK_EQ32(G_CTRL->cq_write_idx, 3u,
-               "fatal_pdi: infinite, PDI, finite evidence");
-    CHECK_EQ32(G_CQ[1].node_index, 2u,
-               "fatal_pdi: PDI CQ evidence");
-    CHECK_EQ32(G_CQ[1].error_detail, 0x8000F00Du,
-               "fatal_pdi: CQ preserves PLM status");
-    CHECK_EQ32(G_CQ[2].node_index, 0u,
-               "fatal_pdi: finite kernel quiesced");
+    CHECK_EQ32(G_CTRL->result.terminal_opcode, RP1_OP_PDI_LOAD,
+               "fatal_pdi: terminal opcode");
+    CHECK_EQ32(G_CTRL->result.completed_operations, 2u,
+               "fatal_pdi: launched kernels counted");
+    CHECK_EQ32(G_CTRL->result.quiescence,
+               RP1_QUIESCE_PACK(1u, 0u, 1u),
+               "fatal_pdi: quiescence counts");
+    CHECK((G_CTRL->result.flags &
+           RP1_RESULT_INFINITE_WORK_REMAINS) != 0u,
+          "fatal_pdi: infinite work reported");
+    CHECK_EQ32(G_CTRL->result.image_state, RP1_IMAGE_STATE_UNKNOWN,
+               "fatal_pdi: failed load makes image unknown");
     return 0;
 }
 
@@ -1687,29 +2135,38 @@ static int run(const char *name, int (*fn)(void))
 void rp1_graph_test_run(void)
 {
     run("diamond_dag",         test_diamond_dag);
-    run("cq_timestamps",       test_cq_timestamps);
+    run("cu_clean_tracking",   test_cu_clean_tracking);
     run("trace_disabled_by_default", test_trace_disabled_by_default);
     run("trace_queue",         test_trace_queue);
+    run("trace_btcm_flush",    test_trace_btcm_flush);
     run("kernel_unblocks_signal", test_kernel_unblocks_signal);
     run("signal_chain",        test_signal_chain);
-    run("cq_flow_control",     test_cq_flow_control);
-    run("cq_config_validation", test_cq_config_validation);
-    run("cq_cursor_wrap",      test_cq_cursor_wrap);
     run("graph_sequence_wrap", test_graph_sequence_wrap);
-    run("signal_slot_validation", test_signal_slot_validation);
+    run("compact_operation_validation",
+        test_compact_operation_validation);
+    run("phase1_payload_validation",
+        test_phase1_payload_validation);
+    run("btcm_node_snapshot",  test_btcm_node_snapshot);
+    run("exact_node_limit",    test_exact_node_limit);
     run("loop_decrement",      test_loop_decrement);
     run("loop_fixed_count",    test_loop_fixed_count);
     run("cond_boolean",        test_cond_boolean);
     run("scalar_read",         test_scalar_read);
     run("wait_blocks",         test_wait_blocks);
+    run("barrier_variants",    test_barrier_variants);
+    run("result_publication_order", test_result_publication_order);
+    run("boot_sequence_baseline", test_boot_sequence_baseline);
+    run("reserved_cq_config_rejected", test_reserved_cq_config_rejected);
     run("pdi_mmio_contract", test_pdi_mmio_contract);
     run("pdi_timeout_invariant", test_pdi_timeout_invariant);
     run("kernel_timeout_invariant", test_kernel_timeout_invariant);
-    run("silent_pdi_rejected", test_silent_pdi_rejected);
     run("pdi_load_basic",   test_pdi_load_basic);
     run("pdi_load_timeout", test_pdi_load_timeout);
     run("pdi_load_chained", test_pdi_load_chained);
+    run("image_survives_later_error",
+        test_image_survives_later_error);
     run("image_guard",      test_image_guard);
+    run("explicit_halt",     test_explicit_halt);
     run("fatal_kernel_quiesce_and_reject",
         test_fatal_kernel_quiesce_and_reject);
     run("fatal_pdi_quiesce_and_recovery",
