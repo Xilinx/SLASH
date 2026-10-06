@@ -88,6 +88,31 @@ if [[ -z "${SLASH_PKG_SKIP_ROOT_DESIGN_BUILD:-}" ]]; then
         echo "See docs/howto/install-from-packages.rst for details." >&2
         _prereq_ok=0
     fi
+    _license_report=/tmp/slash-licenses.txt
+    _license_tcl=/tmp/slash-licenses.tcl
+    echo "report_environment -file {${_license_report}} -format text" > "${_license_tcl}"
+    vivado -mode batch -nolog -nojournal -source "${_license_tcl}" 2>/dev/null
+    rm -f "${_license_tcl}"
+
+    if [[ ! -s "${_license_report}" ]]; then
+        echo "ERROR: Vivado failed to generate the license report. Check that Vivado" >&2
+        echo "       starts correctly and the license server is reachable." >&2
+        _prereq_ok=0
+    else
+        if [[ "$(grep -i 'dcmac' "${_license_report}" | grep -c 'IP:Bought')" -eq 0 ]]; then
+            echo "ERROR: DCMAC IP license not found in Vivado license configuration." >&2
+            echo "See docs/howto/install-from-packages.rst for details." >&2
+            _prereq_ok=0
+        fi
+
+        if [[ "$(grep -i 'smbus' "${_license_report}" | grep -c 'IP:Bought')" -eq 0 ]]; then
+            echo "ERROR: SMBus IP license not found in Vivado license configuration." >&2
+            echo "See docs/howto/install-from-packages.rst for details." >&2
+            _prereq_ok=0
+        fi
+    fi
+
+    rm -f "${_license_report}"
 fi
 
 if [[ "${_prereq_ok}" -eq 0 ]]; then
