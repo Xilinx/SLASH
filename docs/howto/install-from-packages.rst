@@ -233,6 +233,12 @@ normally the build machine, or the cluster nodes when
 :ref:`offloading to a cluster <building-on-a-cluster>`, in which case the build
 machine does not require them.
 
+You also need the following licenses:
+
+1. SMBus IP license. See :ref:`smbus-ip` below for instructions on obtaining the IP and license.
+2. DCMAC IP license. See :ref:`dcmac-license` below for instructions on obtaining the license.
+
+
 Source both before building:
 
 .. code-block:: bash
@@ -252,6 +258,10 @@ binary and exits if it is absent.
    license administrator if you are unsure how licenses are served at your
    site.
 
+   See `Managing Licenses with the Vivado License Manager <https://docs.amd.com/r/en-US/ug973-vivado-release-notes-install-license/Managing-Licenses-with-the-Vivado-License-Manager>`_.
+
+.. _smbus-ip:
+
 SMBus IP
 --------
 
@@ -266,8 +276,9 @@ local IP repository before building:
    ``linker/slashkit/resources/base/common/iprepo/``
    so that Vivado can locate it during synthesis. The directory name must
    begin with ``smbus``; a release-date suffix is permitted.
+3. Generate the SMBus license from the `AMD License Center <https://amd.entitlenow.com/AcrossUser>`_
+   and add it to your Vivado license configuration.
 
-Confirm the result before starting the build:
 
 .. code-block:: bash
 
@@ -278,6 +289,25 @@ performing any work.
 
 See the `AVED rebuild guide <https://xilinx.github.io/AVED/>`_ for
 additional details.
+
+
+.. _dcmac-license:
+
+DCMAC IP License
+----------------
+
+The `Versal™ Adaptive SoC 600G Channelized Multirate Ethernet Subsystem (DCMAC)
+<https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/dcmac.html>`_
+drives the 200 Gb/s network interfaces in the static shell and requires a Vivado
+license to build. The license is free but must be generated and registered before
+building.
+
+1. Open the `DCMAC IP product page <https://www.amd.com/en/products/adaptive-socs-and-fpgas/intellectual-property/dcmac.html>`_
+   and click **Get License**.
+2. Follow the steps to generate the license.
+3. Add the license to your Vivado license configuration.
+
+Confirm the result before starting the build:
 
 .. _build-the-packages:
 

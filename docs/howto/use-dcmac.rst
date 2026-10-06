@@ -19,6 +19,8 @@ Prerequisites
 - A V80 with two QSFP56 cages externally wired to DCMAC0 port 0 (``eth_0``) and
   DCMAC1 port 0 (``eth_2``).
 - Vivado and Vitis HLS **2025.1** or newer, sourced in your shell.
+- A **DCMAC IP license** added to your Vivado license configuration. See
+  :ref:`dcmac-license` in the install guide.
 - Building from a source checkout, the ``Versal-DCMAC`` submodule, which
   supplies the DCMAC block design and its RTL:
 
