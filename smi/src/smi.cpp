@@ -328,7 +328,7 @@ static int smiMain(int argc, char **argv) {
     addRp1ProbeCommonOptions(rp1PingCommand);
 
     auto* rp1TracePingCommand = debugCommand->add_subcommand("rp1-trace-ping",
-        "Submit a one-node SIGNAL graph with RP1 tracing enabled and print CQ/trace entries");
+        "Submit a one-node SIGNAL graph and print its committed result and trace entries");
     addRp1ProbeCommonOptions(rp1TracePingCommand);
 
     CLI11_PARSE(app, argc, argv);

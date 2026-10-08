@@ -21,6 +21,7 @@
 
 #include "rp1_test.h"
 #include "rp1_hal.h"
+#include "rp1_scheduler.h"
 #include "rp1_store.h"
 #include <slash/uapi/rp1_protocol.h>
 #include <stddef.h>
@@ -45,16 +46,25 @@ static int run(const char *name, int (*fn)(void))
 
 static int test_struct_sizes(void)
 {
-    CHECK_EQ32(sizeof(rp1_node_t),         64,     "rp1_node_t size");
-    CHECK_EQ32(offsetof(rp1_node_t, payload), 16,  "payload offset");
+    CHECK_EQ32(sizeof(rp1_node_t),         32,     "rp1_node_t size");
+    CHECK_EQ32(offsetof(rp1_node_t, control), 0,   "control offset");
+    CHECK_EQ32(offsetof(rp1_node_t, barrier_await_bucket), 2,
+               "await bucket offset");
+    CHECK_EQ32(offsetof(rp1_node_t, barrier_set_bucket), 3,
+               "set bucket offset");
+    CHECK_EQ32(offsetof(rp1_node_t, barrier_await_mask), 4,
+               "await mask offset");
+    CHECK_EQ32(offsetof(rp1_node_t, barrier_set_mask), 8,
+               "set mask offset");
+    CHECK_EQ32(offsetof(rp1_node_t, payload), 12,  "payload offset");
     CHECK_EQ32(sizeof(rp1_ctrl_t),         0x1000, "rp1_ctrl_t size");
     CHECK_EQ32(sizeof(rp1_signal_slot_t),  16,     "signal slot size");
-    CHECK_EQ32(sizeof(rp1_cq_entry_t),     16,     "cq entry size");
+    CHECK_EQ32(sizeof(rp1_graph_result_t),  64,     "graph result size");
     CHECK_EQ32(sizeof(rp1_trace_entry_t),  16,     "trace entry size");
     CHECK_EQ32(sizeof(rp1_inflight_t),     24,     "inflight entry size");
-    CHECK_EQ32(RP1_PROTOCOL_VERSION,       4,      "protocol version");
-    CHECK_EQ32(RP1_REQUIRED_CAPABILITIES,  0x1F,   "required capabilities");
-    CHECK_EQ32(RP1_MAX_CQ_ENTRIES,         4096,   "maximum CQ entries");
+    CHECK_EQ32(RP1_PROTOCOL_VERSION,       6,      "protocol version");
+    CHECK_EQ32(RP1_MAX_NODES,              1024,   "maximum nodes");
+    CHECK_EQ32(RP1_REQUIRED_CAPABILITIES,  0x7B,   "required capabilities");
     CHECK_EQ32(RP1_PMU_CYCLE_DIVISOR,      64,     "PMU tick divisor");
     CHECK(RP1_PLATFORM_ID != RP1_PDI_IPI_PLATFORM_UNKNOWN,
           "platform id must be explicit");
@@ -63,26 +73,71 @@ static int test_struct_sizes(void)
 
 static int test_payload_sizes(void)
 {
-    CHECK_EQ32(sizeof(rp1_payload_kernel_dispatch_t), 48, "kernel_dispatch payload");
-    CHECK_EQ32(sizeof(rp1_payload_scalar_write_t),    48, "scalar_write payload");
-    CHECK_EQ32(sizeof(rp1_payload_scalar_read_t),     48, "scalar_read payload");
-    CHECK_EQ32(sizeof(rp1_payload_signal_t),          48, "signal payload");
-    CHECK_EQ32(sizeof(rp1_payload_wait_t),            48, "wait payload");
-    CHECK_EQ32(sizeof(rp1_payload_dma_copy_t),        48, "dma_copy payload");
-    CHECK_EQ32(sizeof(rp1_payload_dma_fill_t),        48, "dma_fill payload");
-    CHECK_EQ32(sizeof(rp1_payload_pdi_load_t),        48, "pdi_load payload");
-    CHECK_EQ32(sizeof(rp1_payload_loop_t),            48, "loop payload");
-    CHECK_EQ32(sizeof(rp1_payload_cond_t),            48, "cond payload");
-    CHECK_EQ32(sizeof(rp1_payload_rerun_t),           48, "rerun payload");
+    CHECK_EQ32(sizeof(rp1_payload_kernel_dispatch_t), 20, "kernel_dispatch payload");
+    CHECK_EQ32(sizeof(rp1_payload_scalar_write_t),    20, "scalar_write payload");
+    CHECK_EQ32(sizeof(rp1_payload_scalar_read_t),      8, "scalar_read payload");
+    CHECK_EQ32(sizeof(rp1_payload_scalar_copy_t),      8, "scalar_copy payload");
+    CHECK_EQ32(sizeof(rp1_payload_signal_t),           8, "signal payload");
+    CHECK_EQ32(sizeof(rp1_payload_wait_t),              8, "wait payload");
+    CHECK_EQ32(sizeof(rp1_payload_dma_copy_t),         20, "dma_copy payload");
+    CHECK_EQ32(sizeof(rp1_payload_dma_fill_t),         20, "dma_fill payload");
+    CHECK_EQ32(sizeof(rp1_payload_pdi_load_t),         20, "pdi_load payload");
+    CHECK_EQ32(sizeof(rp1_payload_loop_t),             20, "loop payload");
+    CHECK_EQ32(sizeof(rp1_payload_cond_t),             20, "cond payload");
+    CHECK_EQ32(sizeof(rp1_payload_rerun_t),            20, "rerun payload");
 
-    /* PDI_LOAD: verify the first three fields land where the host stack
-     * expects them. */
+    CHECK_EQ32(offsetof(rp1_payload_kernel_dispatch_t, arg_count), 8,
+               "dispatch.arg_count offset");
+    CHECK_EQ32(offsetof(rp1_payload_kernel_dispatch_t, ctrl_flags), 10,
+               "dispatch.ctrl_flags offset");
+    CHECK_EQ32(offsetof(rp1_payload_kernel_dispatch_t, timeout_cycles), 12,
+               "dispatch.timeout offset");
+    CHECK_EQ32(offsetof(rp1_payload_kernel_dispatch_t, expected_image_id), 16,
+               "dispatch.image offset");
+    CHECK_EQ32(offsetof(rp1_payload_scalar_read_t, target_slot), 4,
+               "scalar_read.target offset");
+    CHECK_EQ32(offsetof(rp1_payload_scalar_copy_t, source_slot), 4,
+               "scalar_copy.source offset");
+    CHECK_EQ32(offsetof(rp1_payload_signal_t, target_slot), 4,
+               "signal.target offset");
+    CHECK_EQ32(offsetof(rp1_payload_signal_t, operation), 5,
+               "signal.operation offset");
+    CHECK_EQ32(offsetof(rp1_payload_wait_t, condition_signal), 4,
+               "wait.signal offset");
+    CHECK_EQ32(offsetof(rp1_payload_wait_t, condition_op), 5,
+               "wait.operation offset");
+    CHECK_EQ32(offsetof(rp1_payload_dma_copy_t, length_types), 16,
+               "dma_copy.packed offset");
+    CHECK_EQ32(offsetof(rp1_payload_dma_fill_t, dst_type), 16,
+               "dma_fill.type offset");
+
+    /* PDI_LOAD retains its four-word prefix. */
     CHECK_EQ32((uint32_t)offsetof(rp1_payload_pdi_load_t, pdi_addr_lo),
                0,  "pdi_load.pdi_addr_lo offset");
     CHECK_EQ32((uint32_t)offsetof(rp1_payload_pdi_load_t, pdi_addr_hi),
                4,  "pdi_load.pdi_addr_hi offset");
     CHECK_EQ32((uint32_t)offsetof(rp1_payload_pdi_load_t, timeout_cycles),
                8,  "pdi_load.timeout_cycles offset");
+    CHECK_EQ32(offsetof(rp1_payload_loop_t, max_iterations), 4,
+               "loop.max offset");
+    CHECK_EQ32(offsetof(rp1_payload_loop_t, condition_value), 8,
+               "loop.value offset");
+    CHECK_EQ32(offsetof(rp1_payload_loop_t, condition_signal), 12,
+               "loop.signal offset");
+    CHECK_EQ32(offsetof(rp1_payload_loop_t, loop_id), 16,
+               "loop.id offset");
+    CHECK_EQ32(offsetof(rp1_payload_cond_t, done_mask), 4,
+               "cond.done_mask offset");
+    CHECK_EQ32(offsetof(rp1_payload_cond_t, body_start), 8,
+               "cond.body offset");
+    CHECK_EQ32(offsetof(rp1_payload_cond_t, condition_signal), 12,
+               "cond.signal offset");
+    CHECK_EQ32(offsetof(rp1_payload_cond_t, done_bucket), 16,
+               "cond.done_bucket offset");
+    CHECK_EQ32(offsetof(rp1_payload_rerun_t, rerun_flags), 2,
+               "rerun.flags offset");
+    CHECK_EQ32(offsetof(rp1_payload_rerun_t, loop_id), 3,
+               "rerun.loop offset");
     return 0;
 }
 
@@ -94,6 +149,10 @@ static int test_ctrl_offsets(void)
     CHECK_EQ32(offsetof(rp1_ctrl_t, node_count),       0x08, "ctrl.node_count offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, graph_seq),        0x20, "ctrl.graph_seq offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, graph_done_seq),   0x24, "ctrl.graph_done_seq offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, _reserved_cq_write_idx),
+               0x28, "ctrl.reserved_cq_write offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, _reserved_cq_read_idx),
+               0x2C, "ctrl.reserved_cq_read offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, rp1_state),        0x30, "ctrl.rp1_state offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, heartbeat),        0x3C, "ctrl.heartbeat offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, arg_buf_base_lo),  0x40, "ctrl.arg_buf_base_lo offset");
@@ -112,6 +171,8 @@ static int test_ctrl_offsets(void)
                0x70, "ctrl.terminal_error_detail offset");
     CHECK_EQ32(offsetof(rp1_ctrl_t, terminal_error_aux),
                0x74, "ctrl.terminal_error_aux offset");
+    CHECK_EQ32(offsetof(rp1_ctrl_t, result),
+               0x80, "ctrl.result offset");
     CHECK_EQ32(offsetof(rp1_inflight_t, timeout_start),
                0x0C, "inflight.timeout_start offset");
     CHECK_EQ32(offsetof(rp1_inflight_t, timeout_cycles),
@@ -127,25 +188,47 @@ static int test_store_reset(void)
 {
     /* Dirty everything. */
     for (uint32_t i = 0; i < RP1_MAX_BUCKETS;  i++) g_barriers[i]    = 0xDEADBEEFu;
-    for (uint32_t i = 0; i < RP1_MAX_NODES;    i++) g_node_status[i] = 0xABu;
     for (uint32_t i = 0; i < RP1_MAX_LOOPS;    i++) g_loop_iters[i]  = 0xDEADBEEFu;
     for (uint32_t i = 0; i < RP1_MAX_INFLIGHT; i++) {
         g_inflight[i].base_addr = 0xDEADBEEFu;
         g_inflight[i].node_index = i;
     }
+    g_node_count = 99u;
     g_inflight_count = 99;
+    g_completed_operations = 99u;
+    g_operation_started = 1u;
+    g_quiesce_finite_done = 1u;
+    g_quiesce_finite_timeout = 2u;
+    g_quiesce_infinite = 3u;
+    g_recovery_required = 1u;
+    g_terminal_opcode = RP1_OP_HALT;
+    g_active_image_id = 17u;
+    g_active_image_state = RP1_IMAGE_STATE_KNOWN;
 
     rp1_store_reset_graph();
 
     for (uint32_t i = 0; i < RP1_MAX_BUCKETS; i++)
         CHECK_EQ32(g_barriers[i], 0, "barriers not zeroed");
-    for (uint32_t i = 0; i < RP1_MAX_NODES; i++)
-        CHECK_EQ32(g_node_status[i], 0, "node_status not zeroed");
     for (uint32_t i = 0; i < RP1_MAX_LOOPS; i++)
         CHECK_EQ32(g_loop_iters[i], 0, "loop_iters not zeroed");
     for (uint32_t i = 0; i < RP1_MAX_INFLIGHT; i++)
         CHECK_EQ32(g_inflight[i].base_addr, 0, "inflight not zeroed");
     CHECK_EQ32(g_inflight_count, 0, "inflight_count not zeroed");
+    CHECK_EQ32(g_node_count, 0, "node_count not zeroed");
+    CHECK_EQ32(g_completed_operations, 0u, "operation count not zeroed");
+    CHECK_EQ32(g_operation_started, 0u, "operation-start state not zeroed");
+    CHECK_EQ32(g_quiesce_finite_done, 0u, "quiesce done not zeroed");
+    CHECK_EQ32(g_quiesce_finite_timeout, 0u,
+               "quiesce timeout not zeroed");
+    CHECK_EQ32(g_quiesce_infinite, 0u, "quiesce infinite not zeroed");
+    CHECK_EQ32(g_recovery_required, 0u, "recovery state not zeroed");
+    CHECK_EQ32(g_terminal_opcode, RP1_TERMINAL_OPCODE_NONE,
+               "terminal opcode not reset");
+    CHECK_EQ32(g_active_image_id, 17u, "active image id did not persist");
+    CHECK_EQ32(g_active_image_state, RP1_IMAGE_STATE_KNOWN,
+               "active image state did not persist");
+    g_active_image_id = 0u;
+    g_active_image_state = RP1_IMAGE_STATE_NONE;
     return 0;
 }
 
@@ -332,38 +415,144 @@ static int test_node_header(void)
 {
     rp1_node_t node;
 
-    /* Zero the whole packet (as RP1 would after a graph reset). */
+    /* Host builders zero the packet before composing its compact fields. */
     for (uint32_t i = 0; i < sizeof(node); i++) ((uint8_t *)&node)[i] = 0;
 
-    node.opcode               = RP1_OP_KERNEL_DISPATCH;
-    node.flags                = RP1_FLAG_HALT_ON_ERROR | RP1_FLAG_INFINITE;
+    rp1_node_set_control(
+        &node, rp1_node_make_control(RP1_OP_KERNEL_DISPATCH,
+                                     RP1_FLAG_INFINITE,
+                                     RP1_NODE_WAITING));
     node.barrier_await_mask   = 0x00000003u;
     node.barrier_set_mask     = 0x00000004u;
     node.barrier_await_bucket = 0;
     node.barrier_set_bucket   = 1;
-    node.status               = RP1_NODE_PENDING;
 
-    CHECK_EQ32(node.opcode,               RP1_OP_KERNEL_DISPATCH,         "opcode");
-    CHECK_EQ32(node.flags,                RP1_FLAG_HALT_ON_ERROR |
-                                          RP1_FLAG_INFINITE,               "flags");
+    CHECK_EQ32(rp1_node_get_opcode(&node), RP1_OP_KERNEL_DISPATCH, "opcode");
+    CHECK_EQ32(rp1_node_get_flags(&node),  RP1_FLAG_INFINITE,      "flags");
+    CHECK_EQ32(rp1_node_get_status(&node), RP1_NODE_WAITING,       "status");
     CHECK_EQ32(node.barrier_await_mask,   0x3u,                            "await_mask");
     CHECK_EQ32(node.barrier_set_mask,     0x4u,                            "set_mask");
     CHECK_EQ32(node.barrier_await_bucket, 0u,                              "await_bucket");
     CHECK_EQ32(node.barrier_set_bucket,   1u,                              "set_bucket");
-    CHECK_EQ32(node.status,               RP1_NODE_PENDING,                "status");
+
+    /* Component setters preserve every unrelated nibble, including reserved. */
+    rp1_node_set_control(&node, (uint16_t)(node.control | 0xA000u));
+    rp1_node_set_opcode(&node, RP1_OP_HALT);
+    rp1_node_set_flags(&node, 0xFu);
+    rp1_node_set_status(&node, RP1_NODE_ERROR);
+    CHECK_EQ32(rp1_node_get_control(&node), 0xA4FDu, "packed control");
+    CHECK_EQ32(rp1_node_get_opcode(&node), RP1_OP_HALT, "updated opcode");
+    CHECK_EQ32(rp1_node_get_flags(&node), 0xFu, "updated flags");
+    CHECK_EQ32(rp1_node_get_status(&node), RP1_NODE_ERROR, "updated status");
 
     /* Verify the payload union shares the same storage (no extra padding). */
-    CHECK_EQ32((uint32_t)sizeof(node.payload.raw), 48u, "payload raw size");
+    CHECK_EQ32((uint32_t)sizeof(node.payload.raw), 20u, "payload raw size");
 
     return 0;
 }
 
 static int test_node_alignment(void)
 {
-    /* An array of nodes must be packed 64 bytes apart. */
+    /* Natural four-byte alignment produces the exact 32-byte array stride. */
     rp1_node_t arr[2];
     uintptr_t delta = (uintptr_t)&arr[1] - (uintptr_t)&arr[0];
-    CHECK_EQ32((uint32_t)delta, 64u, "node stride 64");
+    CHECK_EQ32((uint32_t)delta, 32u, "node stride 32");
+    CHECK_EQ32((uint32_t)((uintptr_t)&arr[0] & 3u), 0u,
+               "node natural alignment");
+    return 0;
+}
+
+/* Exercise every packed DMA field getter and replacement helper. */
+static int test_dma_packing(void)
+{
+    uint32_t packed = rp1_dma_pack(0x0ABCDEFCu, 1u, 2u);
+
+    CHECK_EQ32(rp1_dma_get_length(packed), 0x0ABCDEFCu,
+               "dma packed length");
+    CHECK_EQ32(rp1_dma_get_src_type(packed), 1u, "dma packed source");
+    CHECK_EQ32(rp1_dma_get_dst_type(packed), 2u, "dma packed destination");
+    packed = rp1_dma_set_length(packed, 0x1234u);
+    packed = rp1_dma_set_src_type(packed, 3u);
+    packed = rp1_dma_set_dst_type(packed, 0u);
+    CHECK_EQ32(rp1_dma_get_length(packed), 0x1234u,
+               "dma replaced length");
+    CHECK_EQ32(rp1_dma_get_src_type(packed), 3u,
+               "dma replaced source");
+    CHECK_EQ32(rp1_dma_get_dst_type(packed), 0u,
+               "dma replaced destination");
+    return 0;
+}
+
+/*
+ * Exercise CSR fan-out, barrier clear/republication, WAIT parking, and dense
+ * graph fallback without involving the graph execution loop.
+ */
+static int test_event_scheduler(void)
+{
+    rp1_store_reset_graph();
+    for (uint32_t i = 0u; i < 3u; i++) {
+        rp1_node_set_control(
+            &g_nodes[i],
+            rp1_node_make_control(RP1_OP_NOP, 0u, RP1_NODE_PENDING));
+        g_nodes[i].barrier_await_bucket = 0u;
+        g_nodes[i].barrier_await_mask = i == 0u ? 0u : 1u;
+        g_nodes[i].barrier_set_bucket = 0u;
+        g_nodes[i].barrier_set_mask = 1u << i;
+    }
+
+    CHECK_EQ32(rp1_scheduler_build(3u), 1u,
+               "scheduler sparse index enabled");
+    CHECK_EQ32(rp1_scheduler_subscription_count(), 2u,
+               "scheduler fanout subscriptions");
+    uint32_t node = UINT32_MAX;
+    CHECK_EQ32(rp1_scheduler_pop_ready(&node), 1u,
+               "scheduler root ready");
+    CHECK_EQ32(node, 0u, "scheduler root index");
+    rp1_node_set_status(&g_nodes[0], RP1_NODE_DONE);
+    rp1_scheduler_remove_node(0u);
+    rp1_scheduler_set_barriers(0u, 1u);
+    CHECK_EQ32(rp1_scheduler_pop_ready(&node), 1u,
+               "scheduler first fanout ready");
+    CHECK_EQ32(node, 1u, "scheduler first fanout index");
+    CHECK_EQ32(rp1_scheduler_pop_ready(&node), 1u,
+               "scheduler second fanout ready");
+    CHECK_EQ32(node, 2u, "scheduler second fanout index");
+
+    rp1_scheduler_clear_barriers(0u, 1u);
+    CHECK_EQ32(rp1_scheduler_pop_ready(&node), 0u,
+               "scheduler clear blocks subscribers");
+    rp1_scheduler_set_barriers(0u, 1u);
+    CHECK_EQ32(rp1_scheduler_pop_ready(&node), 1u,
+               "scheduler republish wakes first");
+    CHECK_EQ32(node, 1u, "scheduler republish first index");
+    CHECK_EQ32(rp1_scheduler_pop_ready(&node), 1u,
+               "scheduler republish wakes second");
+    CHECK_EQ32(node, 2u, "scheduler republish second index");
+
+    rp1_node_set_status(&g_nodes[1], RP1_NODE_WAITING);
+    rp1_scheduler_park_wait(1u);
+    node = UINT32_MAX;
+    CHECK_EQ32(rp1_scheduler_next_waiting(0u, &node), 1u,
+               "scheduler parked wait found");
+    CHECK_EQ32(node, 1u, "scheduler parked wait index");
+    rp1_scheduler_remove_node(1u);
+    CHECK_EQ32(rp1_scheduler_next_waiting(0u, &node), 0u,
+               "scheduler parked wait removed");
+
+    rp1_store_reset_graph();
+    const uint32_t dense_nodes =
+        RP1_SCHEDULER_MAX_SUBSCRIPTIONS / 32u + 1u;
+    for (uint32_t i = 0u; i < dense_nodes; i++) {
+        rp1_node_set_control(
+            &g_nodes[i],
+            rp1_node_make_control(RP1_OP_NOP, 0u, RP1_NODE_PENDING));
+        g_nodes[i].barrier_await_bucket = 0u;
+        g_nodes[i].barrier_await_mask = UINT32_MAX;
+    }
+    CHECK_EQ32(rp1_scheduler_build(dense_nodes), 0u,
+               "scheduler dense graph fallback");
+    CHECK_EQ32(rp1_scheduler_enabled(), 0u,
+               "scheduler fallback disabled index");
     return 0;
 }
 
@@ -391,6 +580,8 @@ void rp1_main(void)
     run("condops",             test_condops);
     run("node_header",         test_node_header);
     run("node_alignment",      test_node_alignment);
+    run("dma_packing",         test_dma_packing);
+    run("event_scheduler",      test_event_scheduler);
 
     semi_puts("\n=== RP1 graph tests ===\n");
     rp1_graph_test_run();
