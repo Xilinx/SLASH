@@ -276,7 +276,7 @@ local IP repository before building:
    ``linker/slashkit/resources/base/common/iprepo/``
    so that Vivado can locate it during synthesis. The directory name must
    begin with ``smbus``; a release-date suffix is permitted.
-3. Generate the SMBus license from the `AMD License Center <https://amd.entitlenow.com/AcrossUser>`_
+3. Generate the SMBus license from the `AMD License Center <https://account.amd.com/en/forms/license/license-form.html>`_
    and add it to your Vivado license configuration.
 
 
