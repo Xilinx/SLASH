@@ -507,6 +507,7 @@ proc create_root_design { parentCell } {
    CONFIG.ASSOCIATED_RESET {arstn} \
    CONFIG.CLK_DOMAIN {bd_4885_pspmc_0_0_pl0_ref_clk} \
  ] $service_clk
+  set gt_mgmt_clk [ create_bd_port -dir I -type clk -freq_hz 100000000 gt_mgmt_clk ]
   set arstn [ create_bd_port -dir I -type rst arstn ]
 
   # Create instance: dummy_noc_0, and set properties
@@ -1664,6 +1665,11 @@ proc create_root_design { parentCell } {
   [get_bd_pins noc_virt_2/aclk0] \
   [get_bd_pins noc_virt_4/aclk0] \
   [get_bd_pins c_shift_ram_0/CLK]
+  # Static CIPS PL0 clock keeps the GTM PCSR management path alive while this
+  # service partition is being shut down and reconfigured.
+  connect_bd_net -net gt_mgmt_clk_1 [get_bd_ports gt_mgmt_clk] \
+  [get_bd_pins qsfp_0_n_1/gt_mgmt_clk] \
+  [get_bd_pins qsfp_2_n_3/gt_mgmt_clk]
   connect_bd_net -net proc_sys_reset_0_peripheral_aresetn  [get_bd_pins ilreduced_logic_0/Res] \
   [get_bd_pins traffic_producer_1/ap_rst_n] \
   [get_bd_pins traffic_producer_2/ap_rst_n] \

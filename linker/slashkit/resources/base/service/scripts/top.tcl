@@ -4663,7 +4663,8 @@ proc create_root_design { parentCell } {
   [get_bd_pins service_layer/arstn]
   connect_bd_net -net arstn_2  [get_bd_pins static_region/peripheral_aresetn2] \
   [get_bd_pins slash/arstn]
-  connect_bd_net -net aved_pl0_ref_clk -boundary_type upper  [get_bd_pins static_region/pl0_ref_clk]
+  connect_bd_net -net aved_pl0_ref_clk -boundary_type upper  [get_bd_pins static_region/pl0_ref_clk] \
+  [get_bd_pins service_layer/gt_mgmt_clk]
   connect_bd_net -net clk_wizard_0_clk_out1  [get_bd_pins static_region/clk_out1] \
   [get_bd_pins slash/static_region_clk]
   connect_bd_net -net service_clk_1  [get_bd_pins static_region/clk_out2] \
