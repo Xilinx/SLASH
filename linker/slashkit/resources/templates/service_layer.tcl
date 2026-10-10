@@ -1150,9 +1150,7 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 
   # Older packaged service_layer.bd files do not carry the management-clock
   # boundary port. Create it here for the fixed static-shell clock contract.
-  if { [llength [get_bd_ports -quiet gt_mgmt_clk]] == 0 } {
-    create_bd_port -dir I -type clk -freq_hz 100000000 gt_mgmt_clk
-  }
+  create_bd_port -dir I -type clk -freq_hz 100000000 gt_mgmt_clk
 
   foreach {__dc __idx __hier} {0 0 qsfp_0_n_1  1 2 qsfp_2_n_3} {
     if { [set ::DCMAC${__dc}_ENABLED] != 1 } { continue }
