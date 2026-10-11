@@ -47,20 +47,63 @@ namespace {
 
 /*
  * A distinctive nonzero sentinel distinguishes this probe's SIGNAL side effect
- * from reset state or stale zeroes; the matching CQ record proves the scanner,
- * rather than an unrelated writer, completed the node.
+ * from reset state or stale zeroes; the sequence-tagged graph result proves
+ * which scanner submission completed the node.
  */
 constexpr uint32_t kSignalMagic     = 0xDEADBEEFu;
-constexpr uint32_t kBringupCqSize   = 64u;
+/// Trace-ring capacity sufficient for the one-node probe lifecycle.
 constexpr uint32_t kBringupTraceSize = 64u;
+/// Absolute graph-result wait limit.
 constexpr auto     kPollTimeout     = std::chrono::seconds(3);
+/// Host polling cadence for sequence and heartbeat reads.
 constexpr auto     kPollInterval    = std::chrono::milliseconds(1);
+/// Heartbeat silence classified as a firmware stall.
 constexpr auto     kStallWindow     = std::chrono::milliseconds(500);
 
+/**
+ * @brief Stable host snapshot of the protocol-v6 graph result.
+ */
+struct GraphResultSnapshot {
+    /// Commit marker written after the result payload.
+    uint32_t magic = 0;
+    /// Exact accepted graph sequence.
+    uint32_t graphSeq = 0;
+    /// Terminal rp1_graph_outcome_t value.
+    uint32_t outcome = 0;
+    /// Raw RP1_RESULT_* mask.
+    uint32_t flags = 0;
+    /// First terminal RP1_ERR_* code.
+    uint32_t errorCode = 0;
+    /// Failing or HALT node.
+    uint32_t terminalNode = RP1_TERMINAL_ERROR_NODE_NONE;
+    /// Opcode associated with the terminal node.
+    uint32_t terminalOpcode = RP1_TERMINAL_OPCODE_NONE;
+    /// Error-specific primary detail.
+    uint32_t errorDetail = 0;
+    /// Error-specific auxiliary detail.
+    uint32_t errorAux = 0;
+    /// Final known image identifier.
+    uint32_t activeImageId = 0;
+    /// Final rp1_image_state_t value.
+    uint32_t imageState = RP1_IMAGE_STATE_NONE;
+    /// Successful operation executions, including loop repeats.
+    uint32_t completedOperations = 0;
+    /// PMU ticks through GRAPH_DONE.
+    uint32_t graphElapsedTicks = 0;
+    /// PMU ticks through final result preparation.
+    uint32_t publishElapsedTicks = 0;
+    /// Final trace producer cursor.
+    uint32_t traceWriteIndex = 0;
+    /// Packed terminal quiescence counts.
+    uint32_t quiescence = 0;
+};
+
+/// Return true when @p text starts with a C-style hexadecimal prefix.
 bool hasHexPrefix(std::string_view text) {
     return text.size() >= 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
 }
 
+/// Parse one decimal or prefixed-hexadecimal unsigned command-line value.
 uint64_t parseUnsigned(std::string_view text, const char* fieldName) {
     if (text.empty()) {
         throw std::invalid_argument(std::string(fieldName) + " is required");
@@ -86,6 +129,7 @@ uint64_t parseUnsigned(std::string_view text, const char* fieldName) {
     return value;
 }
 
+/// Return a diagnostic name for an RP1 firmware state.
 const char* stateStr(uint32_t s) {
     switch (s) {
     case RP1_STATE_INIT:    return "INIT";
@@ -97,6 +141,50 @@ const char* stateStr(uint32_t s) {
     }
 }
 
+/// Return a diagnostic name for a graph-result outcome.
+const char* outcomeStr(uint32_t outcome) {
+    switch (outcome) {
+    case RP1_GRAPH_RESULT_NONE:    return "NONE";
+    case RP1_GRAPH_RESULT_SUCCESS: return "SUCCESS";
+    case RP1_GRAPH_RESULT_FAILED:  return "FAILED";
+    case RP1_GRAPH_RESULT_HALTED:  return "HALTED";
+    default:                       return "?";
+    }
+}
+
+/// Return a diagnostic name for firmware image knowledge.
+const char* imageStateStr(uint32_t state) {
+    switch (state) {
+    case RP1_IMAGE_STATE_NONE:    return "NONE";
+    case RP1_IMAGE_STATE_KNOWN:   return "KNOWN";
+    case RP1_IMAGE_STATE_UNKNOWN: return "UNKNOWN";
+    default:                      return "?";
+    }
+}
+
+/// Return a diagnostic name for an RP1 graph opcode.
+const char* opcodeStr(uint32_t opcode) {
+    switch (opcode) {
+    case RP1_OP_NOP:             return "NOP";
+    case RP1_OP_WAIT:            return "WAIT";
+    case RP1_OP_SIGNAL:          return "SIGNAL";
+    case RP1_OP_KERNEL_DISPATCH: return "KERNEL_DISPATCH";
+    case RP1_OP_SCALAR_WRITE:    return "SCALAR_WRITE";
+    case RP1_OP_SCALAR_READ:     return "SCALAR_READ";
+    case RP1_OP_SCALAR_COPY:     return "SCALAR_COPY";
+    case RP1_OP_DMA_COPY:        return "DMA_COPY";
+    case RP1_OP_DMA_FILL:        return "DMA_FILL";
+    case RP1_OP_PDI_LOAD:        return "PDI_LOAD";
+    case RP1_OP_LOOP:            return "LOOP";
+    case RP1_OP_COND:            return "COND";
+    case RP1_OP_RERUN:           return "RERUN";
+    case RP1_OP_HALT:            return "HALT";
+    case RP1_TERMINAL_OPCODE_NONE: return "NONE";
+    default:                     return "?";
+    }
+}
+
+/// Return a diagnostic name for one optional trace event.
 const char* traceEventStr(uint32_t e) {
     switch (e) {
     case RP1_TRACE_GRAPH_START:    return "GRAPH_START";
@@ -111,23 +199,219 @@ const char* traceEventStr(uint32_t e) {
     case RP1_TRACE_PDI_LOAD:       return "PDI_LOAD";
     case RP1_TRACE_IMAGE_MISMATCH: return "IMAGE_MISMATCH";
     case RP1_TRACE_GRAPH_DONE:     return "GRAPH_DONE";
+    case RP1_TRACE_FLUSH_START:    return "TRACE_FLUSH_START";
+    case RP1_TRACE_FLUSH_END:      return "TRACE_FLUSH_END";
     default:                       return "?";
     }
 }
 
+/// Print whether firmware advertises one named capability.
 void printCapability(const char* name, uint32_t capabilities, uint32_t mask) {
     std::printf("    %-29s = %s\n", name,
                 (capabilities & mask) != 0u ? "yes" : "no");
 }
 
+/// Print whether one graph-result flag is present.
+void printResultFlag(const char* name, uint32_t flags, uint32_t mask) {
+    std::printf("    %-29s = %s\n", name,
+                (flags & mask) != 0u ? "yes" : "no");
+}
+
+/*
+ * Read each volatile word once after the graph_done_seq publication barrier.
+ * The returned object owns its values and cannot observe a later submission.
+ */
+GraphResultSnapshot snapshotResult(volatile rp1_ctrl_t* c) {
+    GraphResultSnapshot result;
+    result.magic = c->result.magic;
+    result.graphSeq = c->result.graph_seq;
+    result.outcome = c->result.outcome;
+    result.flags = c->result.flags;
+    result.errorCode = c->result.error_code;
+    result.terminalNode = c->result.terminal_node;
+    result.terminalOpcode = c->result.terminal_opcode;
+    result.errorDetail = c->result.error_detail;
+    result.errorAux = c->result.error_aux;
+    result.activeImageId = c->result.active_image_id;
+    result.imageState = c->result.image_state;
+    result.completedOperations = c->result.completed_operations;
+    result.graphElapsedTicks = c->result.graph_elapsed_ticks;
+    result.publishElapsedTicks = c->result.publish_elapsed_ticks;
+    result.traceWriteIndex = c->result.trace_write_idx;
+    result.quiescence = c->result.quiescence;
+    return result;
+}
+
+/// Print every field and decoded flag in a graph-result snapshot.
+void printGraphResult(const GraphResultSnapshot& result) {
+    std::printf("  result.magic              = 0x%08x (%s)\n",
+                result.magic,
+                result.magic == RP1_GRAPH_RESULT_MAGIC ? "RSLT" : "UNCOMMITTED");
+    std::printf("  result.graph_seq          = %u\n", result.graphSeq);
+    std::printf("  result.outcome            = %u (%s)\n",
+                result.outcome, outcomeStr(result.outcome));
+    std::printf("  result.flags              = 0x%08x\n", result.flags);
+    printResultFlag("recovery_required", result.flags,
+                    RP1_RESULT_RECOVERY_REQUIRED);
+    printResultFlag("effects_may_be_partial", result.flags,
+                    RP1_RESULT_EFFECTS_MAY_BE_PARTIAL);
+    printResultFlag("infinite_work_remains", result.flags,
+                    RP1_RESULT_INFINITE_WORK_REMAINS);
+    printResultFlag("trace_enabled", result.flags,
+                    RP1_RESULT_TRACE_ENABLED);
+    printResultFlag("trace_overflow", result.flags,
+                    RP1_RESULT_TRACE_OVERFLOW);
+    printResultFlag("unreached_nodes", result.flags,
+                    RP1_RESULT_UNREACHED_NODES);
+    std::printf("  result.error_code         = %u\n", result.errorCode);
+    if (result.terminalNode == RP1_TERMINAL_ERROR_NODE_NONE) {
+        std::printf("  result.terminal_node      = 0x%08x (none)\n",
+                    result.terminalNode);
+    } else {
+        std::printf("  result.terminal_node      = %u\n",
+                    result.terminalNode);
+    }
+    std::printf("  result.terminal_opcode    = 0x%08x (%s)\n",
+                result.terminalOpcode, opcodeStr(result.terminalOpcode));
+    std::printf("  result.error_detail       = 0x%08x\n",
+                result.errorDetail);
+    std::printf("  result.error_aux          = 0x%08x\n",
+                result.errorAux);
+    std::printf("  result.active_image_id    = %u\n",
+                result.activeImageId);
+    std::printf("  result.image_state        = %u (%s)\n",
+                result.imageState, imageStateStr(result.imageState));
+    std::printf("  result.completed_operations = %u\n",
+                result.completedOperations);
+    std::printf("  result.graph_elapsed_ticks  = %u\n",
+                result.graphElapsedTicks);
+    std::printf("  result.publish_elapsed_ticks = %u\n",
+                result.publishElapsedTicks);
+    std::printf("  result.trace_write_idx      = %u\n",
+                result.traceWriteIndex);
+    std::printf("  result.quiescence           = 0x%08x\n",
+                result.quiescence);
+    std::printf("    finite_done/finite_timeout/infinite = %u/%u/%u\n",
+                (result.quiescence >> RP1_QUIESCE_FINITE_DONE_SHIFT) &
+                    RP1_QUIESCE_COUNT_MASK,
+                (result.quiescence >> RP1_QUIESCE_FINITE_TIMEOUT_SHIFT) &
+                    RP1_QUIESCE_COUNT_MASK,
+                (result.quiescence >> RP1_QUIESCE_INFINITE_SHIFT) &
+                    RP1_QUIESCE_COUNT_MASK);
+}
+
+/*
+ * A successful one-node probe has no terminal record, partial effects,
+ * recovery requirement, outstanding work, trace overflow, or unreached node.
+ * Image identity may be NONE or KNOWN because the probe does not reprogram.
+ */
+bool validateProbeResult(const GraphResultSnapshot& result, uint32_t wantSeq,
+                         bool traceExpected) {
+    constexpr uint32_t kKnownFlags =
+        RP1_RESULT_RECOVERY_REQUIRED |
+        RP1_RESULT_EFFECTS_MAY_BE_PARTIAL |
+        RP1_RESULT_INFINITE_WORK_REMAINS |
+        RP1_RESULT_TRACE_ENABLED |
+        RP1_RESULT_TRACE_OVERFLOW |
+        RP1_RESULT_UNREACHED_NODES;
+    constexpr uint32_t kFailureFlags =
+        RP1_RESULT_RECOVERY_REQUIRED |
+        RP1_RESULT_EFFECTS_MAY_BE_PARTIAL |
+        RP1_RESULT_INFINITE_WORK_REMAINS |
+        RP1_RESULT_TRACE_OVERFLOW |
+        RP1_RESULT_UNREACHED_NODES;
+
+    bool valid = true;
+    if (result.magic != RP1_GRAPH_RESULT_MAGIC) {
+        std::fprintf(stderr,
+                     "FAIL: graph result magic=0x%08x, expected 0x%08x\n",
+                     result.magic,
+                     static_cast<uint32_t>(RP1_GRAPH_RESULT_MAGIC));
+        valid = false;
+    }
+    if (result.graphSeq != wantSeq) {
+        std::fprintf(stderr,
+                     "FAIL: graph result seq=%u, expected %u\n",
+                     result.graphSeq, wantSeq);
+        valid = false;
+    }
+    if (result.outcome != RP1_GRAPH_RESULT_SUCCESS) {
+        std::fprintf(stderr,
+                     "FAIL: graph outcome=%s(%u), expected SUCCESS(%u)\n",
+                     outcomeStr(result.outcome), result.outcome,
+                     static_cast<uint32_t>(RP1_GRAPH_RESULT_SUCCESS));
+        valid = false;
+    }
+    if ((result.flags & ~kKnownFlags) != 0u ||
+        (result.flags & kFailureFlags) != 0u) {
+        std::fprintf(stderr,
+                     "FAIL: graph result has invalid success flags 0x%08x\n",
+                     result.flags);
+        valid = false;
+    }
+    const bool traceFlag =
+        (result.flags & RP1_RESULT_TRACE_ENABLED) != 0u;
+    if (traceFlag != traceExpected ||
+        (traceExpected && result.traceWriteIndex == 0u) ||
+        (!traceExpected && result.traceWriteIndex != 0u)) {
+        std::fprintf(stderr,
+                     "FAIL: graph trace result flag=%u write_idx=%u, "
+                     "expected enabled=%u\n",
+                     traceFlag ? 1u : 0u, result.traceWriteIndex,
+                     traceExpected ? 1u : 0u);
+        valid = false;
+    }
+    if (result.errorCode != 0u ||
+        result.terminalNode != RP1_TERMINAL_ERROR_NODE_NONE ||
+        result.terminalOpcode != RP1_TERMINAL_OPCODE_NONE ||
+        result.errorDetail != 0u || result.errorAux != 0u) {
+        std::fprintf(stderr,
+                     "FAIL: successful graph result carries terminal error data\n");
+        valid = false;
+    }
+    const bool imageConsistent =
+        (result.imageState == RP1_IMAGE_STATE_NONE &&
+         result.activeImageId == 0u) ||
+        (result.imageState == RP1_IMAGE_STATE_KNOWN &&
+         result.activeImageId != 0u);
+    if (!imageConsistent) {
+        std::fprintf(stderr,
+                     "FAIL: successful graph result has image=%s(%u):%u\n",
+                     imageStateStr(result.imageState), result.imageState,
+                     result.activeImageId);
+        valid = false;
+    }
+    if (result.completedOperations != 1u) {
+        std::fprintf(stderr,
+                     "FAIL: graph result completed %u operations, expected 1\n",
+                     result.completedOperations);
+        valid = false;
+    }
+    if (result.publishElapsedTicks < result.graphElapsedTicks) {
+        std::fprintf(stderr,
+                     "FAIL: publish ticks %u precede graph ticks %u\n",
+                     result.publishElapsedTicks, result.graphElapsedTicks);
+        valid = false;
+    }
+    if (result.quiescence != 0u) {
+        std::fprintf(stderr,
+                     "FAIL: successful probe required quiescence 0x%08x\n",
+                     result.quiescence);
+        valid = false;
+    }
+    return valid;
+}
+
+/// Print the complete RP1 control and graph-result diagnostics.
 void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  magic            = 0x%08x (%s)\n",
                 c->magic, (c->magic == RP1_CTRL_MAGIC) ? "SQR1" : "BAD");
     std::printf("  version          = %u\n",   c->version);
     std::printf("  node_count       = %u\n",   c->node_count);
-    std::printf("  cq_size          = %u\n",   c->cq_size);
+    std::printf("  reserved_0x0c    = 0x%08x\n", c->_reserved_cq_size);
     std::printf("  node_base        = 0x%08x_%08x\n", c->node_base_hi, c->node_base_lo);
-    std::printf("  cq_base          = 0x%08x_%08x\n", c->cq_base_hi, c->cq_base_lo);
+    std::printf("  reserved_0x18    = 0x%08x\n", c->_reserved_cq_base_lo);
+    std::printf("  reserved_0x1c    = 0x%08x\n", c->_reserved_cq_base_hi);
     std::printf("  arg_buf_base     = 0x%08x_%08x\n", c->arg_buf_base_hi, c->arg_buf_base_lo);
     std::printf("  sig_array_base   = 0x%08x_%08x\n", c->sig_array_base_hi, c->sig_array_base_lo);
     std::printf("  trace_enable     = %u\n",   c->trace_enable);
@@ -140,12 +424,14 @@ void printCtrl(volatile rp1_ctrl_t* c) {
                     RP1_CAP_PLATFORM_PDI_IPI_CONFIG);
     printCapability("pmu_cycle_timeouts", capabilities,
                     RP1_CAP_PMU_CYCLE_TIMEOUTS);
-    printCapability("cq_flow_control", capabilities,
-                    RP1_CAP_CQ_FLOW_CONTROL);
     printCapability("structured_pdi_response", capabilities,
                     RP1_CAP_STRUCTURED_PDI_RESPONSE);
     printCapability("latched_terminal_errors", capabilities,
                     RP1_CAP_LATCHED_TERMINAL_ERRORS);
+    printCapability("btcm_trace_staging", capabilities,
+                    RP1_CAP_BTCM_TRACE_STAGING);
+    printCapability("graph_result", capabilities,
+                    RP1_CAP_GRAPH_RESULT);
     std::printf("  required_capabilities = 0x%08x\n",
                 static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES));
     std::printf("  missing_capabilities  = 0x%08x\n",
@@ -154,8 +440,8 @@ void printCtrl(volatile rp1_ctrl_t* c) {
                 c->pdi_ipi_platform_id);
     std::printf("  graph_seq        = %u\n",   c->graph_seq);
     std::printf("  graph_done_seq   = %u\n",   c->graph_done_seq);
-    std::printf("  cq_write_idx     = %u\n",   c->cq_write_idx);
-    std::printf("  cq_read_idx      = %u\n",   c->cq_read_idx);
+    std::printf("  reserved_0x28    = 0x%08x\n", c->_reserved_cq_write_idx);
+    std::printf("  reserved_0x2c    = 0x%08x\n", c->_reserved_cq_read_idx);
     std::printf("  rp1_state        = %u (%s)\n", c->rp1_state, stateStr(c->rp1_state));
     std::printf("  rp1_error_code   = %u\n",   c->rp1_error_code);
     std::printf("  rp1_current_node = %u\n",   c->rp1_current_node);
@@ -168,6 +454,8 @@ void printCtrl(volatile rp1_ctrl_t* c) {
     std::printf("  terminal_error_detail = 0x%08x\n", c->terminal_error_detail);
     std::printf("  terminal_error_aux    = 0x%08x\n", c->terminal_error_aux);
     std::printf("  heartbeat        = %u\n",   c->heartbeat);
+    std::printf("Graph result:\n");
+    printGraphResult(snapshotResult(c));
 }
 
 /*
@@ -175,13 +463,43 @@ void printCtrl(volatile rp1_ctrl_t* c) {
  * layout, every mandatory behavior bit, and a non-unknown IPI identity.
  * Keep this stricter than a heartbeat-only liveness check.
  */
-bool contractCompatible(volatile rp1_ctrl_t* c) {
+constexpr bool contractFieldsCompatible(
+    uint32_t magic, uint32_t version, uint32_t capabilities,
+    uint32_t platform) {
     const uint32_t missing =
-        static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES) & ~c->capabilities;
-    return c->magic == RP1_CTRL_MAGIC &&
-           c->version == RP1_PROTOCOL_VERSION &&
+        static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES) & ~capabilities;
+    return magic == RP1_CTRL_MAGIC &&
+           version == RP1_PROTOCOL_VERSION &&
            missing == 0u &&
-           c->pdi_ipi_platform_id != RP1_PDI_IPI_PLATFORM_UNKNOWN;
+           platform != RP1_PDI_IPI_PLATFORM_UNKNOWN;
+}
+
+static_assert(
+    !contractFieldsCompatible(
+        RP1_CTRL_MAGIC, 5u, RP1_REQUIRED_CAPABILITIES, 1u),
+    "protocol-v5 firmware must be rejected");
+
+/// Return true only when the published firmware contract matches this host.
+bool contractCompatible(volatile rp1_ctrl_t* c) {
+    return contractFieldsCompatible(
+        c->magic, c->version, c->capabilities,
+        c->pdi_ipi_platform_id);
+}
+
+/// Diagnose an incompatible firmware contract before any probe BAR mutation.
+bool validateFirmwareContract(volatile rp1_ctrl_t* c) {
+    if (contractCompatible(c)) {
+        return true;
+    }
+    std::fprintf(
+        stderr,
+        "ERROR: incompatible RP1 firmware contract "
+        "(magic=0x%08x, version=%u, capabilities=0x%08x, "
+        "platform_id=0x%08x); expected protocol v%u and capabilities 0x%08x.\n",
+        c->magic, c->version, c->capabilities, c->pdi_ipi_platform_id,
+        static_cast<uint32_t>(RP1_PROTOCOL_VERSION),
+        static_cast<uint32_t>(RP1_REQUIRED_CAPABILITIES));
+    return false;
 }
 
 /// Minimum BAR length needed to reach the bring-up trace ring.
@@ -190,6 +508,7 @@ uint64_t requiredBarLen(uint64_t ctrlOffset) {
          + static_cast<uint64_t>(kBringupTraceSize) * sizeof(rp1_trace_entry_t);
 }
 
+/// Zero @p bytes through a volatile BAR mapping.
 void barZero(volatile void* dst, size_t bytes) {
     auto* p = static_cast<volatile uint8_t*>(dst);
     for (size_t i = 0; i < bytes; ++i) {
@@ -197,26 +516,36 @@ void barZero(volatile void* dst, size_t bytes) {
     }
 }
 
-void nodeSetHeader(volatile rp1_node_t* n, uint16_t opcode,
+/// Copy @p bytes into a volatile BAR mapping without dropping writes.
+void barWrite(volatile void* dst, const void* src, size_t bytes) {
+    auto* out = static_cast<volatile uint8_t*>(dst);
+    const auto* in = static_cast<const uint8_t*>(src);
+    for (size_t i = 0; i < bytes; ++i) {
+        out[i] = in[i];
+    }
+}
+
+/// Initialize the common header of one staged node packet.
+void nodeSetHeader(rp1_node_t* n, uint16_t opcode,
                    uint8_t awaitBucket, uint32_t awaitMask,
                    uint8_t setBucket, uint32_t setMask) {
-    n->opcode               = opcode;
-    n->flags                = 0;
+    rp1_node_set_opcode(n, opcode);
+    rp1_node_set_flags(n, 0u);
+    rp1_node_set_status(n, RP1_NODE_PENDING);
     n->barrier_await_mask   = awaitMask;
     n->barrier_set_mask     = setMask;
     n->barrier_await_bucket = awaitBucket;
     n->barrier_set_bucket   = setBucket;
-    n->status               = RP1_NODE_PENDING;
 }
 
 /// Program the control block's base-address fields for a graph of @p nodeCount nodes.
 void programCtrl(volatile rp1_ctrl_t* c, uint32_t nodeCount) {
     c->node_count        = nodeCount;
-    c->cq_size           = kBringupCqSize;
+    c->_reserved_cq_size = 0;
     c->node_base_lo      = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_NODE_ARRAY_OFFSET);
     c->node_base_hi      = 0;
-    c->cq_base_lo        = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_CQ_OFFSET);
-    c->cq_base_hi        = 0;
+    c->_reserved_cq_base_lo = 0;
+    c->_reserved_cq_base_hi = 0;
     c->arg_buf_base_lo   = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_ARG_BUF_OFFSET);
     c->arg_buf_base_hi   = 0;
     c->sig_array_base_lo = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_SIG_ARRAY_OFFSET);
@@ -225,7 +554,6 @@ void programCtrl(volatile rp1_ctrl_t* c, uint32_t nodeCount) {
     c->trace_base_lo     = static_cast<uint32_t>(RP1_CTRL_PHYS_ADDR + RP1_DEFAULT_TRACE_OFFSET);
     c->trace_base_hi     = 0;
     c->trace_size        = kBringupTraceSize;
-    c->trace_write_idx   = 0;
 }
 
 /// Refuse to submit unless the firmware is alive and idle.  Prints a
@@ -259,16 +587,37 @@ bool checkFirmwareReady(volatile rp1_ctrl_t* c) {
  */
 /// Poll graph_done_seq until it equals @p wantSeq. Returns 0 on success,
 /// -1 on timeout, -2 on a detected firmware hang (heartbeat stuck).
-int waitForSeq(volatile rp1_ctrl_t* c, uint32_t wantSeq) {
+int waitForSeq(vrtd::BarFile& barFile, size_t ctrlOffset, uint32_t wantSeq) {
     using clock = std::chrono::steady_clock;
     const auto deadline    = clock::now() + kPollTimeout;
-    uint32_t   lastHb      = c->heartbeat;
+    uint32_t lastHb;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read, ctrlOffset);
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
+        lastHb = c->heartbeat;
+    }
     auto       lastHbTick  = clock::now();
 
-    while (c->graph_done_seq != wantSeq) {
+    while (true) {
+        uint32_t done;
+        uint32_t hb;
+        {
+            /*
+             * End each DMA-BUF read transaction before sleeping. Re-entering
+             * the bracket makes the next firmware publication visible.
+             */
+            auto base = barFile.getPtr<uint8_t>(
+                vrtd::BarFile::Direction::Read, ctrlOffset);
+            auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
+            done = c->graph_done_seq;
+            hb = c->heartbeat;
+        }
+        if (done == wantSeq) {
+            return 0;
+        }
         const auto now = clock::now();
 
-        const uint32_t hb = c->heartbeat;
         if (hb != lastHb) {
             lastHb = hb;
             lastHbTick = now;
@@ -283,7 +632,7 @@ int waitForSeq(volatile rp1_ctrl_t* c, uint32_t wantSeq) {
 
         if (now > deadline) {
             std::fprintf(stderr, "TIMEOUT: graph_done_seq=%u (want %u)\n",
-                         c->graph_done_seq, wantSeq);
+                         done, wantSeq);
             return -1;
         }
         std::this_thread::sleep_for(kPollInterval);
@@ -331,7 +680,7 @@ vrtd::BarFile openRp1Bar(const Rp1Probe::Options& options,
 /*
  * dump is intentionally passive: snapshot the published contract, then sample
  * heartbeat over a stall window. It diagnoses compatibility and liveness
- * without changing sequence, CQ ownership, or graph storage.
+ * without changing sequence, graph result, or graph storage.
  */
 int Rp1Probe::dump(const Options& options) {
     const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
@@ -339,20 +688,32 @@ int Rp1Probe::dump(const Options& options) {
     vrtd::Session session;
     vrtd::BarFile barFile = openRp1Bar(options, session, ctrlOffset, "debug rp1-dump");
 
-    auto base = barFile.getPtr<uint8_t>(vrtd::BarFile::Direction::Read, static_cast<size_t>(ctrlOffset));
-    auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
+    bool compatible;
+    uint32_t hb1;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
 
-    std::printf("RP1 control block @ R5 0x%08lx (BAR%u + 0x%lx):\n",
-                static_cast<unsigned long>(RP1_CTRL_PHYS_ADDR),
-                options.bar, static_cast<unsigned long>(ctrlOffset));
-    printCtrl(c);
-    const bool compatible = contractCompatible(c);
-    std::printf("Protocol contract: %s\n",
-                compatible ? "compatible" : "INCOMPATIBLE");
-
-    const uint32_t hb1 = c->heartbeat;
+        std::printf("RP1 control block @ R5 0x%08lx (BAR%u + 0x%lx):\n",
+                    static_cast<unsigned long>(RP1_CTRL_PHYS_ADDR),
+                    options.bar, static_cast<unsigned long>(ctrlOffset));
+        printCtrl(c);
+        compatible = contractCompatible(c);
+        std::printf("Protocol contract: %s\n",
+                    compatible ? "compatible" : "INCOMPATIBLE");
+        hb1 = c->heartbeat;
+    }
     std::this_thread::sleep_for(kStallWindow);
-    const uint32_t hb2 = c->heartbeat;
+    uint32_t hb2;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
+        hb2 = c->heartbeat;
+    }
     if (hb2 != hb1) {
         std::printf("Liveness: heartbeat advanced %u -> %u (running)\n", hb1, hb2);
     } else {
@@ -371,7 +732,7 @@ int Rp1Probe::dump(const Options& options) {
 /*
  * ping bypasses the graph runtime with one SIGNAL packet. It validates the BAR
  * layout, startup contract, doorbell ordering, scanner side effect, exact
- * sequence publication, and CQ evidence as one minimal transaction.
+ * sequence publication, and committed graph result as one minimal transaction.
  */
 int Rp1Probe::ping(const Options& options) {
     const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
@@ -379,95 +740,115 @@ int Rp1Probe::ping(const Options& options) {
     vrtd::Session session;
     vrtd::BarFile barFile = openRp1Bar(options, session, ctrlOffset, "debug rp1-ping");
 
-    // Hold a single write session over the whole submit + poll sequence and
-    // reach every sub-region by offsetting from the control-block base.
-    auto base = barFile.getPtr<uint8_t>(vrtd::BarFile::Direction::Write, static_cast<size_t>(ctrlOffset));
-    volatile uint8_t* basePtr = base.get();
-    auto* c     = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
-    auto* nodes = reinterpret_cast<volatile rp1_node_t*>(basePtr + RP1_DEFAULT_NODE_ARRAY_OFFSET);
-    auto* cq    = reinterpret_cast<volatile rp1_cq_entry_t*>(basePtr + RP1_DEFAULT_CQ_OFFSET);
-    auto* sigs  = reinterpret_cast<volatile rp1_signal_slot_t*>(basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
-
     /*
-     * Phase 1: require idle READY firmware before claiming shared node, signal,
-     * and CQ storage; the probe cannot safely coexist with another graph.
+     * Phase 1: validate the full protocol and idle state in a read transaction.
+     * No pointer from this bracket may escape into the later write transaction.
      */
-    if (!checkFirmwareReady(c)) {
-        return 1;
+    uint32_t wantSeq;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
+        if (!validateFirmwareContract(c) || !checkFirmwareReady(c)) {
+            return 1;
+        }
+        wantSeq = c->graph_done_seq + 1u;
     }
 
     /*
      * Phase 2: stage one SIGNAL node and clear its sentinel before publishing
      * a sequence change, so success cannot be inherited from an older run.
      */
-    barZero(&nodes[0], sizeof(rp1_node_t));
-    nodeSetHeader(&nodes[0], RP1_OP_SIGNAL, /*await*/ 0, 0x0, /*set*/ 0, 0x1);
-    nodes[0].payload.signal.target_slot = 0;
-    nodes[0].payload.signal.value       = kSignalMagic;
-    nodes[0].payload.signal.operation   = RP1_SIGOP_SET;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Write,
+            static_cast<size_t>(ctrlOffset));
+        volatile uint8_t* basePtr = base.get();
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
+        auto* nodes = reinterpret_cast<volatile rp1_node_t*>(
+            basePtr + RP1_DEFAULT_NODE_ARRAY_OFFSET);
+        auto* sigs = reinterpret_cast<volatile rp1_signal_slot_t*>(
+            basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
 
-    sigs[0].value            = 0;
-    sigs[0].last_writer_node = 0;
-    sigs[0].flags            = 0;
+        rp1_node_t node{};
+        nodeSetHeader(
+            &node, RP1_OP_SIGNAL, /*await*/ 0, 0x0,
+            /*set*/ 0, 0x1);
+        node.payload.signal.target_slot = 0;
+        node.payload.signal.value       = kSignalMagic;
+        node.payload.signal.operation   = RP1_SIGOP_SET;
+        barWrite(&nodes[0], &node, sizeof(node));
 
-    const uint32_t cqStart = c->cq_write_idx;
-    c->cq_read_idx = cqStart;
-    programCtrl(c, /*nodeCount*/ 1);
+        sigs[0].value            = 0;
+        sigs[0].last_writer_node = 0;
+        sigs[0].flags            = 0;
+        programCtrl(c, /*nodeCount*/ 1);
 
-    /*
-     * Phase 3: fences make all staged bytes visible before graph_seq, the sole
-     * firmware doorbell and the exact completion value the probe awaits.
-     */
-    const uint32_t wantSeq = c->graph_done_seq + 1;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    c->graph_seq = wantSeq;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+        /*
+         * Fences make all staged bytes visible before graph_seq, the sole
+         * firmware doorbell and exact completion value.
+         */
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        c->graph_seq = wantSeq;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
 
     std::printf("rp1-ping: submitted seq=%u, polling...\n", wantSeq);
-    if (waitForSeq(c, wantSeq) != 0) {
-        printCtrl(c);
+    if (waitForSeq(
+            barFile, static_cast<size_t>(ctrlOffset), wantSeq) != 0) {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        printCtrl(reinterpret_cast<volatile rp1_ctrl_t*>(base.get()));
         return 1;
     }
 
     /*
-     * Phase 4: completion publishes the signal and one CQ record. Validate both
-     * before releasing the monotonic consumer cursor back to firmware.
+     * Phase 4: graph_done_seq releases both the sentinel side effect and the
+     * sequence-tagged result. Validate both before reporting probe success.
      */
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    const uint32_t observed = sigs[0].value;
-    if (observed != kSignalMagic) {
-        std::fprintf(stderr, "FAIL: signal slot 0 = 0x%08x, expected 0x%08x\n",
-                     observed, kSignalMagic);
-        printCtrl(c);
-        return 1;
-    }
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        volatile uint8_t* basePtr = base.get();
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
+        auto* sigs = reinterpret_cast<volatile rp1_signal_slot_t*>(
+            basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
 
-    const uint32_t cqEnd = c->cq_write_idx;
-    if (cqEnd - cqStart != 1u) {
-        std::fprintf(stderr,
-                     "FAIL: RP1 wrote %u CQ entries for one ping node\n",
-                     cqEnd - cqStart);
-        return 1;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        const GraphResultSnapshot result = snapshotResult(c);
+        if (!validateProbeResult(result, wantSeq, /*traceExpected=*/false) ||
+            c->rp1_state != RP1_STATE_READY) {
+            printCtrl(c);
+            return 1;
+        }
+        const uint32_t observed = sigs[0].value;
+        if (observed != kSignalMagic) {
+            std::fprintf(
+                stderr,
+                "FAIL: signal slot 0 = 0x%08x, expected 0x%08x\n",
+                observed, kSignalMagic);
+            printCtrl(c);
+            return 1;
+        }
+
+        std::printf("Graph result:\n");
+        printGraphResult(result);
+        std::printf("PASS: slot[0] = 0x%08x, result_seq=%u, outcome=%s, "
+                    "graph_ticks=%u, publish_ticks=%u, state=%s\n",
+                    observed, result.graphSeq, outcomeStr(result.outcome),
+                    result.graphElapsedTicks, result.publishElapsedTicks,
+                    stateStr(c->rp1_state));
     }
-    const volatile rp1_cq_entry_t& completion =
-        cq[cqStart % kBringupCqSize];
-    if (completion.node_index != 0u || completion.status != RP1_CQ_OK) {
-        std::fprintf(stderr,
-                     "FAIL: ping CQ node=%u status=%u detail=0x%08x\n",
-                     completion.node_index, completion.status,
-                     completion.error_detail);
-        return 1;
-    }
-    c->cq_read_idx = cqEnd;
-    std::printf("PASS: slot[0] = 0x%08x, cq_write_idx=%u, state=%s\n",
-                observed, c->cq_write_idx, stateStr(c->rp1_state));
     return 0;
 }
 
 /*
  * trace-ping repeats the sentinel transaction with tracing enabled, then reads
- * CQ and trace as rings. The two streams prove externally visible completion
- * and the firmware's internal event ordering.
+ * the committed result and trace ring. They prove externally visible graph
+ * completion and the firmware's internal event ordering.
  */
 int Rp1Probe::tracePing(const Options& options) {
     const uint64_t ctrlOffset = parseUnsigned(options.ctrlOffsetText, "ctrl-offset");
@@ -475,95 +856,133 @@ int Rp1Probe::tracePing(const Options& options) {
     vrtd::Session session;
     vrtd::BarFile barFile = openRp1Bar(options, session, ctrlOffset, "debug rp1-trace-ping");
 
-    auto base = barFile.getPtr<uint8_t>(vrtd::BarFile::Direction::Write, static_cast<size_t>(ctrlOffset));
-    volatile uint8_t* basePtr = base.get();
-    auto* c      = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
-    auto* nodes  = reinterpret_cast<volatile rp1_node_t*>(basePtr + RP1_DEFAULT_NODE_ARRAY_OFFSET);
-    auto* cq     = reinterpret_cast<volatile rp1_cq_entry_t*>(basePtr + RP1_DEFAULT_CQ_OFFSET);
-    auto* sigs   = reinterpret_cast<volatile rp1_signal_slot_t*>(basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
-    auto* traces = reinterpret_cast<volatile rp1_trace_entry_t*>(basePtr + RP1_DEFAULT_TRACE_OFFSET);
-
     /*
-     * Phase 1: claim the shared bring-up regions only from READY. A trace probe
-     * cannot safely merge records with an in-flight submission.
+     * Phase 1: reject an incompatible or busy firmware publication before
+     * opening any BAR write transaction.
      */
-    if (!checkFirmwareReady(c)) {
-        return 1;
+    uint32_t wantSeq;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(base.get());
+        if (!validateFirmwareContract(c) || !checkFirmwareReady(c)) {
+            return 1;
+        }
+        wantSeq = c->graph_done_seq + 1u;
     }
 
     /*
      * Phase 2: clear node, sentinel, and trace storage before enabling trace;
      * this makes every observed record attributable to the new sequence.
      */
-    barZero(&nodes[0], sizeof(rp1_node_t));
-    nodeSetHeader(&nodes[0], RP1_OP_SIGNAL, /*await*/ 0, 0x0, /*set*/ 0, 0x1);
-    nodes[0].payload.signal.target_slot = 0;
-    nodes[0].payload.signal.value       = kSignalMagic;
-    nodes[0].payload.signal.operation   = RP1_SIGOP_SET;
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Write,
+            static_cast<size_t>(ctrlOffset));
+        volatile uint8_t* basePtr = base.get();
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
+        auto* nodes = reinterpret_cast<volatile rp1_node_t*>(
+            basePtr + RP1_DEFAULT_NODE_ARRAY_OFFSET);
+        auto* sigs = reinterpret_cast<volatile rp1_signal_slot_t*>(
+            basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
+        auto* traces = reinterpret_cast<volatile rp1_trace_entry_t*>(
+            basePtr + RP1_DEFAULT_TRACE_OFFSET);
 
-    sigs[0].value            = 0;
-    sigs[0].last_writer_node = 0;
-    sigs[0].flags            = 0;
-    barZero(traces, kBringupTraceSize * sizeof(rp1_trace_entry_t));
+        rp1_node_t node{};
+        nodeSetHeader(
+            &node, RP1_OP_SIGNAL, /*await*/ 0, 0x0,
+            /*set*/ 0, 0x1);
+        node.payload.signal.target_slot = 0;
+        node.payload.signal.value       = kSignalMagic;
+        node.payload.signal.operation   = RP1_SIGOP_SET;
+        barWrite(&nodes[0], &node, sizeof(node));
 
-    programCtrl(c, /*nodeCount*/ 1);
-    c->trace_enable = 1;
+        sigs[0].value            = 0;
+        sigs[0].last_writer_node = 0;
+        sigs[0].flags            = 0;
+        barZero(traces, kBringupTraceSize * sizeof(rp1_trace_entry_t));
 
-    /*
-     * Phase 3: synchronize CQ ownership, publish the sequence doorbell, and
-     * wait exactly while heartbeat distinguishes timeout from a firmware hang.
-     */
-    const uint32_t cqStart = c->cq_write_idx;
-    c->cq_read_idx = cqStart;
-    const uint32_t wantSeq = c->graph_done_seq + 1;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    c->graph_seq = wantSeq;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+        programCtrl(c, /*nodeCount*/ 1);
+        c->trace_enable = 1;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        c->graph_seq = wantSeq;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
 
     std::printf("rp1-trace-ping: submitted seq=%u, polling...\n", wantSeq);
-    if (waitForSeq(c, wantSeq) != 0) {
-        printCtrl(c);
+    if (waitForSeq(
+            barFile, static_cast<size_t>(ctrlOffset), wantSeq) != 0) {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        printCtrl(reinterpret_cast<volatile rp1_ctrl_t*>(base.get()));
         return 1;
     }
 
     /*
-     * Phase 4: validate the sentinel, drain CQ, then reconstruct the trace's
+     * Phase 4: validate the result and sentinel, then reconstruct the trace's
      * chronological suffix when its producer count has wrapped the ring.
      */
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    const uint32_t observed = sigs[0].value;
-    if (observed != kSignalMagic) {
-        std::fprintf(stderr, "FAIL: signal slot 0 = 0x%08x, expected 0x%08x\n",
-                     observed, kSignalMagic);
-        printCtrl(c);
-        return 1;
-    }
+    {
+        auto base = barFile.getPtr<uint8_t>(
+            vrtd::BarFile::Direction::Read,
+            static_cast<size_t>(ctrlOffset));
+        volatile uint8_t* basePtr = base.get();
+        auto* c = reinterpret_cast<volatile rp1_ctrl_t*>(basePtr);
+        auto* sigs = reinterpret_cast<volatile rp1_signal_slot_t*>(
+            basePtr + RP1_DEFAULT_SIG_ARRAY_OFFSET);
+        auto* traces = reinterpret_cast<volatile rp1_trace_entry_t*>(
+            basePtr + RP1_DEFAULT_TRACE_OFFSET);
 
-    const uint32_t cqEnd = c->cq_write_idx;
-    std::printf("PASS: slot[0] = 0x%08x, state=%s\n", observed, stateStr(c->rp1_state));
-    std::printf("CQ entries [%u, %u):\n", cqStart, cqEnd);
-    for (uint32_t i = cqStart; i < cqEnd; i++) {
-        const uint32_t idx = i % kBringupCqSize;
-        const auto& e = cq[idx];
-        std::printf("  cq[%u] node=%u status=%u detail=0x%08x timestamp=%u\n",
-                    idx, e.node_index, e.status, e.error_detail, e.timestamp);
-    }
-    c->cq_read_idx = cqEnd;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        const GraphResultSnapshot result = snapshotResult(c);
+        if (!validateProbeResult(result, wantSeq, /*traceExpected=*/true) ||
+            c->rp1_state != RP1_STATE_READY) {
+            printCtrl(c);
+            return 1;
+        }
+        const uint32_t observed = sigs[0].value;
+        if (observed != kSignalMagic) {
+            std::fprintf(
+                stderr,
+                "FAIL: signal slot 0 = 0x%08x, expected 0x%08x\n",
+                observed, kSignalMagic);
+            printCtrl(c);
+            return 1;
+        }
 
-    const uint32_t traceWritten = c->trace_write_idx;
-    const uint32_t traceCount = traceWritten > kBringupTraceSize
-                              ? kBringupTraceSize : traceWritten;
-    const uint32_t traceStart = traceWritten > kBringupTraceSize
-                              ? traceWritten % kBringupTraceSize : 0;
-    std::printf("Trace entries written=%u readable=%u%s:\n",
-                traceWritten, traceCount,
-                traceWritten > kBringupTraceSize ? " (overflow)" : "");
-    for (uint32_t i = 0; i < traceCount; i++) {
-        const uint32_t idx = (traceStart + i) % kBringupTraceSize;
-        const auto& e = traces[idx];
-        std::printf("  trace[%u] t=%u event=%s(%u) node=%u aux0=0x%08x aux1=0x%08x\n",
-                    idx, e.timestamp, traceEventStr(e.event), e.event,
-                    e.node_index, e.aux0, e.aux1);
+        if (result.traceWriteIndex != c->trace_write_idx) {
+            std::fprintf(
+                stderr,
+                "FAIL: result trace_write_idx=%u, control block reports %u\n",
+                result.traceWriteIndex, c->trace_write_idx);
+            return 1;
+        }
+        std::printf(
+            "PASS: slot[0] = 0x%08x, result_seq=%u, outcome=%s, state=%s\n",
+            observed, result.graphSeq, outcomeStr(result.outcome),
+            stateStr(c->rp1_state));
+        std::printf("Graph result:\n");
+        printGraphResult(result);
+
+        const uint32_t traceWritten = result.traceWriteIndex;
+        const uint32_t traceCount = traceWritten > kBringupTraceSize
+                                  ? kBringupTraceSize : traceWritten;
+        const uint32_t traceStart = traceWritten > kBringupTraceSize
+                                  ? traceWritten % kBringupTraceSize : 0;
+        std::printf("Trace entries written=%u readable=%u%s:\n",
+                    traceWritten, traceCount,
+                    traceWritten > kBringupTraceSize ? " (overflow)" : "");
+        for (uint32_t i = 0; i < traceCount; i++) {
+            const uint32_t idx = (traceStart + i) % kBringupTraceSize;
+            const auto& e = traces[idx];
+            std::printf(
+                "  trace[%u] t=%u event=%s(%u) node=%u "
+                "aux0=0x%08x aux1=0x%08x\n",
+                idx, e.timestamp, traceEventStr(e.event), e.event,
+                e.node_index, e.aux0, e.aux1);
+        }
     }
 
     return 0;
