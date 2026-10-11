@@ -1378,15 +1378,36 @@ proc slash_check_hbm_cdc {cell width target_width} {
     set design [file rootname [file tail [lindex $nested 0]]]
     try {
         current_bd_design [get_bd_designs $design]
+        # A READ_ONLY or WRITE_ONLY master makes SmartConnect omit the unused
+        # direction's nodes entirely, so inspect the channels that exist rather
+        # than assuming all five. HLS declares a single direction whenever a
+        # pointer argument is only read or only written, which is the common
+        # case, not an edge case.
+        set present {}
         foreach channel {ar aw w r b} {
+            if {[llength [get_bd_cells -quiet s00_nodes/s00_${channel}_node]]} {
+                lappend present $channel
+            }
+        }
+        # Fail loudly rather than degrade into verifying nothing.
+        if {![llength $present]} {
+            error "HBM $cell: no AXI channel nodes found; cannot verify the CDC"
+        }
+        if {[lsearch -exact $present r] < 0 && [lsearch -exact $present w] < 0} {
+            error "HBM $cell: no read or write data channel; cannot verify the payload width"
+        }
+        foreach channel $present {
             set node [get_bd_cells s00_nodes/s00_${channel}_node]
             if {[get_property CONFIG.ACLK_RELATIONSHIP $node] != 0 ||
                 [get_property CONFIG.SYNCHRONIZATION_STAGES $node] < 3} {
                 error "HBM $cell/$channel: expected asynchronous CDC with >=3 synchronization stages"
             }
         }
-        set converter [get_bd_cells s00_entry_pipeline/s00_si_converter]
-        foreach direction {R W} {
+        set converter [get_bd_cells -quiet s00_entry_pipeline/s00_si_converter]
+        foreach {direction channel} {R r W w} {
+            if {![llength $converter] || [lsearch -exact $present $channel] < 0} {
+                continue
+            }
             if {[get_property CONFIG.${direction}DATA_WIDTH $converter] != $width ||
                 [get_property CONFIG.MSC000_${direction}DATA_WIDTH $converter] != $target_width} {
                 error "HBM $cell: unexpected $direction converter widths"
@@ -1394,11 +1415,14 @@ proc slash_check_hbm_cdc {cell width target_width} {
         }
         # USER_WIDTH describes AXI sideband storage, not the data payload.
         foreach channel {r w} {
+            if {[lsearch -exact $present $channel] < 0} {
+                continue
+            }
             if {8 * [get_property CONFIG.MAX_PAYLD_BYTES [get_bd_cells s00_nodes/s00_${channel}_node]] != $width} {
                 error "HBM $cell/$channel: asynchronous payload width changed"
             }
         }
-        puts "HBM_CDC $cell: verified asynchronous CDC on all five AXI channels; read/write payload width $width"
+        puts "HBM_CDC $cell: verified asynchronous CDC on AXI channels \[$present\]; read/write payload width $width"
     } finally {
         current_bd_design $parent
     }
