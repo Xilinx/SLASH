@@ -1155,6 +1155,10 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
                  xilinx.com:interface:diff_clock_rtl:1.0]
     set_property -dict [list CONFIG.FREQ_HZ {322265625}] $__clk
     connect_bd_intf_net $__clk [get_bd_intf_pins ${__hier}/qsfp_gt_clk]
+    # In the service-layer RM build, gt_mgmt_clk is a top-level clock port
+    # (the static shell connects it to the always-on pl0_ref_clk).  Use the
+    # port accessor here; get_bd_pins returns no object in that context.
+    connect_bd_net [get_bd_ports gt_mgmt_clk] [get_bd_pins ${__hier}/gt_mgmt_clk]
 
     set __gt0 [slash_get_or_create_intf_port qsfp${__idx}_4x Master \
                  xilinx.com:interface:gt_rtl:1.0]
