@@ -21,6 +21,64 @@
 create_pblock pblock_slash
 add_cells_to_pblock [get_pblocks pblock_slash] [get_cells -quiet [list top_i/slash]]
 resize_pblock [get_pblocks pblock_slash] -add {SLICE_X48Y236:SLICE_X363Y283 SLICE_X0Y284:SLICE_X363Y427 SLICE_X244Y428:SLICE_X363Y521 SLICE_X0Y428:SLICE_X163Y524 SLICE_X256Y522:SLICE_X363Y524 SLICE_X244Y574:SLICE_X323Y574 SLICE_X0Y525:SLICE_X27Y619 SLICE_X84Y575:SLICE_X163Y619 SLICE_X244Y575:SLICE_X351Y619 SLICE_X48Y620:SLICE_X351Y715 SLICE_X28Y716:SLICE_X351Y898}
+# Extend the partition eastward, toward the HBM boundary it has to reach.
+#
+# Same change as the service shell, same reason: the ranges above stop at
+# SLICE_X351, the device has fabric to X391, and the DFX decoupler below runs to
+# X379. On service that band measured completely empty and widening it moved WNS
+# from -0.155 to -0.044 - by far the largest single win in this work, and the
+# only experiment that helped by REMOVING a restriction rather than adding one.
+#
+# Two differences to be aware of on compute:
+#   - compute sets CONTAIN_ROUTING and EXCLUDE_PLACEMENT on pblock_slash (service
+#     does not), so this also forbids static logic from the widened band. Nothing
+#     else claims it - the only other pblock here is pblock_dfx_decoupler at
+#     Y899..Y903 - but that is a stronger statement on compute than on service.
+#   - the band was verified empty on a ROUTED SERVICE design. It has not been
+#     verified on a routed compute design, because no compute build existed when
+#     this was written. If compute placement ever fails for want of static area,
+#     this constraint is the first thing to suspect.
+resize_pblock [get_pblocks pblock_slash] -add {SLICE_X352Y716:SLICE_X385Y898}
+
+# Over-constrain the HBM/NoC clock: the hardware runs at 375 MHz (2.6667 ns),
+# but place and route optimise as though the period were 2.500 ns.
+#
+# VERIFIED WORKING. Confirmed by signature, not by assumption: the routed timing
+# report shows a clock uncertainty of ~0.249 ns on the HBM domain (0.117 inherent
+# jitter + this 0.132), a value absent from every build where the constraint
+# failed to apply. True margin = reported WNS + 0.167.
+#
+# Two things this depends on, both easy to break:
+#
+#  1. NO control flow in this file. Vivado answers 'if' with
+#       CRITICAL WARNING: [Designutils 20-1307] Command 'if' is not supported
+#     and then carries on, so a guarded constraint is silently skipped. An
+#     if-guarded version of this line cost a full 7-hour build before anyone
+#     noticed it had never applied. Keep it one unconditional command.
+#
+#  2. scripts/build_project.tcl clears this uncertainty immediately before the
+#     sign-off timing report. Without that, the design reports a large negative
+#     WNS even when it comfortably meets its real clock, and the installer's own
+#     gate (require_static_shell_timing_or_confirm) refuses to publish the shell.
+#     Do not "fix" that by passing --ignore-timing-failure.
+#
+# Measured capability of this design, from clean builds, all optimised against
+# the same effective 2.500 ns target:
+#
+#   compute, draw A -> achieved 2.526 ns (395.9 MHz)
+#   compute, draw B -> achieved 2.627 ns (380.8 MHz)
+#   service, arm B  -> achieved 2.561 ns (390.5 MHz)
+#
+# Synthesis-to-synthesis variance is therefore ~0.100 ns. Implementation from a
+# FIXED netlist is essentially deterministic (two runs reproduced -0.196 exactly);
+# the spread comes from synthesis. So a frequency target must clear the WORST
+# draw, not the best: 395 MHz was measured achievable on draw A and then failed
+# outright on draw B. 375 MHz clears 2.627 by 0.040 ns and is the reproducible
+# choice; 380 clears it by only 0.005.
+#
+# -setup only; hold is met with room (WHS 0.000..0.010 across every run).
+#
+set_clock_uncertainty -setup 0.167 [get_clocks -quiet *clk_wizard_0_clk_out1*]
 resize_pblock [get_pblocks pblock_slash] -add {BUFG_FABRIC_X0Y72:BUFG_FABRIC_X0Y239 BUFG_FABRIC_X1Y48:BUFG_FABRIC_X2Y239 BUFG_FABRIC_X3Y48:BUFG_FABRIC_X3Y119 BUFG_FABRIC_X3Y168:BUFG_FABRIC_X3Y239 BUFG_FABRIC_X4Y48:BUFG_FABRIC_X4Y239}
 resize_pblock [get_pblocks pblock_slash] -add {BUFG_PS_X2Y48:BUFG_PS_X2Y59}
 resize_pblock [get_pblocks pblock_slash] -add {DPLL_X0Y10:DPLL_X0Y13 DPLL_X1Y7:DPLL_X1Y7 DPLL_X3Y8:DPLL_X3Y11 DPLL_X14Y6:DPLL_X14Y7}
