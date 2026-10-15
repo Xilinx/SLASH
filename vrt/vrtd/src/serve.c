@@ -630,6 +630,69 @@ static void drain_deferred_buffer_cleanups(struct vrtd *state)
 }
 
 /**
+ * Rescan PCI and re-discover devices after an operation that removed devices
+ * from the PCI tree.
+ *
+ * Device nodes appear asynchronously after the rescan, so this blocks the
+ * event loop for the same 5 s settle time as the RESCAN hotplug operation.
+ *
+ * @param state   Daemon state owning the device list (NULL skips re-discovery).
+ * @param reason  Prefix for log messages (e.g. "hotplug_op: link_enable").
+ * @return 0 on success, -1 if the rescan failed (errno set).  A failed
+ *         re-discovery is only logged.
+ */
+static int devices_rescan_and_rediscover(struct vrtd *state, const char *reason)
+{
+    if (slash_hotplug_rescan(g_hotplug) != 0) {
+        int err = errno;
+        LOG(LOG_ERR, "%s: rescan failed: %m", reason);
+        errno = err;
+        return -1;
+    }
+
+    usleep(5000000);
+
+    if (state != NULL && devices_discover_and_open(&state->devices) != 0) {
+        LOG(LOG_WARNING, "%s: device re-discovery after rescan failed", reason);
+    }
+
+    return 0;
+}
+
+/**
+ * Re-enable the root-port link disabled by @p client (LINK_DISABLE), then
+ * rescan PCI and re-discover devices so the board comes back.
+ *
+ * Shared by the LINK_ENABLE operation, by cleanup_client() when a client
+ * disconnects while its link is disabled, and by serve_enable_disabled_links()
+ * at daemon shutdown.  The disable is forgotten even if the enable fails:
+ * there is nothing more the daemon could do with it.
+ *
+ * @param client  Client owning the disabled link; a no-op if it owns none.
+ * @param reason  Prefix for log messages.
+ * @return 0 on success (or no disabled link), -1 on error with errno set (logged).
+ */
+static int client_link_enable(struct client *client, const char *reason)
+{
+    if (!client->link_disabled) {
+        return 0;
+    }
+
+    char bdf[VRTD_PCI_BDF_LEN];
+    memcpy(bdf, client->link_disable_bdf, sizeof(bdf));
+    client->link_disabled = false;
+
+    if (slash_hotplug_link_enable(g_hotplug, bdf) != 0) {
+        int err = errno;
+        LOG(LOG_ERR, "%s: link enable failed for %s: %m", reason, bdf);
+        errno = err;
+        return -1;
+    }
+
+    return devices_rescan_and_rediscover(client->state, reason);
+}
+
+/**
  * Tears down a client: releases buffers, closes fds, unregisters the event
  * source, and frees memory.
  *
@@ -657,18 +720,7 @@ void cleanup_client(struct client *client)
             "client conn_id=%llu disconnected while the root-port link of %s is disabled; "
             "re-enabling, rescanning and re-discovering devices",
             (unsigned long long)client->conn_id, client->link_disable_bdf);
-        client->link_disabled = false;
-        if (slash_hotplug_link_enable(g_hotplug, client->link_disable_bdf) != 0) {
-            LOG(LOG_ERR, "link enable on disconnect failed for %s: %m", client->link_disable_bdf);
-        } else if (slash_hotplug_rescan(g_hotplug) != 0) {
-            LOG(LOG_ERR, "rescan after link enable on disconnect failed: %m");
-        } else {
-            usleep(5000000);
-            if (client->state != NULL
-                && devices_discover_and_open(&client->state->devices) != 0) {
-                LOG(LOG_WARNING, "device re-discovery after link enable on disconnect failed");
-            }
-        }
+        (void) client_link_enable(client, "link enable on disconnect");
     }
 
     /* Close the inbound SCM_RIGHTS fd if one was received but not consumed. */
@@ -686,6 +738,33 @@ void cleanup_client(struct client *client)
     (void) sd_event_source_disable_unrefp(&client->event_source);
 
     free(client);
+}
+
+/**
+ * Re-enable every root-port link still disabled by a connected client.
+ *
+ * Called from main() once the event loop has stopped, while the hotplug
+ * handle is still open.  Clients are not torn down individually at shutdown,
+ * so without this a daemon restart (systemd stop, watchdog, SIGTERM) during a
+ * JTAG shell load would leave the link disabled with nobody left who knows
+ * about it.
+ *
+ * @param state  Daemon state.
+ */
+void serve_enable_disabled_links(struct vrtd *state)
+{
+    for (size_t i = 0; i < state->clients.len; i++) {
+        struct client *client = state->clients.d[i];
+        if (client == NULL || !client->link_disabled) {
+            continue;
+        }
+
+        LOG(LOG_WARNING,
+            "shutting down while client conn_id=%llu keeps the root-port link of %s disabled; "
+            "re-enabling, rescanning and re-discovering devices",
+            (unsigned long long)client->conn_id, client->link_disable_bdf);
+        (void) client_link_enable(client, "link enable on shutdown");
+    }
 }
 
 /* ---- sd_event I/O callback ---------------------------------------------- */
@@ -2376,22 +2455,8 @@ static uint16_t client_handle_request_device_hotplug_op(
             (unsigned int)req_body->op, client->link_disable_bdf,
             (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
-        client->link_disabled = false;
-        int ret = slash_hotplug_link_enable(g_hotplug, client->link_disable_bdf);
-        if (ret != 0) {
-            LOG(LOG_WARNING, "hotplug_op: link_enable failed for %s: %m", client->link_disable_bdf);
+        if (client_link_enable(client, "hotplug_op: link_enable") != 0) {
             return hotplug_errno_to_vrtd_ret(errno);
-        }
-        ret = slash_hotplug_rescan(g_hotplug);
-        if (ret != 0) {
-            LOG(LOG_WARNING, "hotplug_op: rescan after link_enable failed: %m");
-            return hotplug_errno_to_vrtd_ret(errno);
-        }
-        /* Same settle time as RESCAN: device nodes appear asynchronously. */
-        usleep(5000000);
-        ret = devices_discover_and_open(&client->state->devices);
-        if (ret != 0) {
-            LOG(LOG_WARNING, "hotplug_op: failed to refresh devices after link_enable");
         }
         resp_body->zero = 0;
         *resp_size = sizeof(*resp_body);
@@ -2485,7 +2550,11 @@ static uint16_t client_handle_request_device_hotplug_op(
                 ret = slash_hotplug_link_disable(g_hotplug, pf0_bdf);
                 if (ret != 0) {
                     int err = errno;
-                    LOG(LOG_WARNING, "hotplug_op: link_disable: disabling the link failed for %s: %m", pf0_bdf);
+                    LOG(LOG_WARNING, "hotplug_op: link_disable: disabling the link failed for %s: %m; "
+                        "rescanning so the removed functions come back", pf0_bdf);
+                    /* PF0..PF2 are already gone; without this the board would
+                     * stay absent until somebody issues a RESCAN by hand. */
+                    (void) devices_rescan_and_rediscover(client->state, "hotplug_op: link_disable");
                     return hotplug_errno_to_vrtd_ret(err);
                 }
                 strncpy(client->link_disable_bdf, pf0_bdf, sizeof(client->link_disable_bdf) - 1);

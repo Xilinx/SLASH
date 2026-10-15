@@ -147,6 +147,16 @@ struct client {
 void cleanup_client(struct client *client);
 
 /**
+ * @brief Re-enable every root-port link still disabled by a connected client.
+ *
+ * For daemon shutdown: call after the event loop has stopped and before the
+ * hotplug handle is closed, so a restart never leaves a root port in reset.
+ *
+ * @param state Daemon state whose clients are inspected.
+ */
+void serve_enable_disabled_links(struct vrtd *state);
+
+/**
  * @brief Cleanup helper for use with __attribute__((cleanup)).
  *
  * Calls cleanup_client on the pointed-to client pointer, then NULLs it.

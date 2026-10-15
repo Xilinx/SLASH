@@ -153,6 +153,14 @@ int main(void)
     }
 
     ret = sd_event_loop(ev);
+
+    /*
+     * The loop has stopped: re-enable any root-port link a client still
+     * keeps disabled (LINK_DISABLE) while the hotplug handle is still open,
+     * so that a daemon restart never leaves a link down.
+     */
+    serve_enable_disabled_links(&state);
+
     if (ret < 0) {
         LOG(LOG_CRIT, "Critical error: %s", strerrordesc_np(-ret));
         exit(EXIT_FAILURE);
