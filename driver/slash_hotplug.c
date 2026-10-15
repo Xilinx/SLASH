@@ -481,7 +481,7 @@ static const struct file_operations slash_hotplug_fops = {
 int slash_hotplug_init(void)
 {
     slash_hotplug_device.device =
-        slash_chrdev_add(&slash_hotplug_device.cdev, &slash_hotplug_fops,
+        slash_chrdev_add(&slash_hotplug_device.cdev, NULL, &slash_hotplug_fops,
                          SLASH_HOTPLUG_MINOR, NULL, &slash_hotplug_device,
                          SLASH_HOTPLUG_DEVICE_NAME);
     if (IS_ERR(slash_hotplug_device.device)) {

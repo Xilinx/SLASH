@@ -70,6 +70,8 @@ struct slash_ctldev_bar {
 struct slash_ctldev {
     struct pci_dev *pdev;
     struct cdev cdev;
+    /** Parent kobject of @cdev; pins this struct until the cdev is released. */
+    struct kobject cdev_kobj;
     struct device *device;
     struct kref ref;
     struct mutex lock;
