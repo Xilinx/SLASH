@@ -115,7 +115,35 @@ void slash_chrdev_exit(void)
     mutex_unlock(&slash_board_slots_lock);
 }
 
+/**
+ * slash_chrdev_add() - Register a character device and its /dev node.
+ * @cdev:        Embedded cdev to initialise and add.
+ * @cdev_parent: Optional kobject the cdev takes a reference on for its whole
+ *               lifetime (see below), or NULL.
+ * @fops:        File operations.
+ * @minor:       Minor number within the SLASH major.
+ * @parent:      sysfs parent for the class device.
+ * @drvdata:     Driver data stored on the class device.
+ * @name:        Device node name.
+ *
+ * Lifetime of an embedded cdev: the kernel holds a reference on
+ * @cdev->kobj for every open file and drops it in __fput() only *after*
+ * calling fops->release().  When fops->release() drops the last reference
+ * on the structure that embeds @cdev, the memory is gone by the time
+ * cdev_purge() runs from the cdev kobject release -- a use-after-free
+ * that shows up as a GPF in __list_del_entry_valid() on close() after a
+ * PCI remove.  Passing @cdev_parent (a kobject embedded in the same
+ * container, whose release drops one container reference) makes the cdev
+ * pin its container until the cdev itself is released: cdev_add() takes a
+ * reference on the parent and cdev_default_release() drops it after
+ * cdev_purge().  The caller must have initialised @cdev_parent and must
+ * drop its own initial reference after this call (kobject_put()), so that
+ * the cdev becomes the sole owner.
+ *
+ * Return: the class device, or ERR_PTR().
+ */
 struct device *slash_chrdev_add(struct cdev *cdev,
+                                struct kobject *cdev_parent,
                                 const struct file_operations *fops,
                                 unsigned int minor,
                                 struct device *parent,
@@ -128,6 +156,8 @@ struct device *slash_chrdev_add(struct cdev *cdev,
 
     cdev_init(cdev, fops);
     cdev->owner = fops->owner;
+    if (cdev_parent)
+        cdev_set_parent(cdev, cdev_parent);
 
     err = cdev_add(cdev, devt, 1);
     if (err)

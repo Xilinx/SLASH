@@ -432,13 +432,23 @@ int runJtagMode(const WriteStaticShell::Options& options) {
     reporter.stage("Connecting to VRTD");
     vrtd::Session session;
     std::string bdf;
+    bool sbrHeld = false;
     if (!options.noRemoveDevice) {
         reporter.stage("Resolving device address");
         bdf = resolveBoardBdf(options.bdf, "write-static-shell");
         reporter.stage("Resolving VRTD device");
         auto device = session.getDeviceByBdf(bdf);
-        reporter.stage("Removing PCIe functions");
-        device.hotplugOp(vrtd::HotplugOp::Remove, vrtd::HotplugFunctionAll);
+        // The xsdb script resets the PMC, which drops the PCIe link from the
+        // device side.  Some root ports never retrain after such a Surprise
+        // Down and need a host reboot (seen on AMD Turin GPP bridges with
+        // firmware-first error handling).  SbrHold removes the PFs and keeps
+        // the upstream bridge's Secondary Bus Reset asserted so the link
+        // drop is host-initiated; hotplugSbrRelease() below releases it,
+        // rescans and re-discovers the device.  vrtd also releases the hold
+        // if this process dies while xsdb is running.
+        reporter.stage("Removing PCIe functions and holding secondary bus reset");
+        device.hotplugOp(vrtd::HotplugOp::SbrHold, vrtd::HotplugFunctionAll);
+        sbrHeld = true;
     }
 
     std::exception_ptr xsdbError;
@@ -451,8 +461,13 @@ int runJtagMode(const WriteStaticShell::Options& options) {
     }
 
     try {
-        reporter.stage("Rescanning PCIe");
-        session.hotplugRescan();
+        if (sbrHeld) {
+            reporter.stage("Releasing secondary bus reset and rescanning PCIe");
+            session.hotplugSbrRelease();
+        } else {
+            reporter.stage("Rescanning PCIe");
+            session.hotplugRescan();
+        }
     } catch (const std::exception& e) {
         rethrowXsdbAndRescanErrors(xsdbError, e);
     }

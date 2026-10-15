@@ -297,12 +297,12 @@ static int smiMain(int argc, char **argv) {
         "In file mode -W and -c determine the byte count (-W * -c), not word alignment.");
 
     auto* hotplugOpCommand = debugCommand->add_subcommand("hotplug-op",
-        "Perform a PCIe hotplug operation (rescan/remove/toggle-sbr/hotplug)");
+        "Perform a PCIe hotplug operation (rescan/remove/toggle-sbr/hotplug/sbr-hold/sbr-release)");
     Hotplug::Options hotplugOptions;
     hotplugOpCommand->add_option("-d,--device", hotplugOptions.bdf,
         "Board address (e.g. 03:00 or 0000:03:00), required except for rescan");
     hotplugOpCommand->add_option("--op", hotplugOptions.opText,
-        "Hotplug operation: rescan, remove, toggle-sbr, or hotplug")->required();
+        "Hotplug operation: rescan, remove, toggle-sbr, hotplug, sbr-hold, or sbr-release")->required();
     hotplugOpCommand->add_option_function<uint32_t>("--function",
         [&hotplugOptions](uint32_t value) {
             hotplugOptions.function = static_cast<uint8_t>(value);

@@ -367,6 +367,8 @@ static const char *vrtd_hotplug_op_to_string(uint32_t op)
     case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:     return "toggle_sbr";
     case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG:        return "hotplug";
     case VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE: return "reset_sequence";
+    case VRTD_DEVICE_HOTPLUG_OP_SBR_HOLD:       return "sbr_hold";
+    case VRTD_DEVICE_HOTPLUG_OP_SBR_RELEASE:    return "sbr_release";
     default:                                    return "unknown";
     }
 }
@@ -628,6 +630,69 @@ static void drain_deferred_buffer_cleanups(struct vrtd *state)
 }
 
 /**
+ * Rescan PCI and re-discover devices after an operation that removed devices
+ * from the PCI tree.
+ *
+ * Device nodes appear asynchronously after the rescan, so this blocks the
+ * event loop for the same 5 s settle time as the RESCAN hotplug operation.
+ *
+ * @param state   Daemon state owning the device list (NULL skips re-discovery).
+ * @param reason  Prefix for log messages (e.g. "hotplug_op: sbr_release").
+ * @return 0 on success, -1 if the rescan failed (errno set).  A failed
+ *         re-discovery is only logged.
+ */
+static int devices_rescan_and_rediscover(struct vrtd *state, const char *reason)
+{
+    if (slash_hotplug_rescan(g_hotplug) != 0) {
+        int err = errno;
+        LOG(LOG_ERR, "%s: rescan failed: %m", reason);
+        errno = err;
+        return -1;
+    }
+
+    usleep(5000000);
+
+    if (state != NULL && devices_discover_and_open(&state->devices) != 0) {
+        LOG(LOG_WARNING, "%s: device re-discovery after rescan failed", reason);
+    }
+
+    return 0;
+}
+
+/**
+ * Release the Secondary Bus Reset held by @p client (SBR_HOLD), then rescan
+ * PCI and re-discover devices so the board comes back.
+ *
+ * Shared by the SBR_RELEASE operation, by cleanup_client() when a client
+ * disconnects while holding a reset, and by serve_release_sbr_holds() at
+ * daemon shutdown.  The hold is forgotten even if the release fails: there is
+ * nothing more the daemon could do with it.
+ *
+ * @param client  Client owning the hold; a no-op if it holds none.
+ * @param reason  Prefix for log messages.
+ * @return 0 on success (or no hold), -1 on error with errno set (logged).
+ */
+static int client_sbr_release(struct client *client, const char *reason)
+{
+    if (!client->sbr_held) {
+        return 0;
+    }
+
+    char bdf[VRTD_PCI_BDF_LEN];
+    memcpy(bdf, client->sbr_hold_bdf, sizeof(bdf));
+    client->sbr_held = false;
+
+    if (slash_hotplug_sbr_deassert(g_hotplug, bdf) != 0) {
+        int err = errno;
+        LOG(LOG_ERR, "%s: secondary bus reset release failed for %s: %m", reason, bdf);
+        errno = err;
+        return -1;
+    }
+
+    return devices_rescan_and_rediscover(client->state, reason);
+}
+
+/**
  * Tears down a client: releases buffers, closes fds, unregisters the event
  * source, and frees memory.
  *
@@ -646,6 +711,18 @@ void cleanup_client(struct client *client)
 
     gid_t_array_free(&client->gids);
 
+    /*
+     * Never leave a root port in reset because the client died mid-way
+     * (e.g. v80-smi killed while xsdb was programming the board).
+     */
+    if (client->sbr_held) {
+        LOG(LOG_WARNING,
+            "client conn_id=%llu disconnected while holding a secondary bus reset on %s; "
+            "releasing, rescanning and re-discovering devices",
+            (unsigned long long)client->conn_id, client->sbr_hold_bdf);
+        (void) client_sbr_release(client, "sbr release on disconnect");
+    }
+
     /* Close the inbound SCM_RIGHTS fd if one was received but not consumed. */
     if (client->in_fd >= 0) {
         (void) close(client->in_fd);
@@ -661,6 +738,33 @@ void cleanup_client(struct client *client)
     (void) sd_event_source_disable_unrefp(&client->event_source);
 
     free(client);
+}
+
+/**
+ * Release every Secondary Bus Reset still held by a connected client.
+ *
+ * Called from main() once the event loop has stopped, while the hotplug
+ * handle is still open.  Clients are not torn down individually at shutdown,
+ * so without this a daemon restart (systemd stop, watchdog, SIGTERM) during a
+ * JTAG shell load would leave the root port in reset with nobody left who
+ * knows about the hold.
+ *
+ * @param state  Daemon state.
+ */
+void serve_release_sbr_holds(struct vrtd *state)
+{
+    for (size_t i = 0; i < state->clients.len; i++) {
+        struct client *client = state->clients.d[i];
+        if (client == NULL || !client->sbr_held) {
+            continue;
+        }
+
+        LOG(LOG_WARNING,
+            "shutting down while client conn_id=%llu holds a secondary bus reset on %s; "
+            "releasing, rescanning and re-discovering devices",
+            (unsigned long long)client->conn_id, client->sbr_hold_bdf);
+        (void) client_sbr_release(client, "sbr release on shutdown");
+    }
 }
 
 /* ---- sd_event I/O callback ---------------------------------------------- */
@@ -2340,6 +2444,25 @@ static uint16_t client_handle_request_device_hotplug_op(
         return VRTD_RET_OK;
     }
 
+    if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_SBR_RELEASE) {
+        /* Device-independent like RESCAN; authorised implicitly by the
+         * SBR_HOLD this connection performed earlier. */
+        if (!client->sbr_held) {
+            LOG(LOG_NOTICE, "hotplug_op: sbr_release without a held secondary bus reset");
+            return VRTD_RET_INVALID_ARGUMENT;
+        }
+        LOG(LOG_INFO, "Hotplug op=sbr_release(%u) bdf=%s uid=%u conn_id=%llu",
+            (unsigned int)req_body->op, client->sbr_hold_bdf,
+            (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+        if (client_sbr_release(client, "hotplug_op: sbr_release") != 0) {
+            return hotplug_errno_to_vrtd_ret(errno);
+        }
+        resp_body->zero = 0;
+        *resp_size = sizeof(*resp_body);
+        return VRTD_RET_OK;
+    }
+
     int ret = auth_request_device_hotplug_op(client, req_body);
     if (ret == -1) {
         return VRTD_RET_INTERNAL_ERROR;
@@ -2358,28 +2481,46 @@ static uint16_t client_handle_request_device_hotplug_op(
         return VRTD_RET_NOEXIST;
     }
 
+    /* Board-level BDF, still valid after @d has been closed and freed below. */
+    char board_bdf[VRTD_PCI_BDF_LEN] = {0};
+    strncpy(board_bdf, d->pci_info.bdf, sizeof(board_bdf) - 1);
+
     LOG(LOG_INFO, "Hotplug op=%s(%u) bdf=%s dev=%u uid=%u conn_id=%llu",
         vrtd_hotplug_op_to_string(req_body->op), (unsigned int)req_body->op,
-        d->pci_info.bdf, (unsigned int)req_body->dev_number,
+        board_bdf, (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     switch (req_body->op) {
     case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
     case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:
-    case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG: {
+    case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG:
+    case VRTD_DEVICE_HOTPLUG_OP_SBR_HOLD: {
         if (req_body->function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL) {
             if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR) {
                 LOG(LOG_ERR, "hotplug_op: toggle_sbr requires a specific function number");
                 return VRTD_RET_INVALID_ARGUMENT;
             }
 
-            bool any_removed = false;
+            /*
+             * Close our own handles on the device BEFORE removing its PCI
+             * functions, exactly as reset_with_ami() does.  The slash
+             * character devices live in driver structures that die with
+             * the PCI device; closing a descriptor after the remove used to
+             * free that memory underneath the kernel's cdev teardown (GPF
+             * in __list_del_entry_valid on close(), seen with
+             * `v80-smi write-static-shell --jtag`).  The driver now pins
+             * its containers, but closing first is the correct order
+             * regardless.
+             */
+            device_ptr_array_rm_by_reference(&client->state->devices, d);
+            d = NULL;
+
             for (uint8_t func = 0; func < 3; func++) {
                 char pf_bdf[VRTD_PCI_BDF_LEN];
-                if (pci_bdf_set_function(d->pci_info.bdf, func, pf_bdf) != 0) {
+                if (pci_bdf_set_function(board_bdf, func, pf_bdf) != 0) {
                     LOG(LOG_ERR, "hotplug_op: %s: failed to construct PF%u BDF from %s",
                         vrtd_hotplug_op_to_string(req_body->op),
-                        (unsigned int)func, d->pci_info.bdf);
+                        (unsigned int)func, board_bdf);
                     return VRTD_RET_INTERNAL_ERROR;
                 }
 
@@ -2389,17 +2530,39 @@ static uint16_t client_handle_request_device_hotplug_op(
                     LOG(LOG_WARNING, "hotplug_op: %s failed removing PF%u bdf=%s: %m",
                         vrtd_hotplug_op_to_string(req_body->op),
                         (unsigned int)func, pf_bdf);
-                    if (any_removed) {
-                        device_ptr_array_rm_by_reference(&client->state->devices, d);
-                        d = NULL;
-                    }
                     return hotplug_errno_to_vrtd_ret(err);
                 }
-                any_removed = true;
             }
 
-            device_ptr_array_rm_by_reference(&client->state->devices, d);
-            d = NULL;
+            if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_SBR_HOLD) {
+                char pf0_bdf[VRTD_PCI_BDF_LEN];
+                if (pci_bdf_set_function(board_bdf, 0, pf0_bdf) != 0) {
+                    LOG(LOG_ERR, "hotplug_op: sbr_hold: failed to construct PF0 BDF from %s",
+                        board_bdf);
+                    return VRTD_RET_INTERNAL_ERROR;
+                }
+                if (client->sbr_held) {
+                    LOG(LOG_WARNING, "hotplug_op: sbr_hold: connection already holds a reset on %s; "
+                        "releasing it first", client->sbr_hold_bdf);
+                    (void) slash_hotplug_sbr_deassert(g_hotplug, client->sbr_hold_bdf);
+                    client->sbr_held = false;
+                }
+                ret = slash_hotplug_sbr_assert(g_hotplug, pf0_bdf);
+                if (ret != 0) {
+                    int err = errno;
+                    LOG(LOG_WARNING, "hotplug_op: sbr_hold: assert failed for %s: %m; "
+                        "rescanning so the removed functions come back", pf0_bdf);
+                    /* PF0..PF2 are already gone; without this the board would
+                     * stay absent until somebody issues a RESCAN by hand. */
+                    (void) devices_rescan_and_rediscover(client->state, "hotplug_op: sbr_hold");
+                    return hotplug_errno_to_vrtd_ret(err);
+                }
+                strncpy(client->sbr_hold_bdf, pf0_bdf, sizeof(client->sbr_hold_bdf) - 1);
+                client->sbr_hold_bdf[sizeof(client->sbr_hold_bdf) - 1] = '\0';
+                client->sbr_held = true;
+                LOG(LOG_INFO, "hotplug_op: sbr_hold: PF0-PF2 of %s removed, secondary bus reset "
+                    "held on the upstream bridge until sbr_release", board_bdf);
+            }
 
             if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_HOTPLUG) {
                 ret = slash_hotplug_rescan(g_hotplug);
@@ -2440,12 +2603,22 @@ static uint16_t client_handle_request_device_hotplug_op(
 
         switch (req_body->op) {
         case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
+            /* Close our handles before the PCI remove (see the FUNCTION_ALL
+             * path).  If the remove then fails the device is still present,
+             * so pick it up again. */
+            device_ptr_array_rm_by_reference(&client->state->devices, d);
+            d = NULL;
             ret = slash_hotplug_remove(g_hotplug, pf_bdf);
-            if (ret == 0) {
-                device_ptr_array_rm_by_reference(&client->state->devices, d);
-                d = NULL;
+            if (ret != 0) {
+                int err = errno;
+                LOG(LOG_WARNING, "hotplug_op: remove of %s failed: %m; re-discovering devices", pf_bdf);
+                (void) devices_discover_and_open(&client->state->devices);
+                errno = err;
             }
             break;
+        case VRTD_DEVICE_HOTPLUG_OP_SBR_HOLD:
+            LOG(LOG_ERR, "hotplug_op: sbr_hold requires function ALL");
+            return VRTD_RET_INVALID_ARGUMENT;
         case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:
             ret = slash_hotplug_toggle_sbr(g_hotplug, pf_bdf);
             break;
@@ -2479,7 +2652,7 @@ static uint16_t client_handle_request_device_hotplug_op(
     if (ret != 0) {
         LOG(LOG_WARNING, "hotplug_op: %s failed for device %u bdf=%s: %m",
             vrtd_hotplug_op_to_string(req_body->op),
-            (unsigned int)req_body->dev_number, d->pci_info.bdf);
+            (unsigned int)req_body->dev_number, board_bdf);
         return hotplug_errno_to_vrtd_ret(errno);
     }
 

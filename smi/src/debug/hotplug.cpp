@@ -59,8 +59,15 @@ vrtd::HotplugOp parseOp(const std::string_view text) {
     if (normalized == "hotplug") {
         return vrtd::HotplugOp::Hotplug;
     }
+    if (normalized == "sbr-hold") {
+        return vrtd::HotplugOp::SbrHold;
+    }
+    if (normalized == "sbr-release") {
+        return vrtd::HotplugOp::SbrRelease;
+    }
 
-    throw std::invalid_argument("op must be one of: rescan, remove, toggle-sbr, hotplug");
+    throw std::invalid_argument(
+        "op must be one of: rescan, remove, toggle-sbr, hotplug, sbr-hold, sbr-release");
 }
 
 bool isFunctionLevelOp(vrtd::HotplugOp op) {
@@ -69,9 +76,15 @@ bool isFunctionLevelOp(vrtd::HotplugOp op) {
            op == vrtd::HotplugOp::Hotplug;
 }
 
+// Device-targeted but always acts on all PFs (vrtd rejects anything else).
+bool isBoardLevelOp(vrtd::HotplugOp op) {
+    return op == vrtd::HotplugOp::SbrHold;
+}
+
 bool defaultsToAllPfs(vrtd::HotplugOp op) {
     return op == vrtd::HotplugOp::Remove ||
-           op == vrtd::HotplugOp::Hotplug;
+           op == vrtd::HotplugOp::Hotplug ||
+           op == vrtd::HotplugOp::SbrHold;
 }
 
 const char* opName(vrtd::HotplugOp op) {
@@ -84,6 +97,10 @@ const char* opName(vrtd::HotplugOp op) {
         return "toggle-sbr";
     case vrtd::HotplugOp::Hotplug:
         return "hotplug";
+    case vrtd::HotplugOp::SbrHold:
+        return "sbr-hold";
+    case vrtd::HotplugOp::SbrRelease:
+        return "sbr-release";
     case vrtd::HotplugOp::ResetSequence:
         break;
     }
@@ -94,6 +111,7 @@ const char* opName(vrtd::HotplugOp op) {
 vrtd::HotplugOp validateOptions(const Hotplug::Options& options) {
     const vrtd::HotplugOp op = parseOp(options.opText);
     const bool needsFunction = isFunctionLevelOp(op);
+    const bool needsDevice = needsFunction || isBoardLevelOp(op);
 
     if (op == vrtd::HotplugOp::ToggleSbr && !options.function.has_value()) {
         throw std::invalid_argument("--function is required for toggle-sbr");
@@ -101,11 +119,13 @@ vrtd::HotplugOp validateOptions(const Hotplug::Options& options) {
     if (!needsFunction && options.function.has_value()) {
         throw std::invalid_argument("--function is only valid for remove, toggle-sbr, and hotplug");
     }
-    if (needsFunction && options.bdf.empty()) {
-        throw std::invalid_argument("--device is required for remove, toggle-sbr, and hotplug");
+    if (needsDevice && options.bdf.empty()) {
+        throw std::invalid_argument(
+            "--device is required for remove, toggle-sbr, hotplug, and sbr-hold");
     }
-    if (!needsFunction && !options.bdf.empty()) {
-        throw std::invalid_argument("--device is only valid for remove, toggle-sbr, and hotplug");
+    if (!needsDevice && !options.bdf.empty()) {
+        throw std::invalid_argument(
+            "--device is only valid for remove, toggle-sbr, hotplug, and sbr-hold");
     }
 
     return op;
@@ -120,6 +140,16 @@ int Hotplug::run(const Options& options) {
     if (op == vrtd::HotplugOp::Rescan) {
         session.hotplugRescan();
         std::cout << "hotplug_op=rescan\n";
+        return 0;
+    }
+    if (op == vrtd::HotplugOp::SbrRelease) {
+        // Releases the reset held by an earlier sbr-hold on *this* vrtd
+        // connection.  Since every v80-smi invocation is its own connection,
+        // vrtd has already released a hold left behind by a crashed process;
+        // this op exists for scripted use of the libvrtdpp API and for
+        // completeness.
+        session.hotplugSbrRelease();
+        std::cout << "hotplug_op=sbr-release\n";
         return 0;
     }
 

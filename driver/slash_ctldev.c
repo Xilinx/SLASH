@@ -52,6 +52,16 @@ static int slash_ctldev_create_chrdev(struct slash_ctldev *ctldev);
 
 static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev);
 static void slash_ctldev_release(struct kref *ref);
+static void slash_ctldev_cdev_parent_release(struct kobject *kobj);
+
+/*
+ * Parent kobject type for the embedded cdev.  Its only job is to hold one
+ * reference on the control device while the cdev is alive, so that the
+ * container outlives cdev_purge() (see slash_chrdev_add()).
+ */
+static struct kobj_type slash_ctldev_cdev_parent_ktype = {
+    .release = slash_ctldev_cdev_parent_release,
+};
 
 static int slash_ctldev_fop_open(struct inode *, struct file *);
 static int slash_ctldev_fop_release(struct inode *, struct file *);
@@ -228,10 +238,21 @@ static int slash_ctldev_create_chrdev(struct slash_ctldev *ctldev)
 
     snprintf(name, sizeof(name), SLASH_CTLDEV_NAME_FMT,
              pci_name(ctldev->pdev));
+    /*
+     * The cdev pins this struct through cdev_kobj: take the container
+     * reference the parent kobject will drop on release, register, then
+     * drop our own initial kobject reference so the cdev is the sole
+     * owner.  On registration failure the kobject_put() releases the
+     * container reference again.
+     */
+    kref_get(&ctldev->ref);
+    kobject_init(&ctldev->cdev_kobj, &slash_ctldev_cdev_parent_ktype);
     ctldev->device =
-        slash_chrdev_add(&ctldev->cdev, &slash_ctldev_fops,
+        slash_chrdev_add(&ctldev->cdev, &ctldev->cdev_kobj,
+                         &slash_ctldev_fops,
                          SLASH_CTLDEV_MINOR(ctldev->slot),
                          &ctldev->pdev->dev, ctldev, name);
+    kobject_put(&ctldev->cdev_kobj);
     if (!IS_ERR(ctldev->device))
         return 0;
 
@@ -270,6 +291,15 @@ static void slash_ctldev_release(struct kref *ref)
 
     mutex_destroy(&ctldev->lock);
     kfree(ctldev);
+}
+
+static void slash_ctldev_cdev_parent_release(struct kobject *kobj)
+{
+    struct slash_ctldev *ctldev =
+        container_of(kobj, struct slash_ctldev, cdev_kobj);
+
+    /* Last user of the cdev is gone: drop the reference it held on us. */
+    kref_put(&ctldev->ref, slash_ctldev_release);
 }
 
 static void slash_ctldev_destroy_dmabufs(struct slash_ctldev *ctldev)

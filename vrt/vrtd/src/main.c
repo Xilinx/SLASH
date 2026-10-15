@@ -153,6 +153,14 @@ int main(void)
     }
 
     ret = sd_event_loop(ev);
+
+    /*
+     * The loop has stopped: release any secondary bus reset a client still
+     * holds (SBR_HOLD) while the hotplug handle is still open, so that a
+     * daemon restart never leaves a root port in reset.
+     */
+    serve_release_sbr_holds(&state);
+
     if (ret < 0) {
         LOG(LOG_CRIT, "Critical error: %s", strerrordesc_np(-ret));
         exit(EXIT_FAILURE);

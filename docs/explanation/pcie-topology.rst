@@ -143,6 +143,11 @@ with four ioctl operations:
      - Rescan the entire PCI bus to re-enumerate devices.
    * - ``HOTPLUG``
      - Atomic REMOVE + RESCAN for a single device.
+   * - ``SBR_ASSERT`` / ``SBR_DEASSERT``
+     - Hold the Secondary Bus Reset asserted across a device-side reset
+       (e.g. the PMC reset of a JTAG shell load), then release it and wait
+       for link training. ``vrtd`` exposes this as the ``SBR_HOLD`` /
+       ``SBR_RELEASE`` hotplug operations.
 
 A typical FPGA programming sequence follows this order:
 

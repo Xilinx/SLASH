@@ -46,6 +46,11 @@ enum class HotplugOp : uint8_t {
     ToggleSbr = VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR,
     Hotplug = VRTD_DEVICE_HOTPLUG_OP_HOTPLUG,
     ResetSequence = VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE,
+    /// Close handles, remove PF0..PF2 and hold the upstream bridge's SBR
+    /// (requires HotplugFunctionAll); release with Session::hotplugSbrRelease().
+    SbrHold = VRTD_DEVICE_HOTPLUG_OP_SBR_HOLD,
+    /// Device-independent; use Session::hotplugSbrRelease() instead.
+    SbrRelease = VRTD_DEVICE_HOTPLUG_OP_SBR_RELEASE,
 };
 
 inline constexpr uint8_t HotplugFunctionAll = VRTD_DEVICE_HOTPLUG_FUNCTION_ALL;

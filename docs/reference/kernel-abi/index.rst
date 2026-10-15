@@ -919,9 +919,18 @@ Device resets and hotplugging: ``/dev/slash_hotplug``
 
 The hotplug device provides privileged control over the PCIe lifecycle of SLASH cards. It supports
 removing a device from the PCI hierarchy, rescanning root buses to rediscover devices, issuing a
-secondary bus reset (SBR) on the upstream bridge for a full hardware reset, and an atomic
+secondary bus reset (SBR) on the upstream bridge for a full hardware reset, holding that SBR
+asserted across a device-side reset (``SBR_ASSERT`` / ``SBR_DEASSERT``), and an atomic
 remove-and-rescan operation. These operations are used after loading a new FPGA bitstream and when
 performing a full board reset.
+
+``SBR_ASSERT`` and ``SBR_DEASSERT`` exist for operations in which the *device* drops the link on
+its own, such as a JTAG-driven PMC reset while programming a static shell. Some root ports never
+retrain after a device-initiated Surprise Down and need a host reboot (observed on AMD Turin GPP
+bridges with firmware-first error handling). Asserting the SBR first turns that into a
+host-initiated link down, which the port recovers from as soon as the reset is released. Remove the
+device's functions before ``SBR_ASSERT`` and rescan after ``SBR_DEASSERT``; both resolve the bridge
+from the bus number, so they work while the endpoint is absent from the PCI tree.
 
 - **Device file name:** ``/dev/slash_hotplug``
 - **Sysfs name:** ``/sys/class/slash/slash_hotplug``

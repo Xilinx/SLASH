@@ -110,6 +110,10 @@ struct client {
 
     /** @brief Systemd event source registration for this client's socket I/O. */
     sd_event_source *event_source;
+    /** @brief True while this connection holds a Secondary Bus Reset (SBR_HOLD). */
+    bool sbr_held;
+    /** @brief PF0 BDF whose upstream bridge is held in reset while @c sbr_held. */
+    char sbr_hold_bdf[VRTD_PCI_BDF_LEN];
 };
 
 /**
@@ -141,6 +145,16 @@ struct client {
  * @param client Pointer to the client to clean up. Fields are zeroed after release.
  */
 void cleanup_client(struct client *client);
+
+/**
+ * @brief Release every Secondary Bus Reset still held by a connected client.
+ *
+ * For daemon shutdown: call after the event loop has stopped and before the
+ * hotplug handle is closed, so a restart never leaves a root port in reset.
+ *
+ * @param state Daemon state whose clients are inspected.
+ */
+void serve_release_sbr_holds(struct vrtd *state);
 
 /**
  * @brief Cleanup helper for use with __attribute__((cleanup)).

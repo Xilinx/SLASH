@@ -120,6 +120,27 @@ int slash_hotplug_toggle_sbr(struct slash_hotplug *hotplug, const char *bdf);
  */
 int slash_hotplug_hotplug(struct slash_hotplug *hotplug, const char *bdf);
 
+/**
+ * slash_hotplug_sbr_assert() - Assert (and hold) the Secondary Bus Reset on the
+ *                              upstream bridge of @bdf.
+ * @hotplug: Hotplug handle.
+ * @bdf:     Endpoint BDF ("DDDD:BB:DD.F"); only its bus is used, so this also
+ *           works after the endpoint was removed.
+ *
+ * Use this before an operation that makes the *device* drop the PCIe link
+ * (e.g. a JTAG-driven PMC reset): with the reset already asserted the root
+ * port sees a host-initiated link down instead of a Surprise Down.  Pair with
+ * slash_hotplug_sbr_deassert() and a rescan.  Returns 0 or -1 with errno.
+ */
+int slash_hotplug_sbr_assert(struct slash_hotplug *hotplug, const char *bdf);
+
+/**
+ * slash_hotplug_sbr_deassert() - Release a Secondary Bus Reset held by
+ *                                slash_hotplug_sbr_assert() and wait for link
+ *                                training.  Returns 0 or -1 with errno.
+ */
+int slash_hotplug_sbr_deassert(struct slash_hotplug *hotplug, const char *bdf);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif /* __cplusplus */

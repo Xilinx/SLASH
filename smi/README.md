@@ -201,9 +201,18 @@ v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|comp
 | `-d,--device`     | Board address, required except with `--jtag --no-remove-device` |
 | `--shell-type`    | Shell to program. Flash without `--pdi` defaults to `all`; other modes default to `service` |
 | `--pdi`           | Use this PDI file instead of resolving the installed static shell PDI |
-| `--no-remove-device` | Skip the pre-JTAG PCIe device removal; valid only with `--jtag` |
+| `--no-remove-device` | Skip the pre-JTAG PCIe device removal and secondary-bus-reset hold; valid only with `--jtag` (see note below) |
 | `--bash-source`   | Source a Vivado/Vitis setup script before running `xsdb`; may be repeated and is valid only with `--jtag` |
 | `--xsdb-target-id` | Select the `Versal xcv80` XSDB `target_id`; valid only with `--jtag` |
+
+JTAG mode has VRTD remove the board's PCIe functions and hold the upstream
+bridge's Secondary Bus Reset while `xsdb` resets the PMC and loads the PDI, then
+release it, rescan and re-discover the board. The hold makes the link drop
+host-initiated; some root ports (AMD Turin GPP bridges with firmware-first error
+handling) never retrain after a device-initiated Surprise Down and need a host
+reboot. A full compute/service shell switch over JTAG takes about 25 s on such a
+host. `--no-remove-device` skips both steps and is only safe where a device-side
+link drop is known to be harmless.
 
 Flash mode programs the selected boot partition, or both the service and compute
 partitions when `--shell-type all` is used. `all` is valid only with `--flash`

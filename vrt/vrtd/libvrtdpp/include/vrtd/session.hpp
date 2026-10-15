@@ -171,6 +171,18 @@ public:
      */
     void hotplugRescan() const;
 
+    /**
+     * @brief Release a Secondary Bus Reset held by Device::hotplugOp(HotplugOp::SbrHold),
+     *        then rescan PCI and re-discover devices.
+     *
+     * Device-independent: the Device the hold was issued on is gone by now.
+     * The daemon releases the reset by itself if this session closes while
+     * holding it.
+     *
+     * @throws vrtd::Error on error.
+     */
+    void hotplugSbrRelease() const;
+
     uint64_t cfgmemProgramStart(
         const Device& device,
         int input_fd,
