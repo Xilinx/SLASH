@@ -110,6 +110,10 @@ struct client {
 
     /** @brief Systemd event source registration for this client's socket I/O. */
     sd_event_source *event_source;
+    /** @brief True while this connection holds a Secondary Bus Reset (SBR_HOLD). */
+    bool sbr_held;
+    /** @brief PF0 BDF whose upstream bridge is held in reset while @c sbr_held. */
+    char sbr_hold_bdf[VRTD_PCI_BDF_LEN];
 };
 
 /**
