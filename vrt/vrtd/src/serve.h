@@ -110,6 +110,10 @@ struct client {
 
     /** @brief Systemd event source registration for this client's socket I/O. */
     sd_event_source *event_source;
+    /** @brief True while this connection keeps a root-port link disabled (LINK_DISABLE). */
+    bool link_disabled;
+    /** @brief PF0 BDF whose upstream bridge has its link disabled while @c link_disabled. */
+    char link_disable_bdf[VRTD_PCI_BDF_LEN];
 };
 
 /**

@@ -367,6 +367,8 @@ static const char *vrtd_hotplug_op_to_string(uint32_t op)
     case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:     return "toggle_sbr";
     case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG:        return "hotplug";
     case VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE: return "reset_sequence";
+    case VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE:       return "link_disable";
+    case VRTD_DEVICE_HOTPLUG_OP_LINK_ENABLE:    return "link_enable";
     default:                                    return "unknown";
     }
 }
@@ -645,6 +647,29 @@ void cleanup_client(struct client *client)
     cleanup_client_buffers(client);
 
     gid_t_array_free(&client->gids);
+
+    /*
+     * Never leave a root-port link disabled because the client died mid-way
+     * (e.g. v80-smi killed while xsdb was programming the board).
+     */
+    if (client->link_disabled) {
+        LOG(LOG_WARNING,
+            "client conn_id=%llu disconnected while the root-port link of %s is disabled; "
+            "re-enabling, rescanning and re-discovering devices",
+            (unsigned long long)client->conn_id, client->link_disable_bdf);
+        client->link_disabled = false;
+        if (slash_hotplug_link_enable(g_hotplug, client->link_disable_bdf) != 0) {
+            LOG(LOG_ERR, "link enable on disconnect failed for %s: %m", client->link_disable_bdf);
+        } else if (slash_hotplug_rescan(g_hotplug) != 0) {
+            LOG(LOG_ERR, "rescan after link enable on disconnect failed: %m");
+        } else {
+            usleep(5000000);
+            if (client->state != NULL
+                && devices_discover_and_open(&client->state->devices) != 0) {
+                LOG(LOG_WARNING, "device re-discovery after link enable on disconnect failed");
+            }
+        }
+    }
 
     /* Close the inbound SCM_RIGHTS fd if one was received but not consumed. */
     if (client->in_fd >= 0) {
@@ -2340,6 +2365,39 @@ static uint16_t client_handle_request_device_hotplug_op(
         return VRTD_RET_OK;
     }
 
+    if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_LINK_ENABLE) {
+        /* Device-independent like RESCAN; authorised implicitly by the
+         * LINK_DISABLE this connection performed earlier. */
+        if (!client->link_disabled) {
+            LOG(LOG_NOTICE, "hotplug_op: link_enable without a disabled link");
+            return VRTD_RET_INVALID_ARGUMENT;
+        }
+        LOG(LOG_INFO, "Hotplug op=link_enable(%u) bdf=%s uid=%u conn_id=%llu",
+            (unsigned int)req_body->op, client->link_disable_bdf,
+            (unsigned int)client->uid, (unsigned long long)client->conn_id);
+
+        client->link_disabled = false;
+        int ret = slash_hotplug_link_enable(g_hotplug, client->link_disable_bdf);
+        if (ret != 0) {
+            LOG(LOG_WARNING, "hotplug_op: link_enable failed for %s: %m", client->link_disable_bdf);
+            return hotplug_errno_to_vrtd_ret(errno);
+        }
+        ret = slash_hotplug_rescan(g_hotplug);
+        if (ret != 0) {
+            LOG(LOG_WARNING, "hotplug_op: rescan after link_enable failed: %m");
+            return hotplug_errno_to_vrtd_ret(errno);
+        }
+        /* Same settle time as RESCAN: device nodes appear asynchronously. */
+        usleep(5000000);
+        ret = devices_discover_and_open(&client->state->devices);
+        if (ret != 0) {
+            LOG(LOG_WARNING, "hotplug_op: failed to refresh devices after link_enable");
+        }
+        resp_body->zero = 0;
+        *resp_size = sizeof(*resp_body);
+        return VRTD_RET_OK;
+    }
+
     int ret = auth_request_device_hotplug_op(client, req_body);
     if (ret == -1) {
         return VRTD_RET_INTERNAL_ERROR;
@@ -2358,28 +2416,46 @@ static uint16_t client_handle_request_device_hotplug_op(
         return VRTD_RET_NOEXIST;
     }
 
+    /* Board-level BDF, still valid after @d has been closed and freed below. */
+    char board_bdf[VRTD_PCI_BDF_LEN] = {0};
+    strncpy(board_bdf, d->pci_info.bdf, sizeof(board_bdf) - 1);
+
     LOG(LOG_INFO, "Hotplug op=%s(%u) bdf=%s dev=%u uid=%u conn_id=%llu",
         vrtd_hotplug_op_to_string(req_body->op), (unsigned int)req_body->op,
-        d->pci_info.bdf, (unsigned int)req_body->dev_number,
+        board_bdf, (unsigned int)req_body->dev_number,
         (unsigned int)client->uid, (unsigned long long)client->conn_id);
 
     switch (req_body->op) {
     case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
     case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:
-    case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG: {
+    case VRTD_DEVICE_HOTPLUG_OP_HOTPLUG:
+    case VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE: {
         if (req_body->function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL) {
             if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR) {
                 LOG(LOG_ERR, "hotplug_op: toggle_sbr requires a specific function number");
                 return VRTD_RET_INVALID_ARGUMENT;
             }
 
-            bool any_removed = false;
+            /*
+             * Close our own handles on the device BEFORE removing its PCI
+             * functions, exactly as reset_with_ami() does.  The slash
+             * character devices live in driver structures that die with
+             * the PCI device; closing a descriptor after the remove used to
+             * free that memory underneath the kernel's cdev teardown (GPF
+             * in __list_del_entry_valid on close(), seen with
+             * `v80-smi write-static-shell --jtag`).  The driver now pins
+             * its containers, but closing first is the correct order
+             * regardless.
+             */
+            device_ptr_array_rm_by_reference(&client->state->devices, d);
+            d = NULL;
+
             for (uint8_t func = 0; func < 3; func++) {
                 char pf_bdf[VRTD_PCI_BDF_LEN];
-                if (pci_bdf_set_function(d->pci_info.bdf, func, pf_bdf) != 0) {
+                if (pci_bdf_set_function(board_bdf, func, pf_bdf) != 0) {
                     LOG(LOG_ERR, "hotplug_op: %s: failed to construct PF%u BDF from %s",
                         vrtd_hotplug_op_to_string(req_body->op),
-                        (unsigned int)func, d->pci_info.bdf);
+                        (unsigned int)func, board_bdf);
                     return VRTD_RET_INTERNAL_ERROR;
                 }
 
@@ -2389,17 +2465,35 @@ static uint16_t client_handle_request_device_hotplug_op(
                     LOG(LOG_WARNING, "hotplug_op: %s failed removing PF%u bdf=%s: %m",
                         vrtd_hotplug_op_to_string(req_body->op),
                         (unsigned int)func, pf_bdf);
-                    if (any_removed) {
-                        device_ptr_array_rm_by_reference(&client->state->devices, d);
-                        d = NULL;
-                    }
                     return hotplug_errno_to_vrtd_ret(err);
                 }
-                any_removed = true;
             }
 
-            device_ptr_array_rm_by_reference(&client->state->devices, d);
-            d = NULL;
+            if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE) {
+                char pf0_bdf[VRTD_PCI_BDF_LEN];
+                if (pci_bdf_set_function(board_bdf, 0, pf0_bdf) != 0) {
+                    LOG(LOG_ERR, "hotplug_op: link_disable: failed to construct PF0 BDF from %s",
+                        board_bdf);
+                    return VRTD_RET_INTERNAL_ERROR;
+                }
+                if (client->link_disabled) {
+                    LOG(LOG_WARNING, "hotplug_op: link_disable: connection already has the link of %s "
+                        "disabled; re-enabling it first", client->link_disable_bdf);
+                    (void) slash_hotplug_link_enable(g_hotplug, client->link_disable_bdf);
+                    client->link_disabled = false;
+                }
+                ret = slash_hotplug_link_disable(g_hotplug, pf0_bdf);
+                if (ret != 0) {
+                    int err = errno;
+                    LOG(LOG_WARNING, "hotplug_op: link_disable: disabling the link failed for %s: %m", pf0_bdf);
+                    return hotplug_errno_to_vrtd_ret(err);
+                }
+                strncpy(client->link_disable_bdf, pf0_bdf, sizeof(client->link_disable_bdf) - 1);
+                client->link_disable_bdf[sizeof(client->link_disable_bdf) - 1] = '\0';
+                client->link_disabled = true;
+                LOG(LOG_INFO, "hotplug_op: link_disable: PF0-PF2 of %s removed, root-port link "
+                    "disabled until link_enable", board_bdf);
+            }
 
             if (req_body->op == VRTD_DEVICE_HOTPLUG_OP_HOTPLUG) {
                 ret = slash_hotplug_rescan(g_hotplug);
@@ -2440,12 +2534,22 @@ static uint16_t client_handle_request_device_hotplug_op(
 
         switch (req_body->op) {
         case VRTD_DEVICE_HOTPLUG_OP_REMOVE:
+            /* Close our handles before the PCI remove (see the FUNCTION_ALL
+             * path).  If the remove then fails the device is still present,
+             * so pick it up again. */
+            device_ptr_array_rm_by_reference(&client->state->devices, d);
+            d = NULL;
             ret = slash_hotplug_remove(g_hotplug, pf_bdf);
-            if (ret == 0) {
-                device_ptr_array_rm_by_reference(&client->state->devices, d);
-                d = NULL;
+            if (ret != 0) {
+                int err = errno;
+                LOG(LOG_WARNING, "hotplug_op: remove of %s failed: %m; re-discovering devices", pf_bdf);
+                (void) devices_discover_and_open(&client->state->devices);
+                errno = err;
             }
             break;
+        case VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE:
+            LOG(LOG_ERR, "hotplug_op: link_disable requires function ALL");
+            return VRTD_RET_INVALID_ARGUMENT;
         case VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR:
             ret = slash_hotplug_toggle_sbr(g_hotplug, pf_bdf);
             break;
@@ -2479,7 +2583,7 @@ static uint16_t client_handle_request_device_hotplug_op(
     if (ret != 0) {
         LOG(LOG_WARNING, "hotplug_op: %s failed for device %u bdf=%s: %m",
             vrtd_hotplug_op_to_string(req_body->op),
-            (unsigned int)req_body->dev_number, d->pci_info.bdf);
+            (unsigned int)req_body->dev_number, board_bdf);
         return hotplug_errno_to_vrtd_ret(errno);
     }
 

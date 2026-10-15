@@ -171,6 +171,18 @@ public:
      */
     void hotplugRescan() const;
 
+    /**
+     * @brief Re-enable a link disabled by Device::hotplugOp(HotplugOp::LinkDisable),
+     *        then rescan PCI and re-discover devices.
+     *
+     * Device-independent: the Device the disable was issued on is gone by now.
+     * The daemon re-enables the link by itself if this session closes while
+     * it is disabled.
+     *
+     * @throws vrtd::Error on error.
+     */
+    void hotplugLinkEnable() const;
+
     uint64_t cfgmemProgramStart(
         const Device& device,
         int input_fd,

@@ -581,6 +581,37 @@ enum vrtd_ret vrtd_device_hotplug_hotplug(
     uint32_t dev,
     uint8_t function
 );
+/**
+ * @brief Prepare a device for a device-side reset: close the daemon's
+ *        handles, remove PF0..PF2 and disable the upstream bridge's link
+ *        (VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE).
+ *
+ * Use before an operation that makes the device drop its PCIe link on its
+ * own (e.g. a JTAG-driven PMC reset), then call
+ * vrtd_device_hotplug_link_enable().  The daemon re-enables the link
+ * automatically if the connection closes while it is disabled.
+ *
+ * @param fd  Connected vrtd socket file descriptor.
+ * @param dev Device index (0-based).
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ */
+enum vrtd_ret vrtd_device_hotplug_link_disable(
+    int fd,
+    uint32_t dev
+);
+/**
+ * @brief Re-enable the link disabled by vrtd_device_hotplug_link_disable(),
+ *        rescan PCI and re-discover devices (VRTD_DEVICE_HOTPLUG_OP_LINK_ENABLE).
+ *
+ * Device-independent: the device index used for the disable is no longer
+ * valid at this point; the daemon remembers the bridge per connection.
+ *
+ * @param fd Connected vrtd socket file descriptor.
+ * @return #VRTD_RET_OK on success; otherwise a #vrtd_ret error code.
+ */
+enum vrtd_ret vrtd_device_hotplug_link_enable(
+    int fd
+);
 
 enum vrtd_ret vrtd_device_reset_sequence(
     int fd,
