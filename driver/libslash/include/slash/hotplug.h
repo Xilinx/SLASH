@@ -120,6 +120,27 @@ int slash_hotplug_toggle_sbr(struct slash_hotplug *hotplug, const char *bdf);
  */
 int slash_hotplug_hotplug(struct slash_hotplug *hotplug, const char *bdf);
 
+/**
+ * slash_hotplug_link_disable() - Disable the PCIe link on the upstream bridge
+ *                                of @bdf (Link Control: Link Disable).
+ * @hotplug: Hotplug handle.
+ * @bdf:     Endpoint BDF ("DDDD:BB:DD.F"); only its bus is used, so this also
+ *           works after the endpoint was removed.
+ *
+ * Use this before an operation that makes the *device* drop the PCIe link
+ * (e.g. a JTAG-driven PMC reset): with the link already disabled the root
+ * port sees a host-initiated link down instead of a Surprise Down.  Pair with
+ * slash_hotplug_link_enable() and a rescan.  Returns 0 or -1 with errno.
+ */
+int slash_hotplug_link_disable(struct slash_hotplug *hotplug, const char *bdf);
+
+/**
+ * slash_hotplug_link_enable() - Re-enable a link disabled by
+ *                               slash_hotplug_link_disable() and wait for link
+ *                               training.  Returns 0 or -1 with errno.
+ */
+int slash_hotplug_link_enable(struct slash_hotplug *hotplug, const char *bdf);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif /* __cplusplus */
