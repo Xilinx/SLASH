@@ -199,3 +199,13 @@ int slash_hotplug_toggle_sbr(struct slash_hotplug *hotplug, const char *bdf) {
 int slash_hotplug_hotplug(struct slash_hotplug *hotplug, const char *bdf) {
     return slash_hotplug_ioctl(hotplug, SLASH_HOTPLUG_IOCTL_HOTPLUG, true, bdf);
 }
+
+int slash_hotplug_sbr_assert(struct slash_hotplug *hotplug, const char *bdf) {
+    return slash_hotplug_ioctl(hotplug, SLASH_HOTPLUG_IOCTL_SBR_ASSERT, true,
+                               bdf);
+}
+
+int slash_hotplug_sbr_deassert(struct slash_hotplug *hotplug, const char *bdf) {
+    return slash_hotplug_ioctl(hotplug, SLASH_HOTPLUG_IOCTL_SBR_DEASSERT, true,
+                               bdf);
+}

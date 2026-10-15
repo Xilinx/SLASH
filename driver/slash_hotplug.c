@@ -382,6 +382,65 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
  *
  * Return: 0 on success, negative errno on failure.
  */
+/**
+ * slash_hotplug_handle_sbr_set() - Assert or deassert the Secondary Bus Reset
+ *                                  on the upstream bridge of @bdf.
+ * @bdf:    Endpoint BDF string ("DDDD:BB:DD.F").  Only the bus number is used
+ *          to find the bridge, so this works after the endpoint was removed.
+ * @assert: true to set PCI_BRIDGE_CTL_BUS_RESET, false to clear it.
+ *
+ * Unlike slash_hotplug_handle_toggle_sbr() this does not pulse the reset: the
+ * caller decides how long the bus stays in reset (see the uapi header for
+ * why).  On assert we wait the T_rst minimum (2 ms, as pci_reset_secondary_bus()
+ * does); on deassert we wait 1000 ms for link training, matching
+ * slash_hotplug_handle_toggle_sbr().
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+static int slash_hotplug_handle_sbr_set(const char *bdf, bool assert)
+{
+    const char *what = assert ? "sbr_assert" : "sbr_deassert";
+    struct pci_bus *ep_bus;
+    struct pci_dev *bridge;
+    int domain, bus_nr, slot, func;
+    u16 ctrl;
+
+    if (sscanf(bdf, "%x:%x:%x.%x", &domain, &bus_nr, &slot, &func) != 4) {
+        pr_err("slash_hotplug: %s: malformed BDF '%s'\n", what, bdf);
+        return -EINVAL;
+    }
+
+    pci_lock_rescan_remove();
+    ep_bus = pci_find_bus(domain, bus_nr);
+    if (!ep_bus || !ep_bus->self) {
+        pci_unlock_rescan_remove();
+        pr_err("slash_hotplug: %s: no upstream bridge for %s\n", what, bdf);
+        return -ENODEV;
+    }
+    bridge = pci_dev_get(ep_bus->self);
+    pci_unlock_rescan_remove();
+
+    pci_read_config_word(bridge, PCI_BRIDGE_CONTROL, &ctrl);
+    if (assert)
+        ctrl |= PCI_BRIDGE_CTL_BUS_RESET;
+    else
+        ctrl &= ~PCI_BRIDGE_CTL_BUS_RESET;
+    pci_write_config_word(bridge, PCI_BRIDGE_CONTROL, ctrl);
+    pr_info("slash_hotplug: %s: bridge=%s bridge_ctrl=0x%04x\n", what,
+            pci_name(bridge), ctrl);
+
+    if (assert) {
+        /* PCIe r6.0 sec. 6.6.1: T_rst minimum before the bus may be released. */
+        msleep(2);
+    } else {
+        pr_info("slash_hotplug: %s: waiting 1000 ms for PCIe link training\n", what);
+        msleep(1000);
+    }
+
+    pci_dev_put(bridge);
+    return 0;
+}
+
 static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct slash_hotplug_device_request req = {0};
@@ -432,6 +491,23 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
         if (!ret)
             pr_info("slash_hotplug: ioctl: HOTPLUG succeeded\n");
         break;
+    case SLASH_HOTPLUG_IOCTL_SBR_ASSERT:
+    case SLASH_HOTPLUG_IOCTL_SBR_DEASSERT: {
+        const bool assert = (cmd == SLASH_HOTPLUG_IOCTL_SBR_ASSERT);
+        const char *what = assert ? "SBR_ASSERT" : "SBR_DEASSERT";
+
+        pr_info("slash_hotplug: ioctl: dispatching %s\n", what);
+        ret = slash_hotplug_copy_request(arg, &req);
+        if (ret) {
+            pr_err("slash_hotplug: %s: copy_request failed (%d)\n", what, ret);
+            break;
+        }
+        pr_info("slash_hotplug: %s: BDF %s\n", what, req.bdf);
+        ret = slash_hotplug_handle_sbr_set(req.bdf, assert);
+        if (!ret)
+            pr_info("slash_hotplug: ioctl: %s succeeded\n", what);
+        break;
+    }
     default:
         pr_err("slash_hotplug: unknown ioctl cmd 0x%x\n", cmd);
         ret = -ENOTTY;

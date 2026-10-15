@@ -107,5 +107,24 @@ struct slash_hotplug_device_request {
  * before HOTPLUG if a reset is required.
  */
 #define SLASH_HOTPLUG_IOCTL_HOTPLUG    _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x33, struct slash_hotplug_device_request)
+/**
+ * SLASH_HOTPLUG_IOCTL_SBR_ASSERT / SLASH_HOTPLUG_IOCTL_SBR_DEASSERT - hold a
+ * Secondary Bus Reset on the upstream bridge of @bdf.
+ *
+ * TOGGLE_SBR pulses the reset.  These two keep it asserted for as long as the
+ * caller needs, so that a link drop caused by the *device* (JTAG-driven PMC
+ * reset, firmware reload, ...) happens while the root port already holds the
+ * link in reset.  Some root ports (observed: AMD Turin GPP bridges with
+ * firmware-first error handling) never retrain after a device-initiated
+ * Surprise Down and need a host reboot; a host-initiated reset avoids that.
+ *
+ * ASSERT sets PCI_BRIDGE_CTL_BUS_RESET and waits the T_rst minimum.
+ * DEASSERT clears it and waits for link training to settle.  Callers should
+ * remove the device's functions before ASSERT and rescan after DEASSERT.
+ * Both resolve the bridge from the bus number of @bdf, so they also work
+ * after the device itself has been removed from the PCI tree.
+ */
+#define SLASH_HOTPLUG_IOCTL_SBR_ASSERT   _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x34, struct slash_hotplug_device_request)
+#define SLASH_HOTPLUG_IOCTL_SBR_DEASSERT _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x35, struct slash_hotplug_device_request)
 
 #endif /* SLASH_HOTPLUG_UAPI_H */
