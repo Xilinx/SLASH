@@ -151,6 +151,23 @@ kernel register access; ``vrt::Device`` defaults to BAR index 0.
      - 2 MB
      - ``axi_dbg_hub_0`` AXI Debug Hub. Fixed address; present only when the
        design declares debug nets.
+   * - ``0x07FF_0000``
+     - 64 KB
+     - ``slash_window_anchor``. Fixed address, present in every design.
+       Reserved for the linker — see the note below.
+
+.. note::
+
+   The anchor at the top of the window is not a user-facing register block. It
+   exists so that the span of mapped AXI-Lite addresses is always the full
+   128 MB, because the NoC slave unit at the partition boundary is sized from
+   that span rather than from the aperture the static shell declares. Without
+   it the boundary is sized to whatever a particular design happens to use —
+   64 KB for a one-kernel design, 8 MB for a 76-kernel one — and Dynamic
+   Function Exchange requires that size to be identical across all
+   configurations of a partition. Images built that way are rejected by
+   ``pr_verify`` with ``NOC-Validation-16`` and are not mutually loadable.
+   Treat the slot as reserved.
 
 Kernel apertures are bump-allocated by the linker from the base of the window,
 in sorted instance-name order, each aligned to the larger of 256 bytes and the
@@ -191,6 +208,11 @@ In the service shell:
    * - ``0x0300_0000``
      - 256 KB
      - ``qsfp_2_n_3`` DCMAC 1 (``dcmac_wrapper/dcmac_1/s_axi``).
+   * - ``0x07FF_0000``
+     - 64 KB
+     - ``sl_window_anchor``. Reserved, for the same reason as the user region's
+       anchor above; present whenever the service layer is rebuilt, which is
+       whenever networking is enabled.
 
 PF2 BAR4 — Static Shell
 =======================

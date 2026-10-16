@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 
+from slashkit.emit.hw.user_region.anchor_ctx import ANCHOR_RANGE, WINDOW_BYTES
+
 # Source checkout only: the submodule lives outside the slashkit package, so it is
 # never present in an installed wheel/deb. Packaged installs carry a staged copy
 # under slashkit/resources/dcmac/versal instead - see stage_versal_dcmac().
@@ -39,6 +41,13 @@ _VERSAL_DCMAC_MISSING = (
     "for the submodule at {submodule}). From a source checkout, run:\n"
     "    git submodule update --init submodules/Versal-DCMAC"
 )
+
+#! Base of the service-layer RP's AXI-Lite aperture, matching the APERTURES on
+#! /service_layer/S_AXILITE_INI in resources/base/service/scripts/top.tcl.
+SL_AXILITE_BASE = 0x0203_0000_0000
+#! Window anchor for that RP -- same role as the slash RP's, see anchor_ctx.
+SL_ANCHOR_NAME = "sl_window_anchor"
+SL_ANCHOR_OFFSET = SL_AXILITE_BASE + WINDOW_BYTES - ANCHOR_RANGE
 
 
 def stage_versal_dcmac(dest: Path) -> Path:
@@ -122,11 +131,31 @@ def build_service_axilite_ctx(net) -> Dict[str, Any]:
         qsfp_blocks.append("qsfp_2_n_3")
         mi_targets.append("qsfp_2_n_3/s_axi")
 
+    # The service-layer RP has the same NoC aperture problem as the slash RP
+    # (issue 228): the static shell declares a constant 128 MiB at
+    # 0x203_0000_0000 for /service_layer/S_AXILITE_INI (top.tcl), while the
+    # DCMAC control segments assigned in dcmac/tcl/slash_wrapper.tcl top out at
+    # 0x203_0304_0000 -- so the NSU is sized to 64 MiB, not 128 MiB, and it
+    # moves with the [network] configuration. Anchor the span the same way.
+    #
+    # Only when there is an xbar at all: with no DCMAC the fan-out does not
+    # exist, axi_noc_0/M00_AXI is unconnected, and the service-layer RM is not
+    # rebuilt either (__main__.py gates it on networking being enabled).
+    have_xbar = len(mi_targets) > 0
+    if have_xbar:
+        mi_targets.append(f"{SL_ANCHOR_NAME}/S_AXI")
+
     num_mi = len(mi_targets)
 
     return {
         # smartconnect presence
-        "sl_have_xbar": num_mi > 0,
+        "sl_have_xbar": have_xbar,
+
+        # window anchor (see above); consumed by service_layer.tcl
+        "sl_window_anchor_enabled": have_xbar,
+        "sl_window_anchor_name": SL_ANCHOR_NAME,
+        "sl_window_anchor_offset": f"0x{SL_ANCHOR_OFFSET:012X}",
+        "sl_window_anchor_range": f"0x{ANCHOR_RANGE:08X}",
 
         # properties
         "sl_num_clks": 1,

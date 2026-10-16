@@ -148,3 +148,17 @@ open_run impl_1
 
 set partial_pdi [file join $artifact_out_dir "top_i_service_layer_service_layer_${proj_name}_inst_0_partial.pdi"]
 write_device_image -cell top_i/service_layer -force $partial_pdi
+
+# DFX compatibility check, matching the one in slash_project_build.tcl. This RP
+# is exposed to the same NoC aperture mismatch (issue 228): the static shell
+# declares a constant 128 MiB at 0x203_0000_0000 while the DCMAC control
+# segments span whatever the [network] configuration asked for. pr_verify wants
+# no design open, so close the project first.
+close_design
+close_project
+set routed_dcp [file join $rm_work_dir "${rm_proj_name}.runs" "impl_1" "top_wrapper_routed.dcp"]
+_require_file $routed_dcp "routed top checkpoint"
+source [file join [file dirname [info script]] .. .. common scripts slash_prverify.tcl]
+slash_pr_verify $static_shell_dcp $routed_dcp \
+    [file join $rm_work_dir "pr_verify_${proj_name}.rpt"] \
+    $partial_pdi "service-layer RM"

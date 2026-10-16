@@ -227,5 +227,15 @@ close_design
 close_project
 set routed_dcp [file join $rm_work_dir "${slash_proj_name}.runs" "impl_1" "top_wrapper_routed.dcp"]
 _require_file $routed_dcp "routed top checkpoint"
+
+# DFX compatibility check. pr_verify wants no design open, so it runs here,
+# after the project is closed and before the probes are exported. See
+# slash_prverify.tcl for what it fails on and why that is narrower than
+# "pr_verify said no".
+source [file join [file dirname [info script]] slash_prverify.tcl]
+slash_pr_verify $static_shell_dcp $routed_dcp \
+    [file join $rm_work_dir "pr_verify_${proj_name}.rpt"] \
+    $partial_pdi "slash RM"
+
 open_checkpoint $routed_dcp
 write_debug_probes -cell top_i/slash -file $ltx_file

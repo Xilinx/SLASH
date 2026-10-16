@@ -38,6 +38,11 @@ from slashkit.emit.hw.service_region.network_ctx import build_network_axis_conte
 from slashkit.emit.hw.service_region.stream_ctx import build_stream_connect_context
 from slashkit.emit.hw.user_region.host_ctx import build_host_smartconnect_context
 from slashkit.emit.hw.user_region.addr_ctx import build_axilite_address_context
+from slashkit.emit.hw.user_region.anchor_ctx import (
+    build_window_anchor_slaves,
+    build_window_anchor_context,
+    assert_window_spanned,
+)
 from slashkit.emit.hw.user_region.param_ctx import build_data_width_param_context
 from slashkit.emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from slashkit.emit.hw.service_region.service_layer_ctx import *
@@ -47,6 +52,11 @@ from slashkit.core.command_config import LinkerConfiguration, ShellType
 logger = logging.getLogger(__name__)
 
 _RX_SRC_PIN_RE = re.compile(r"^/?dcmac_axis_noc_s_(\d+)/M00_AXIS$")
+
+#! Base of the slash RP's AXI-Lite control aperture. Pairs with WINDOW_BYTES
+#! from anchor_ctx, and both must match the APERTURES the static shell declares
+#! on /slash/S_AXILITE_INI in resources/base/*/scripts/top.tcl.
+_AXILITE_BASE = 0x0202_0000_0000
 
 
 def _collect_used_targets(ctx: dict) -> set[str]:
@@ -257,10 +267,18 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     # (empty when no debug nets are configured).
     hub_slaves = build_debug_hub_slaves(cfg.debug)
 
+    # The window anchor joins it the same way, but unconditionally: it is what
+    # keeps the control map spanning the full aperture the static shell
+    # declares, so the NoC NSU is sized identically in every RM. See
+    # anchor_ctx and issue 228. Last in the list, so it takes the trailing
+    # SmartConnect slot and kernels keep the slots they had.
+    anchor_slaves = build_window_anchor_slaves(_AXILITE_BASE)
+    control_slaves = hub_slaves + anchor_slaves
+
     ctx = build_kernel_add_context(instances)
     ctx.update(build_data_width_param_context(instances))
     ctx.update(build_axilite_smartconnect_context(
-        instances, extra_slaves=[s["dst_pin"] for s in hub_slaves]))
+        instances, extra_slaves=[s["dst_pin"] for s in control_slaves]))
     ctx.update(build_hbm_smartconnect_context(instances, bd, max_si=16))
     ctx.update(build_ddr_smartconnect_context(instances, max_si=16))
     ctx.update(build_mem_smartconnect_context(
@@ -333,11 +351,13 @@ def generate_tcl(config: LinkerConfiguration) -> None:
     axilite_ctx = build_axilite_address_context(
         instances,
         addr_space="S_AXILITE_INI",
-        base_offset=0x0202_0000_0000,
+        base_offset=_AXILITE_BASE,
         min_align=0x0001_0000,
-        extra_slaves=hub_slaves,
+        extra_slaves=control_slaves,
     )
+    assert_window_spanned(axilite_ctx["axilite_addr"], _AXILITE_BASE)
     ctx.update(axilite_ctx)
+    ctx.update(build_window_anchor_context())
     ctx.update(build_system_ila_debug_context(instances, cfg.debug))
     ctx["project_name"] = config.project_name
     ctx["slash_bd_name"] = f"slash_{config.project_name}"

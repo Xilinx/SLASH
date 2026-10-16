@@ -1180,6 +1180,25 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 {% if sl_have_xbar %}
   current_bd_design service_layer_user
 
+  # === AXI-Lite window anchor (issue 228) ===
+  # The static shell declares a constant 128 MiB aperture at 0x203_0000_0000 for
+  # /service_layer/S_AXILITE_INI, but the DCMAC control segments assigned in
+  # dcmac/tcl/slash_wrapper.tcl top out at 0x203_0304_0000, so the NoC NSU is
+  # sized to 64 MiB -- and moves with the [network] configuration. Mapping a
+  # small slave into the last 64 KiB of the aperture makes the span constant,
+  # which is what the DFX flow requires of a reconfigurable NoC instance.
+  # Created before the MI loop below, which wires it as the last MI target.
+  {% if sl_window_anchor_enabled|default(false) %}
+  create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 {{ sl_window_anchor_name }}
+  set_property -dict [list \
+    CONFIG.C_ALL_OUTPUTS {1} \
+    CONFIG.C_GPIO_WIDTH  {1} \
+    CONFIG.C_IS_DUAL     {0} \
+  ] [get_bd_cells {{ sl_window_anchor_name }}]
+  connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ sl_window_anchor_name }}/s_axi_aclk]
+  connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ sl_window_anchor_name }}/s_axi_aresetn]
+  {% endif %}
+
   # Create SmartConnect inside the service_layer BD with a local name
   create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smartconnect_0
   set_property -dict [list \
@@ -1294,6 +1313,12 @@ assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_addre
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_01] [get_bd_addr_segs M_VIRT_1/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_02] [get_bd_addr_segs M_VIRT_2/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_03] [get_bd_addr_segs M_VIRT_3/Reg] -force
+{% if sl_window_anchor_enabled|default(false) %}
+# Window anchor: last 64 KiB of the 128 MiB aperture, so the span of
+# S_AXILITE_INI is the full aperture whatever the [network] config maps. Must
+# precede the bare assign_bd_address below, which would otherwise auto-place it.
+assign_bd_address -offset {{ sl_window_anchor_offset }} -range {{ sl_window_anchor_range }} -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs {{ sl_window_anchor_name }}/S_AXI/Reg] -force
+{% endif %}
 assign_bd_address
 validate_bd_design
 save_bd_design
