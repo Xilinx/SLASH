@@ -48,8 +48,9 @@ def _parse_target(s: str) -> MemoryTarget:
     if domain not in {"HBM", "DDR", "MEM", "VIRT", "HOST"}:
         raise ValueError(
             f"Unsupported memory domain '{domain}'. Use HBM, DDR, MEM, VIRT or HOST.")
-    # HOST (and MEM) have no numeric index
-    idx = int(idx_str) if (idx_str and domain not in {"MEM", "HOST"}) else ""
+    # HOST has no numeric index. MEM may carry one (MEM3) to select a specific
+    # vNoC port; a bare MEM leaves the choice to the round-robin assignment.
+    idx = int(idx_str) if (idx_str and domain != "HOST") else ""
     return MemoryTarget(domain=domain, index=idx)
 
 

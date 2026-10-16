@@ -92,10 +92,16 @@ class TestHelperFunctions:
         assert t.index == ""
 
     def test_parse_target_mem(self):
-        # MEM likewise carries no index.
+        # A bare MEM carries no index; the port is assigned round-robin later.
         t = _parse_target("MEM")
         assert t.domain == "MEM"
         assert t.index == ""
+
+    def test_parse_target_mem_indexed(self):
+        # MEM<i> selects a specific vNoC port and must keep its index.
+        t = _parse_target("MEM3")
+        assert t.domain == "MEM"
+        assert t.index == 3
 
     def test_parse_target_invalid_domain(self):
         # An unrecognised domain name must be rejected.
