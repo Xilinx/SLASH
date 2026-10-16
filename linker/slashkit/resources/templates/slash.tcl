@@ -194,6 +194,12 @@ update_compile_order -fileset sources_1
    CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
  ] [get_bd_pins /ddr_noc_3/aclk0]
 
+  # MEM ingress NMUs are pinned. HBM_AXI_* already reach HBM through the hardened
+  # NMUs along the HBM edge at the top of SLR2; MEM serves logic away from that
+  # edge. This user region has no SLR0 and only a strip of SLR1, so MEM0-1 sit in
+  # that strip and MEM2-7 along the bottom of SLR2. The region owns exactly as many
+  # NMU sites as it has NMUs, and every site must stay inside pblock_slash
+  # (base/service/constraints/impl.xdc).
   # Create instance: hbm_vnoc_00, and set properties
   set hbm_vnoc_00 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc hbm_vnoc_00 ]
   set_property -dict [list \
@@ -209,6 +215,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_00/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y12} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -233,6 +240,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_01/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X3Y12} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -257,6 +265,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_02/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X0Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -281,6 +290,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_03/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -305,6 +315,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_04/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X2Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -329,6 +340,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_05/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X3Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -353,6 +365,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_06/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y15} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -377,6 +390,7 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_07/M00_INI]
 
   set_property -dict [ list \
+   CONFIG.PHYSICAL_LOC {NOC_NMU512_X2Y15} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
