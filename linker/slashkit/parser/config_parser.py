@@ -22,11 +22,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import logging
 import re
 
 from slashkit.core.kernel import Kernel, KernelInstance
 from slashkit.core.connectivity import *
+from slashkit.core.floorplan import ALLOWED_SLRS
 from slashkit.core.port import BusType
+
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------
@@ -37,6 +41,7 @@ _RE_TARGET = re.compile(r"^\s*([A-Za-z]+)\s*(\d*)\s*$")
 _RE_NK = re.compile(r"^\s*([^:]+)\s*:\s*(\d+)(?::(.*))?\s*$")
 _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
 _RE_DEBUG_NET = re.compile(r"^\s*([^.:\s]+)\.([^.:\s]+)\s*$")
+_RE_SLR = re.compile(r"^\s*SLR(\d+)\s*$", re.IGNORECASE)
 
 
 def _parse_target(s: str) -> MemoryTarget:
@@ -122,6 +127,19 @@ def _parse_debug_net_value(val: str) -> DebugNetSpec:
     return DebugNetSpec(inst=m.group(1).strip(), port=m.group(2).strip())
 
 
+def _parse_slr_value(val: str) -> list[SlrSpec]:
+    """
+    Expects: 'inst:SLR1' or 'inst_0,inst_1:SLR1' (instances split as for nk=)
+    """
+    insts, sep, slr = val.rpartition(":")
+    m = _RE_SLR.match(slr)
+    names = _split_instance_names(insts)
+    if not sep or not m or not names:
+        raise ValueError(
+            f"Invalid slr '{val}'. Expected '<instance>[,<instance>...]:SLR<n>'.")
+    return [SlrSpec(inst=name, slr=int(m.group(1))) for name in names]
+
+
 # -----------------------------
 # Main parser
 # -----------------------------
@@ -129,7 +147,8 @@ def _parse_debug_net_value(val: str) -> DebugNetSpec:
 def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     """
     Custom parser that supports repeated [clock] sections, [network] section,
-    [user_region] section, [debug] section, and a single [connectivity] section.
+    [user_region] section, [debug] section, [floorplan] section, and a single
+    [connectivity] section.
     Lines beginning with '#' or ';' are ignored as comments.
     """
     cfg = ConnectivityConfig()
@@ -239,6 +258,17 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                 )
             debug_nets.append(_parse_debug_net_value(v))
 
+        elif section == "floorplan":
+            if "=" not in line:
+                raise ValueError(
+                    f"Invalid line in [floorplan] section: '{line}'")
+            k, v = [t.strip() for t in line.split("=", 1)]
+            if k.lower() != "slr":
+                raise ValueError(
+                    f"Invalid key '{k}' in [floorplan] section. Only 'slr=<instance>[,<instance>...]:SLR<n>' is supported."
+                )
+            cfg.floorplan.extend(_parse_slr_value(v))
+
         else:
             pass
 
@@ -271,7 +301,8 @@ def apply_config_to_instances(
     cfg: ConnectivityConfig,
     kernel_library: List[Kernel],
     *,
-    default_ddr_index: int = 0  # DDR0 fallback for missing AXI4FULL ports
+    default_ddr_index: int = 0,  # DDR0 fallback for missing AXI4FULL ports
+    mem_slr: Optional[Tuple[int, ...]] = None,  # SLR of MEM<i>, from the shell
 ) -> List[KernelInstance]:
     instances: Dict[str, KernelInstance] = {}
     kernel_library = {kernel.name: kernel for kernel in kernel_library}
@@ -316,5 +347,55 @@ def apply_config_to_instances(
         for pname in axi_full_ports:
             if pname not in mem_map:
                 mem_map[pname] = {"domain": "MEM", "index": ""}
+
+    # 5) [floorplan]: pin instances to an SLR. A pinned instance's bare MEM ports
+    #    take a MEM port in the same SLR, round-robin within that SLR; an explicit
+    #    MEM<i> is kept as written. Unpinned bare MEM ports are left for the global
+    #    round-robin in mem_ctx / system_map_ctx, which treat indices resolved here
+    #    as explicit. MEM port SLRs come from the shell (mem_slr); without them,
+    #    pinned instances' bare MEM ports fall back to the global round-robin.
+    allowed = ALLOWED_SLRS[cfg.shell]
+    for spec in cfg.floorplan:
+        if spec.inst not in instances:
+            raise KeyError(
+                f"[floorplan] slr refers to unknown instance '{spec.inst}'.")
+        if spec.slr not in allowed:
+            raise ValueError(
+                f"[floorplan] SLR{spec.slr} for '{spec.inst}' is not available on the "
+                f"{cfg.shell} shell. Use one of: "
+                f"{', '.join(f'SLR{s}' for s in allowed)}.")
+        prev = instances[spec.inst].params.setdefault("slr", spec.slr)
+        if prev != spec.slr:
+            raise ValueError(
+                f"[floorplan] '{spec.inst}' is pinned to both SLR{prev} and SLR{spec.slr}.")
+
+    if cfg.floorplan and mem_slr is None:
+        logger.warning(
+            "The installed %s shell does not report where its MEM ports are (missing, "
+            "or built before they were pinned); MEM ports of [floorplan] instances are "
+            "assigned round-robin.", cfg.shell)
+        return list(instances.values())
+    next_in_slr: Dict[int, int] = {}
+    for inst in instances.values():
+        slr = inst.params.get("slr")
+        if slr is None:
+            continue
+        candidates = [i for i, s in enumerate(mem_slr) if s == slr]
+        for pname, tgt in inst.params["mem_sp"].items():
+            if tgt["domain"] != "MEM":
+                continue
+            if tgt["index"] == "" and not candidates:
+                logger.warning(
+                    "The installed %s shell has no MEM port in SLR%d; %s.%s is assigned "
+                    "round-robin.", cfg.shell, slr, inst.name, pname)
+            elif tgt["index"] == "":
+                n = next_in_slr.get(slr, 0)
+                tgt["index"] = candidates[n % len(candidates)]
+                next_in_slr[slr] = n + 1
+            elif 0 <= tgt["index"] < len(mem_slr) and mem_slr[tgt["index"]] != slr:
+                logger.warning(
+                    "%s.%s is pinned to MEM%d (SLR%d) but the instance is in SLR%d; "
+                    "keeping MEM%d.", inst.name, pname, tgt["index"],
+                    mem_slr[tgt["index"]], slr, tgt["index"])
 
     return list(instances.values())

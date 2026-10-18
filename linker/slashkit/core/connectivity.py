@@ -82,6 +82,12 @@ class ClockSpec:
     freq_hz: int
 
 
+@dataclass(frozen=True)
+class SlrSpec:
+    inst: str
+    slr: int
+
+
 @dataclass
 class ConnectivityConfig:
     nk: List[NKSpec] = field(default_factory=list)
@@ -94,4 +100,5 @@ class ConnectivityConfig:
         default_factory=lambda: UserRegionSpec(pre_synth_tcls=[])
     )
     debug: DebugSpec = field(default_factory=lambda: DebugSpec(nets=[]))
+    floorplan: List[SlrSpec] = field(default_factory=list)
     shell: str = "compute"

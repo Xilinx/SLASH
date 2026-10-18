@@ -194,12 +194,10 @@ update_compile_order -fileset sources_1
    CONFIG.ASSOCIATED_BUSIF {S00_AXI} \
  ] [get_bd_pins /ddr_noc_3/aclk0]
 
-  # MEM ingress NMUs are pinned. HBM_AXI_* already reach HBM through the hardened
-  # NMUs along the HBM edge at the top of SLR2; MEM serves logic away from that
-  # edge. This user region has no SLR0 and only a strip of SLR1, so MEM0-1 sit in
-  # that strip and MEM2-7 along the bottom of SLR2. The region owns exactly as many
-  # NMU sites as it has NMUs, and every site must stay inside pblock_slash
-  # (base/service/constraints/impl.xdc).
+  # MEM ingress NMU sites are not set here: the static shell pins them
+  # (base/service/scripts/slash_base.tcl) and locks the NoC paths that cross
+  # into the user region, so a PHYSICAL_LOC here could only repeat them, and a
+  # stale one fails DFX DRC (HDPR-122).
   # Create instance: hbm_vnoc_00, and set properties
   set hbm_vnoc_00 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc hbm_vnoc_00 ]
   set_property -dict [list \
@@ -215,7 +213,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_00/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y12} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -240,7 +237,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_01/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X3Y12} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -265,7 +261,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_02/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X0Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -290,7 +285,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_03/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -315,7 +309,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_04/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X2Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -340,7 +333,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_05/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X3Y13} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -365,7 +357,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_06/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X1Y15} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -390,7 +381,6 @@ update_compile_order -fileset sources_1
  ] [get_bd_intf_pins /hbm_vnoc_07/M00_INI]
 
   set_property -dict [ list \
-   CONFIG.PHYSICAL_LOC {NOC_NMU512_X2Y15} \
    CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
    CONFIG.NOC_PARAMS {} \
    CONFIG.CATEGORY {pl} \
@@ -958,18 +948,16 @@ update_compile_order -fileset sources_1
   ] $ilreduced_logic_0
 
 
-  # Create instance: util_ds_buf_0, and set properties
-  set util_ds_buf_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 util_ds_buf_0 ]
-  set_property CONFIG.C_BUF_TYPE {BUFG_FABRIC} $util_ds_buf_0
-
-  connect_bd_net -net util_ds_buf_0_BUFG_FABRIC_O  [get_bd_pins util_ds_buf_0/BUFG_FABRIC_O] \
-  [get_bd_pins ilreduced_logic_0/Op1]
-
   connect_bd_net -net arstn_1  [get_bd_ports arstn] \
   [get_bd_pins c_shift_ram_0/D]
   
+  # The region's reset spine: arstn, registered here, then fanned out through
+  # ilreduced_logic_0 to the interconnect and to the kernel reset replicas. It
+  # used to run through a util_ds_buf BUFG_FABRIC, a single fixed site the placer
+  # can neither move toward the loads nor replicate; every load paid the round
+  # trip to it, which made it the region's critical path (see slash_base.tcl).
   connect_bd_net -net c_shift_ram_0_Q  [get_bd_pins c_shift_ram_0/Q] \
-  [get_bd_pins util_ds_buf_0/BUFG_FABRIC_I]
+  [get_bd_pins ilreduced_logic_0/Op1]
 
 
   # Create interface connections
@@ -1071,8 +1059,18 @@ connect_bd_net [get_bd_pins {{ c.src_pin }}] [get_bd_pins user_clk]
 {% endfor %}
 
 # === Connect kernel resets to ap_rst_n ===
+# Kernels take reset from 1-deep replicas of the spine: one per SLR that
+# [floorplan] pins kernels to, placed in that SLR's pblock so its fanout stays
+# in the SLR, and one for unpinned kernels. All kernels leave reset on the same
+# cycle, one after the interconnect.
+{% for name in reset_replicas %}
+set {{ name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:c_shift_ram:12.0 {{ name }} ]
+set_property -dict [list CONFIG.Depth {1} CONFIG.Width {1}] ${{ name }}
+connect_bd_net [get_bd_pins {{ name }}/CLK] [get_bd_pins user_clk]
+connect_bd_net [get_bd_pins {{ name }}/D] [get_bd_pins ilreduced_logic_0/Res]
+{% endfor %}
 {% for r in resets %}
-connect_bd_net [get_bd_pins {{ r.src_pin }}] [get_bd_pins ilreduced_logic_0/Res]
+connect_bd_net [get_bd_pins {{ r.src_pin }}] [get_bd_pins {{ r.replica }}/Q]
 {% endfor %}
 
 # === Debug hub (paired with AXIS ILA) — created BEFORE the SmartConnect MI loop ===
@@ -1296,13 +1294,20 @@ connect_bd_intf_net [get_bd_intf_pins {{ e.src_pin }}] [get_bd_intf_pins {{ e.ds
 {% endfor %}
 
 # === AXI Register Slice terminators for UNUSED memory endpoints ===
+# A terminator only has to present an idle master to its unused NoC port, so
+# it is held in reset for good: VALIDs stay low and no transaction is ever
+# issued. Wiring it to the reset spine instead bought nothing but fanout to
+# cells scattered next to their NoC ports, and the timing paths to reach them.
+{% if axi_terminators|default([]) %}
+set term_rst_asserted [create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconstant:1.0 term_rst_asserted]
+set_property -dict [list CONFIG.CONST_WIDTH {1} CONFIG.CONST_VAL {0}] $term_rst_asserted
+{% endif %}
 {% for t in axi_terminators|default([]) %}
 # {{ t.name }} -> {{ t.dst }}
 set {{ t.name }} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 {{ t.name }} ]
 
-# Clock / Reset (defaults to user_clk and arstn if not provided)
 connect_bd_net [get_bd_pins {{ t.name }}/aclk]    [get_bd_pins {{ t.clk|default('user_clk') }}]
-connect_bd_net [get_bd_pins {{ t.name }}/aresetn] [get_bd_pins {{ t.rst|default('ilreduced_logic_0/Res') }}]
+connect_bd_net [get_bd_pins {{ t.name }}/aresetn] [get_bd_pins term_rst_asserted/dout]
 
 # Leave S_AXI unconnected on purpose
 

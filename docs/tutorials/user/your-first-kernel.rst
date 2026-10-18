@@ -143,8 +143,9 @@ instantiated, connected, and mapped to memory. Here is
 ``sp``
    Maps an AXI memory-mapped port to a physical memory resource. Format:
    ``<instance>.<port>:<memory>``. Valid memories include ``HBM0``–``HBM63``,
-   ``DDR0``–``DDR3``, ``MEM``, and ``MEM0``–``MEM7``. A bare ``MEM`` lets the
-   linker pick a vNoC port round-robin; ``MEM<i>`` selects port ``i``.
+   ``DDR0``–``DDR3``, ``MEM``, and ``MEM0``–``MEM7``. ``MEM<i>`` selects
+   ``MEM`` port ``i``; an unindexed ``MEM`` is assigned a port by the linker.
+   See :doc:`/howto/floorplan-kernels` for the assignment rules.
 
 CMake Build Setup
 =================

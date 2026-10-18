@@ -35,16 +35,19 @@ from slashkit.parser.config_parser import (
 )
 
 
-def _instances(tmp_path, sp_lines):
-    """Parse a config with two single-port dma instances and the given sp lines."""
+def _instances(tmp_path, sp_lines, extra=""):
+    """Parse a config with two single-port dma instances, the given sp lines and
+    any extra sections."""
     cfg_path = tmp_path / "connectivity.cfg"
     cfg_path.write_text(textwrap.dedent("""\
         [connectivity]
         nk=dma:2:dma_0.dma_1
-    """) + "".join(f"{ln}\n" for ln in sp_lines))
+    """) + "".join(f"{ln}\n" for ln in sp_lines) + textwrap.dedent(extra))
     kernel = Kernel(name="dma", component_xml_path=Path(), ports={
         "m_axi_gmem": Port(name="m_axi_gmem", ptype=BusType.AXI4FULL, width=512)})
-    instances = apply_config_to_instances(parse_connectivity_file(cfg_path), [kernel])
+    # MEM<i> -> SLR as a pinned compute shell reports it.
+    instances = apply_config_to_instances(
+        parse_connectivity_file(cfg_path), [kernel], mem_slr=(0, 0, 0, 1, 1, 1, 1, 2))
     return {inst.name: inst for inst in instances}
 
 
@@ -66,6 +69,20 @@ def test_bare_mem_is_still_assigned_round_robin(tmp_path):
     assert {"src_pin": "dma_1/m_axi_gmem",
             "dst_pin": "/hbm_vnoc_00/S00_AXI"} in direct
     assert _assign_mem_indices(instances)[("dma_1", "m_axi_gmem")] == 0
+
+
+def test_floorplan_slr_selects_a_mem_port_in_that_slr(tmp_path):
+    # Compute: dma_1 pinned to SLR2 takes MEM7, the only SLR2 port; unpinned dma_0
+    # still gets round-robin MEM0. Wiring and system map must agree.
+    instances = _instances(tmp_path, [], extra="""\
+        [floorplan]
+        slr=dma_1:SLR2
+    """)
+    direct = build_mem_smartconnect_context(instances)["mem_direct"]
+    assert {"src_pin": "dma_1/m_axi_gmem", "dst_pin": "/hbm_vnoc_07/S00_AXI"} in direct
+    assert {"src_pin": "dma_0/m_axi_gmem", "dst_pin": "/hbm_vnoc_00/S00_AXI"} in direct
+    assert _assign_mem_indices(instances) == {
+        ("dma_0", "m_axi_gmem"): 0, ("dma_1", "m_axi_gmem"): 7}
 
 
 def test_mem_index_out_of_range_is_rejected(tmp_path):
