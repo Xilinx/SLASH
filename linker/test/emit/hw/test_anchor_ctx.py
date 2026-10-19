@@ -67,8 +67,9 @@ def test_anchor_sits_in_the_last_window_of_the_aperture():
 
 def test_anchor_offset_tracks_a_different_aperture_base():
     """The service-layer RP sits at 0x203_0000_0000, not 0x202_0000_0000."""
-    (anchor,) = build_window_anchor_slaves(0x0203_0000_0000)
-    assert anchor["offset"] + anchor["range"] == 0x0203_0000_0000 + WINDOW_BYTES
+    base = 0x0203_0000_0000
+    (anchor,) = build_window_anchor_slaves(base)
+    assert anchor["offset"] + anchor["range"] == base + WINDOW_BYTES
 
 
 def test_single_kernel_map_spans_the_full_aperture_with_the_anchor():
