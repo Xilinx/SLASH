@@ -149,6 +149,9 @@ static int smiMain(int argc, char **argv) {
         ->expected(1);
     writeStaticShellCommand->add_option("--xsdb-target-id", writeStaticShellOptions.xsdbTargetId,
         "XSDB target_id of the Versal xcv80 device to program; only valid with --jtag");
+    writeStaticShellCommand->add_option("--xsdb-cable-serial", writeStaticShellOptions.xsdbCableSerial,
+        "JTAG cable serial (or its prefix, e.g. the board serial) of the Versal xcv80 device to program; "
+        "stable across xsdb sessions, unlike target ids; only valid with --jtag");
 
     // -- validate (memory integrity + bandwidth) --
     auto* validateCommand = app.add_subcommand("validate", "Validate board memory (integrity + bandwidth)");
