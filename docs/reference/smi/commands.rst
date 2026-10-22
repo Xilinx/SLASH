@@ -227,8 +227,8 @@ Write the installed static SLASH shell PDI to a V80 board.
 .. code-block:: text
 
    v80-smi write-static-shell --flash -d <BDF> [--shell-type <all|service|compute>] [--pdi <file>]
-   v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
-   v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+   v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id> | --xsdb-cable-serial <serial>] [--bash-source <file> ...]
+   v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id> | --xsdb-cable-serial <serial>] [--bash-source <file> ...]
 
 Modes:
 
@@ -275,6 +275,13 @@ Modes:
 
    Select the ``Versal xcv80`` XSDB ``target_id``. Valid only with ``--jtag``.
 
+.. option:: --xsdb-cable-serial <serial>
+
+   Select the ``Versal xcv80`` by its JTAG cable serial, or a prefix of it such
+   as the board serial reported in sysfs as ``board_serial``. Preferred on hosts
+   with several boards: XSDB target ids can change between sessions, cable
+   serials do not. Valid only with ``--jtag``.
+
 .. option:: --bash-source <file>
 
    Source a shell setup script before running ``xsdb``. May be repeated and is
@@ -283,8 +290,11 @@ Modes:
 In JTAG mode, ``v80-smi`` removes all V80 PCIe functions through VRTD unless
 ``--no-remove-device`` is used, runs ``/bin/bash -c 'source ...; xsdb ...'``
 with ``PDI_PATH`` set to the selected PDI, optionally sets ``V80_TARGET_ID``
-from ``--xsdb-target-id``, and always asks VRTD to rescan PCIe after
-the ``xsdb`` step completes. Since default PDI resolution uses
+from ``--xsdb-target-id`` or ``V80_CABLE_SERIAL`` from ``--xsdb-cable-serial``,
+and always asks VRTD to rescan PCIe after the ``xsdb`` step completes. The Tcl
+script polls for the selected target for up to 5 s, because ``hw_server`` briefly
+reports no targets to a client that connects right after the previous one
+disconnected. Since default PDI resolution uses
 ``python3 -m slashkit``, setting ``PYTHONPATH`` can select an in-repo
 ``slashkit``.
 

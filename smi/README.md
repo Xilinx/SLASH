@@ -190,8 +190,8 @@ The `--jtag` mode programs the no-FPT PDI over JTAG with `xsdb`.
 
 ```
 v80-smi write-static-shell --flash -d <BDF> [--shell-type <all|service|compute>] [--pdi <file>]
-v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
-v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id> | --xsdb-cable-serial <serial>] [--bash-source <file> ...]
+v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id> | --xsdb-cable-serial <serial>] [--bash-source <file> ...]
 ```
 
 | Flag              | Description                                          |
@@ -204,6 +204,7 @@ v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|comp
 | `--no-remove-device` | Skip the pre-JTAG PCIe device removal; valid only with `--jtag` |
 | `--bash-source`   | Source a Vivado/Vitis setup script before running `xsdb`; may be repeated and is valid only with `--jtag` |
 | `--xsdb-target-id` | Select the `Versal xcv80` XSDB `target_id`; valid only with `--jtag` |
+| `--xsdb-cable-serial` | Select the `Versal xcv80` by its JTAG cable serial or a prefix of it (the board serial from sysfs `board_serial` works); preferred on multi-board hosts because XSDB target ids can change between sessions; valid only with `--jtag` |
 
 Flash mode programs the selected boot partition, or both the service and compute
 partitions when `--shell-type all` is used. `all` is valid only with `--flash`
@@ -216,7 +217,10 @@ mode (`--flash` expects a flash-image PDI, `--jtag` expects a no-FPT/JTAG-bootab
 PDI).  JTAG mode removes the board's PCIe functions via VRTD unless
 `--no-remove-device` is given, runs `/bin/bash -c 'source ...; xsdb ...'` with
 `PDI_PATH` set to the selected PDI, optionally sets `V80_TARGET_ID` from
-`--xsdb-target-id`, and rescans PCIe through VRTD afterward.
+`--xsdb-target-id` or `V80_CABLE_SERIAL` from `--xsdb-cable-serial`, and rescans
+PCIe through VRTD afterward. The Tcl script polls for the selected target for up
+to 5 s, because `hw_server` briefly reports no targets to a client that connects
+right after the previous one disconnected.
 
 The command prints progress to stderr.  Flash mode reports VRTD cfgmem phases
 and interval-based PDI download progress, while JTAG mode reports local stages
