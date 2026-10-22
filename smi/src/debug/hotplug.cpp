@@ -59,8 +59,15 @@ vrtd::HotplugOp parseOp(const std::string_view text) {
     if (normalized == "hotplug") {
         return vrtd::HotplugOp::Hotplug;
     }
+    if (normalized == "link-disable") {
+        return vrtd::HotplugOp::LinkDisable;
+    }
+    if (normalized == "link-enable") {
+        return vrtd::HotplugOp::LinkEnable;
+    }
 
-    throw std::invalid_argument("op must be one of: rescan, remove, toggle-sbr, hotplug");
+    throw std::invalid_argument(
+        "op must be one of: rescan, remove, toggle-sbr, hotplug, link-disable, link-enable");
 }
 
 bool isFunctionLevelOp(vrtd::HotplugOp op) {
@@ -69,9 +76,15 @@ bool isFunctionLevelOp(vrtd::HotplugOp op) {
            op == vrtd::HotplugOp::Hotplug;
 }
 
+// Device-targeted but always acts on all PFs (vrtd rejects anything else).
+bool isBoardLevelOp(vrtd::HotplugOp op) {
+    return op == vrtd::HotplugOp::LinkDisable;
+}
+
 bool defaultsToAllPfs(vrtd::HotplugOp op) {
     return op == vrtd::HotplugOp::Remove ||
-           op == vrtd::HotplugOp::Hotplug;
+           op == vrtd::HotplugOp::Hotplug ||
+           op == vrtd::HotplugOp::LinkDisable;
 }
 
 const char* opName(vrtd::HotplugOp op) {
@@ -84,6 +97,10 @@ const char* opName(vrtd::HotplugOp op) {
         return "toggle-sbr";
     case vrtd::HotplugOp::Hotplug:
         return "hotplug";
+    case vrtd::HotplugOp::LinkDisable:
+        return "link-disable";
+    case vrtd::HotplugOp::LinkEnable:
+        return "link-enable";
     case vrtd::HotplugOp::ResetSequence:
         break;
     }
@@ -94,6 +111,7 @@ const char* opName(vrtd::HotplugOp op) {
 vrtd::HotplugOp validateOptions(const Hotplug::Options& options) {
     const vrtd::HotplugOp op = parseOp(options.opText);
     const bool needsFunction = isFunctionLevelOp(op);
+    const bool needsDevice = needsFunction || isBoardLevelOp(op);
 
     if (op == vrtd::HotplugOp::ToggleSbr && !options.function.has_value()) {
         throw std::invalid_argument("--function is required for toggle-sbr");
@@ -101,11 +119,13 @@ vrtd::HotplugOp validateOptions(const Hotplug::Options& options) {
     if (!needsFunction && options.function.has_value()) {
         throw std::invalid_argument("--function is only valid for remove, toggle-sbr, and hotplug");
     }
-    if (needsFunction && options.bdf.empty()) {
-        throw std::invalid_argument("--device is required for remove, toggle-sbr, and hotplug");
+    if (needsDevice && options.bdf.empty()) {
+        throw std::invalid_argument(
+            "--device is required for remove, toggle-sbr, hotplug, and link-disable");
     }
-    if (!needsFunction && !options.bdf.empty()) {
-        throw std::invalid_argument("--device is only valid for remove, toggle-sbr, and hotplug");
+    if (!needsDevice && !options.bdf.empty()) {
+        throw std::invalid_argument(
+            "--device is only valid for remove, toggle-sbr, hotplug, and link-disable");
     }
 
     return op;
@@ -120,6 +140,16 @@ int Hotplug::run(const Options& options) {
     if (op == vrtd::HotplugOp::Rescan) {
         session.hotplugRescan();
         std::cout << "hotplug_op=rescan\n";
+        return 0;
+    }
+    if (op == vrtd::HotplugOp::LinkEnable) {
+        // Re-enables the link disabled by an earlier link-disable on *this*
+        // vrtd connection.  Since every v80-smi invocation is its own
+        // connection, vrtd has already re-enabled a link left disabled by a
+        // crashed process; this op exists for scripted use of the libvrtdpp
+        // API and for completeness.
+        session.hotplugLinkEnable();
+        std::cout << "hotplug_op=link-enable\n";
         return 0;
     }
 

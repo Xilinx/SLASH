@@ -985,6 +985,15 @@ enum vrtd_ret vrtd_device_hotplug_hotplug(int fd, uint32_t dev, uint8_t function
 {
     return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_HOTPLUG, function);
 }
+enum vrtd_ret vrtd_device_hotplug_link_disable(int fd, uint32_t dev)
+{
+    return vrtd_device_hotplug_op(fd, dev, VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE,
+                                  VRTD_DEVICE_HOTPLUG_FUNCTION_ALL);
+}
+enum vrtd_ret vrtd_device_hotplug_link_enable(int fd)
+{
+    return vrtd_device_hotplug_op(fd, 0, VRTD_DEVICE_HOTPLUG_OP_LINK_ENABLE, 0);
+}
 
 enum vrtd_ret vrtd_device_reset_sequence(int fd, uint32_t dev, uint8_t shell_type)
 {

@@ -110,6 +110,10 @@ struct client {
 
     /** @brief Systemd event source registration for this client's socket I/O. */
     sd_event_source *event_source;
+    /** @brief True while this connection keeps a root-port link disabled (LINK_DISABLE). */
+    bool link_disabled;
+    /** @brief PF0 BDF whose upstream bridge has its link disabled while @c link_disabled. */
+    char link_disable_bdf[VRTD_PCI_BDF_LEN];
 };
 
 /**
@@ -141,6 +145,16 @@ struct client {
  * @param client Pointer to the client to clean up. Fields are zeroed after release.
  */
 void cleanup_client(struct client *client);
+
+/**
+ * @brief Re-enable every root-port link still disabled by a connected client.
+ *
+ * For daemon shutdown: call after the event loop has stopped and before the
+ * hotplug handle is closed, so a restart never leaves a root port in reset.
+ *
+ * @param state Daemon state whose clients are inspected.
+ */
+void serve_enable_disabled_links(struct vrtd *state);
 
 /**
  * @brief Cleanup helper for use with __attribute__((cleanup)).

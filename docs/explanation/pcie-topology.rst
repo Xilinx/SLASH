@@ -143,6 +143,11 @@ with four ioctl operations:
      - Rescan the entire PCI bus to re-enumerate devices.
    * - ``HOTPLUG``
      - Atomic REMOVE + RESCAN for a single device.
+   * - ``LINK_DISABLE`` / ``LINK_ENABLE``
+     - Take the root port's link down (Link Control: Link Disable) across a
+       device-side reset (e.g. the PMC reset of a JTAG shell load), then
+       re-enable it and wait for link training. ``vrtd`` exposes this as the
+       ``LINK_DISABLE`` / ``LINK_ENABLE`` hotplug operations.
 
 A typical FPGA programming sequence follows this order:
 

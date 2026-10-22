@@ -107,5 +107,26 @@ struct slash_hotplug_device_request {
  * before HOTPLUG if a reset is required.
  */
 #define SLASH_HOTPLUG_IOCTL_HOTPLUG    _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x33, struct slash_hotplug_device_request)
+/**
+ * SLASH_HOTPLUG_IOCTL_LINK_DISABLE / SLASH_HOTPLUG_IOCTL_LINK_ENABLE - disable
+ * and re-enable the PCIe link of the upstream bridge of @bdf.
+ *
+ * TOGGLE_SBR resets the bus.  These two only take the link down, via the Link
+ * Disable bit of the bridge's Link Control register, for as long as the caller
+ * needs, so that a link drop caused by the *device* (JTAG-driven PMC reset,
+ * firmware reload, ...) happens while the root port already has its link
+ * disabled.  Some root ports (observed: AMD Turin GPP bridges with
+ * firmware-first error handling) never retrain after a device-initiated
+ * Surprise Down and need a host reboot; a host-initiated link down avoids
+ * that without asserting a reset towards the board.
+ *
+ * LINK_DISABLE sets PCI_EXP_LNKCTL_LD and waits for the link to go down.
+ * LINK_ENABLE clears it and waits for link training to settle.  Callers should
+ * remove the device's functions before LINK_DISABLE and rescan after
+ * LINK_ENABLE.  Both resolve the bridge from the bus number of @bdf, so they
+ * also work after the device itself has been removed from the PCI tree.
+ */
+#define SLASH_HOTPLUG_IOCTL_LINK_DISABLE _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x34, struct slash_hotplug_device_request)
+#define SLASH_HOTPLUG_IOCTL_LINK_ENABLE  _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x35, struct slash_hotplug_device_request)
 
 #endif /* SLASH_HOTPLUG_UAPI_H */

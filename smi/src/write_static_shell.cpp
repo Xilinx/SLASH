@@ -432,13 +432,23 @@ int runJtagMode(const WriteStaticShell::Options& options) {
     reporter.stage("Connecting to VRTD");
     vrtd::Session session;
     std::string bdf;
+    bool linkDisabled = false;
     if (!options.noRemoveDevice) {
         reporter.stage("Resolving device address");
         bdf = resolveBoardBdf(options.bdf, "write-static-shell");
         reporter.stage("Resolving VRTD device");
         auto device = session.getDeviceByBdf(bdf);
-        reporter.stage("Removing PCIe functions");
-        device.hotplugOp(vrtd::HotplugOp::Remove, vrtd::HotplugFunctionAll);
+        // The xsdb script resets the PMC, which drops the PCIe link from the
+        // device side.  Some root ports never retrain after such a Surprise
+        // Down and need a host reboot (seen on AMD Turin GPP bridges with
+        // firmware-first error handling).  LinkDisable removes the PFs and
+        // sets Link Disable on the upstream bridge so the link drop is
+        // host-initiated; hotplugLinkEnable() below clears it, rescans and
+        // re-discovers the device.  vrtd also re-enables the link if this
+        // process dies while xsdb is running.
+        reporter.stage("Removing PCIe functions and disabling the root-port link");
+        device.hotplugOp(vrtd::HotplugOp::LinkDisable, vrtd::HotplugFunctionAll);
+        linkDisabled = true;
     }
 
     std::exception_ptr xsdbError;
@@ -451,8 +461,13 @@ int runJtagMode(const WriteStaticShell::Options& options) {
     }
 
     try {
-        reporter.stage("Rescanning PCIe");
-        session.hotplugRescan();
+        if (linkDisabled) {
+            reporter.stage("Re-enabling the root-port link and rescanning PCIe");
+            session.hotplugLinkEnable();
+        } else {
+            reporter.stage("Rescanning PCIe");
+            session.hotplugRescan();
+        }
     } catch (const std::exception& e) {
         rethrowXsdbAndRescanErrors(xsdbError, e);
     }

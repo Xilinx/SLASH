@@ -22,6 +22,7 @@
 
 #include <fcntl.h>
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,9 @@
 static void log_startup(void);
 static int configure_watchdog(sd_event *ev);
 static int configure_signals(sd_event *ev, struct vrtd *state);
+
+/* Signals the event loop handles (shutdown path); blocked in every thread. */
+static const int loop_signals[] = {SIGINT, SIGTERM, SIGQUIT, SIGHUP};
 static int configure_sockets(sd_event *ev, struct vrtd *state);
 static int configure_background_tasks(sd_event *ev, struct vrtd *state);
 static int block_signals(const int *signals, size_t n);
@@ -99,6 +103,20 @@ int main(void)
      * reset) off the event-loop thread so the loop stays responsive enough to
      * feed the systemd watchdog while a device is being reprogrammed.
      */
+    /*
+     * Block the signals the event loop handles BEFORE any other thread exists.
+     * A signal mask is per thread and is inherited at pthread_create(); the
+     * flash worker started below would otherwise keep SIGTERM & co. unblocked,
+     * a process-directed SIGTERM could be delivered to it, and the default
+     * action would kill the daemon without running the event loop's handler
+     * (and with it serve_enable_disabled_links() on the way out).
+     */
+    ret = block_signals(loop_signals, SIZEOF_ARRAY(loop_signals));
+    if (ret == -1) {
+        LOG(LOG_CRIT, "Failed to block the event-loop signals");
+        exit(EXIT_FAILURE);
+    }
+
     state.flash_worker = flash_worker_create();
     if (state.flash_worker == NULL) {
         LOG(LOG_CRIT, "Failed to create flash worker");
@@ -153,6 +171,14 @@ int main(void)
     }
 
     ret = sd_event_loop(ev);
+
+    /*
+     * The loop has stopped: re-enable any root-port link a client still
+     * keeps disabled (LINK_DISABLE) while the hotplug handle is still open,
+     * so that a daemon restart never leaves a link down.
+     */
+    serve_enable_disabled_links(&state);
+
     if (ret < 0) {
         LOG(LOG_CRIT, "Critical error: %s", strerrordesc_np(-ret));
         exit(EXIT_FAILURE);
@@ -201,14 +227,15 @@ static int configure_signals(sd_event *ev, struct vrtd *state)
     ret = sigaction(SIGPIPE, &sa_ignore, NULL);
     PROPAGATE_ERROR_STDC_LOG(ret, LOG_ERR, "Failed to ignore SIGPIPE");
 
-    int signals[] = {SIGINT, SIGTERM, SIGQUIT, SIGHUP};
-
-    ret = block_signals(signals, SIZEOF_ARRAY(signals));
+    /* Already blocked in main() before the first thread was created; harmless
+     * to repeat here for the main thread, and it keeps this function complete
+     * on its own. */
+    ret = block_signals(loop_signals, SIZEOF_ARRAY(loop_signals));
     PROPAGATE_ERROR(ret);
 
-    for (size_t i = 0; i < SIZEOF_ARRAY(signals); i++) {
-        ret = sd_event_add_signal(ev, NULL, signals[i], on_event_signal, state);
-        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to add event source: %s", sigabbrev_np(signals[i]));
+    for (size_t i = 0; i < SIZEOF_ARRAY(loop_signals); i++) {
+        ret = sd_event_add_signal(ev, NULL, loop_signals[i], on_event_signal, state);
+        PROPAGATE_ERROR_SD_LOG(ret, LOG_ERR, "Failed to add event source: %s", sigabbrev_np(loop_signals[i]));
     }
 
     return 0;
@@ -222,7 +249,13 @@ static int block_signals(const int *signals, size_t n)
         sigaddset(&set, signals[i]);
     }
 
-    int ret = sigprocmask(SIG_BLOCK, &set, NULL);
+    /* pthread_sigmask(): the process may already be multithreaded, and POSIX
+     * leaves sigprocmask() undefined in that case. */
+    int ret = pthread_sigmask(SIG_BLOCK, &set, NULL);
+    if (ret != 0) {
+        errno = ret;
+        ret = -1;
+    }
     PROPAGATE_ERROR_STDC_LOG(ret,LOG_CRIT, "Failed to mask signals");
 
     return 0;

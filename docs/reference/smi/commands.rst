@@ -280,11 +280,25 @@ Modes:
    Source a shell setup script before running ``xsdb``. May be repeated and is
    valid only with ``--jtag``.
 
-In JTAG mode, ``v80-smi`` removes all V80 PCIe functions through VRTD unless
+In JTAG mode, ``v80-smi`` asks VRTD to remove all V80 PCIe functions and to
+disable the link of the board's upstream bridge (``LINK_DISABLE``) unless
 ``--no-remove-device`` is used, runs ``/bin/bash -c 'source ...; xsdb ...'``
 with ``PDI_PATH`` set to the selected PDI, optionally sets ``V80_TARGET_ID``
-from ``--xsdb-target-id``, and always asks VRTD to rescan PCIe after
-the ``xsdb`` step completes. Since default PDI resolution uses
+from ``--xsdb-target-id``, and then asks VRTD to re-enable the link, rescan
+PCIe and re-discover the board (``LINK_ENABLE``; a plain rescan with
+``--no-remove-device``).
+
+The link is kept disabled across ``xsdb`` because the Tcl script resets the
+Versal PMC, which drops the PCIe link from the device side. Some root ports
+never retrain after such a device-initiated Surprise Down and need a host
+reboot (observed on AMD Turin GPP bridges with firmware-first error handling);
+with the Link Disable bit already set the link drop is host-initiated and the
+port retrains as soon as the bit is cleared, without a reset being asserted
+towards the board. VRTD re-enables the link by itself if ``v80-smi`` dies while
+``xsdb`` is running. On such hosts ``--no-remove-device`` leaves the drivers
+bound during the PMC reset and the root port without a host-initiated link
+down, so it should only be used where a device-side link drop is known to be
+harmless. Since default PDI resolution uses
 ``python3 -m slashkit``, setting ``PYTHONPATH`` can select an in-repo
 ``slashkit``.
 
