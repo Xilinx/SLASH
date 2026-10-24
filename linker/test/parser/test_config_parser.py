@@ -43,6 +43,7 @@ from slashkit.core.connectivity import (
     ClockSpec,
     SpMapping,
     MemoryTarget,
+    SlrSpec,
 )
 
 
@@ -92,10 +93,16 @@ class TestHelperFunctions:
         assert t.index == ""
 
     def test_parse_target_mem(self):
-        # MEM likewise carries no index.
+        # A bare MEM carries no index; the port is assigned round-robin later.
         t = _parse_target("MEM")
         assert t.domain == "MEM"
         assert t.index == ""
+
+    def test_parse_target_mem_indexed(self):
+        # MEM<i> selects a specific vNoC port and must keep its index.
+        t = _parse_target("MEM3")
+        assert t.domain == "MEM"
+        assert t.index == 3
 
     def test_parse_target_invalid_domain(self):
         # An unrecognised domain name must be rejected.
@@ -411,6 +418,31 @@ class TestParseConnectivityFile:
                 no_equals_here
             """))
 
+    def test_floorplan_slr_parsed(self, cfg_file):
+        # One line may pin several instances, split like nk= names.
+        cfg = parse_connectivity_file(cfg_file("""\
+            [floorplan]
+            slr=perf_0,perf_1:SLR1
+            slr=perf_2:slr0
+        """))
+        assert cfg.floorplan == [SlrSpec("perf_0", 1), SlrSpec("perf_1", 1),
+                                 SlrSpec("perf_2", 0)]
+
+    @pytest.mark.parametrize("value", ["perf_0", "perf_0:SLRX", ":SLR1", "perf_0:HBM1"])
+    def test_floorplan_bad_slr_value_raises(self, cfg_file, value):
+        with pytest.raises(ValueError, match="Invalid slr"):
+            parse_connectivity_file(cfg_file(f"""\
+                [floorplan]
+                slr={value}
+            """))
+
+    def test_floorplan_unknown_key_raises(self, cfg_file):
+        with pytest.raises(ValueError, match="Invalid key 'pblock' in \\[floorplan\\]"):
+            parse_connectivity_file(cfg_file("""\
+                [floorplan]
+                pblock=perf_0:SLR1
+            """))
+
     def test_unknown_section_lines_silently_ignored(self, cfg_file):
         # Lines under an unrecognised section header produce no error.
         cfg = parse_connectivity_file(cfg_file("""\
@@ -572,3 +604,86 @@ class TestApplyConfigToInstances:
         instances = apply_config_to_instances(cfg, [k])
         inst = next(i for i in instances if i.name == "pt_0")
         assert inst.params["mem_sp"] == {}
+
+    # --- [floorplan] ---
+
+    # MEM<i> -> SLR as the pinned shells report it.
+    _MEM_SLR = {"compute": (0, 0, 0, 1, 1, 1, 1, 2), "service": (1, 1, 2, 2, 2, 2, 2, 2)}
+
+    @classmethod
+    def _floorplan_cfg(cls, floorplan, shell="compute", sps=(), mem_slr="shell"):
+        cfg = ConnectivityConfig(
+            nk=[NKSpec("dma", 3, ["dma_0", "dma_1", "dma_2"])],
+            sps=list(sps), floorplan=floorplan, shell=shell)
+        k = _make_kernel("dma", {"m_axi_gmem": (BusType.AXI4FULL, 512)})
+        if mem_slr == "shell":
+            mem_slr = cls._MEM_SLR[shell]
+        return {i.name: i for i in apply_config_to_instances(cfg, [k], mem_slr=mem_slr)}
+
+    def test_floorplan_pins_slr_and_picks_mem_round_robin_within_it(self):
+        # Compute MEM3..MEM6 are the SLR1 ports.
+        insts = self._floorplan_cfg(
+            [SlrSpec("dma_0", 1), SlrSpec("dma_1", 1), SlrSpec("dma_2", 1)])
+        assert [insts[n].params["slr"] for n in ("dma_0", "dma_1", "dma_2")] == [1, 1, 1]
+        assert [insts[n].params["mem_sp"]["m_axi_gmem"]["index"]
+                for n in ("dma_0", "dma_1", "dma_2")] == [3, 4, 5]
+
+    def test_floorplan_leaves_unpinned_instances_to_global_round_robin(self):
+        insts = self._floorplan_cfg([SlrSpec("dma_1", 2)])
+        assert "slr" not in insts["dma_0"].params
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert insts["dma_1"].params["mem_sp"]["m_axi_gmem"]["index"] == 7
+
+    def test_floorplan_keeps_explicit_mem_and_warns_on_slr_mismatch(self, caplog):
+        insts = self._floorplan_cfg(
+            [SlrSpec("dma_0", 2)],
+            sps=[SpMapping("dma_0", "m_axi_gmem", MemoryTarget("MEM", 0))])
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"]["index"] == 0
+        assert "pinned to MEM0 (SLR0) but the instance is in SLR2" in caplog.text
+
+    def test_floorplan_does_not_touch_non_mem_targets(self):
+        insts = self._floorplan_cfg(
+            [SlrSpec("dma_0", 1)],
+            sps=[SpMapping("dma_0", "m_axi_gmem", MemoryTarget("HBM", 5))])
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "HBM", "index": 5}
+
+    def test_floorplan_service_maps_to_service_mem_ports(self):
+        # Service MEM0..MEM1 are the SLR1 ports.
+        insts = self._floorplan_cfg(
+            [SlrSpec("dma_0", 1), SlrSpec("dma_1", 1), SlrSpec("dma_2", 1)],
+            shell="service")
+        assert [insts[n].params["mem_sp"]["m_axi_gmem"]["index"]
+                for n in ("dma_0", "dma_1", "dma_2")] == [0, 1, 0]
+
+    def test_floorplan_slr0_rejected_on_service(self):
+        with pytest.raises(ValueError, match="SLR0 for 'dma_0' is not available on the service shell"):
+            self._floorplan_cfg([SlrSpec("dma_0", 0)], shell="service")
+
+    def test_floorplan_slr3_rejected_on_compute(self):
+        with pytest.raises(ValueError, match="not available on the compute shell"):
+            self._floorplan_cfg([SlrSpec("dma_0", 3)])
+
+    def test_floorplan_unknown_instance_raises(self):
+        with pytest.raises(KeyError, match="unknown instance 'nope'"):
+            self._floorplan_cfg([SlrSpec("nope", 1)])
+
+    def test_floorplan_conflicting_pins_raise(self):
+        with pytest.raises(ValueError, match="pinned to both SLR1 and SLR2"):
+            self._floorplan_cfg([SlrSpec("dma_0", 1), SlrSpec("dma_0", 2)])
+
+    def test_floorplan_without_shell_mem_slrs_keeps_pins_but_not_mem_steering(self, caplog):
+        # A shell built before the MEM NMUs were pinned cannot say where they are.
+        insts = self._floorplan_cfg([SlrSpec("dma_0", 1)], mem_slr=None)
+        assert insts["dma_0"].params["slr"] == 1
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert "does not report where its MEM ports are" in caplog.text
+
+    def test_floorplan_slr_without_mem_ports_falls_back_with_warning(self, caplog):
+        # e.g. a shell whose MEM ports all sit in SLR2
+        insts = self._floorplan_cfg([SlrSpec("dma_0", 0)], mem_slr=(2,) * 8)
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert "has no MEM port in SLR0" in caplog.text
+
+    def test_floorplan_repeated_identical_pin_is_accepted(self):
+        insts = self._floorplan_cfg([SlrSpec("dma_0", 1), SlrSpec("dma_0", 1)])
+        assert insts["dma_0"].params["slr"] == 1

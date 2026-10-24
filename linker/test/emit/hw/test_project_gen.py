@@ -201,6 +201,7 @@ def _rm_config(tmp_path):
         build_dir=tmp_path,
         ip_repository=tmp_path / "iprepo",
         kernels=[],
+        kernel_instances=[],
         shell_type=ShellType.SERVICE,
         pre_synth_tcls=[],
         project_name="test",
@@ -263,3 +264,26 @@ def test_rm_builds_are_offloaded_under_distinct_task_kinds(monkeypatch, tmp_path
     assert [env["SLASH_BUILD_TASK"] for _, env in seen] == [
         launcher.TASK_RM_SLASH, launcher.TASK_RM_SERVICE_LAYER]
     assert all(env["SLASH_TOOL_CWD"] == str(tmp_path) for _, env in seen)
+
+
+def test_floorplan_xdc_reaches_the_slash_rm_build_only_when_pinned(monkeypatch, tmp_path):
+    """[floorplan] pins become floorplan.xdc, handed to the slash RM build."""
+    monkeypatch.setattr(project_gen, "export_package",
+                        lambda _package, out_dir: out_dir.mkdir(exist_ok=True))
+    argvs = []
+    _stub_rm_build(monkeypatch, tmp_path, lambda argv, _kwargs: argvs.append(argv))
+
+    config = _rm_config(tmp_path)
+    project_gen.build_slash_rm(config)
+    assert "--floorplan-xdc" not in argvs[-1]
+
+    config.kernel_instances = [
+        SimpleNamespace(name="perf_0", params={"slr": 2}),
+        SimpleNamespace(name="perf_1", params={}),
+    ]
+    project_gen.build_slash_rm(config)
+    xdc = Path(argvs[-1][argvs[-1].index("--floorplan-xdc") + 1])
+    text = xdc.read_text()
+    assert "create_pblock pblock_slash_slr2" in text
+    assert "[get_cells -quiet {top_i/slash/perf_0 top_i/slash/rst_repl_slr2}]" in text
+    assert "perf_1" not in text
