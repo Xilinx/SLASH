@@ -1,0 +1,78 @@
+SLASH local modification to the pinned QDMA submodule (libqdma).
+
+libqdma: fix runtime writeback-interval updates
+
+The QDMA_CSR_REG_UPDATE implementation passes the writeback-interval enum by
+value to a HAL callback that requires a pointer. It also checks for active
+queues using the PCI bus number instead of libqdma's device index, and the
+CPM5 HAL ORs the new interval into the register without clearing the old field.
+The feature is normally compiled out, which hides these defects.
+
+Pass a local enum by address in both update paths and use the same device index
+as the other global-CSR setters. Replace the CPM5 field rather than accumulating
+its encoding. This allows SLASH to select the writeback interval during probe,
+before any queues exist, without changing libqdma's default for other users.
+
+Generated against qdma_drv @ 03ac7f3 (pinned submodule commit).
+Applied automatically by driver/Makefile (libqdma-patches target, patch -p1).
+diff --git a/libqdma_config.c b/libqdma_config.c
+--- a/libqdma_config.c
++++ b/libqdma_config.c
+@@ -561,5 +561,7 @@ int qdma_set_cmpl_status_acc(unsigned long dev_hndl, u32 cmpl_status_acc)
+ {
+ 	struct xlnx_dma_dev *xdev = (struct xlnx_dma_dev *)dev_hndl;
++	enum qdma_wrb_interval wb_intvl =
++			(enum qdma_wrb_interval)cmpl_status_acc;
+ 	int rv = 0;
+ 
+ 	/**
+@@ -574,7 +576,7 @@ int qdma_set_cmpl_status_acc(unsigned long dev_hndl, u32 cmpl_status_acc)
+ 	/** If qdma_get_active_queue_count() > 0,
+ 	 *  cmpl_status_acc is not allowed to change.
+ 	 */
+-	if (qdma_get_active_queue_count(xdev->conf.pdev->bus->number)) {
++	if (qdma_get_active_queue_count(xdev->dma_device_index)) {
+ 		pr_err("xdev 0x%p, FMAP prog done, cannot modify cmpt acc\n",
+ 				xdev);
+ 		return -EINVAL;
+@@ -582,7 +584,7 @@ int qdma_set_cmpl_status_acc(unsigned long dev_hndl, u32 cmpl_status_acc)
+ 	/**
+ 	 * Write the given cmpl_status_acc value to the register
+ 	 */
+-	rv = xdev->hw.qdma_global_writeback_interval_conf(xdev, cmpl_status_acc,
++	rv = xdev->hw.qdma_global_writeback_interval_conf(xdev, &wb_intvl,
+ 							QDMA_HW_ACCESS_WRITE);
+ 	if (unlikely(rv < 0)) {
+ 		pr_err("set global writeback intvl failed, err = %d", rv);
+diff --git a/qdma_regs.c b/qdma_regs.c
+--- a/qdma_regs.c
++++ b/qdma_regs.c
+@@ -292,6 +292,8 @@ int qdma_global_csr_set(unsigned long dev_hndl, u8 index, u8 count,
+ 		struct global_csr_conf *csr)
+ {
+ 	int rv = 0;
++	enum qdma_wrb_interval wb_intvl =
++			(enum qdma_wrb_interval)csr->wb_intvl;
+ 	struct xlnx_dma_dev *xdev = (struct xlnx_dma_dev *)dev_hndl;
+ 
+ 	if (xdev_check_hndl(__func__, xdev->conf.pdev, dev_hndl) < 0)
+@@ -305,7 +307,7 @@ int qdma_global_csr_set(unsigned long dev_hndl, u8 index, u8 count,
+ 				xdev->mod_name);
+ 		return -EINVAL;
+ 	}
+-	if (xdev->hw.qdma_global_writeback_interval_conf(xdev, csr->wb_intvl,
++	if (xdev->hw.qdma_global_writeback_interval_conf(xdev, &wb_intvl,
+ 							 QDMA_HW_ACCESS_WRITE))
+ 		return -EINVAL;
+ 	if (xdev->hw.qdma_global_csr_conf(xdev, index, count, csr->ring_sz,
+diff --git a/qdma_access/eqdma_cpm5_access/eqdma_cpm5_access.c b/qdma_access/eqdma_cpm5_access/eqdma_cpm5_access.c
+--- a/qdma_access/eqdma_cpm5_access/eqdma_cpm5_access.c
++++ b/qdma_access/eqdma_cpm5_access/eqdma_cpm5_access.c
+@@ -6622,6 +6622,7 @@ static int eqdma_cpm5_global_writeback_interval_write(void *dev_hndl,
+ 	if (dev_cap.st_en || dev_cap.mm_cmpt_en) {
+ 		reg_val = qdma_reg_read(dev_hndl,
+ 				EQDMA_CPM5_GLBL_DSC_CFG_ADDR);
++		reg_val &= ~GLBL_DSC_CFG_WB_ACC_INT_MASK;
+ 		reg_val |= FIELD_SET(GLBL_DSC_CFG_WB_ACC_INT_MASK, wb_int);
+ 		qdma_reg_write(dev_hndl, EQDMA_CPM5_GLBL_DSC_CFG_ADDR,
+ 				reg_val);
