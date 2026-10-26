@@ -36,6 +36,21 @@ SECTIONS
         *(.rodata.*)
     } > r5_1_atcm
 
+    /*
+     * Writable scheduler adjacency storage uses otherwise idle ATCM capacity.
+     * It is initialized from the accepted BTCM node snapshot before execution.
+     */
+    .atcm_data (NOLOAD) : {
+        . = ALIGN(4);
+        __atcm_data_start = .;
+        *(.atcm_data)
+        . = ALIGN(4);
+        __atcm_data_end = .;
+    } > r5_1_atcm
+
+    ASSERT(__atcm_data_end <= ORIGIN(r5_1_atcm) + LENGTH(r5_1_atcm),
+           "RP1 code and scheduler index exceed 64 KB ATCM")
+
     .data : {
         __data_start = .;
         *(.data)
@@ -43,12 +58,14 @@ SECTIONS
         __data_end = .;
     } > r5_1_btcm
 
-    /* Hot BTCM data: barriers, node status, loop counters, inflight table.
-     * Explicitly placed before BSS so we know where they land. */
+    /* Hot BTCM data: node snapshot, barriers, loop counters, inflight table.
+     * Explicitly placed before BSS so the complete footprint is checkable. */
     .btcm (NOLOAD) : {
         . = ALIGN(4);
+        __btcm_snapshot_start = .;
         *(.btcm)
         . = ALIGN(4);
+        __btcm_snapshot_end = .;
     } > r5_1_btcm
 
     .bss (NOLOAD) : {
@@ -68,6 +85,9 @@ SECTIONS
         . = ALIGN(16);
         __stack_top = .;
     } > r5_1_btcm
+
+    ASSERT(__stack_top <= ORIGIN(r5_1_btcm) + LENGTH(r5_1_btcm),
+           "RP1 BTCM data and stack exceed 64 KB")
 
     /* BAR-visible shared DDR region for control/status structures. */
     .rp1_shared (NOLOAD) : {
