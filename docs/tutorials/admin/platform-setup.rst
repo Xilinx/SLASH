@@ -139,20 +139,19 @@ This step loads the no-FPT static-shell PDI over JTAG. The image is temporary:
 it lets the board enumerate over PCIe so that step B can write the permanent
 flash image.
 
-A1. Identify the XSDB Target if Multiple Boards Are Present
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A1. Identify the JTAG Cable if Multiple Boards Are Present
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If the host has more than one V80 connected over USB-JTAG, use ``xsdb`` to find
-the ``target_id`` for the ``Versal xcv80`` device you want to program:
+If the host has more than one V80 connected over USB-JTAG, identify the board
+to program by its JTAG cable serial, which is the board serial. List the serials
+of the connected V80 USB-JTAG interfaces:
 
-.. code-block:: text
+.. code-block:: bash
 
-   source <path-to-vitis>/settings64.sh
-   xsdb
-   connect
-   targets
+   for f in $(grep -l V80 /sys/bus/usb/devices/*/product); do cat "$(dirname "$f")/serial"; done
 
-Use the number from the matching ``Versal xcv80`` target.
+On a board that already runs AVED or SLASH, ``ami_tool mfg_info -d <BDF>``
+reports the same value as the serial number.
 
 A2. Write via JTAG
 ~~~~~~~~~~~~~~~~~~
@@ -164,12 +163,12 @@ If there is a single connected V80, run:
    source <path-to-vitis>/settings64.sh
    v80-smi write-static-shell --jtag --no-remove-device
 
-For multiple connected V80s, pass the XSDB target ID from step A1:
+For multiple connected V80s, pass the cable serial from step A1:
 
 .. code-block:: bash
 
    source <path-to-vitis>/settings64.sh
-   v80-smi write-static-shell --jtag --no-remove-device --xsdb-target-id <XSDB_TARGET_ID>
+   v80-smi write-static-shell --jtag --no-remove-device --xsdb-cable-serial <SERIAL>
 
 B. Flash the Permanent Image via PCIe
 -------------------------------------

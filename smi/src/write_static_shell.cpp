@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -187,6 +188,52 @@ std::string trimTrailingNewline(std::string text) {
     }
     text.erase(end + 1);
     return text;
+}
+
+/// First line of a sysfs attribute without trailing padding; empty if unreadable.
+std::string readSysfsLine(const std::string& path) {
+    std::ifstream in(path);
+    std::string line;
+    std::getline(in, line);
+    line.erase(line.find_last_not_of(std::string(" \t\r\n\0", 5)) + 1);
+    return line;
+}
+
+/// True if @p serial is @p boardSerial, optionally followed by an FTDI channel letter.
+bool cableSerialMatches(const std::string& serial, const std::string& boardSerial) {
+    if (serial == boardSerial) {
+        return true;
+    }
+    return serial.size() == boardSerial.size() + 1 &&
+           serial.compare(0, boardSerial.size(), boardSerial) == 0 &&
+           serial.back() >= 'A' && serial.back() <= 'D';
+}
+
+/// Resolve the JTAG cable serial of board @p bdf from the board serial reported by
+/// ami.  An explicit @p requested serial must match it, and the board's USB JTAG
+/// device must be present.  Must run before the PCIe functions are removed, since
+/// the board_serial attribute disappears with them.
+std::string resolveCableSerial(const std::string& bdf, const std::string& requested) {
+    const std::string boardSerial =
+        readSysfsLine("/sys/bus/pci/devices/" + bdf + ".0/board_serial");
+    if (boardSerial.empty()) {
+        throw std::runtime_error(
+            "cannot read the board serial of " + bdf + " from the ami driver");
+    }
+    if (!requested.empty() && !cableSerialMatches(requested, boardSerial)) {
+        throw std::invalid_argument(
+            "--xsdb-cable-serial " + requested + " does not match board " + bdf +
+            " (board serial " + boardSerial + ")");
+    }
+
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator("/sys/bus/usb/devices", ec)) {
+        if (readSysfsLine((entry.path() / "serial").string()) == boardSerial) {
+            return requested.empty() ? boardSerial : requested;
+        }
+    }
+    throw std::runtime_error(
+        "no USB JTAG device with serial " + boardSerial + " found for board " + bdf);
 }
 
 std::string shellQuote(const std::string& text) {
@@ -441,9 +488,12 @@ int runJtagMode(const WriteStaticShell::Options& options) {
     reporter.stage("Connecting to VRTD");
     vrtd::Session session;
     std::string bdf;
+    std::string cableSerial = options.xsdbCableSerial;
     if (!options.noRemoveDevice) {
         reporter.stage("Resolving device address");
         bdf = resolveBoardBdf(options.bdf, "write-static-shell");
+        reporter.stage("Resolving JTAG cable serial");
+        cableSerial = resolveCableSerial(bdf, options.xsdbCableSerial);
         reporter.stage("Resolving VRTD device");
         auto device = session.getDeviceByBdf(bdf);
         reporter.stage("Removing PCIe functions");
@@ -455,7 +505,7 @@ int runJtagMode(const WriteStaticShell::Options& options) {
         reporter.stage("Running xsdb");
         runBashCommandWithPdiPath(
             buildXsdbCommand(options.bashSources, tclPath), pdiPath, options.xsdbTargetId,
-            options.xsdbCableSerial);
+            cableSerial);
     } catch (...) {
         xsdbError = std::current_exception();
     }
