@@ -96,17 +96,30 @@ proc versal_target_selected {target} {
     return 1
 }
 
+# Return true if $target_properties lists a PMC under the Versal target $versal_ctx.
+proc pmc_target_present {target_properties versal_ctx} {
+    foreach target $target_properties {
+        if {[dict exists $target name] && [dict get $target name] eq "PMC" &&
+            [dict exists $target parent_ctx] && [dict get $target parent_ctx] eq $versal_ctx} {
+            return 1
+        }
+    }
+    return 0
+}
+
 # hw_server presents an empty (or partial) target list to a client that connects
 # within a fraction of a second after the previous client disconnected (measured
 # <0.6 s on a two-board host, 2026-10-21), and briefly after the server was just
-# launched.  Poll until the selected Versal target is present instead of trusting
-# the first answer; on timeout return the last list so the caller reports it.
+# launched.  Poll until the selected Versal target and its PMC are present instead
+# of trusting the first answer; on timeout return the last list so the caller
+# reports it.
 proc wait_for_versal_targets {{timeout_ms 5000} {poll_ms 250}} {
     set waited 0
     while {1} {
         set target_properties [targets -target-properties]
         foreach target $target_properties {
-            if {[versal_target_selected $target]} {
+            if {[versal_target_selected $target] && [dict exists $target target_ctx] &&
+                [pmc_target_present $target_properties [dict get $target target_ctx]]} {
                 return $target_properties
             }
         }
