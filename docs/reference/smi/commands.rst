@@ -227,8 +227,8 @@ Write the installed static SLASH shell PDI to a V80 board.
 .. code-block:: text
 
    v80-smi write-static-shell --flash -d <BDF> [--shell-type <all|service|compute>] [--pdi <file>]
-   v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
-   v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id>] [--bash-source <file> ...]
+   v80-smi write-static-shell --jtag -d <BDF> [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id> | --xsdb-cable-serial <serial>] [--bash-source <file> ...]
+   v80-smi write-static-shell --jtag --no-remove-device [--shell-type <service|compute>] [--pdi <file>] [--xsdb-target-id <id> | --xsdb-cable-serial <serial>] [--bash-source <file> ...]
 
 Modes:
 
@@ -275,6 +275,14 @@ Modes:
 
    Select the ``Versal xcv80`` XSDB ``target_id``. Valid only with ``--jtag``.
 
+.. option:: --xsdb-cable-serial <serial>
+
+   Select the ``Versal xcv80`` by its JTAG cable serial, or a prefix of it.
+   XSDB target ids can change between sessions; cable serials do not. With
+   ``-d``, the serial defaults to the board serial reported by the ``ami``
+   driver, and an explicit value must be that serial, optionally followed by the
+   FTDI channel letter. Valid only with ``--jtag``.
+
 .. option:: --bash-source <file>
 
    Source a shell setup script before running ``xsdb``. May be repeated and is
@@ -282,9 +290,17 @@ Modes:
 
 In JTAG mode, ``v80-smi`` removes all V80 PCIe functions through VRTD unless
 ``--no-remove-device`` is used, runs ``/bin/bash -c 'source ...; xsdb ...'``
-with ``PDI_PATH`` set to the selected PDI, optionally sets ``V80_TARGET_ID``
-from ``--xsdb-target-id``, and always asks VRTD to rescan PCIe after
-the ``xsdb`` step completes. Since default PDI resolution uses
+with ``PDI_PATH`` set to the selected PDI, sets ``V80_CABLE_SERIAL`` and
+``V80_TARGET_ID`` from the cable serial and ``--xsdb-target-id`` when present,
+and always asks VRTD to rescan PCIe after the ``xsdb`` step completes.
+With ``-d``, the board serial is read before the PCIe functions are removed. The
+command stops without removing them if the serial cannot be read, does not
+match ``--xsdb-cable-serial``, or no USB-JTAG device with that serial is present.
+This check assumes the board's on-board USB-JTAG interface; to program through
+another JTAG cable, use ``--no-remove-device`` with ``--xsdb-cable-serial``. The Tcl
+script polls for the selected target for up to 5 s, because ``hw_server`` briefly
+reports no targets to a client that connects right after the previous one
+disconnected. Since default PDI resolution uses
 ``python3 -m slashkit``, setting ``PYTHONPATH`` can select an in-repo
 ``slashkit``.
 

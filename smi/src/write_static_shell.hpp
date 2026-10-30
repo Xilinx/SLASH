@@ -44,6 +44,7 @@ public:
         bool noRemoveDevice = false;        ///< Skip pre-JTAG PCIe remove; JTAG mode only.
         std::vector<std::string> bashSources; ///< Environment setup scripts for JTAG mode.
         std::string xsdbTargetId;           ///< Optional Versal xcv80 XSDB target_id.
+        std::string xsdbCableSerial;        ///< Optional JTAG cable serial (or prefix) selecting the Versal xcv80.
     };
 
     /// @brief Executes the write-static-shell command.
