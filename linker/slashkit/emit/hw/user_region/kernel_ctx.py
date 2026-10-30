@@ -21,6 +21,7 @@
 from __future__ import annotations
 from collections import OrderedDict
 from typing import Dict
+from slashkit.core.floorplan import reset_replica_name
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
@@ -28,8 +29,10 @@ from slashkit.core.port import BusType
 def build_kernel_add_context(instances: Dict[str, KernelInstance]) -> dict:
     """
     Context for your Jinja template:
-      - instances: OrderedDict[name -> KernelInstance]
-      - clocks:    [{"src_pin": "<inst>/<pin>"} ...]
+      - instances:      OrderedDict[name -> KernelInstance]
+      - clocks:         [{"src_pin": "<inst>/<pin>"} ...]
+      - resets:         [{"src_pin": "<inst>/<pin>", "replica": "<cell>"} ...]
+      - reset_replicas: names of the reset replica registers to create
     """
     ordered = OrderedDict((name, instances[name])
                           for name in sorted(instances.keys()))
@@ -41,8 +44,14 @@ def build_kernel_add_context(instances: Dict[str, KernelInstance]) -> dict:
             phys = inst.kernel.bus_physical_port(p.name) or p.name
             clocks.append({"src_pin": f"{inst.name}/{phys}"})
 
+        # Kernel resets come from a replica of the reset spine: one per SLR that
+        # [floorplan] pins kernels to (placed in that SLR's pblock), one for the rest.
+        slr = inst.params.get("slr")
+        replica = reset_replica_name(slr)
         for p in inst.kernel.ports_of_type(BusType.RESET):
             phys = inst.kernel.bus_physical_port(p.name) or p.name
-            resets.append({"src_pin": f"{inst.name}/{phys}"})
+            resets.append({"src_pin": f"{inst.name}/{phys}", "replica": replica})
 
-    return {"instances": ordered, "clocks": clocks, "resets": resets}
+    reset_replicas = sorted({r["replica"] for r in resets})
+    return {"instances": ordered, "clocks": clocks, "resets": resets,
+            "reset_replicas": reset_replicas}
