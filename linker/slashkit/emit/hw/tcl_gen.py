@@ -46,6 +46,7 @@ from slashkit.emit.hw.user_region.anchor_ctx import (
 from slashkit.emit.hw.user_region.param_ctx import build_data_width_param_context
 from slashkit.emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from slashkit.emit.hw.service_region.service_layer_ctx import *
+from slashkit.emit.hw.service_region.rdma_ctx import build_service_rdma_ctx, stage_rdma
 
 from slashkit.core.command_config import LinkerConfiguration, ShellType
 
@@ -406,6 +407,11 @@ def generate_tcl(config: LinkerConfiguration) -> None:
             # Only Ethernet-enabled designs need the Versal-DCMAC sources.
             stage_versal_dcmac(dcmac_dir / "versal")
         svc_ctx.update(dcmac_paths(dcmac_dir))
+
+        rdma_dir = None
+        if cfg.net.rdma is not None:
+            rdma_dir = stage_rdma(config.build_dir / "rdma")
+        svc_ctx.update(build_service_rdma_ctx(cfg.net, rdma_dir))
 
         svc_out = config.build_dir / "service_layer.tcl"
         render_template(

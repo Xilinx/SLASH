@@ -1175,6 +1175,14 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   # Ethernet disabled; no DCMAC hierarchy created.
 {% endif %}
 
+# === RDMA service on one DCMAC port ([network] rdma=eth_<n>) ===
+# Its DCMAC hierarchy, rdma_0 and its DataMover; before the SmartConnect,
+# which takes rdma_0/s_axil and the port's DCMAC registers as targets.
+{% if rdma_enabled %}
+  source [file normalize "{{ rdma_tcl }}"]
+  slash_add_rdma {{ rdma_eth }} {{ rdma_build }} [file normalize "{{ rdma_dir }}"]
+{% endif %}
+
 # === AXI-Lite SmartConnect for service_layer control ===
 # === AXI-Lite SmartConnect for service_layer control ===
 {% if sl_have_xbar %}
@@ -1211,6 +1219,9 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 
   # Clocks & reset (design pins to SC pins)
   connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ sl_smartconnect_name }}/aclk]
+  {% for c in sl_extra_clks %}
+  connect_bd_net [get_bd_pins {{ c }}] [get_bd_pins {{ sl_smartconnect_name }}/aclk{{ loop.index }}]
+  {% endfor %}
   connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ sl_smartconnect_name }}/aresetn]
 
   # SI: service_layer design's S_AXILITE -> SmartConnect S00_AXI

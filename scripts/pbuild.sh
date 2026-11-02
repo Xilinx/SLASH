@@ -36,6 +36,10 @@ fi
 # submodules/ is outside linker/, so the DCMAC sources have to be copied into
 # the package tree before the wheel is built.
 bash scripts/stage-versal-dcmac.sh
+# Likewise the RDMA stack IP of the fpga-network-stack submodule (built here).
+if [[ -z "${SLASH_PKG_SKIP_RDMA:-}" ]]; then
+    bash scripts/stage-rdma.sh
+fi
 
 rm -rf linker/dist linker/build linker/slashkit.egg-info
 rm -rf .venv

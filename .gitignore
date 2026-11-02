@@ -94,6 +94,9 @@ driver/kcompat/.scratch/
 # Versal-DCMAC sources staged into the package tree by scripts/stage-versal-dcmac.sh
 /linker/slashkit/resources/dcmac/versal/
 
+# RDMA stack IP built and staged into the package tree by scripts/stage-rdma.sh
+/linker/slashkit/resources/rdma/iprepo/
+
 # LSF job scripts, job logs, and smoke-test scratch
 lsf_logs/
 lsf_smoke/

@@ -521,9 +521,23 @@ def build_system_map_context(
     if network is not None:
         enabled_eth = sorted(getattr(network, "enabled_eth", set()) or [])
 
+    # RDMA service ([network] rdma=eth_<n>): rdma_0's register window on
+    # PF2 BAR2 (resources/rdma/tcl/rdma_service.tcl) and its memory window
+    rdma_eth = getattr(network, "rdma", None) if network is not None else None
+    rdma = None
+    if rdma_eth is not None:
+        rdma = {
+            "eth": rdma_eth,
+            "base_addr": "0x020304000000",
+            "range": "0x01000000",
+            "mem_base": "0x060000000000",
+            "mem_range": "0x000800000000",
+        }
+
     service_layer = {
         "eth_enabled": bool(enabled_eth),
         "eth_indices": enabled_eth,
+        "rdma": rdma,
         "virt": [{"index": i, "connection": "unused"} for i in range(num_virt)],
     }
 

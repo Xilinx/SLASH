@@ -32,6 +32,7 @@ from contextlib import ExitStack
 
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
+from slashkit.emit.hw.service_region.rdma_ctx import write_rdma_opt_post
 from slashkit.core.command_config import (
     LinkerConfiguration,
     InstallerConfiguration,
@@ -630,6 +631,9 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
                     "service_layer_eth.opt.post.tcl",
                 )
             )
+            rdma = config.configuration.net.rdma
+            if rdma is not None:
+                opt_post_tcl = write_rdma_opt_post(config.build_dir, opt_post_tcl, rdma)
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
         # Distinct task kinds: a single `slashkit link` runs both RM builds, so
