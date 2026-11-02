@@ -96,8 +96,11 @@ def write_rdma_opt_post(build_dir: Path, base_hook: Path, rdma: int) -> Path:
     """
     The service-layer build takes one opt_design post hook: SLASH's, then the
     RDMA port's constraints (resources/rdma/constraints/rdma.opt.post.tcl).
+    service_layer_build.tcl finds the hook by its file name, so it keeps
+    SLASH's name, in a directory of its own.
     """
-    out = build_dir / "service_layer_rdma.opt.post.tcl"
+    out = build_dir / "rdma" / "opt_post" / "service_layer_eth.opt.post.tcl"
+    out.parent.mkdir(parents=True, exist_ok=True)
     hook = build_dir / "rdma" / "constraints" / "rdma.opt.post.tcl"
     out.write_text(
         f"source {{{base_hook}}}\n"

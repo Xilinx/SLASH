@@ -88,6 +88,7 @@ def test_stage_rdma_without_ip_explains(tmp_path, monkeypatch):
 
 def test_opt_post_chains_slash_hook_then_rdma(tmp_path):
     out = rdma_ctx.write_rdma_opt_post(tmp_path, Path("/x/service_layer_eth.opt.post.tcl"), 2)
+    assert out.name == "service_layer_eth.opt.post.tcl"     # service_layer_build.tcl looks for it
     lines = out.read_text().splitlines()
     assert lines[0] == "source {/x/service_layer_eth.opt.post.tcl}"
     assert lines[1] == "set ::slash_rdma_eth 2"
