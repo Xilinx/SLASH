@@ -24,7 +24,7 @@ from typing import Dict, List
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
-_ETH_EP_RE = re.compile(r"^eth_(\d+)\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
+_ETH_EP_RE = re.compile(r"^(eth_(\d+)|rdma)\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
 def _port_norm(s): return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
@@ -60,7 +60,7 @@ def build_stream_connect_context(
         # prevent accidental eth_* usage here
         if _ETH_EP_RE.match(f"{s.src_inst}.{s.src_port}") or _ETH_EP_RE.match(f"{s.dst_inst}.{s.dst_port}"):
             raise ValueError(
-                "eth_* endpoint seen in generic builder. "
+                "eth_* / rdma.* endpoint seen in generic builder. "
                 "Call build_network_axis_context() first and pass only its 'streams_leftover' here."
             )
 

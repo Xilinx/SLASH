@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 # -----------------------------
 # Data structures
@@ -30,6 +30,8 @@ from typing import List
 @dataclass
 class NetworkSpec:
     enabled_eth: set[int]
+    # Ethernet port (eth_<n> index) that carries the RDMA service, or None
+    rdma: Optional[int] = None
 
 
 @dataclass

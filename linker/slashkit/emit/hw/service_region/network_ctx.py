@@ -24,8 +24,9 @@ from typing import Dict, List, Tuple
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
-# eth_<i>.(tx0|tx1|rx0|rx1)
-_ETH_EP_RE = re.compile(r"^eth_(\d+)\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
+# eth_<i>.(tx0|tx1|rx0|rx1), or rdma.(tx0|tx1|rx0|rx1): the lanes of the
+# Ethernet port that carries the RDMA service ([network] rdma=eth_<i>)
+_ETH_EP_RE = re.compile(r"^(?:eth_(\d+)|(rdma))\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
 
 
 def _map_eth_tx_pin(eth_idx: int, lane: int) -> str:
@@ -42,12 +43,18 @@ def _is_eth_endpoint(s: str) -> bool:
     return _ETH_EP_RE.match(s or "") is not None
 
 
-def _parse_eth_endpoint(s: str) -> Tuple[int, str]:
+def _parse_eth_endpoint(s: str, net=None) -> Tuple[int, str]:
     m = _ETH_EP_RE.match(s)
     if not m:
         raise ValueError(
-            f"Invalid eth endpoint '{s}'. Expected eth_<0..3>.(tx0|tx1|rx0|rx1)")
-    return int(m.group(1)), m.group(2).lower()
+            f"Invalid eth endpoint '{s}'. Expected eth_<0..3>.(tx0|tx1|rx0|rx1) "
+            f"or rdma.(tx0|tx1|rx0|rx1)")
+    if m.group(2):
+        rdma = getattr(net, "rdma", None)
+        if rdma is None:
+            raise ValueError(f"'{s}' needs an rdma= port in [network]")
+        return rdma, m.group(3).lower()
+    return int(m.group(1)), m.group(3).lower()
 
 
 def _port_norm(s): return re.sub(r"[^a-z0-9]", "", s.lower())
@@ -117,7 +124,7 @@ def build_network_axis_context(
                     f"{s.src_inst}.{src_port} is not AXIS (got {src_p.ptype.name})")
 
             eth_idx, lane_name = _parse_eth_endpoint(
-                f"{s.dst_inst}.{s.dst_port}")
+                f"{s.dst_inst}.{s.dst_port}", net)
             if eth_idx not in getattr(net, "enabled_eth", set()):
                 raise ValueError(
                     f"eth_{eth_idx} is not enabled in [network] but is referenced in stream_connect")
@@ -146,7 +153,7 @@ def build_network_axis_context(
                     f"{s.dst_inst}.{dst_port} is not AXIS (got {dst_p.ptype.name})")
 
             eth_idx, lane_name = _parse_eth_endpoint(
-                f"{s.src_inst}.{s.src_port}")
+                f"{s.src_inst}.{s.src_port}", net)
             if eth_idx not in getattr(net, "enabled_eth", set()):
                 raise ValueError(
                     f"eth_{eth_idx} is not enabled in [network] but is referenced in stream_connect")

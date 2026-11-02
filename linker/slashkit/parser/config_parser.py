@@ -36,6 +36,11 @@ from slashkit.core.port import BusType
 _RE_TARGET = re.compile(r"^\s*([A-Za-z]+)\s*(\d*)\s*$")
 _RE_NK = re.compile(r"^\s*([^:]+)\s*:\s*(\d+)(?::(.*))?\s*$")
 _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
+_RE_STREAM_EP = re.compile(r"^(eth_(\d+)|rdma)\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
+
+# Ethernet ports with a DCMAC in the service layer (eth_0: DCMAC0, eth_2: DCMAC1),
+# the only ones that can carry the RDMA service.
+RDMA_ETH_PORTS = (0, 2)
 _RE_DEBUG_NET = re.compile(r"^\s*([^.:\s]+)\.([^.:\s]+)\s*$")
 
 
@@ -138,6 +143,7 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     section: Optional[str] = None
     pending_clock: Dict[str, str] = {}
     enabled_eth: set[int] = set()
+    rdma_eth: Optional[int] = None
     pre_synth_tcls: list[str] = []
     debug_nets: list[DebugNetSpec] = []
 
@@ -199,6 +205,16 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                 raise ValueError(
                     f"Invalid line in [network] section: '{line}'")
             k, v = [t.strip() for t in line.split("=", 1)]
+            if k.lower() == "rdma":
+                if rdma_eth is not None:
+                    raise ValueError(
+                        "Only one RDMA stack is supported: [network] has more than one 'rdma=' line.")
+                m = _RE_ETH_KEY.match(v)
+                if not m:
+                    raise ValueError(
+                        f"Invalid [network] rdma value '{v}'. Expected an Ethernet port, e.g. rdma=eth_0.")
+                rdma_eth = int(m.group(1))
+                continue
             m = _RE_ETH_KEY.match(k)
             if not m:
                 # ignore unknown keys in [network] to be lenient
@@ -245,11 +261,37 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     _commit_clock()
 
     # Attach network spec
-    cfg.net = NetworkSpec(enabled_eth=enabled_eth)
+    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=rdma_eth)
+    _check_rdma(cfg)
     cfg.user_region = UserRegionSpec(pre_synth_tcls=pre_synth_tcls)
     cfg.debug = DebugSpec(nets=debug_nets)
 
     return cfg
+
+
+def _check_rdma(cfg: ConnectivityConfig) -> None:
+    """The RDMA port must be an enabled DCMAC port, and owns that port's streams."""
+    rdma = cfg.net.rdma
+    if rdma is not None:
+        if rdma not in RDMA_ETH_PORTS:
+            raise ValueError(
+                f"[network] rdma=eth_{rdma}: RDMA needs a port with a DCMAC "
+                f"({', '.join(f'eth_{i}' for i in RDMA_ETH_PORTS)}).")
+        if rdma not in cfg.net.enabled_eth:
+            raise ValueError(
+                f"[network] rdma=eth_{rdma} needs eth_{rdma}=1.")
+    for s in cfg.streams:
+        for ep in (f"{s.src_inst}.{s.src_port}", f"{s.dst_inst}.{s.dst_port}"):
+            m = _RE_STREAM_EP.match(ep)
+            if not m:
+                continue
+            if m.group(1).lower() == "rdma" and rdma is None:
+                raise ValueError(
+                    f"stream_connect uses '{ep}' but [network] has no rdma= port.")
+            if m.group(2) is not None and int(m.group(2)) == rdma:
+                raise ValueError(
+                    f"stream_connect uses '{ep}', but eth_{rdma} carries the RDMA "
+                    f"service: connect to rdma.{m.group(3).lower()} instead.")
 
 
 def _resolve_port_name_for_kernel(kernel: Kernel, requested: str) -> str:

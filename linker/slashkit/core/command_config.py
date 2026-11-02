@@ -154,7 +154,9 @@ Connectivity Configuration Format:
       Examples:
         stream_connect=dma_in_0.axis_out:passthrough_0.axis_in
         stream_connect=traffic_producer_0.axis_out:eth_0.tx0
-      Connects AXI-Stream ports between kernel instances and/or ethernet ports.
+        stream_connect=producer_0.axis_out:rdma.tx0
+      Connects AXI-Stream ports between kernel instances and/or ethernet ports
+      (eth_<idx>.tx0/tx1/rx0/rx1) or the RDMA service (rdma.tx0/tx1/rx0/rx1).
 
     sp=<inst>.<port>:<memory_target>
       Example: sp=vadd_0.m_axi_gmem0:HBM0
@@ -169,6 +171,11 @@ Connectivity Configuration Format:
   [network]  - Enable Ethernet interfaces
     eth_<idx>=<0|1>
       Example: eth_0=1
+    rdma=eth_<idx>
+      Example: rdma=eth_0
+      Puts the 200G RoCE v2 RDMA service on an enabled DCMAC port (eth_0 or
+      eth_2; at most one). Its streams are rdma.tx0/tx1 and rdma.rx0/rx1;
+      that port's eth_<idx>.* endpoints are no longer available.
 
   [user_region]  - Custom TCL scripts
     pre_synth=<path_to_tcl>
