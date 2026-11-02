@@ -153,10 +153,9 @@ proc slash_add_rdma {eth build rdma_dir} {
         -target_address_space $as [get_bd_addr_segs $hier/dcmac_wrapper/dcmac_$dc/s_axi/Reg] -force
     assign_bd_address -offset 0x020304000000 -range 0x01000000 -target_address_space $as \
         [get_bd_addr_segs rdma_0/s_axil/*] -force
-    # as the base service layer maps its SL2NOC masters; the static shell
-    # routes 0x600_0000_0000 + 32 GiB to the DDR
+    # the SL2NOC ports' aperture: the DDR window of the static shell
     foreach sp {Data_MM2S Data_S2MM} port {SL2NOC_0 SL2NOC_1} {
-        assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 \
+        assign_bd_address -offset 0x060000000000 -range 0x000800000000 \
             -target_address_space [get_bd_addr_spaces rdma_dm/$sp] \
             [get_bd_addr_segs $port/Reg] -force
     }
