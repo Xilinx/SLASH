@@ -50,7 +50,8 @@ def build_kernel_add_context(instances: Dict[str, KernelInstance]) -> dict:
         replica = reset_replica_name(slr)
         for p in inst.kernel.ports_of_type(BusType.RESET):
             phys = inst.kernel.bus_physical_port(p.name) or p.name
-            resets.append({"src_pin": f"{inst.name}/{phys}", "replica": replica})
+            resets.append(
+                {"src_pin": f"{inst.name}/{phys}", "replica": replica})
 
     reset_replicas = sorted({r["replica"] for r in resets})
     return {"instances": ordered, "clocks": clocks, "resets": resets,

@@ -53,11 +53,13 @@ def _render(template, **ctx):
 
 
 def test_kernels_take_reset_from_the_replica_of_their_slr():
-    ctx = build_kernel_add_context(_instances({"k_0": 1, "k_1": None, "k_2": 2, "k_3": 1}))
+    ctx = build_kernel_add_context(_instances(
+        {"k_0": 1, "k_1": None, "k_2": 2, "k_3": 1}))
     assert {r["src_pin"]: r["replica"] for r in ctx["resets"]} == {
         "k_0/ap_rst_n": "rst_repl_slr1", "k_1/ap_rst_n": "rst_repl_kernels",
         "k_2/ap_rst_n": "rst_repl_slr2", "k_3/ap_rst_n": "rst_repl_slr1"}
-    assert ctx["reset_replicas"] == ["rst_repl_kernels", "rst_repl_slr1", "rst_repl_slr2"]
+    assert ctx["reset_replicas"] == [
+        "rst_repl_kernels", "rst_repl_slr1", "rst_repl_slr2"]
 
 
 def test_without_floorplan_one_replica_feeds_every_kernel():

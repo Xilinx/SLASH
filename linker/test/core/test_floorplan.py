@@ -38,7 +38,8 @@ from slashkit.core.floorplan import (
 _SHELLS = ("compute", "service")
 _TEMPLATE = {"compute": "slash_compute.tcl", "service": "slash.tcl"}
 # Agreed MEM layout: more ports where there is no HBM edge, at least one per SLR.
-_MEM_SLR = {"compute": (0, 0, 0, 1, 1, 1, 1, 2), "service": (1, 1, 2, 2, 2, 2, 2, 2)}
+_MEM_SLR = {"compute": (0, 0, 0, 1, 1, 1, 1, 2),
+            "service": (1, 1, 2, 2, 2, 2, 2, 2)}
 _RE_VNOC_PIN = re.compile(
     r"PHYSICAL_LOC \{(NOC_NMU512_X\d+Y\d+)\} \\\n(?:.*\n){3}"
     r" \] \[get_bd_intf_pins /hbm_vnoc_0(\d)/S00_AXI\]")
@@ -46,7 +47,8 @@ _RE_VNOC_PIN = re.compile(
 
 def _rect(rng):
     lo, _, hi = rng.partition(":")
-    (kind, x0, y0), (_, x1, y1) = (floorplan._parse_site(s) for s in (lo, hi or lo))
+    (kind, x0, y0), (_, x1, y1) = (floorplan._parse_site(s)
+                                   for s in (lo, hi or lo))
     return kind, min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
 
 
@@ -57,7 +59,8 @@ def _bd(sites):
         params = {"CATEGORY": {"value": "pl"}}
         if site:
             params["PHYSICAL_LOC"] = {"value": site}
-        comps[f"hbm_vnoc_0{i}"] = {"interface_ports": {"S00_AXI": {"parameters": params}}}
+        comps[f"hbm_vnoc_0{i}"] = {"interface_ports": {
+            "S00_AXI": {"parameters": params}}}
     return json.dumps({"design": {"components": comps}})
 
 
@@ -94,7 +97,8 @@ def test_mem_slr_from_bd_is_none_for_a_shell_without_pins():
 def test_every_allowed_slr_has_mem_ports_and_fabric(shell):
     for slr in ALLOWED_SLRS[shell]:
         assert slr in _MEM_SLR[shell]
-        assert any(r.startswith("SLICE_") for r in slr_pblock_ranges(shell, slr))
+        assert any(r.startswith("SLICE_")
+                   for r in slr_pblock_ranges(shell, slr))
 
 
 def test_service_user_region_has_nothing_in_slr0():
@@ -121,10 +125,12 @@ def test_slr_split_covers_the_whole_parent_slice_area():
         for r in ranges:
             kind, x0, x1, y0, y1 = _rect(r)
             if kind == "SLICE":
-                cells |= {(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)}
+                cells |= {(x, y) for x in range(x0, x1 + 1)
+                          for y in range(y0, y1 + 1)}
         return cells
     parent = area(floorplan._slash_pblock_ranges("compute"))
-    assert area(r for s in (0, 1, 2) for r in slr_pblock_ranges("compute", s)) == parent
+    assert area(r for s in (0, 1, 2)
+                for r in slr_pblock_ranges("compute", s)) == parent
 
 
 def test_floorplan_xdc_makes_one_child_pblock_per_used_slr():
@@ -132,7 +138,8 @@ def test_floorplan_xdc_makes_one_child_pblock_per_used_slr():
     assert xdc.count("create_pblock") == 2
     assert "set_property PARENT pblock_slash [get_pblocks pblock_slash_slr0]" in xdc
     # Child pblocks start soft; pinning must be hard.
-    assert xdc.count("set_property IS_SOFT FALSE [get_pblocks pblock_slash_slr") == 2
+    assert xdc.count(
+        "set_property IS_SOFT FALSE [get_pblocks pblock_slash_slr") == 2
     # Each SLR pblock also holds the reset replica feeding its kernels.
     assert ("add_cells_to_pblock [get_pblocks pblock_slash_slr1] [get_cells -quiet "
             "{top_i/slash/k_0 top_i/slash/k_2 top_i/slash/rst_repl_slr1}]") in xdc

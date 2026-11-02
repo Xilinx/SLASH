@@ -271,7 +271,8 @@ def test_floorplan_xdc_reaches_the_slash_rm_build_only_when_pinned(monkeypatch, 
     monkeypatch.setattr(project_gen, "export_package",
                         lambda _package, out_dir: out_dir.mkdir(exist_ok=True))
     argvs = []
-    _stub_rm_build(monkeypatch, tmp_path, lambda argv, _kwargs: argvs.append(argv))
+    _stub_rm_build(monkeypatch, tmp_path,
+                   lambda argv, _kwargs: argvs.append(argv))
 
     config = _rm_config(tmp_path)
     project_gen.build_slash_rm(config)

@@ -608,7 +608,8 @@ class TestApplyConfigToInstances:
     # --- [floorplan] ---
 
     # MEM<i> -> SLR as the pinned shells report it.
-    _MEM_SLR = {"compute": (0, 0, 0, 1, 1, 1, 1, 2), "service": (1, 1, 2, 2, 2, 2, 2, 2)}
+    _MEM_SLR = {"compute": (0, 0, 0, 1, 1, 1, 1, 2),
+                "service": (1, 1, 2, 2, 2, 2, 2, 2)}
 
     @classmethod
     def _floorplan_cfg(cls, floorplan, shell="compute", sps=(), mem_slr="shell"):
@@ -624,14 +625,16 @@ class TestApplyConfigToInstances:
         # Compute MEM3..MEM6 are the SLR1 ports.
         insts = self._floorplan_cfg(
             [SlrSpec("dma_0", 1), SlrSpec("dma_1", 1), SlrSpec("dma_2", 1)])
-        assert [insts[n].params["slr"] for n in ("dma_0", "dma_1", "dma_2")] == [1, 1, 1]
+        assert [insts[n].params["slr"]
+                for n in ("dma_0", "dma_1", "dma_2")] == [1, 1, 1]
         assert [insts[n].params["mem_sp"]["m_axi_gmem"]["index"]
                 for n in ("dma_0", "dma_1", "dma_2")] == [3, 4, 5]
 
     def test_floorplan_leaves_unpinned_instances_to_global_round_robin(self):
         insts = self._floorplan_cfg([SlrSpec("dma_1", 2)])
         assert "slr" not in insts["dma_0"].params
-        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {
+            "domain": "MEM", "index": ""}
         assert insts["dma_1"].params["mem_sp"]["m_axi_gmem"]["index"] == 7
 
     def test_floorplan_keeps_explicit_mem_and_warns_on_slr_mismatch(self, caplog):
@@ -645,7 +648,8 @@ class TestApplyConfigToInstances:
         insts = self._floorplan_cfg(
             [SlrSpec("dma_0", 1)],
             sps=[SpMapping("dma_0", "m_axi_gmem", MemoryTarget("HBM", 5))])
-        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "HBM", "index": 5}
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {
+            "domain": "HBM", "index": 5}
 
     def test_floorplan_service_maps_to_service_mem_ports(self):
         # Service MEM0..MEM1 are the SLR1 ports.
@@ -675,13 +679,15 @@ class TestApplyConfigToInstances:
         # A shell built before the MEM NMUs were pinned cannot say where they are.
         insts = self._floorplan_cfg([SlrSpec("dma_0", 1)], mem_slr=None)
         assert insts["dma_0"].params["slr"] == 1
-        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {
+            "domain": "MEM", "index": ""}
         assert "does not report where its MEM ports are" in caplog.text
 
     def test_floorplan_slr_without_mem_ports_falls_back_with_warning(self, caplog):
         # e.g. a shell whose MEM ports all sit in SLR2
         insts = self._floorplan_cfg([SlrSpec("dma_0", 0)], mem_slr=(2,) * 8)
-        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {"domain": "MEM", "index": ""}
+        assert insts["dma_0"].params["mem_sp"]["m_axi_gmem"] == {
+            "domain": "MEM", "index": ""}
         assert "has no MEM port in SLR0" in caplog.text
 
     def test_floorplan_repeated_identical_pin_is_accepted(self):

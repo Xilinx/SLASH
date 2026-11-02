@@ -79,8 +79,10 @@ def test_floorplan_slr_selects_a_mem_port_in_that_slr(tmp_path):
         slr=dma_1:SLR2
     """)
     direct = build_mem_smartconnect_context(instances)["mem_direct"]
-    assert {"src_pin": "dma_1/m_axi_gmem", "dst_pin": "/hbm_vnoc_07/S00_AXI"} in direct
-    assert {"src_pin": "dma_0/m_axi_gmem", "dst_pin": "/hbm_vnoc_00/S00_AXI"} in direct
+    assert {"src_pin": "dma_1/m_axi_gmem",
+            "dst_pin": "/hbm_vnoc_07/S00_AXI"} in direct
+    assert {"src_pin": "dma_0/m_axi_gmem",
+            "dst_pin": "/hbm_vnoc_00/S00_AXI"} in direct
     assert _assign_mem_indices(instances) == {
         ("dma_0", "m_axi_gmem"): 0, ("dma_1", "m_axi_gmem"): 7}
 
