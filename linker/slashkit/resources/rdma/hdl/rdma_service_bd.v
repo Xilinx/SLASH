@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: MIT
+`timescale 1ns / 1ps
+
+// Verilog top of rdma_service for the service-layer block design (a module
+// reference needs a Verilog or VHDL top): the same ports, with the clock of
+// each interface.
+module rdma_service_bd #(
+
+    parameter integer BUILD = 1,
+    parameter integer ETH_INDEX = 0,
+    parameter [47:0]  MEM_BASE = 48'h0600_0000_0000,
+    parameter integer MEM_BITS = 35,                  // 32 GiB
+    parameter integer LANE_DEPTH = 256                // beats per lane FIFO
+) (
+
+    (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 aclk CLK" *)
+    (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axil:s_axis_rx:m_axis_tx, ASSOCIATED_RESET aresetn" *)
+    input  wire              aclk,
+    (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 aresetn RST" *)
+    (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
+    input  wire              aresetn,
+    (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 sclk CLK" *)
+    (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF m_axis_mm2s_cmd:s_axis_mm2s:s_axis_mm2s_sts:m_axis_s2mm_cmd:m_axis_s2mm:s_axis_s2mm_sts:s_axis_tx0:s_axis_tx1:m_axis_rx0:m_axis_rx1, ASSOCIATED_RESET sresetn" *)
+    input  wire              sclk,
+    (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 sresetn RST" *)
+    (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
+    input  wire              sresetn,
+
+    // registers (aclk)
+    input  wire [23:0]       s_axil_awaddr,
+    input  wire              s_axil_awvalid,
+    output wire              s_axil_awready,
+    input  wire [31:0]       s_axil_wdata,
+    input  wire [3:0]        s_axil_wstrb,
+    input  wire              s_axil_wvalid,
+    output wire              s_axil_wready,
+    output wire [1:0]        s_axil_bresp,
+    output wire              s_axil_bvalid,
+    input  wire              s_axil_bready,
+    input  wire [23:0]       s_axil_araddr,
+    input  wire              s_axil_arvalid,
+    output wire              s_axil_arready,
+    output wire [31:0]       s_axil_rdata,
+    output wire [1:0]        s_axil_rresp,
+    output wire              s_axil_rvalid,
+    input  wire              s_axil_rready,
+
+    // Ethernet frames without FCS (aclk)
+    input  wire [1023:0]     s_axis_rx_tdata,
+    input  wire [127:0]      s_axis_rx_tkeep,
+    input  wire              s_axis_rx_tlast,
+    input  wire              s_axis_rx_tvalid,
+    output wire              s_axis_rx_tready,
+    output wire [1023:0]     m_axis_tx_tdata,
+    output wire [127:0]      m_axis_tx_tkeep,
+    output wire              m_axis_tx_tlast,
+    output wire              m_axis_tx_tvalid,
+    input  wire              m_axis_tx_tready,
+
+    // DCMAC port control (aclk)
+    input  wire [15:0]       rx_drop_count,
+    output wire [15:0]       phy_ctrl,
+    input  wire [15:0]       phy_status,
+
+    // AXI DataMover (sclk)
+    output wire              m_axis_mm2s_cmd_tvalid,
+    input  wire              m_axis_mm2s_cmd_tready,
+    output wire [103:0]      m_axis_mm2s_cmd_tdata,
+    input  wire              s_axis_mm2s_tvalid,
+    output wire              s_axis_mm2s_tready,
+    input  wire [511:0]      s_axis_mm2s_tdata,
+    input  wire [63:0]       s_axis_mm2s_tkeep,
+    input  wire              s_axis_mm2s_tlast,
+    input  wire              s_axis_mm2s_sts_tvalid,
+    output wire              s_axis_mm2s_sts_tready,
+    input  wire [7:0]        s_axis_mm2s_sts_tdata,
+    output wire              m_axis_s2mm_cmd_tvalid,
+    input  wire              m_axis_s2mm_cmd_tready,
+    output wire [103:0]      m_axis_s2mm_cmd_tdata,
+    output wire              m_axis_s2mm_tvalid,
+    input  wire              m_axis_s2mm_tready,
+    output wire [511:0]      m_axis_s2mm_tdata,
+    output wire [63:0]       m_axis_s2mm_tkeep,
+    output wire              m_axis_s2mm_tlast,
+    input  wire              s_axis_s2mm_sts_tvalid,
+    output wire              s_axis_s2mm_sts_tready,
+    input  wire [7:0]        s_axis_s2mm_sts_tdata,
+
+    // NoC stream lanes (sclk): user region -> stack, stack -> user region
+    input  wire              s_axis_tx0_tvalid,
+    output wire              s_axis_tx0_tready,
+    input  wire [511:0]      s_axis_tx0_tdata,
+    input  wire [63:0]       s_axis_tx0_tkeep,
+    input  wire              s_axis_tx0_tlast,
+    input  wire              s_axis_tx1_tvalid,
+    output wire              s_axis_tx1_tready,
+    input  wire [511:0]      s_axis_tx1_tdata,
+    input  wire [63:0]       s_axis_tx1_tkeep,
+    input  wire              s_axis_tx1_tlast,
+    output wire              m_axis_rx0_tvalid,
+    input  wire              m_axis_rx0_tready,
+    output wire [511:0]      m_axis_rx0_tdata,
+    output wire [63:0]       m_axis_rx0_tkeep,
+    output wire              m_axis_rx0_tlast,
+    output wire              m_axis_rx1_tvalid,
+    input  wire              m_axis_rx1_tready,
+    output wire [511:0]      m_axis_rx1_tdata,
+    output wire [63:0]       m_axis_rx1_tkeep,
+    output wire              m_axis_rx1_tlast
+);
+    rdma_service #(
+        .BUILD(BUILD),
+        .ETH_INDEX(ETH_INDEX),
+        .MEM_BASE(MEM_BASE),
+        .MEM_BITS(MEM_BITS),
+        .LANE_DEPTH(LANE_DEPTH)
+    ) inst (
+        .aclk(aclk),
+        .aresetn(aresetn),
+        .sclk(sclk),
+        .sresetn(sresetn),
+        .s_axil_awaddr(s_axil_awaddr),
+        .s_axil_awvalid(s_axil_awvalid),
+        .s_axil_awready(s_axil_awready),
+        .s_axil_wdata(s_axil_wdata),
+        .s_axil_wstrb(s_axil_wstrb),
+        .s_axil_wvalid(s_axil_wvalid),
+        .s_axil_wready(s_axil_wready),
+        .s_axil_bresp(s_axil_bresp),
+        .s_axil_bvalid(s_axil_bvalid),
+        .s_axil_bready(s_axil_bready),
+        .s_axil_araddr(s_axil_araddr),
+        .s_axil_arvalid(s_axil_arvalid),
+        .s_axil_arready(s_axil_arready),
+        .s_axil_rdata(s_axil_rdata),
+        .s_axil_rresp(s_axil_rresp),
+        .s_axil_rvalid(s_axil_rvalid),
+        .s_axil_rready(s_axil_rready),
+        .s_axis_rx_tdata(s_axis_rx_tdata),
+        .s_axis_rx_tkeep(s_axis_rx_tkeep),
+        .s_axis_rx_tlast(s_axis_rx_tlast),
+        .s_axis_rx_tvalid(s_axis_rx_tvalid),
+        .s_axis_rx_tready(s_axis_rx_tready),
+        .m_axis_tx_tdata(m_axis_tx_tdata),
+        .m_axis_tx_tkeep(m_axis_tx_tkeep),
+        .m_axis_tx_tlast(m_axis_tx_tlast),
+        .m_axis_tx_tvalid(m_axis_tx_tvalid),
+        .m_axis_tx_tready(m_axis_tx_tready),
+        .rx_drop_count(rx_drop_count),
+        .phy_ctrl(phy_ctrl),
+        .phy_status(phy_status),
+        .m_axis_mm2s_cmd_tvalid(m_axis_mm2s_cmd_tvalid),
+        .m_axis_mm2s_cmd_tready(m_axis_mm2s_cmd_tready),
+        .m_axis_mm2s_cmd_tdata(m_axis_mm2s_cmd_tdata),
+        .s_axis_mm2s_tvalid(s_axis_mm2s_tvalid),
+        .s_axis_mm2s_tready(s_axis_mm2s_tready),
+        .s_axis_mm2s_tdata(s_axis_mm2s_tdata),
+        .s_axis_mm2s_tkeep(s_axis_mm2s_tkeep),
+        .s_axis_mm2s_tlast(s_axis_mm2s_tlast),
+        .s_axis_mm2s_sts_tvalid(s_axis_mm2s_sts_tvalid),
+        .s_axis_mm2s_sts_tready(s_axis_mm2s_sts_tready),
+        .s_axis_mm2s_sts_tdata(s_axis_mm2s_sts_tdata),
+        .m_axis_s2mm_cmd_tvalid(m_axis_s2mm_cmd_tvalid),
+        .m_axis_s2mm_cmd_tready(m_axis_s2mm_cmd_tready),
+        .m_axis_s2mm_cmd_tdata(m_axis_s2mm_cmd_tdata),
+        .m_axis_s2mm_tvalid(m_axis_s2mm_tvalid),
+        .m_axis_s2mm_tready(m_axis_s2mm_tready),
+        .m_axis_s2mm_tdata(m_axis_s2mm_tdata),
+        .m_axis_s2mm_tkeep(m_axis_s2mm_tkeep),
+        .m_axis_s2mm_tlast(m_axis_s2mm_tlast),
+        .s_axis_s2mm_sts_tvalid(s_axis_s2mm_sts_tvalid),
+        .s_axis_s2mm_sts_tready(s_axis_s2mm_sts_tready),
+        .s_axis_s2mm_sts_tdata(s_axis_s2mm_sts_tdata),
+        .s_axis_tx0_tvalid(s_axis_tx0_tvalid),
+        .s_axis_tx0_tready(s_axis_tx0_tready),
+        .s_axis_tx0_tdata(s_axis_tx0_tdata),
+        .s_axis_tx0_tkeep(s_axis_tx0_tkeep),
+        .s_axis_tx0_tlast(s_axis_tx0_tlast),
+        .s_axis_tx1_tvalid(s_axis_tx1_tvalid),
+        .s_axis_tx1_tready(s_axis_tx1_tready),
+        .s_axis_tx1_tdata(s_axis_tx1_tdata),
+        .s_axis_tx1_tkeep(s_axis_tx1_tkeep),
+        .s_axis_tx1_tlast(s_axis_tx1_tlast),
+        .m_axis_rx0_tvalid(m_axis_rx0_tvalid),
+        .m_axis_rx0_tready(m_axis_rx0_tready),
+        .m_axis_rx0_tdata(m_axis_rx0_tdata),
+        .m_axis_rx0_tkeep(m_axis_rx0_tkeep),
+        .m_axis_rx0_tlast(m_axis_rx0_tlast),
+        .m_axis_rx1_tvalid(m_axis_rx1_tvalid),
+        .m_axis_rx1_tready(m_axis_rx1_tready),
+        .m_axis_rx1_tdata(m_axis_rx1_tdata),
+        .m_axis_rx1_tkeep(m_axis_rx1_tkeep),
+        .m_axis_rx1_tlast(m_axis_rx1_tlast)
+    );
+endmodule
