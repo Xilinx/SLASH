@@ -361,7 +361,7 @@ def generate_sim_tcl(config: LinkerConfiguration) -> None:
         platform="Simulation",
         shell_type=config.shell_type.value,
         kernel_hls_by_type=kernel_hls_by_type,
-        network=getattr(cfg, "network", None),
+        network=cfg.net,
     )
     system_map_out = config.build_dir / "system_map.xml"
     render_template(
