@@ -4,7 +4,9 @@
 # before the control SmartConnect, which takes rdma_0/s_axil and the port's
 # DCMAC registers as targets.
 #
-#   slash_add_rdma <eth> <build> <rdma dir>
+#   slash_add_rdma <eth> <build> <rdma dir>      (before the SmartConnect)
+#   slash_rdma_assign_addresses <eth>           (after it: the control segments
+#                                                are reachable only through it)
 #     eth        0 (DCMAC0, qsfp_0_n_1, QSFP0) or 2 (DCMAC1, qsfp_2_n_3, QSFP2)
 #     build      BUILD register value of rdma_service
 #     rdma dir   the staged resources/rdma (hdl/, tcl/, iprepo/rdma_200)
@@ -147,16 +149,30 @@ proc slash_add_rdma {eth build rdma_dir} {
     connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx0] [get_bd_intf_pins dummy_noc_m_$k/S00_AXIS]
     connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx1] [get_bd_intf_pins dummy_noc_m_[expr {$k + 1}]/S00_AXIS]
 
-    # ------------------------------------------------------------ addresses
-    set as [get_bd_addr_spaces S_AXILITE_INI]
-    assign_bd_address -offset [expr {$dc ? 0x020303000000 : 0x020302000000}] -range 0x00040000 \
-        -target_address_space $as [get_bd_addr_segs $hier/dcmac_wrapper/dcmac_$dc/s_axi/Reg] -force
-    assign_bd_address -offset 0x020304000000 -range 0x01000000 -target_address_space $as \
-        [get_bd_addr_segs rdma_0/s_axil/*] -force
+    # ------------------------------------------------------------ memory addresses
     # the SL2NOC ports' aperture: the DDR window of the static shell
     foreach sp {Data_MM2S Data_S2MM} port {SL2NOC_0 SL2NOC_1} {
         assign_bd_address -offset 0x060000000000 -range 0x000800000000 \
             -target_address_space [get_bd_addr_spaces rdma_dm/$sp] \
             [get_bd_addr_segs $port/Reg] -force
+    }
+}
+
+# The control segments of the RDMA port, in S_AXILITE_INI. Called after the
+# SmartConnect connects rdma_0 and the DCMAC to S_AXILITE_INI: before, the
+# segments are not reachable from it and the final assign_bd_address places
+# them anywhere.
+proc slash_rdma_assign_addresses {eth} {
+    set dc [expr {$eth == 0 ? 0 : 1}]
+    set hier [expr {$eth == 0 ? "qsfp_0_n_1" : "qsfp_2_n_3"}]
+    set as [get_bd_addr_spaces S_AXILITE_INI]
+    foreach {seg offset range} [list \
+        $hier/dcmac_wrapper/dcmac_$dc/s_axi/Reg [expr {$dc ? 0x020303000000 : 0x020302000000}] 0x00040000 \
+        rdma_0/s_axil/reg0 0x020304000000 0x01000000] {
+        set s [get_bd_addr_segs $seg]
+        if {[llength $s] != 1} {
+            error "slash_rdma_assign_addresses: segment $seg not found"
+        }
+        assign_bd_address -offset $offset -range $range -target_address_space $as $s -force
     }
 }

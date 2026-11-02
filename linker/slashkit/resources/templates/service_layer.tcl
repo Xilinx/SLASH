@@ -1324,6 +1324,11 @@ assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_addre
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_01] [get_bd_addr_segs M_VIRT_1/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_02] [get_bd_addr_segs M_VIRT_2/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_03] [get_bd_addr_segs M_VIRT_3/Reg] -force
+{% if rdma_enabled %}
+# RDMA port: its DCMAC and rdma_0 at their fixed control addresses (now that
+# the SmartConnect connects them to S_AXILITE_INI)
+slash_rdma_assign_addresses {{ rdma_eth }}
+{% endif %}
 {% if sl_window_anchor_enabled|default(false) %}
 # Window anchor: last 64 KiB of the 128 MiB aperture, so the span of
 # S_AXILITE_INI is the full aperture whatever the [network] config maps. Must
