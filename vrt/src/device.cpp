@@ -373,6 +373,54 @@ void Device::parseSystemMap() {
         kernel.second.setServer(zmqServer);
     }
     this->qdmaConnections = parser.getQdmaConnections();
+    this->rdmaInfo = parser.getRdma();
+}
+
+namespace {
+
+// RDMA service registers on PF2 BAR2 (the service layer's AXI-Lite window)
+class Pf2Bar2Registers : public RdmaRegisters {
+    vrtd::Bar bar;
+    std::shared_ptr<vrtd::BarFile> file;
+
+    vrtd::BarFile& barFile() {
+        if (!file || file->isClosed()) {
+            file = std::make_shared<vrtd::BarFile>(bar.openBarFile());
+        }
+        return *file;
+    }
+    size_t offsetOf(uint64_t addr) {
+        uint64_t len = barFile().getLen();
+        if (len == 0) {
+            throw std::runtime_error("PF2 BAR2 length is zero");
+        }
+        // the BAR maps an aligned window: the address modulo its length
+        return static_cast<size_t>(addr % len);
+    }
+
+   public:
+    explicit Pf2Bar2Registers(vrtd::Bar bar_) : bar(std::move(bar_)) {}
+    uint32_t read(uint64_t addr) override {
+        auto ptr = barFile().getPtr<uint32_t>(vrtd::BarFile::Direction::Read, offsetOf(addr));
+        return *ptr;
+    }
+    void write(uint64_t addr, uint32_t value) override {
+        auto ptr = barFile().getPtr<uint32_t>(vrtd::BarFile::Direction::Write, offsetOf(addr));
+        *ptr = value;
+    }
+};
+
+}  // namespace
+
+vrt::Rdma Device::getRdmaDevice() {
+    if (!rdmaInfo.has_value()) {
+        throw std::runtime_error(
+            "This design has no RDMA service ([network] rdma=eth_<n> in the linker config)");
+    }
+    if (platform != Platform::HARDWARE || !vrtdDevice.has_value()) {
+        throw std::runtime_error("The RDMA service is available on hardware only");
+    }
+    return vrt::Rdma(*rdmaInfo, std::make_shared<Pf2Bar2Registers>(vrtdDevice->getBar(2)));
 }
 
 Kernel Device::getKernel(const std::string& name) {

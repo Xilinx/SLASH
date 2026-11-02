@@ -31,6 +31,8 @@
 
 #include <vrt/kernel.hpp>  // Include the Kernel class
 #include <vrt/qdma/qdma_connection.hpp>
+#include <optional>
+#include <vrt/rdma.hpp>
 #include <vrt/utils/platform.hpp>
 
 namespace vrt {
@@ -49,6 +51,7 @@ class XMLParser {
     Platform platform;                            ///< The platform of the device.
     ShellType shellType;                          ///< The required hardware shell type.
     std::vector<QdmaConnection> qdmaConnections;  ///< Vector of QDMA connections.
+    std::optional<RdmaInfo> rdma;                 ///< RDMA service of the service layer, if any.
 
    public:
     /**
@@ -98,6 +101,11 @@ class XMLParser {
      * @return The vector of QDMA connections.
      */
     std::vector<QdmaConnection> getQdmaConnections();
+
+    /**
+     * @brief The RDMA service (<ServiceLayer><Rdma .../>), if the design has one.
+     */
+    std::optional<RdmaInfo> getRdma();
 
     /**
      * @brief Destructor for XMLParser.

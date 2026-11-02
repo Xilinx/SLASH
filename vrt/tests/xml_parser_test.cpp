@@ -220,6 +220,42 @@ TEST_F(XMLParserTest, ParseQdmaConnections) {
     EXPECT_EQ(conns[0].getQid(), 3u);
 }
 
+TEST_F(XMLParserTest, ParseServiceLayerRdma) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ServiceLayer>
+    <Ethernet enabled="true">
+      <eth index="2" />
+    </Ethernet>
+    <Rdma eth="2" base_addr="0x020304000000" range="0x01000000" mem_base="0x060000000000" mem_range="0x000800000000" />
+    <VIRT>
+      <interface index="0" connection="unused" />
+    </VIRT>
+  </ServiceLayer>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    auto r = parser.getRdma();
+    ASSERT_TRUE(r.has_value());
+    EXPECT_EQ(r->eth, 2u);
+    EXPECT_EQ(r->baseAddr, 0x020304000000ull);
+    EXPECT_EQ(r->range, 0x01000000ull);
+    EXPECT_EQ(r->memBase, 0x060000000000ull);
+    EXPECT_EQ(r->memRange, 0x000800000000ull);
+}
+
+TEST_F(XMLParserTest, NoRdmaWithoutTheElement) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ServiceLayer><Ethernet enabled="true"><eth index="0" /></Ethernet></ServiceLayer>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    EXPECT_FALSE(parser.getRdma().has_value());
+}
+
 TEST_F(XMLParserTest, ParseMultipleKernels) {
     auto path = writeXml(R"(<?xml version="1.0"?>
 <SystemMap>
