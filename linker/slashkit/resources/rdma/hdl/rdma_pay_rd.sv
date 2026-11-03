@@ -6,15 +6,18 @@
 // exactly the requested length, first byte in byte 0, 1024 bits per beat.
 //
 // A request comes from rdma_service already classified:
-//   KIND_DDR     the AXI DataMover reads it (MM2S command here, its 512-bit
-//                output packed two beats to one 1024-bit beat)
+//   KIND_DDR     one of the two AXI DataMovers reads it, alternately (MM2S
+//                command here); each DataMover's 512-bit output goes into
+//                its own FIFO, which gives two beats per cycle, so the next
+//                packet is read while this one is sent
 //   KIND_STREAM  the next ceil(len / 64) beats of lane 0 or 1 (tkeep and
 //                tlast of the lane are ignored)
 //   KIND_BAD     zeros (an address outside the memory window)
 // DataMover commands are issued ahead of the data; the order FIFO keeps the
 // requests whose data is still to come.
 module rdma_pay_rd #(
-    parameter integer ORDER_DEPTH = 32
+    parameter integer ORDER_DEPTH = 32,
+    parameter integer DDR_DEPTH = 256       // 512-bit beats per DataMover FIFO
 ) (
     input  wire          clk,
     input  wire          resetn,
@@ -25,14 +28,16 @@ module rdma_pay_rd #(
     output wire          req_ready,
     input  wire [66:0]   req_data,
 
-    // AXI DataMover MM2S, 64-bit addresses
-    output wire          mm2s_cmd_tvalid,
-    input  wire          mm2s_cmd_tready,
+    // AXI DataMovers 0 and 1, MM2S, 64-bit addresses
+    output wire [1:0]    mm2s_cmd_tvalid,
+    input  wire [1:0]    mm2s_cmd_tready,
     output wire [103:0]  mm2s_cmd_tdata,
-    input  wire          mm2s_tvalid,
-    output wire          mm2s_tready,
-    input  wire [511:0]  mm2s_tdata,
-    input  wire          mm2s_tlast,
+    input  wire [1:0]    mm2s_tvalid,
+    output wire [1:0]    mm2s_tready,
+    input  wire [511:0]  mm2s0_tdata,
+    input  wire          mm2s0_tlast,
+    input  wire [511:0]  mm2s1_tdata,
+    input  wire          mm2s1_tlast,
 
     // the two lanes (rdma_fifo_w1r2 read sides)
     input  wire [1:0]    lane_avail1,
@@ -57,20 +62,32 @@ module rdma_pay_rd #(
 
     // ---------------------------------------------------------------- dispatch
     reg         busy;
+    reg         dm_next;                    // DataMover of the next DDR request
     wire        q_pop;
     wire        q_full, q_empty, q_rst_busy;
-    wire [24:0] q_dout;                     // [15:0] length, [17:16] kind, [18] lane
+    wire [24:0] q_dout;                     // [15:0] length, [17:16] kind, [19:18] source
     wire [1:0]  req_kind = req_data[65:64];
+    wire        req_ddr = req_kind == KIND_DDR;
 
     wire   q_room = !q_full && !q_rst_busy;
-    assign mm2s_cmd_tvalid = req_valid && q_room && req_kind == KIND_DDR;
-    assign req_ready = q_room && (req_kind != KIND_DDR || mm2s_cmd_tready);
+    assign mm2s_cmd_tvalid[0] = req_valid && q_room && req_ddr && !dm_next;
+    assign mm2s_cmd_tvalid[1] = req_valid && q_room && req_ddr &&  dm_next;
+    assign req_ready = q_room && (!req_ddr || mm2s_cmd_tready[dm_next]);
     wire   q_push = req_valid && req_ready;
+    // source: [1] DataMover, [0] which (lane or DataMover)
+    wire [1:0] req_src = req_ddr ? {1'b1, dm_next} : {1'b0, req_data[66]};
 
     // DataMover command: [22:0] BTT, [23] INCR, [29:24] DSA, [30] EOF,
     // [31] DRR, [95:32] start address, [99:96] tag, [103:100] reserved
     assign mm2s_cmd_tdata = {8'd0, 16'd0, req_data[47:0], 1'b0, 1'b1, 6'd0, 1'b1,
                              7'd0, req_data[63:48]};
+
+    always @(posedge clk) begin
+        if (!resetn)
+            dm_next <= 1'b0;
+        else if (q_push && req_ddr)
+            dm_next <= !dm_next;
+    end
 
     xpm_fifo_sync #(
         .FIFO_MEMORY_TYPE("distributed"),
@@ -83,7 +100,7 @@ module rdma_pay_rd #(
         .DOUT_RESET_VALUE("0")
     ) inst_order (
         .wr_clk(clk), .rst(!resetn),
-        .wr_en(q_push), .din({6'd0, req_data[66:48]}), .full(q_full),
+        .wr_en(q_push), .din({5'd0, req_src, req_data[65:48]}), .full(q_full),
         .rd_en(q_pop), .dout(q_dout), .empty(q_empty),
         .sleep(1'b0), .injectsbiterr(1'b0), .injectdbiterr(1'b0),
         .overflow(), .prog_empty(), .prog_full(), .rd_data_count(), .wr_data_count(),
@@ -91,11 +108,30 @@ module rdma_pay_rd #(
         .sbiterr(), .dbiterr(), .wr_rst_busy(q_rst_busy), .rd_rst_busy()
     );
 
+    // ---------------------------------------------------------------- DataMover FIFOs
+    // Each DataMover's output goes into a w1r2 FIFO with its tlast, which the
+    // assembler checks against the end of the packet.
+    wire [1:0]   dm_avail1, dm_avail2, dm_take1, dm_take2;
+    wire [512:0] dm_d0 [2];
+    wire [512:0] dm_d1 [2];
+    wire [512:0] mm2s_beat [2];
+    assign mm2s_beat[0] = {mm2s0_tlast, mm2s0_tdata};
+    assign mm2s_beat[1] = {mm2s1_tlast, mm2s1_tdata};
+
+    for (genvar i = 0; i < 2; i++) begin : g_dm
+        rdma_fifo_w1r2 #(.DEPTH(DDR_DEPTH), .WIDTH(513)) inst_fifo (
+            .clk(clk), .resetn(resetn),
+            .s_tvalid(mm2s_tvalid[i]), .s_tready(mm2s_tready[i]), .s_tdata(mm2s_beat[i]),
+            .avail1(dm_avail1[i]), .avail2(dm_avail2[i]), .d0(dm_d0[i]), .d1(dm_d1[i]),
+            .take1(dm_take1[i]), .take2(dm_take2[i])
+        );
+    end
+
     // ---------------------------------------------------------------- assemble
     // rem: 64-byte halves of the current packet still to take; last_bytes:
     // valid bytes of its final half; lo: a taken half waiting for its pair.
     reg  [1:0]  kind;
-    reg         lane;
+    reg  [1:0]  src;
     reg  [10:0] rem;
     reg  [6:0]  last_bytes;
     reg         lo_valid;
@@ -108,26 +144,27 @@ module rdma_pay_rd #(
     wire [6:0]  q_last = (q_len[5:0] == 6'd0) ? 7'd64 : {1'b0, q_len[5:0]};
     assign      q_pop = !busy && !q_empty;
 
-    // halves the source has this cycle, and what it hands over
-    reg  [1:0]  have;
-    reg  [511:0] src0, src1;
-    always @* begin
-        have = 2'd0;
-        src0 = '0;
-        src1 = '0;
-        case (kind)
-            KIND_DDR: begin
-                have = mm2s_tvalid ? 2'd1 : 2'd0;
-                src0 = mm2s_tdata;
-            end
-            KIND_STREAM: begin
-                have = lane_avail2[lane] ? 2'd2 : lane_avail1[lane] ? 2'd1 : 2'd0;
-                src0 = lane ? lane1_d0 : lane0_d0;
-                src1 = lane ? lane1_d1 : lane0_d1;
-            end
-            default: have = 2'd2;
-        endcase
-    end
+    // the four FIFOs a packet is taken from: lane 0 / 1, DataMover 0 / 1
+    wire [3:0]   avail1 = {dm_avail1, lane_avail1};
+    wire [3:0]   avail2 = {dm_avail2, lane_avail2};
+    wire [511:0] d0 [4];
+    wire [511:0] d1 [4];
+    assign d0[0] = lane0_d0;
+    assign d1[0] = lane0_d1;
+    assign d0[1] = lane1_d0;
+    assign d1[1] = lane1_d1;
+    assign d0[2] = dm_d0[0][511:0];
+    assign d1[2] = dm_d1[0][511:0];
+    assign d0[3] = dm_d0[1][511:0];
+    assign d1[3] = dm_d1[1][511:0];
+    // the DataMover's tlast of those halves
+    wire   dm_last0 = src[0] ? dm_d0[1][512] : dm_d0[0][512];
+    wire   dm_last1 = src[0] ? dm_d1[1][512] : dm_d1[0][512];
+
+    // halves the source has this cycle (zeros for an address outside)
+    wire [1:0]   have = kind == KIND_BAD ? 2'd2 : avail2[src] ? 2'd2 : avail1[src] ? 2'd1 : 2'd0;
+    wire [511:0] src0 = kind == KIND_BAD ? 512'd0 : d0[src];
+    wire [511:0] src1 = kind == KIND_BAD ? 512'd0 : d1[src];
 
     // take what completes the output word (or starts it), if a beat can go out
     wire [1:0] want = lo_valid ? 2'd1 : (rem >= 11'd2 ? 2'd2 : 2'd1);
@@ -140,11 +177,15 @@ module rdma_pay_rd #(
     wire [63:0] keep_a = (rem == 11'd1) ? keep_of(last_bytes) : {64{1'b1}};
     wire [63:0] keep_b = (rem == 11'd2) ? keep_of(last_bytes) : {64{1'b1}};
 
-    assign mm2s_tready = busy && kind == KIND_DDR && take != 2'd0;
-    assign lane_take1[0] = busy && kind == KIND_STREAM && !lane && take == 2'd1;
-    assign lane_take2[0] = busy && kind == KIND_STREAM && !lane && take == 2'd2;
-    assign lane_take1[1] = busy && kind == KIND_STREAM &&  lane && take == 2'd1;
-    assign lane_take2[1] = busy && kind == KIND_STREAM &&  lane && take == 2'd2;
+    wire [3:0] take1, take2;
+    for (genvar i = 0; i < 4; i++) begin : g_take
+        assign take1[i] = busy && kind != KIND_BAD && src == i && take == 2'd1;
+        assign take2[i] = busy && kind != KIND_BAD && src == i && take == 2'd2;
+    end
+    assign lane_take1 = take1[1:0];
+    assign lane_take2 = take2[1:0];
+    assign dm_take1 = take1[3:2];
+    assign dm_take2 = take2[3:2];
 
     wire [10:0] rem_next = rem - take;
 
@@ -158,13 +199,14 @@ module rdma_pay_rd #(
             if (q_pop) begin
                 busy <= 1'b1;
                 kind <= q_dout[17:16];
-                lane <= q_dout[18];
+                src <= q_dout[19:18];
                 rem <= q_halves;
                 last_bytes <= q_last;
                 lo_valid <= 1'b0;
             end
             if (take != 2'd0) begin
-                if (kind == KIND_DDR && mm2s_tlast != (rem == 11'd1))
+                if (kind == KIND_DDR && (dm_last0 != (rem == 11'd1) ||
+                                         (take == 2'd2 && dm_last1 != (rem == 11'd2))))
                     mm2s_len_error <= 1'b1;
                 if (lo_valid) begin
                     // take == 1: the high half completes the word

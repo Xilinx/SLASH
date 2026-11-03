@@ -7,27 +7,29 @@
 // a payload request may end on either half of a 1024-bit word.
 
 // Lane -> payload: one beat in, up to two beats out per cycle. Only tdata is
-// kept: a request takes whole beats and its length gives the valid bytes.
+// kept (and tlast, where WIDTH = 513 has room for it): a request takes whole
+// beats and its length gives the valid bytes.
 module rdma_fifo_w1r2 #(
-    parameter integer DEPTH = 256           // beats, both halves together
+    parameter integer DEPTH = 256,          // beats, both halves together
+    parameter integer WIDTH = 512
 ) (
     input  wire          clk,
     input  wire          resetn,
 
     input  wire          s_tvalid,
     output wire          s_tready,
-    input  wire [511:0]  s_tdata,
+    input  wire [WIDTH-1:0] s_tdata,
 
     output wire          avail1,            // the next beat is here
     output wire          avail2,            // the next two beats are here
-    output wire [511:0]  d0,                // next beat
-    output wire [511:0]  d1,                // the one after it
+    output wire [WIDTH-1:0] d0,             // next beat
+    output wire [WIDTH-1:0] d1,             // the one after it
     input  wire          take1,
     input  wire          take2
 );
     reg        wr_phase, rd_phase;
     wire [1:0] full, empty;
-    wire [511:0] dout [2];
+    wire [WIDTH-1:0] dout [2];
     wire [1:0] wr_en, rd_en;
 
     wire [1:0] rst_busy;
@@ -58,8 +60,8 @@ module rdma_fifo_w1r2 #(
         xpm_fifo_sync #(
             .FIFO_MEMORY_TYPE("block"),
             .FIFO_WRITE_DEPTH(DEPTH / 2),
-            .WRITE_DATA_WIDTH(512),
-            .READ_DATA_WIDTH(512),
+            .WRITE_DATA_WIDTH(WIDTH),
+            .READ_DATA_WIDTH(WIDTH),
             .READ_MODE("fwft"),
             .FIFO_READ_LATENCY(0),
             .USE_ADV_FEATURES("0000"),

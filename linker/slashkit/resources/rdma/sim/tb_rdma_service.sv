@@ -148,17 +148,21 @@ module tb_rdma_service;
     wire [1:0] bresp, rresp;
     wire [31:0] rdata;
 
-    // DataMover
-    wire mm2s_cmd_tvalid, s2mm_cmd_tvalid, s2mm_tvalid, s2mm_tlast, mm2s_tready;
-    logic mm2s_cmd_tready = 0, s2mm_cmd_tready = 0, s2mm_tready = 0;
-    wire [103:0] mm2s_cmd_tdata, s2mm_cmd_tdata;
-    logic mm2s_tvalid = 0, mm2s_tlast = 0;
-    logic [511:0] mm2s_tdata;
-    logic [63:0] mm2s_tkeep;
-    wire [511:0] s2mm_tdata;
-    wire [63:0] s2mm_tkeep;
-    logic mm2s_sts_tvalid = 0, s2mm_sts_tvalid = 0;
-    logic [7:0] mm2s_sts_tdata, s2mm_sts_tdata;
+    // DataMovers 0 and 1
+    wire [1:0] mm2s_cmd_tvalid, s2mm_cmd_tvalid, s2mm_tvalid, s2mm_tlast, mm2s_tready;
+    logic [1:0] mm2s_cmd_tready = 0, s2mm_cmd_tready = 0, s2mm_tready = 0;
+    wire [103:0] mm2s_cmd_tdata [2];
+    wire [103:0] s2mm_cmd_tdata [2];
+    logic [1:0] mm2s_tvalid = 0, mm2s_tlast = 0;
+    logic [511:0] mm2s_tdata [2];
+    logic [63:0] mm2s_tkeep [2];
+    wire [511:0] s2mm_tdata [2];
+    wire [63:0] s2mm_tkeep [2];
+    logic [1:0] mm2s_sts_tvalid = 0, s2mm_sts_tvalid = 0;
+    logic [7:0] mm2s_sts_tdata [2];
+    logic [7:0] s2mm_sts_tdata [2];
+    int dm_cmds [2][2] = '{'{0, 0}, '{0, 0}};   // [MM2S / S2MM][DataMover]
+    logic [15:0] rx_drop_count = 16'h0005;
 
     // lanes
     logic [1:0] tx_tvalid = 0;
@@ -180,19 +184,35 @@ module tb_rdma_service;
         .s_axis_rx_tready(),
         .m_axis_tx_tdata(), .m_axis_tx_tkeep(), .m_axis_tx_tlast(), .m_axis_tx_tvalid(),
         .m_axis_tx_tready(1'b1),
-        .rx_drop_count(16'd5), .phy_ctrl(), .phy_status(16'h0007),
-        .m_axis_mm2s_cmd_tvalid(mm2s_cmd_tvalid), .m_axis_mm2s_cmd_tready(mm2s_cmd_tready),
-        .m_axis_mm2s_cmd_tdata(mm2s_cmd_tdata),
-        .s_axis_mm2s_tvalid(mm2s_tvalid), .s_axis_mm2s_tready(mm2s_tready), .s_axis_mm2s_tdata(mm2s_tdata),
-        .s_axis_mm2s_tkeep(mm2s_tkeep), .s_axis_mm2s_tlast(mm2s_tlast),
-        .s_axis_mm2s_sts_tvalid(mm2s_sts_tvalid), .s_axis_mm2s_sts_tready(),
-        .s_axis_mm2s_sts_tdata(mm2s_sts_tdata),
-        .m_axis_s2mm_cmd_tvalid(s2mm_cmd_tvalid), .m_axis_s2mm_cmd_tready(s2mm_cmd_tready),
-        .m_axis_s2mm_cmd_tdata(s2mm_cmd_tdata),
-        .m_axis_s2mm_tvalid(s2mm_tvalid), .m_axis_s2mm_tready(s2mm_tready), .m_axis_s2mm_tdata(s2mm_tdata),
-        .m_axis_s2mm_tkeep(s2mm_tkeep), .m_axis_s2mm_tlast(s2mm_tlast),
-        .s_axis_s2mm_sts_tvalid(s2mm_sts_tvalid), .s_axis_s2mm_sts_tready(),
-        .s_axis_s2mm_sts_tdata(s2mm_sts_tdata),
+        .rx_drop_count(rx_drop_count), .phy_ctrl(), .phy_status(16'h0007),
+        .m_axis_mm2s0_cmd_tvalid(mm2s_cmd_tvalid[0]), .m_axis_mm2s0_cmd_tready(mm2s_cmd_tready[0]),
+        .m_axis_mm2s0_cmd_tdata(mm2s_cmd_tdata[0]),
+        .s_axis_mm2s0_tvalid(mm2s_tvalid[0]), .s_axis_mm2s0_tready(mm2s_tready[0]),
+        .s_axis_mm2s0_tdata(mm2s_tdata[0]), .s_axis_mm2s0_tkeep(mm2s_tkeep[0]),
+        .s_axis_mm2s0_tlast(mm2s_tlast[0]),
+        .s_axis_mm2s0_sts_tvalid(mm2s_sts_tvalid[0]), .s_axis_mm2s0_sts_tready(),
+        .s_axis_mm2s0_sts_tdata(mm2s_sts_tdata[0]),
+        .m_axis_s2mm0_cmd_tvalid(s2mm_cmd_tvalid[0]), .m_axis_s2mm0_cmd_tready(s2mm_cmd_tready[0]),
+        .m_axis_s2mm0_cmd_tdata(s2mm_cmd_tdata[0]),
+        .m_axis_s2mm0_tvalid(s2mm_tvalid[0]), .m_axis_s2mm0_tready(s2mm_tready[0]),
+        .m_axis_s2mm0_tdata(s2mm_tdata[0]), .m_axis_s2mm0_tkeep(s2mm_tkeep[0]),
+        .m_axis_s2mm0_tlast(s2mm_tlast[0]),
+        .s_axis_s2mm0_sts_tvalid(s2mm_sts_tvalid[0]), .s_axis_s2mm0_sts_tready(),
+        .s_axis_s2mm0_sts_tdata(s2mm_sts_tdata[0]),
+        .m_axis_mm2s1_cmd_tvalid(mm2s_cmd_tvalid[1]), .m_axis_mm2s1_cmd_tready(mm2s_cmd_tready[1]),
+        .m_axis_mm2s1_cmd_tdata(mm2s_cmd_tdata[1]),
+        .s_axis_mm2s1_tvalid(mm2s_tvalid[1]), .s_axis_mm2s1_tready(mm2s_tready[1]),
+        .s_axis_mm2s1_tdata(mm2s_tdata[1]), .s_axis_mm2s1_tkeep(mm2s_tkeep[1]),
+        .s_axis_mm2s1_tlast(mm2s_tlast[1]),
+        .s_axis_mm2s1_sts_tvalid(mm2s_sts_tvalid[1]), .s_axis_mm2s1_sts_tready(),
+        .s_axis_mm2s1_sts_tdata(mm2s_sts_tdata[1]),
+        .m_axis_s2mm1_cmd_tvalid(s2mm_cmd_tvalid[1]), .m_axis_s2mm1_cmd_tready(s2mm_cmd_tready[1]),
+        .m_axis_s2mm1_cmd_tdata(s2mm_cmd_tdata[1]),
+        .m_axis_s2mm1_tvalid(s2mm_tvalid[1]), .m_axis_s2mm1_tready(s2mm_tready[1]),
+        .m_axis_s2mm1_tdata(s2mm_tdata[1]), .m_axis_s2mm1_tkeep(s2mm_tkeep[1]),
+        .m_axis_s2mm1_tlast(s2mm_tlast[1]),
+        .s_axis_s2mm1_sts_tvalid(s2mm_sts_tvalid[1]), .s_axis_s2mm1_sts_tready(),
+        .s_axis_s2mm1_sts_tdata(s2mm_sts_tdata[1]),
         .s_axis_tx0_tvalid(tx_tvalid[0]), .s_axis_tx0_tready(tx_tready[0]), .s_axis_tx0_tdata(tx_tdata[0]),
         .s_axis_tx0_tkeep('1), .s_axis_tx0_tlast(1'b0),
         .s_axis_tx1_tvalid(tx_tvalid[1]), .s_axis_tx1_tready(tx_tready[1]), .s_axis_tx1_tdata(tx_tdata[1]),
@@ -212,70 +232,75 @@ module tb_rdma_service;
         return mem.exists(a) ? mem[a] : mem_init(a);
     endfunction
 
-    // ---------------------------------------------------------------- DataMover model
-    // MM2S: BTT bytes from the address, packed from byte 0, then OKAY
-    initial begin
-        forever begin
-            longint a; int btt, beats;
-            mm2s_cmd_tready = 1;
-            do @(posedge sclk); while (!mm2s_cmd_tvalid);
-            btt = mm2s_cmd_tdata[22:0];
-            a = mm2s_cmd_tdata[95:32];
-            if (!mm2s_cmd_tdata[23] || !mm2s_cmd_tdata[30]) begin
-                $display("ERROR: MM2S command not INCR+EOF: %h", mm2s_cmd_tdata); errors++;
-            end
-            #0.1 mm2s_cmd_tready = 0;
-            beats = (btt + 63) / 64;
-            for (int b = 0; b < beats; b++) begin
-                while ($urandom_range(99) < 20) begin @(posedge sclk); #0.1; end
-                for (int i = 0; i < 64; i++) begin
-                    mm2s_tdata[8*i +: 8] = (b*64 + i < btt) ? mem_rd(a + b*64 + i) : 8'h00;
-                    mm2s_tkeep[i] = b*64 + i < btt;
+    // ---------------------------------------------------------------- DataMover models
+    // MM2S: BTT bytes from the address, packed from byte 0, then OKAY. Each
+    // DataMover has its own pace, so the two run out of step.
+    for (genvar d = 0; d < 2; d++) begin : g_dm
+        initial begin
+            forever begin
+                longint a; int btt, beats;
+                mm2s_cmd_tready[d] = 1;
+                do @(posedge sclk); while (!mm2s_cmd_tvalid[d]);
+                btt = mm2s_cmd_tdata[d][22:0];
+                a = mm2s_cmd_tdata[d][95:32];
+                dm_cmds[0][d]++;
+                if (!mm2s_cmd_tdata[d][23] || !mm2s_cmd_tdata[d][30]) begin
+                    $display("ERROR: MM2S%0d command not INCR+EOF: %h", d, mm2s_cmd_tdata[d]); errors++;
                 end
-                mm2s_tlast = b == beats - 1;
-                mm2s_tvalid = 1;
-                do @(posedge sclk); while (!mm2s_tready);
-                #0.1 mm2s_tvalid = 0;
-            end
-            mm2s_sts_tdata = 8'h80;
-            mm2s_sts_tvalid = 1;
-            @(posedge sclk);
-            #0.1 mm2s_sts_tvalid = 0;
-        end
-    end
-    // S2MM: BTT bytes to the address; tlast must end exactly there
-    initial begin
-        forever begin
-            longint a; int btt, got;
-            bit last;
-            s2mm_cmd_tready = 1;
-            do @(posedge sclk); while (!s2mm_cmd_tvalid);
-            btt = s2mm_cmd_tdata[22:0];
-            a = s2mm_cmd_tdata[95:32];
-            #0.1 s2mm_cmd_tready = 0;
-            got = 0;
-            last = 0;
-            while (!last) begin
-                s2mm_tready = $urandom_range(99) >= 20;
+                #0.1 mm2s_cmd_tready[d] = 0;
+                beats = (btt + 63) / 64;
+                for (int b = 0; b < beats; b++) begin
+                    while ($urandom_range(99) < (d ? 40 : 10)) begin @(posedge sclk); #0.1; end
+                    for (int i = 0; i < 64; i++) begin
+                        mm2s_tdata[d][8*i +: 8] = (b*64 + i < btt) ? mem_rd(a + b*64 + i) : 8'h00;
+                        mm2s_tkeep[d][i] = b*64 + i < btt;
+                    end
+                    mm2s_tlast[d] = b == beats - 1;
+                    mm2s_tvalid[d] = 1;
+                    do @(posedge sclk); while (!mm2s_tready[d]);
+                    #0.1 mm2s_tvalid[d] = 0;
+                end
+                mm2s_sts_tdata[d] = 8'h80;
+                mm2s_sts_tvalid[d] = 1;
                 @(posedge sclk);
-                if (s2mm_tvalid && s2mm_tready) begin
-                    for (int i = 0; i < 64; i++)
-                        if (s2mm_tkeep[i]) begin
-                            mem[a + got] = s2mm_tdata[8*i +: 8];
-                            got++;
-                        end
-                    last = s2mm_tlast;
+                #0.1 mm2s_sts_tvalid[d] = 0;
+            end
+        end
+        // S2MM: BTT bytes to the address; tlast must end exactly there
+        initial begin
+            forever begin
+                longint a; int btt, got;
+                bit last;
+                s2mm_cmd_tready[d] = 1;
+                do @(posedge sclk); while (!s2mm_cmd_tvalid[d]);
+                btt = s2mm_cmd_tdata[d][22:0];
+                a = s2mm_cmd_tdata[d][95:32];
+                dm_cmds[1][d]++;
+                #0.1 s2mm_cmd_tready[d] = 0;
+                got = 0;
+                last = 0;
+                while (!last) begin
+                    s2mm_tready[d] = $urandom_range(99) >= (d ? 10 : 40);
+                    @(posedge sclk);
+                    if (s2mm_tvalid[d] && s2mm_tready[d]) begin
+                        for (int i = 0; i < 64; i++)
+                            if (s2mm_tkeep[d][i]) begin
+                                mem[a + got] = s2mm_tdata[d][8*i +: 8];
+                                got++;
+                            end
+                        last = s2mm_tlast[d];
+                    end
+                    #0.1;
                 end
-                #0.1;
+                s2mm_tready[d] = 0;
+                if (got != btt) begin
+                    $display("ERROR: S2MM%0d got %0d bytes for BTT %0d", d, got, btt); errors++;
+                end
+                s2mm_sts_tdata[d] = 8'h80;
+                s2mm_sts_tvalid[d] = 1;
+                @(posedge sclk);
+                #0.1 s2mm_sts_tvalid[d] = 0;
             end
-            s2mm_tready = 0;
-            if (got != btt) begin
-                $display("ERROR: S2MM got %0d bytes for BTT %0d", got, btt); errors++;
-            end
-            s2mm_sts_tdata = 8'h80;
-            s2mm_sts_tvalid = 1;
-            @(posedge sclk);
-            #0.1 s2mm_sts_tvalid = 0;
         end
     end
 
@@ -489,6 +514,16 @@ module tb_rdma_service;
         expect_reg(24'h000014, 32'h0000_0600, "MEM_BASE hi");
         expect_reg(24'h000024, 32'h0000_0007, "PHY_STATUS");
         expect_reg(24'h000028, 32'h0000_0005, "RX_DROPS");
+        expect_reg(24'h00001C, 32'd2, "MEM_PORTS");
+        // the port's counters wrap: 5000 bad-FCS and 37 no-room drops
+        for (int i = 0; i < 5000; i++) begin
+            @(negedge aclk);
+            rx_drop_count[11:0] = rx_drop_count[11:0] + 1;
+            if (i % 3 == 0 && i < 111) rx_drop_count[15:12] = rx_drop_count[15:12] + 1;
+        end
+        repeat (4) @(posedge aclk);
+        expect_reg(24'h00002C, 32'd5000, "RX_FCS_DROPS");
+        expect_reg(24'h000030, 32'd37, "RX_ROOM_DROPS");
         reg_wr(24'h000020, 32'h0000_1234);
         expect_reg(24'h000020, 32'h0000_1234, "PHY_CTRL");
         expect_reg(24'h400000, 32'h52444D41, "stack ID through the split");
@@ -537,6 +572,12 @@ module tb_rdma_service;
         reg_rd(24'h000134, d);
         if (d != tx_used[1]) begin $display("ERROR: TX1 beats %0d, expected %0d", d, tx_used[1]); errors++; end
 
+        $display("DataMover commands: MM2S %0d / %0d, S2MM %0d / %0d",
+                 dm_cmds[0][0], dm_cmds[0][1], dm_cmds[1][0], dm_cmds[1][1]);
+        for (int d = 0; d < 2; d++)
+            if (dm_cmds[0][d] + 1 < n_rd[K_MEM] / 2 || dm_cmds[1][d] + 1 < n_wr[K_MEM] / 2) begin
+                $display("ERROR: DataMover %0d is not used for every second packet", d); errors++;
+            end
         if (errors == 0) $display("PASS");
         else $display("FAIL: %0d errors", errors);
         $finish;
@@ -545,6 +586,14 @@ module tb_rdma_service;
 
     initial begin
         #50ms;
+        $display("rd: busy %0d kind %0d src %0d rem %0d have %0d out_room %0d q_empty %0d",
+                 dut.inst_rd.busy, dut.inst_rd.kind, dut.inst_rd.src, dut.inst_rd.rem, dut.inst_rd.have,
+                 dut.inst_rd.out_room, dut.inst_rd.q_empty);
+        $display("wr: busy %0d kind %0d dst %0d rem %0d room %0d in_valid %0d req_valid %0d",
+                 dut.inst_wr.busy, dut.inst_wr.kind, dut.inst_wr.dst, dut.inst_wr.rem, dut.inst_wr.room,
+                 dut.inst_wr.in_valid, dut.inst_wr.req_valid);
+        $display("DataMover commands: MM2S %0d / %0d, S2MM %0d / %0d; reads issued %0d",
+                 dm_cmds[0][0], dm_cmds[0][1], dm_cmds[1][0], dm_cmds[1][1], n_rd[0] + n_rd[1] + n_rd[2]);
         $display("FAIL: timeout");
         $finish;
     end

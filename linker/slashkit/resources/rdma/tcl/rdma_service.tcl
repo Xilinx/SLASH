@@ -12,15 +12,18 @@
 #     rdma dir   the staged resources/rdma (hdl/, tcl/, iprepo/rdma_200)
 #
 # Cells: the port's DCMAC hierarchy with the rdma_dcmac.tcl datapaths (1024-bit
-# at user_clk = 230 MHz), rdma_0 (rdma_service_bd), rdma_dm (AXI DataMover,
-# MM2S on SL2NOC_0, S2MM on SL2NOC_1, service_clk), rst_rdma_0 (user_clk reset).
+# at user_clk = 230 MHz), rdma_0 (rdma_service_bd), rdma_dm_0 / rdma_dm_1 (AXI
+# DataMovers, service_clk), rdma_mem_0 / rdma_mem_1 (SmartConnects joining each
+# DataMover's MM2S and S2MM onto one port), rst_rdma_0 (user_clk reset).
+# The port's two SL2NOC ports, SL2NOC_<2n> and SL2NOC_<2n+1> (two per QSFP),
+# take one DataMover each; rdma_service alternates packets between them.
 # The port's NoC lanes (dummy_noc_<2n>/<2n+1>, dummy_noc_m_<2n>/<2n+1>) carry
 # rdma.tx0/tx1 and rdma.rx0/rx1.
 #
 # Addresses (S_AXILITE_INI, PF2 BAR2):
 #   0x203_0200_0000 / 0x203_0300_0000  DCMAC0 / DCMAC1 registers (as in SLASH)
 #   0x203_0400_0000                    rdma_0 (16 MiB; the stack at +0x40_0000)
-# Memory (rdma_dm): the DDR window 0x600_0000_0000, 32 GiB, behind SL2NOC
+# Memory (rdma_dm_*): the DDR window 0x600_0000_0000, 32 GiB, behind SL2NOC
 # (VRT MemoryRangeType::DDR buffers).
 
 proc slash_add_rdma {eth build rdma_dir} {
@@ -104,35 +107,43 @@ proc slash_add_rdma {eth build rdma_dir} {
     connect_bd_net [get_bd_pins $hier/phy_status] [get_bd_pins rdma_0/phy_status]
 
     # ------------------------------------------------------------ memory
-    set dm [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_datamover:5.1 rdma_dm]
-    set_property -dict [list \
-        CONFIG.c_include_mm2s {Full} CONFIG.c_include_s2mm {Full} \
-        CONFIG.c_m_axi_mm2s_data_width {512} CONFIG.c_m_axis_mm2s_tdata_width {512} \
-        CONFIG.c_m_axi_s2mm_data_width {512} CONFIG.c_s_axis_s2mm_tdata_width {512} \
-        CONFIG.c_include_mm2s_dre {true} CONFIG.c_include_s2mm_dre {true} \
-        CONFIG.c_mm2s_btt_used {23} CONFIG.c_s2mm_btt_used {23} \
-        CONFIG.c_addr_width {64} \
-        CONFIG.c_mm2s_burst_size {64} CONFIG.c_s2mm_burst_size {64} \
-        CONFIG.c_mm2s_include_sf {true} CONFIG.c_s2mm_include_sf {true} \
-        CONFIG.c_s2mm_support_indet_btt {false} \
-    ] $dm
-    foreach p {m_axi_mm2s_aclk m_axis_mm2s_cmdsts_aclk m_axi_s2mm_aclk m_axis_s2mm_cmdsts_awclk} {
-        connect_bd_net [get_bd_ports service_clk] [get_bd_pins rdma_dm/$p]
-    }
-    foreach p {m_axi_mm2s_aresetn m_axis_mm2s_cmdsts_aresetn m_axi_s2mm_aresetn m_axis_s2mm_cmdsts_aresetn} {
-        connect_bd_net [get_bd_pins ilreduced_logic_0/Res] [get_bd_pins rdma_dm/$p]
-    }
-    foreach {from to} {
-        rdma_0/m_axis_mm2s_cmd rdma_dm/S_AXIS_MM2S_CMD
-        rdma_dm/M_AXIS_MM2S     rdma_0/s_axis_mm2s
-        rdma_dm/M_AXIS_MM2S_STS rdma_0/s_axis_mm2s_sts
-        rdma_0/m_axis_s2mm_cmd rdma_dm/S_AXIS_S2MM_CMD
-        rdma_0/m_axis_s2mm     rdma_dm/S_AXIS_S2MM
-        rdma_dm/M_AXIS_S2MM_STS rdma_0/s_axis_s2mm_sts
-        rdma_dm/M_AXI_MM2S      sl2noc_0/S00_AXI
-        rdma_dm/M_AXI_S2MM      sl2noc_1/S00_AXI
-    } {
-        connect_bd_intf_net [get_bd_intf_pins $from] [get_bd_intf_pins $to]
+    foreach i {0 1} {
+        set p [expr {2 * $eth + $i}]
+        set dm [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_datamover:5.1 rdma_dm_$i]
+        set_property -dict [list \
+            CONFIG.c_include_mm2s {Full} CONFIG.c_include_s2mm {Full} \
+            CONFIG.c_m_axi_mm2s_data_width {512} CONFIG.c_m_axis_mm2s_tdata_width {512} \
+            CONFIG.c_m_axi_s2mm_data_width {512} CONFIG.c_s_axis_s2mm_tdata_width {512} \
+            CONFIG.c_include_mm2s_dre {true} CONFIG.c_include_s2mm_dre {true} \
+            CONFIG.c_mm2s_btt_used {23} CONFIG.c_s2mm_btt_used {23} \
+            CONFIG.c_addr_width {64} \
+            CONFIG.c_mm2s_burst_size {64} CONFIG.c_s2mm_burst_size {64} \
+            CONFIG.c_mm2s_include_sf {true} CONFIG.c_s2mm_include_sf {true} \
+            CONFIG.c_s2mm_support_indet_btt {false} \
+        ] $dm
+        foreach pin {m_axi_mm2s_aclk m_axis_mm2s_cmdsts_aclk m_axi_s2mm_aclk m_axis_s2mm_cmdsts_awclk} {
+            connect_bd_net [get_bd_ports service_clk] [get_bd_pins rdma_dm_$i/$pin]
+        }
+        foreach pin {m_axi_mm2s_aresetn m_axis_mm2s_cmdsts_aresetn m_axi_s2mm_aresetn m_axis_s2mm_cmdsts_aresetn} {
+            connect_bd_net [get_bd_pins ilreduced_logic_0/Res] [get_bd_pins rdma_dm_$i/$pin]
+        }
+        # its reads and writes onto the one port
+        set sc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 rdma_mem_$i]
+        set_property -dict [list CONFIG.NUM_SI {2} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] $sc
+        connect_bd_net [get_bd_ports service_clk] [get_bd_pins rdma_mem_$i/aclk]
+        connect_bd_net [get_bd_pins ilreduced_logic_0/Res] [get_bd_pins rdma_mem_$i/aresetn]
+        foreach {from to} [list \
+            rdma_0/m_axis_mm2s${i}_cmd rdma_dm_$i/S_AXIS_MM2S_CMD \
+            rdma_dm_$i/M_AXIS_MM2S     rdma_0/s_axis_mm2s$i \
+            rdma_dm_$i/M_AXIS_MM2S_STS rdma_0/s_axis_mm2s${i}_sts \
+            rdma_0/m_axis_s2mm${i}_cmd rdma_dm_$i/S_AXIS_S2MM_CMD \
+            rdma_0/m_axis_s2mm$i       rdma_dm_$i/S_AXIS_S2MM \
+            rdma_dm_$i/M_AXIS_S2MM_STS rdma_0/s_axis_s2mm${i}_sts \
+            rdma_dm_$i/M_AXI_MM2S      rdma_mem_$i/S00_AXI \
+            rdma_dm_$i/M_AXI_S2MM      rdma_mem_$i/S01_AXI \
+            rdma_mem_$i/M00_AXI        sl2noc_$p/S00_AXI] {
+            connect_bd_intf_net [get_bd_intf_pins $from] [get_bd_intf_pins $to]
+        }
     }
 
     # ------------------------------------------------------------ lanes
@@ -151,10 +162,13 @@ proc slash_add_rdma {eth build rdma_dir} {
 
     # ------------------------------------------------------------ memory addresses
     # the SL2NOC ports' aperture: the DDR window of the static shell
-    foreach sp {Data_MM2S Data_S2MM} port {SL2NOC_0 SL2NOC_1} {
-        assign_bd_address -offset 0x060000000000 -range 0x000800000000 \
-            -target_address_space [get_bd_addr_spaces rdma_dm/$sp] \
-            [get_bd_addr_segs $port/Reg] -force
+    foreach i {0 1} {
+        set port SL2NOC_[expr {2 * $eth + $i}]
+        foreach sp {Data_MM2S Data_S2MM} {
+            assign_bd_address -offset 0x060000000000 -range 0x000800000000 \
+                -target_address_space [get_bd_addr_spaces rdma_dm_$i/$sp] \
+                [get_bd_addr_segs $port/Reg] -force
+        }
     }
 }
 

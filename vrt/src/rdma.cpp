@@ -244,6 +244,10 @@ RdmaStats Rdma::stats() {
     s.s2mmErrors = c[7];
     s.rdLenErrors = c[8];
     s.wrLenErrors = c[9];
+    if (svcRead(SVC_VERSION) >= 0x0001'0001) {
+        s.rxFcsDrops = svcRead(SVC_RX_FCS_DROPS);
+        s.rxRoomDrops = svcRead(SVC_RX_ROOM_DROPS);
+    }
     return s;
 }
 

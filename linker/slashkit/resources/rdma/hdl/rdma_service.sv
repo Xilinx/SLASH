@@ -7,14 +7,16 @@
 //
 //   aclk (node clock, 230 MHz from the DCMAC clock wizard): the stack, its
 //     Ethernet side (1024-bit, dcmac_rx_path / dcmac_tx_path), registers
-//   sclk (service clock): the AXI DataMover to the memory window (SL2NOC)
-//     and the port's NoC stream lanes to the user region
+//   sclk (service clock): the two AXI DataMovers to the memory window (the
+//     port's two SL2NOC ports, one each) and its NoC stream lanes to the
+//     user region
 //
 // Payload addresses (48-bit, the local address of a request or the address
 // a peer reads or writes):
 //   bit 47 = 0: card memory; must lie in the window
 //               [MEM_BASE, MEM_BASE + 2^MEM_BITS) (VRT DDR buffers), else
-//               reads return zeros and writes are dropped (counted)
+//               reads return zeros and writes are dropped (counted);
+//               packets alternate between the two DataMovers
 //   bit 47 = 1: stream; bit 46 selects lane 0 or 1 (rdma.tx0/tx1 for data
 //               the stack sends, rdma.rx0/rx1 for data it receives)
 //
@@ -22,11 +24,14 @@
 // stack (rdma_200 register map). No register has a read side effect.
 //   0x000 ID 0x52444D53 ("RDMS")       0x004 VERSION
 //   0x008 BUILD                         0x00C ETH port index
-//   0x010 / 0x014 MEM_BASE low / high   0x018 MEM_BITS
-//   0x020 PHY_CTRL (RW)                 0x024 PHY_STATUS    0x028 RX_DROPS
+//   0x010 / 0x014 MEM_BASE low / high   0x018 MEM_BITS      0x01C MEM_PORTS (2)
+//   0x020 PHY_CTRL (RW)                 0x024 PHY_STATUS
+//   0x028 RX_DROPS   the port's drop counters as they come: [11:0] bad FCS,
+//                    [15:12] no room (both wrap)
+//   0x02C RX_FCS_DROPS  0x030 RX_ROOM_DROPS   the same, 32 bits
 //   0x100 RD_MEM     0x104 RD_STREAM    0x108 RD_BAD        payload requests
 //   0x10C WR_MEM     0x110 WR_STREAM    0x114 WR_BAD          of each kind
-//   0x118 MM2S_ERR   0x11C S2MM_ERR     DataMover status not OKAY
+//   0x118 MM2S_ERR   0x11C S2MM_ERR     DataMover status not OKAY (either)
 //   0x120 RD_LEN_ERR 0x124 WR_LEN_ERR   packet ends not where expected
 //   0x128 LAST_STS   [7:0] last MM2S status, [15:8] last S2MM status
 //   0x130 / 0x134 TX0 / TX1 beats taken from the lanes
@@ -79,29 +84,52 @@ module rdma_service #(
     output reg  [15:0]     phy_ctrl,
     input  wire [15:0]     phy_status,
 
-    // AXI DataMover (sclk)
-    output wire            m_axis_mm2s_cmd_tvalid,
-    input  wire            m_axis_mm2s_cmd_tready,
-    output wire [103:0]    m_axis_mm2s_cmd_tdata,
-    input  wire            s_axis_mm2s_tvalid,
-    output wire            s_axis_mm2s_tready,
-    input  wire [511:0]    s_axis_mm2s_tdata,
-    input  wire [63:0]     s_axis_mm2s_tkeep,
-    input  wire            s_axis_mm2s_tlast,
-    input  wire            s_axis_mm2s_sts_tvalid,
-    output wire            s_axis_mm2s_sts_tready,
-    input  wire [7:0]      s_axis_mm2s_sts_tdata,
-    output wire            m_axis_s2mm_cmd_tvalid,
-    input  wire            m_axis_s2mm_cmd_tready,
-    output wire [103:0]    m_axis_s2mm_cmd_tdata,
-    output wire            m_axis_s2mm_tvalid,
-    input  wire            m_axis_s2mm_tready,
-    output wire [511:0]    m_axis_s2mm_tdata,
-    output wire [63:0]     m_axis_s2mm_tkeep,
-    output wire            m_axis_s2mm_tlast,
-    input  wire            s_axis_s2mm_sts_tvalid,
-    output wire            s_axis_s2mm_sts_tready,
-    input  wire [7:0]      s_axis_s2mm_sts_tdata,
+    // AXI DataMovers 0 and 1 (sclk)
+    output wire            m_axis_mm2s0_cmd_tvalid,
+    input  wire            m_axis_mm2s0_cmd_tready,
+    output wire [103:0]    m_axis_mm2s0_cmd_tdata,
+    input  wire            s_axis_mm2s0_tvalid,
+    output wire            s_axis_mm2s0_tready,
+    input  wire [511:0]    s_axis_mm2s0_tdata,
+    input  wire [63:0]     s_axis_mm2s0_tkeep,
+    input  wire            s_axis_mm2s0_tlast,
+    input  wire            s_axis_mm2s0_sts_tvalid,
+    output wire            s_axis_mm2s0_sts_tready,
+    input  wire [7:0]      s_axis_mm2s0_sts_tdata,
+    output wire            m_axis_s2mm0_cmd_tvalid,
+    input  wire            m_axis_s2mm0_cmd_tready,
+    output wire [103:0]    m_axis_s2mm0_cmd_tdata,
+    output wire            m_axis_s2mm0_tvalid,
+    input  wire            m_axis_s2mm0_tready,
+    output wire [511:0]    m_axis_s2mm0_tdata,
+    output wire [63:0]     m_axis_s2mm0_tkeep,
+    output wire            m_axis_s2mm0_tlast,
+    input  wire            s_axis_s2mm0_sts_tvalid,
+    output wire            s_axis_s2mm0_sts_tready,
+    input  wire [7:0]      s_axis_s2mm0_sts_tdata,
+
+    output wire            m_axis_mm2s1_cmd_tvalid,
+    input  wire            m_axis_mm2s1_cmd_tready,
+    output wire [103:0]    m_axis_mm2s1_cmd_tdata,
+    input  wire            s_axis_mm2s1_tvalid,
+    output wire            s_axis_mm2s1_tready,
+    input  wire [511:0]    s_axis_mm2s1_tdata,
+    input  wire [63:0]     s_axis_mm2s1_tkeep,
+    input  wire            s_axis_mm2s1_tlast,
+    input  wire            s_axis_mm2s1_sts_tvalid,
+    output wire            s_axis_mm2s1_sts_tready,
+    input  wire [7:0]      s_axis_mm2s1_sts_tdata,
+    output wire            m_axis_s2mm1_cmd_tvalid,
+    input  wire            m_axis_s2mm1_cmd_tready,
+    output wire [103:0]    m_axis_s2mm1_cmd_tdata,
+    output wire            m_axis_s2mm1_tvalid,
+    input  wire            m_axis_s2mm1_tready,
+    output wire [511:0]    m_axis_s2mm1_tdata,
+    output wire [63:0]     m_axis_s2mm1_tkeep,
+    output wire            m_axis_s2mm1_tlast,
+    input  wire            s_axis_s2mm1_sts_tvalid,
+    output wire            s_axis_s2mm1_sts_tready,
+    input  wire [7:0]      s_axis_s2mm1_sts_tdata,
 
     // NoC stream lanes (sclk): user region -> stack, stack -> user region
     input  wire            s_axis_tx0_tvalid,
@@ -167,6 +195,8 @@ module rdma_service #(
     reg  [31:0] cnt_wr [3];
     wire [31:0] s_cnt [8];                  // sclk counters, synchronized
     wire [15:0] last_sts;
+    reg  [31:0] fcs_drops, room_drops;      // rx_drop_count's fields, widened
+    reg  [15:0] drops_prev;
 
     always @(posedge aclk) begin
         if (!aresetn) begin
@@ -196,15 +226,18 @@ module rdma_service #(
                 r0_rvalid <= 1'b1;
                 case (r0_araddr[11:0])
                     12'h000: r0_rdata <= 32'h52444D53;
-                    12'h004: r0_rdata <= 32'h0001_0000;
+                    12'h004: r0_rdata <= 32'h0001_0001;
                     12'h008: r0_rdata <= BUILD;
                     12'h00C: r0_rdata <= ETH_INDEX;
                     12'h010: r0_rdata <= MEM_BASE[31:0];
                     12'h014: r0_rdata <= {16'd0, MEM_BASE[47:32]};
                     12'h018: r0_rdata <= MEM_BITS;
+                    12'h01C: r0_rdata <= 32'd2;
                     12'h020: r0_rdata <= {16'd0, phy_ctrl};
                     12'h024: r0_rdata <= {16'd0, phy_status};
                     12'h028: r0_rdata <= {16'd0, rx_drop_count};
+                    12'h02C: r0_rdata <= fcs_drops;
+                    12'h030: r0_rdata <= room_drops;
                     12'h100: r0_rdata <= cnt_rd[KIND_MEM];
                     12'h104: r0_rdata <= cnt_rd[KIND_STREAM];
                     12'h108: r0_rdata <= cnt_rd[KIND_BAD];
@@ -292,6 +325,20 @@ module rdma_service #(
         end
     end
 
+    // the port's drop counters wrap at 4096 and 16: add up their steps
+    wire [15:0] drops_step = {rx_drop_count[15:12] - drops_prev[15:12],
+                              rx_drop_count[11:0] - drops_prev[11:0]};
+    always @(posedge aclk) begin
+        drops_prev <= rx_drop_count;
+        if (!aresetn) begin
+            fcs_drops <= 32'd0;
+            room_drops <= 32'd0;
+        end else begin
+            fcs_drops <= fcs_drops + drops_step[11:0];
+            room_drops <= room_drops + drops_step[15:12];
+        end
+    end
+
     // ================================================================ clock crossings
     wire          s_rd_req_valid, s_rd_req_ready, s_wr_req_valid, s_wr_req_ready;
     wire [71:0]   s_rd_req, s_wr_req;
@@ -373,14 +420,18 @@ module rdma_service #(
 
     // ================================================================ payload engines (sclk)
     wire rd_len_error, wr_len_error;
+    wire [103:0] mm2s_cmd_tdata, s2mm_cmd_tdata;
 
     rdma_pay_rd inst_rd (
         .clk(sclk), .resetn(sresetn),
         .req_valid(s_rd_req_valid), .req_ready(s_rd_req_ready), .req_data(s_rd_req[66:0]),
-        .mm2s_cmd_tvalid(m_axis_mm2s_cmd_tvalid), .mm2s_cmd_tready(m_axis_mm2s_cmd_tready),
-        .mm2s_cmd_tdata(m_axis_mm2s_cmd_tdata),
-        .mm2s_tvalid(s_axis_mm2s_tvalid), .mm2s_tready(s_axis_mm2s_tready),
-        .mm2s_tdata(s_axis_mm2s_tdata), .mm2s_tlast(s_axis_mm2s_tlast),
+        .mm2s_cmd_tvalid({m_axis_mm2s1_cmd_tvalid, m_axis_mm2s0_cmd_tvalid}),
+        .mm2s_cmd_tready({m_axis_mm2s1_cmd_tready, m_axis_mm2s0_cmd_tready}),
+        .mm2s_cmd_tdata(mm2s_cmd_tdata),
+        .mm2s_tvalid({s_axis_mm2s1_tvalid, s_axis_mm2s0_tvalid}),
+        .mm2s_tready({s_axis_mm2s1_tready, s_axis_mm2s0_tready}),
+        .mm2s0_tdata(s_axis_mm2s0_tdata), .mm2s0_tlast(s_axis_mm2s0_tlast),
+        .mm2s1_tdata(s_axis_mm2s1_tdata), .mm2s1_tlast(s_axis_mm2s1_tlast),
         .lane_avail1(tx_avail1), .lane_avail2(tx_avail2),
         .lane0_d0(tx_d0[0]), .lane0_d1(tx_d1[0]), .lane1_d0(tx_d0[1]), .lane1_d1(tx_d1[1]),
         .lane_take1(tx_take1), .lane_take2(tx_take2),
@@ -388,40 +439,57 @@ module rdma_service #(
         .out_keep(s_rd_keep), .out_last(s_rd_last),
         .mm2s_len_error(rd_len_error)
     );
+    assign m_axis_mm2s0_cmd_tdata = mm2s_cmd_tdata;
+    assign m_axis_mm2s1_cmd_tdata = mm2s_cmd_tdata;
 
     rdma_pay_wr inst_wr (
         .clk(sclk), .resetn(sresetn),
         .req_valid(s_wr_req_valid), .req_ready(s_wr_req_ready), .req_data(s_wr_req[67:0]),
         .in_valid(s_wr_valid), .in_ready(s_wr_ready), .in_data(s_wr_data), .in_last(s_wr_last),
-        .s2mm_cmd_tvalid(m_axis_s2mm_cmd_tvalid), .s2mm_cmd_tready(m_axis_s2mm_cmd_tready),
-        .s2mm_cmd_tdata(m_axis_s2mm_cmd_tdata),
-        .s2mm_tvalid(m_axis_s2mm_tvalid), .s2mm_tready(m_axis_s2mm_tready),
-        .s2mm_tdata(m_axis_s2mm_tdata), .s2mm_tkeep(m_axis_s2mm_tkeep), .s2mm_tlast(m_axis_s2mm_tlast),
+        .s2mm_cmd_tvalid({m_axis_s2mm1_cmd_tvalid, m_axis_s2mm0_cmd_tvalid}),
+        .s2mm_cmd_tready({m_axis_s2mm1_cmd_tready, m_axis_s2mm0_cmd_tready}),
+        .s2mm_cmd_tdata(s2mm_cmd_tdata),
+        .s2mm_tvalid({m_axis_s2mm1_tvalid, m_axis_s2mm0_tvalid}),
+        .s2mm_tready({m_axis_s2mm1_tready, m_axis_s2mm0_tready}),
+        .s2mm0_tdata(m_axis_s2mm0_tdata), .s2mm0_tkeep(m_axis_s2mm0_tkeep), .s2mm0_tlast(m_axis_s2mm0_tlast),
+        .s2mm1_tdata(m_axis_s2mm1_tdata), .s2mm1_tkeep(m_axis_s2mm1_tkeep), .s2mm1_tlast(m_axis_s2mm1_tlast),
         .lane_room1(rx_room1), .lane_room2(rx_room2), .lane_put1(rx_put1), .lane_put2(rx_put2),
         .lane_d0_data(rx_d0_data), .lane_d0_keep(rx_d0_keep), .lane_d0_last(rx_d0_last),
         .lane_d1_data(rx_d1_data), .lane_d1_keep(rx_d1_keep), .lane_d1_last(rx_d1_last),
         .in_len_error(wr_len_error)
     );
+    assign m_axis_s2mm0_cmd_tdata = s2mm_cmd_tdata;
+    assign m_axis_s2mm1_cmd_tdata = s2mm_cmd_tdata;
 
     // ================================================================ sclk status
-    assign s_axis_mm2s_sts_tready = 1'b1;
-    assign s_axis_s2mm_sts_tready = 1'b1;
+    assign s_axis_mm2s0_sts_tready = 1'b1;
+    assign s_axis_mm2s1_sts_tready = 1'b1;
+    assign s_axis_s2mm0_sts_tready = 1'b1;
+    assign s_axis_s2mm1_sts_tready = 1'b1;
 
     reg  [31:0] scnt [8];
     reg  [15:0] s_last_sts;
     // DataMover status: [3:0] tag, [4] internal, [5] decode, [6] slave error, [7] OKAY
-    wire mm2s_err = s_axis_mm2s_sts_tvalid && (!s_axis_mm2s_sts_tdata[7] || |s_axis_mm2s_sts_tdata[6:4]);
-    wire s2mm_err = s_axis_s2mm_sts_tvalid && (!s_axis_s2mm_sts_tdata[7] || |s_axis_s2mm_sts_tdata[6:4]);
+    function automatic sts_err(input valid, input [7:0] sts);
+        sts_err = valid && (!sts[7] || |sts[6:4]);
+    endfunction
+    wire [1:0] mm2s_err = {sts_err(s_axis_mm2s1_sts_tvalid, s_axis_mm2s1_sts_tdata),
+                           sts_err(s_axis_mm2s0_sts_tvalid, s_axis_mm2s0_sts_tdata)};
+    wire [1:0] s2mm_err = {sts_err(s_axis_s2mm1_sts_tvalid, s_axis_s2mm1_sts_tdata),
+                           sts_err(s_axis_s2mm0_sts_tvalid, s_axis_s2mm0_sts_tdata)};
     wire [7:0] s_event = {
         rx_put1[1] ? 1'b1 : rx_put2[1],
         rx_put1[0] ? 1'b1 : rx_put2[0],
         tx_take1[1] | tx_take2[1],
         tx_take1[0] | tx_take2[0],
-        wr_len_error, rd_len_error, s2mm_err, mm2s_err
+        wr_len_error, rd_len_error, |s2mm_err, |mm2s_err
     };
-    // beats moved per cycle on the lanes (1 or 2), events (1)
+    // beats moved per cycle on the lanes (1 or 2), events (1, or 2 when
+    // both DataMovers report one)
     function automatic [31:0] inc_of(input integer i);
         case (i)
+            0: inc_of = &mm2s_err ? 32'd2 : 32'd1;
+            1: inc_of = &s2mm_err ? 32'd2 : 32'd1;
             4: inc_of = tx_take2[0] ? 32'd2 : 32'd1;
             5: inc_of = tx_take2[1] ? 32'd2 : 32'd1;
             6: inc_of = rx_put2[0] ? 32'd2 : 32'd1;
@@ -439,10 +507,14 @@ module rdma_service #(
             for (int i = 0; i < 8; i++)
                 if (s_event[i])
                     scnt[i] <= scnt[i] + inc_of(i);
-            if (s_axis_mm2s_sts_tvalid)
-                s_last_sts[7:0] <= s_axis_mm2s_sts_tdata;
-            if (s_axis_s2mm_sts_tvalid)
-                s_last_sts[15:8] <= s_axis_s2mm_sts_tdata;
+            if (s_axis_mm2s0_sts_tvalid)
+                s_last_sts[7:0] <= s_axis_mm2s0_sts_tdata;
+            else if (s_axis_mm2s1_sts_tvalid)
+                s_last_sts[7:0] <= s_axis_mm2s1_sts_tdata;
+            if (s_axis_s2mm0_sts_tvalid)
+                s_last_sts[15:8] <= s_axis_s2mm0_sts_tdata;
+            else if (s_axis_s2mm1_sts_tvalid)
+                s_last_sts[15:8] <= s_axis_s2mm1_sts_tdata;
         end
     end
 

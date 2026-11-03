@@ -27,7 +27,7 @@ _RESOURCES = Path(__file__).resolve().parents[3] / "resources" / "rdma"
 
 RDMA_IP = "rdma_200"
 #! BUILD register of rdma_service: raise it when the service's RTL changes.
-RDMA_BUILD = 1
+RDMA_BUILD = 2
 #! DCMAC hierarchy per Ethernet port
 _QSFP = {0: "qsfp_0_n_1", 2: "qsfp_2_n_3"}
 

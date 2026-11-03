@@ -171,9 +171,16 @@ TEST(RdmaTest, StatsReadEveryCounter) {
     for (unsigned i = 0; i < 16; i++) regs->regs[STACK + vrt::Rdma::STATS + 4 * i] = 100 + i;
     for (unsigned i = 0; i < 10; i++) regs->regs[BASE + vrt::Rdma::SVC_COUNTERS + 4 * i] = i + 1;
     regs->set64(STACK + vrt::Rdma::SQ_REQS, 0x2'0000'0001ull);
+    regs->regs[BASE + vrt::Rdma::SVC_RX_FCS_DROPS] = 5000;
+    regs->regs[BASE + vrt::Rdma::SVC_RX_ROOM_DROPS] = 37;
     auto s = rdma.stats();
     EXPECT_EQ(s.stack[9], 109u);
     EXPECT_EQ(s.requests, 0x2'0000'0001ull);
     EXPECT_EQ(s.rdMem, 1u);
     EXPECT_EQ(s.wrLenErrors, 10u);
+    EXPECT_EQ(s.rxFcsDrops, 0u);     // version 1.0: not there
+    regs->regs[BASE + vrt::Rdma::SVC_VERSION] = 0x0001'0001;
+    s = rdma.stats();
+    EXPECT_EQ(s.rxFcsDrops, 5000u);
+    EXPECT_EQ(s.rxRoomDrops, 37u);
 }

@@ -78,6 +78,9 @@ struct RdmaStats {
     uint32_t wrMem = 0, wrStream = 0, wrBad = 0;   ///< payload write requests by kind
     uint32_t mm2sErrors = 0, s2mmErrors = 0;       ///< memory accesses not OKAY
     uint32_t rdLenErrors = 0, wrLenErrors = 0;     ///< packets ending where not expected
+    /// frames the port dropped before the stack: bad FCS, no room (the stack
+    /// was not taking them); 0 on services before version 1.1
+    uint32_t rxFcsDrops = 0, rxRoomDrops = 0;
 };
 
 class Rdma {
@@ -90,7 +93,9 @@ class Rdma {
 
     // service registers (offsets in the service window)
     static constexpr uint64_t SVC_ID = 0x000, SVC_BUILD = 0x008, SVC_ETH = 0x00C;
+    static constexpr uint64_t SVC_VERSION = 0x004, SVC_MEM_PORTS = 0x01C;
     static constexpr uint64_t SVC_PHY_CTRL = 0x020, SVC_PHY_STATUS = 0x024;
+    static constexpr uint64_t SVC_RX_FCS_DROPS = 0x02C, SVC_RX_ROOM_DROPS = 0x030;
     static constexpr uint64_t SVC_COUNTERS = 0x100;
     static constexpr uint32_t SVC_ID_VALUE = 0x52444D53;    ///< "RDMS"
     // the stack's registers (rdma_200 register map), at STACK in the window
