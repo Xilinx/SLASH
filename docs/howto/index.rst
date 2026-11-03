@@ -14,6 +14,7 @@ Task-oriented recipes for common operations.
    install-from-packages
    use-multiple-boards
    set-clock-frequency
+   floorplan-kernels
    chain-streaming-kernels
    use-dcmac
    benchmark-memory
