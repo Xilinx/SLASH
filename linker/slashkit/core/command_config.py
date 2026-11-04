@@ -36,6 +36,7 @@ from slashkit.core.bd_ports import (
 from slashkit.core.kernel import Kernel, KernelInstance
 from slashkit.core.launcher import tool_launcher
 from slashkit.core.connectivity import ConnectivityConfig
+from slashkit.core.floorplan import installed_mem_slr
 from slashkit.parser.config_parser import parse_connectivity_file, apply_config_to_instances
 from slashkit.parser.component_parser import parse_component_xml
 
@@ -293,8 +294,12 @@ class LinkerConfiguration(CommandConfiguration):
                     bd_ports_path
                 )
 
+        # [floorplan] steers MEM ports by SLR, so it needs to know where the
+        # installed shell put them.
+        mem_slr = (installed_mem_slr(self._configuration.shell)
+                   if self._configuration.floorplan else None)
         self._kernel_instances: List[KernelInstance] = apply_config_to_instances(
-            self.configuration, self.kernels)
+            self.configuration, self.kernels, mem_slr=mem_slr)
 
         # merge config [user_region] pre_synth= entries with the --pre-synth-tcls
         # flag. config entries source first, then CLI ones, with duplicates

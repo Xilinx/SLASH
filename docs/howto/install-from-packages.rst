@@ -279,6 +279,7 @@ local IP repository before building:
 3. Generate the SMBus license from the `AMD License Center <https://account.amd.com/en/forms/license/license-form.html>`_
    and add it to your Vivado license configuration.
 
+Confirm the result before starting the build:
 
 .. code-block:: bash
 
@@ -306,8 +307,6 @@ building.
    and click **Get License**.
 2. Follow the steps to generate the license.
 3. Add the license to your Vivado license configuration.
-
-Confirm the result before starting the build:
 
 .. _build-the-packages:
 
