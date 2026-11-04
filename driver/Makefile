@@ -55,6 +55,10 @@ SLASH_QDMA_OP_DEBUG ?= 0
 # DMA transfer breaking down the kernel phases. Default off (zero overhead).
 SLASH_QDMA_TIMING ?= 0
 
+# Build libqdma's runtime CSR setters so probe can tune the global writeback
+# interval before any queue is created.
+ccflags-y += -DQDMA_CSR_REG_UPDATE=1
+
 # Kcompat feature flags. Defaults are "n"; the all: recipe runs
 # driver/kcompat/probe.sh against $(KDIR) to detect the actual values
 # and passes them into the kbuild recursion. Each pair (modern API +
