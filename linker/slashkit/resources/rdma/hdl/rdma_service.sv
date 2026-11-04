@@ -29,6 +29,8 @@
 //   0x028 RX_DROPS   the port's drop counters as they come: [11:0] bad FCS,
 //                    [15:12] no room (both wrap)
 //   0x02C RX_FCS_DROPS  0x030 RX_ROOM_DROPS   the same, 32 bits
+//   0x034 MEM_MODE (RW) [1:0] DataMovers used: 3 both, alternately (reset),
+//                    1 only DataMover 0, 2 only DataMover 1 (change it idle)
 //   0x100 RD_MEM     0x104 RD_STREAM    0x108 RD_BAD        payload requests
 //   0x10C WR_MEM     0x110 WR_STREAM    0x114 WR_BAD          of each kind
 //   0x118 MM2S_ERR   0x11C S2MM_ERR     DataMover status not OKAY (either)
@@ -36,6 +38,13 @@
 //   0x128 LAST_STS   [7:0] last MM2S status, [15:8] last S2MM status
 //   0x130 / 0x134 TX0 / TX1 beats taken from the lanes
 //   0x138 / 0x13C RX0 / RX1 beats given to the lanes
+//   0x140 + 8 k + 4 i  DataMover i (0, 1), diagnosis: k = 0 S2MM commands,
+//                    1 S2MM beats in, 2 S2MM addresses posted on AXI, 3 S2MM
+//                    writes finished (responses), 4 S2MM status, 5 MM2S
+//                    commands, 6 MM2S beats out, 7 MM2S addresses posted,
+//                    8 MM2S reads finished, 9 MM2S status
+//   0x190 SVC_LIVE   handshake levels on the service clock (see s_live)
+//   0x194 STACK_LIVE handshake levels at the stack (see a_live)
 module rdma_service #(
     parameter integer BUILD = 1,
     parameter integer ETH_INDEX = 0,
@@ -130,6 +139,12 @@ module rdma_service #(
     input  wire            s_axis_s2mm1_sts_tvalid,
     output wire            s_axis_s2mm1_sts_tready,
     input  wire [7:0]      s_axis_s2mm1_sts_tdata,
+    // their progress pulses (advanced signals): an address posted on AXI,
+    // a transfer finished there (write response, last read beat)
+    input  wire [1:0]      mm2s_addr_posted,
+    input  wire [1:0]      mm2s_rd_done,
+    input  wire [1:0]      s2mm_addr_posted,
+    input  wire [1:0]      s2mm_wr_done,
 
     // NoC stream lanes (sclk): user region -> stack, stack -> user region
     input  wire            s_axis_tx0_tvalid,
@@ -193,7 +208,11 @@ module rdma_service #(
     // counters kept in aclk, and those crossing from sclk
     reg  [31:0] cnt_rd [3];                 // by kind
     reg  [31:0] cnt_wr [3];
-    wire [31:0] s_cnt [8];                  // sclk counters, synchronized
+    localparam integer NCNT = 28;
+    wire [31:0] s_cnt [NCNT];               // sclk counters, synchronized
+    wire [31:0] s_live_a;                   // s_live, synchronized
+    wire [31:0] a_live;
+    reg  [1:0]  mem_mode;
     wire [15:0] last_sts;
     reg  [31:0] fcs_drops, room_drops;      // rx_drop_count's fields, widened
     reg  [15:0] drops_prev;
@@ -206,6 +225,7 @@ module rdma_service #(
             r0_arready <= 1'b0;
             r0_rvalid <= 1'b0;
             phy_ctrl <= 16'd0;
+            mem_mode <= 2'b11;
         end else begin
             // one write at a time: address and data together
             r0_awready <= 1'b0;
@@ -216,6 +236,8 @@ module rdma_service #(
                 r0_bvalid <= 1'b1;
                 if (r0_awaddr[11:0] == 12'h020 && r0_wstrb[1:0] == 2'b11)
                     phy_ctrl <= r0_wdata[15:0];
+                if (r0_awaddr[11:0] == 12'h034 && r0_wstrb[0])
+                    mem_mode <= r0_wdata[1:0];
             end
             if (r0_bvalid && r0_bready)
                 r0_bvalid <= 1'b0;
@@ -226,7 +248,7 @@ module rdma_service #(
                 r0_rvalid <= 1'b1;
                 case (r0_araddr[11:0])
                     12'h000: r0_rdata <= 32'h52444D53;
-                    12'h004: r0_rdata <= 32'h0001_0001;
+                    12'h004: r0_rdata <= 32'h0001_0002;
                     12'h008: r0_rdata <= BUILD;
                     12'h00C: r0_rdata <= ETH_INDEX;
                     12'h010: r0_rdata <= MEM_BASE[31:0];
@@ -238,6 +260,7 @@ module rdma_service #(
                     12'h028: r0_rdata <= {16'd0, rx_drop_count};
                     12'h02C: r0_rdata <= fcs_drops;
                     12'h030: r0_rdata <= room_drops;
+                    12'h034: r0_rdata <= {30'd0, mem_mode};
                     12'h100: r0_rdata <= cnt_rd[KIND_MEM];
                     12'h104: r0_rdata <= cnt_rd[KIND_STREAM];
                     12'h108: r0_rdata <= cnt_rd[KIND_BAD];
@@ -253,7 +276,10 @@ module rdma_service #(
                     12'h134: r0_rdata <= s_cnt[5];
                     12'h138: r0_rdata <= s_cnt[6];
                     12'h13C: r0_rdata <= s_cnt[7];
-                    default: r0_rdata <= 32'd0;
+                    12'h190: r0_rdata <= s_live_a;
+                    12'h194: r0_rdata <= a_live;
+                    default: r0_rdata <= (r0_araddr[11:0] >= 12'h140 && r0_araddr[11:0] < 12'h190) ?
+                                         s_cnt[8 + (r0_araddr[11:0] - 12'h140) / 4] : 32'd0;
                 endcase
             end
             if (r0_rvalid && r0_rready)
@@ -422,8 +448,15 @@ module rdma_service #(
     wire rd_len_error, wr_len_error;
     wire [103:0] mm2s_cmd_tdata, s2mm_cmd_tdata;
 
+    wire [1:0] s_dm_mask;
+    xpm_cdc_array_single #(
+        .DEST_SYNC_FF(3), .INIT_SYNC_FF(0), .SIM_ASSERT_CHK(0), .SRC_INPUT_REG(1), .WIDTH(2)
+    ) inst_mode_cdc (
+        .src_clk(aclk), .src_in(mem_mode), .dest_clk(sclk), .dest_out(s_dm_mask)
+    );
+
     rdma_pay_rd inst_rd (
-        .clk(sclk), .resetn(sresetn),
+        .clk(sclk), .resetn(sresetn), .dm_mask(s_dm_mask),
         .req_valid(s_rd_req_valid), .req_ready(s_rd_req_ready), .req_data(s_rd_req[66:0]),
         .mm2s_cmd_tvalid({m_axis_mm2s1_cmd_tvalid, m_axis_mm2s0_cmd_tvalid}),
         .mm2s_cmd_tready({m_axis_mm2s1_cmd_tready, m_axis_mm2s0_cmd_tready}),
@@ -443,7 +476,7 @@ module rdma_service #(
     assign m_axis_mm2s1_cmd_tdata = mm2s_cmd_tdata;
 
     rdma_pay_wr inst_wr (
-        .clk(sclk), .resetn(sresetn),
+        .clk(sclk), .resetn(sresetn), .dm_mask(s_dm_mask),
         .req_valid(s_wr_req_valid), .req_ready(s_wr_req_ready), .req_data(s_wr_req[67:0]),
         .in_valid(s_wr_valid), .in_ready(s_wr_ready), .in_data(s_wr_data), .in_last(s_wr_last),
         .s2mm_cmd_tvalid({m_axis_s2mm1_cmd_tvalid, m_axis_s2mm0_cmd_tvalid}),
@@ -467,7 +500,7 @@ module rdma_service #(
     assign s_axis_s2mm0_sts_tready = 1'b1;
     assign s_axis_s2mm1_sts_tready = 1'b1;
 
-    reg  [31:0] scnt [8];
+    reg  [31:0] scnt [NCNT];
     reg  [15:0] s_last_sts;
     // DataMover status: [3:0] tag, [4] internal, [5] decode, [6] slave error, [7] OKAY
     function automatic sts_err(input valid, input [7:0] sts);
@@ -477,7 +510,19 @@ module rdma_service #(
                            sts_err(s_axis_mm2s0_sts_tvalid, s_axis_mm2s0_sts_tdata)};
     wire [1:0] s2mm_err = {sts_err(s_axis_s2mm1_sts_tvalid, s_axis_s2mm1_sts_tdata),
                            sts_err(s_axis_s2mm0_sts_tvalid, s_axis_s2mm0_sts_tdata)};
-    wire [7:0] s_event = {
+    wire [1:0] s2mm_cmd_hs = {m_axis_s2mm1_cmd_tvalid & m_axis_s2mm1_cmd_tready,
+                              m_axis_s2mm0_cmd_tvalid & m_axis_s2mm0_cmd_tready};
+    wire [1:0] s2mm_beat = {m_axis_s2mm1_tvalid & m_axis_s2mm1_tready,
+                            m_axis_s2mm0_tvalid & m_axis_s2mm0_tready};
+    wire [1:0] mm2s_cmd_hs = {m_axis_mm2s1_cmd_tvalid & m_axis_mm2s1_cmd_tready,
+                              m_axis_mm2s0_cmd_tvalid & m_axis_mm2s0_cmd_tready};
+    wire [1:0] mm2s_beat = {s_axis_mm2s1_tvalid & s_axis_mm2s1_tready,
+                            s_axis_mm2s0_tvalid & s_axis_mm2s0_tready};
+    wire [NCNT-1:0] s_event = {
+        s_axis_mm2s1_sts_tvalid, s_axis_mm2s0_sts_tvalid, mm2s_rd_done, mm2s_addr_posted,
+        mm2s_beat, mm2s_cmd_hs,
+        s_axis_s2mm1_sts_tvalid, s_axis_s2mm0_sts_tvalid, s2mm_wr_done, s2mm_addr_posted,
+        s2mm_beat, s2mm_cmd_hs,
         rx_put1[1] ? 1'b1 : rx_put2[1],
         rx_put1[0] ? 1'b1 : rx_put2[0],
         tx_take1[1] | tx_take2[1],
@@ -500,11 +545,11 @@ module rdma_service #(
 
     always @(posedge sclk) begin
         if (!sresetn) begin
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < NCNT; i++)
                 scnt[i] <= 32'd0;
             s_last_sts <= 16'd0;
         end else begin
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < NCNT; i++)
                 if (s_event[i])
                     scnt[i] <= scnt[i] + inc_of(i);
             if (s_axis_mm2s0_sts_tvalid)
@@ -518,7 +563,7 @@ module rdma_service #(
         end
     end
 
-    for (genvar i = 0; i < 8; i++) begin : g_cnt_cdc
+    for (genvar i = 0; i < NCNT; i++) begin : g_cnt_cdc
         xpm_cdc_gray #(
             .DEST_SYNC_FF(3), .INIT_SYNC_FF(0), .REG_OUTPUT(1), .SIM_ASSERT_CHK(0),
             .SIM_LOSSLESS_GRAY_CHK(0), .WIDTH(32)
@@ -527,6 +572,27 @@ module rdma_service #(
         );
     end
     // quasi-static: read for diagnosis only
+    // s_live: [4i+3:4i] S2MM of DataMover i: command valid, ready, data valid,
+    // ready; [4i+11:4i+8] the same for MM2S; [19:16] write engine: request
+    // valid, ready, packet data valid, ready; [22:20] read engine: request
+    // valid, ready, room for its output; [25:24] DataMovers used
+    wire [31:0] s_live = {6'd0, s_dm_mask, 1'b0, s_rd_room, s_rd_req_ready, s_rd_req_valid,
+        s_wr_ready, s_wr_valid, s_wr_req_ready, s_wr_req_valid,
+        s_axis_mm2s1_tready, s_axis_mm2s1_tvalid, m_axis_mm2s1_cmd_tready, m_axis_mm2s1_cmd_tvalid,
+        s_axis_mm2s0_tready, s_axis_mm2s0_tvalid, m_axis_mm2s0_cmd_tready, m_axis_mm2s0_cmd_tvalid,
+        m_axis_s2mm1_tready, m_axis_s2mm1_tvalid, m_axis_s2mm1_cmd_tready, m_axis_s2mm1_cmd_tvalid,
+        m_axis_s2mm0_tready, m_axis_s2mm0_tvalid, m_axis_s2mm0_cmd_tready, m_axis_s2mm0_cmd_tvalid};
+    xpm_cdc_array_single #(
+        .DEST_SYNC_FF(3), .INIT_SYNC_FF(0), .SIM_ASSERT_CHK(0), .SRC_INPUT_REG(1), .WIDTH(32)
+    ) inst_live_cdc (
+        .src_clk(sclk), .src_in(s_live), .dest_clk(aclk), .dest_out(s_live_a)
+    );
+    // a_live: the stack's ports: [3:0] write request valid, ready, write data
+    // valid, ready; [7:4] the same for reads; [11:8] RX valid, ready, TX
+    // valid, ready
+    assign a_live = {20'd0, m_axis_tx_tready, m_axis_tx_tvalid, s_axis_rx_tready, s_axis_rx_tvalid,
+                     rd_tready, rd_tvalid, rd_req_ready, rd_req_valid,
+                     wr_tready, wr_tvalid, wr_req_ready, wr_req_valid};
     xpm_cdc_array_single #(
         .DEST_SYNC_FF(3), .INIT_SYNC_FF(0), .SIM_ASSERT_CHK(0), .SRC_INPUT_REG(1), .WIDTH(16)
     ) inst_sts_cdc (

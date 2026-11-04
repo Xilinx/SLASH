@@ -19,6 +19,7 @@ module rdma_pay_wr #(
 ) (
     input  wire          clk,
     input  wire          resetn,
+    input  wire [1:0]    dm_mask,           // DataMovers used: 3 both, 1 / 2 only 0 / 1
 
     // classified requests: [47:0] address, [63:48] length (1..65535 bytes),
     // [65:64] kind, [66] lane, [67] last packet of the message
@@ -69,6 +70,8 @@ module rdma_pay_wr #(
     reg  [10:0] rem;                        // 64-byte halves still to write
     reg  [6:0]  last_bytes;                 // valid bytes of the final half
     reg         dm_next;                    // DataMover of the next DDR packet
+    // the DataMover it goes to: alternately, or the one dm_mask allows
+    wire        dm_sel = dm_mask == 2'b01 ? 1'b0 : dm_mask == 2'b10 ? 1'b1 : dm_next;
 
     // ---------------------------------------------------------------- requests
     wire [1:0]  req_kind = req_data[65:64];
@@ -76,9 +79,9 @@ module rdma_pay_wr #(
     wire [16:0] req_len_up = {1'b0, req_len} + 17'd63;
     wire        req_ddr = req_kind == KIND_DDR;
 
-    assign s2mm_cmd_tvalid[0] = !busy && req_valid && req_ddr && !dm_next;
-    assign s2mm_cmd_tvalid[1] = !busy && req_valid && req_ddr &&  dm_next;
-    assign req_ready = !busy && (!req_ddr || s2mm_cmd_tready[dm_next]);
+    assign s2mm_cmd_tvalid[0] = !busy && req_valid && req_ddr && !dm_sel;
+    assign s2mm_cmd_tvalid[1] = !busy && req_valid && req_ddr &&  dm_sel;
+    assign req_ready = !busy && (!req_ddr || s2mm_cmd_tready[dm_sel]);
     // [22:0] BTT, [23] INCR, [29:24] DSA, [30] EOF, [31] DRR, [95:32] address
     assign s2mm_cmd_tdata = {8'd0, 16'd0, req_data[47:0], 1'b0, 1'b1, 6'd0, 1'b1,
                              7'd0, req_len};
@@ -130,7 +133,7 @@ module rdma_pay_wr #(
             if (req_valid && req_ready) begin
                 busy <= 1'b1;
                 kind <= req_kind;
-                dst <= req_ddr ? {1'b1, dm_next} : {1'b0, req_data[66]};
+                dst <= req_ddr ? {1'b1, dm_sel} : {1'b0, req_data[66]};
                 if (req_ddr)
                     dm_next <= !dm_next;
                 msg_last <= req_data[67];

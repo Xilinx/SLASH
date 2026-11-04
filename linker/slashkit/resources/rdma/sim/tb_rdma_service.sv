@@ -213,6 +213,7 @@ module tb_rdma_service;
         .m_axis_s2mm1_tlast(s2mm_tlast[1]),
         .s_axis_s2mm1_sts_tvalid(s2mm_sts_tvalid[1]), .s_axis_s2mm1_sts_tready(),
         .s_axis_s2mm1_sts_tdata(s2mm_sts_tdata[1]),
+        .mm2s_addr_posted(2'b00), .mm2s_rd_done(2'b00), .s2mm_addr_posted(2'b00), .s2mm_wr_done(2'b00),
         .s_axis_tx0_tvalid(tx_tvalid[0]), .s_axis_tx0_tready(tx_tready[0]), .s_axis_tx0_tdata(tx_tdata[0]),
         .s_axis_tx0_tkeep('1), .s_axis_tx0_tlast(1'b0),
         .s_axis_tx1_tvalid(tx_tvalid[1]), .s_axis_tx1_tready(tx_tready[1]), .s_axis_tx1_tdata(tx_tdata[1]),
@@ -578,6 +579,37 @@ module tb_rdma_service;
             if (dm_cmds[0][d] + 1 < n_rd[K_MEM] / 2 || dm_cmds[1][d] + 1 < n_wr[K_MEM] / 2) begin
                 $display("ERROR: DataMover %0d is not used for every second packet", d); errors++;
             end
+        // diagnosis counters: commands and status per DataMover
+        for (int d = 0; d < 2; d++) begin
+            expect_reg(24'h000140 + 4 * d, dm_cmds[1][d], $sformatf("S2MM_CMD%0d", d));
+            expect_reg(24'h000160 + 4 * d, dm_cmds[1][d], $sformatf("S2MM_STS%0d", d));
+            expect_reg(24'h000168 + 4 * d, dm_cmds[0][d], $sformatf("MM2S_CMD%0d", d));
+            expect_reg(24'h000188 + 4 * d, dm_cmds[0][d], $sformatf("MM2S_STS%0d", d));
+        end
+        expect_reg(24'h000034, 32'd3, "MEM_MODE");
+
+        // MEM_MODE 1 / 2: one DataMover takes every memory packet
+        for (int m = 1; m <= 2; m++) begin
+            automatic int prev [2] = '{dm_cmds[1][0], dm_cmds[1][1]};
+            automatic byte data [] = new [4096];
+            reg_wr(24'h000034, m);
+            repeat (20) @(posedge sclk);
+            for (int k = 0; k < 6; k++) begin
+                foreach (data[i]) data[i] = $urandom;
+                fork
+                    dut.inst_stack.wr_req(48'h0600_0010_0000 + k * 4096, 4096, 1);
+                    dut.inst_stack.wr_packet(data, 0);
+                join
+            end
+            repeat (2000) @(posedge sclk);
+            if (dm_cmds[1][m - 1] != prev[m - 1] + 6 || dm_cmds[1][2 - m] != prev[2 - m]) begin
+                $display("ERROR: MEM_MODE %0d: S2MM commands %0d / %0d, before %0d / %0d", m,
+                         dm_cmds[1][0], dm_cmds[1][1], prev[0], prev[1]);
+                errors++;
+            end
+        end
+        reg_wr(24'h000034, 3);
+
         if (errors == 0) $display("PASS");
         else $display("FAIL: %0d errors", errors);
         $finish;

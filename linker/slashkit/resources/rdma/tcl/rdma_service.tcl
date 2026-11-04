@@ -13,8 +13,9 @@
 #
 # Cells: the port's DCMAC hierarchy with the rdma_dcmac.tcl datapaths (1024-bit
 # at user_clk = 230 MHz), rdma_0 (rdma_service_bd), rdma_dm_0 / rdma_dm_1 (AXI
-# DataMovers, service_clk), rdma_mem_0 / rdma_mem_1 (SmartConnects joining each
-# DataMover's MM2S and S2MM onto one port), rst_rdma_0 (user_clk reset).
+# DataMovers, service_clk), rdma_mem_0 / rdma_mem_1 (rdma_axi_join: each
+# DataMover's MM2S and S2MM onto one port, wiring only), rst_rdma_0 (user_clk
+# reset).
 # The port's two SL2NOC ports, SL2NOC_<2n> and SL2NOC_<2n+1> (two per QSFP),
 # take one DataMover each; rdma_service alternates packets between them.
 # The port's NoC lanes (dummy_noc_<2n>/<2n+1>, dummy_noc_m_<2n>/<2n+1>) carry
@@ -55,7 +56,7 @@ proc slash_add_rdma {eth build rdma_dir} {
     foreach f {
         axis_skid.sv axil_split.sv rx_fcs_filter.sv rdma_lane_fifo.sv rdma_pay_rd.sv
         rdma_pay_wr.sv rdma_service.sv rdma_service_bd.v dcmac_rx_path.v dcmac_tx_path.v
-        dcmac_tx_cdc.v dcmac_phy_ctl.v
+        dcmac_tx_cdc.v dcmac_phy_ctl.v rdma_axi_join.v
     } {
         lappend files [file normalize [file join $rdma_dir hdl $f]]
     }
@@ -120,18 +121,23 @@ proc slash_add_rdma {eth build rdma_dir} {
             CONFIG.c_mm2s_burst_size {64} CONFIG.c_s2mm_burst_size {64} \
             CONFIG.c_mm2s_include_sf {true} CONFIG.c_s2mm_include_sf {true} \
             CONFIG.c_s2mm_support_indet_btt {false} \
+            CONFIG.c_enable_mm2s_adv_sig {1} CONFIG.c_enable_s2mm_adv_sig {1} \
         ] $dm
+        # progress pulses for rdma_0's diagnosis counters
+        foreach {from to} [list mm2s_addr_req_posted mm2s${i}_addr_posted mm2s_rd_xfer_cmplt mm2s${i}_rd_done \
+                               s2mm_addr_req_posted s2mm${i}_addr_posted s2mm_wr_xfer_cmplt s2mm${i}_wr_done] {
+            connect_bd_net [get_bd_pins rdma_dm_$i/$from] [get_bd_pins rdma_0/$to]
+        }
         foreach pin {m_axi_mm2s_aclk m_axis_mm2s_cmdsts_aclk m_axi_s2mm_aclk m_axis_s2mm_cmdsts_awclk} {
             connect_bd_net [get_bd_ports service_clk] [get_bd_pins rdma_dm_$i/$pin]
         }
         foreach pin {m_axi_mm2s_aresetn m_axis_mm2s_cmdsts_aresetn m_axi_s2mm_aresetn m_axis_s2mm_cmdsts_aresetn} {
             connect_bd_net [get_bd_pins ilreduced_logic_0/Res] [get_bd_pins rdma_dm_$i/$pin]
         }
-        # its reads and writes onto the one port
-        set sc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 rdma_mem_$i]
-        set_property -dict [list CONFIG.NUM_SI {2} CONFIG.NUM_MI {1} CONFIG.NUM_CLKS {1}] $sc
+        # its reads and writes onto the one port (disjoint AXI channels: a
+        # SmartConnect here stalled the writes on hardware)
+        create_bd_cell -type module -reference rdma_axi_join rdma_mem_$i
         connect_bd_net [get_bd_ports service_clk] [get_bd_pins rdma_mem_$i/aclk]
-        connect_bd_net [get_bd_pins ilreduced_logic_0/Res] [get_bd_pins rdma_mem_$i/aresetn]
         foreach {from to} [list \
             rdma_0/m_axis_mm2s${i}_cmd rdma_dm_$i/S_AXIS_MM2S_CMD \
             rdma_dm_$i/M_AXIS_MM2S     rdma_0/s_axis_mm2s$i \
@@ -139,9 +145,9 @@ proc slash_add_rdma {eth build rdma_dir} {
             rdma_0/m_axis_s2mm${i}_cmd rdma_dm_$i/S_AXIS_S2MM_CMD \
             rdma_0/m_axis_s2mm$i       rdma_dm_$i/S_AXIS_S2MM \
             rdma_dm_$i/M_AXIS_S2MM_STS rdma_0/s_axis_s2mm${i}_sts \
-            rdma_dm_$i/M_AXI_MM2S      rdma_mem_$i/S00_AXI \
-            rdma_dm_$i/M_AXI_S2MM      rdma_mem_$i/S01_AXI \
-            rdma_mem_$i/M00_AXI        sl2noc_$p/S00_AXI] {
+            rdma_dm_$i/M_AXI_MM2S      rdma_mem_$i/s_axi_rd \
+            rdma_dm_$i/M_AXI_S2MM      rdma_mem_$i/s_axi_wr \
+            rdma_mem_$i/m_axi          sl2noc_$p/S00_AXI] {
             connect_bd_intf_net [get_bd_intf_pins $from] [get_bd_intf_pins $to]
         }
     }
@@ -161,13 +167,24 @@ proc slash_add_rdma {eth build rdma_dir} {
     connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx1] [get_bd_intf_pins dummy_noc_m_[expr {$k + 1}]/S00_AXIS]
 
     # ------------------------------------------------------------ memory addresses
-    # the SL2NOC ports' aperture: the DDR window of the static shell
+    # the SL2NOC ports' aperture: the DDR window of the static shell, seen
+    # by each join; the DataMovers see the join's ports at the same place
+    # (it passes addresses through)
     foreach i {0 1} {
         set port SL2NOC_[expr {2 * $eth + $i}]
-        foreach sp {Data_MM2S Data_S2MM} {
+        assign_bd_address -offset 0x060000000000 -range 0x000800000000 \
+            -target_address_space [get_bd_addr_spaces rdma_mem_$i/m_axi] \
+            [get_bd_addr_segs $port/Reg] -force
+        foreach {sp intf} {Data_MM2S s_axi_rd Data_S2MM s_axi_wr} {
+            set space [get_bd_addr_spaces rdma_dm_$i/$sp]
             assign_bd_address -offset 0x060000000000 -range 0x000800000000 \
-                -target_address_space [get_bd_addr_spaces rdma_dm_$i/$sp] \
-                [get_bd_addr_segs $port/Reg] -force
+                -target_address_space $space [get_bd_addr_segs rdma_mem_$i/$intf/reg0] -force
+            # a module port has register usage, the DataMover's space memory
+            # usage: BD excludes the segment unless told otherwise
+            set ex [get_bd_addr_segs -quiet -excluded -of_objects $space]
+            if {[llength $ex]} {
+                include_bd_addr_seg $ex
+            }
         }
     }
 }

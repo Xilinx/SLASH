@@ -107,6 +107,15 @@ module rdma_service_bd #(
     input  wire              s_axis_s2mm1_sts_tvalid,
     output wire              s_axis_s2mm1_sts_tready,
     input  wire [7:0]        s_axis_s2mm1_sts_tdata,
+    // their progress pulses (advanced signals, diagnosis)
+    input  wire              mm2s0_addr_posted,
+    input  wire              mm2s0_rd_done,
+    input  wire              s2mm0_addr_posted,
+    input  wire              s2mm0_wr_done,
+    input  wire              mm2s1_addr_posted,
+    input  wire              mm2s1_rd_done,
+    input  wire              s2mm1_addr_posted,
+    input  wire              s2mm1_wr_done,
 
     // NoC stream lanes (sclk): user region -> stack, stack -> user region
     input  wire              s_axis_tx0_tvalid,
@@ -215,6 +224,10 @@ module rdma_service_bd #(
         .s_axis_s2mm1_sts_tvalid(s_axis_s2mm1_sts_tvalid),
         .s_axis_s2mm1_sts_tready(s_axis_s2mm1_sts_tready),
         .s_axis_s2mm1_sts_tdata(s_axis_s2mm1_sts_tdata),
+        .mm2s_addr_posted({mm2s1_addr_posted, mm2s0_addr_posted}),
+        .mm2s_rd_done({mm2s1_rd_done, mm2s0_rd_done}),
+        .s2mm_addr_posted({s2mm1_addr_posted, s2mm0_addr_posted}),
+        .s2mm_wr_done({s2mm1_wr_done, s2mm0_wr_done}),
         .s_axis_tx0_tvalid(s_axis_tx0_tvalid),
         .s_axis_tx0_tready(s_axis_tx0_tready),
         .s_axis_tx0_tdata(s_axis_tx0_tdata),

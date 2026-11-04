@@ -21,6 +21,7 @@ module rdma_pay_rd #(
 ) (
     input  wire          clk,
     input  wire          resetn,
+    input  wire [1:0]    dm_mask,           // DataMovers used: 3 both, 1 / 2 only 0 / 1
 
     // classified requests: [47:0] address, [63:48] length (1..65535 bytes),
     // [65:64] kind, [66] lane
@@ -63,6 +64,8 @@ module rdma_pay_rd #(
     // ---------------------------------------------------------------- dispatch
     reg         busy;
     reg         dm_next;                    // DataMover of the next DDR request
+    // the DataMover it goes to: alternately, or the one dm_mask allows
+    wire        dm_sel = dm_mask == 2'b01 ? 1'b0 : dm_mask == 2'b10 ? 1'b1 : dm_next;
     wire        q_pop;
     wire        q_full, q_empty, q_rst_busy;
     wire [24:0] q_dout;                     // [15:0] length, [17:16] kind, [19:18] source
@@ -70,12 +73,12 @@ module rdma_pay_rd #(
     wire        req_ddr = req_kind == KIND_DDR;
 
     wire   q_room = !q_full && !q_rst_busy;
-    assign mm2s_cmd_tvalid[0] = req_valid && q_room && req_ddr && !dm_next;
-    assign mm2s_cmd_tvalid[1] = req_valid && q_room && req_ddr &&  dm_next;
-    assign req_ready = q_room && (!req_ddr || mm2s_cmd_tready[dm_next]);
+    assign mm2s_cmd_tvalid[0] = req_valid && q_room && req_ddr && !dm_sel;
+    assign mm2s_cmd_tvalid[1] = req_valid && q_room && req_ddr &&  dm_sel;
+    assign req_ready = q_room && (!req_ddr || mm2s_cmd_tready[dm_sel]);
     wire   q_push = req_valid && req_ready;
     // source: [1] DataMover, [0] which (lane or DataMover)
-    wire [1:0] req_src = req_ddr ? {1'b1, dm_next} : {1'b0, req_data[66]};
+    wire [1:0] req_src = req_ddr ? {1'b1, dm_sel} : {1'b0, req_data[66]};
 
     // DataMover command: [22:0] BTT, [23] INCR, [29:24] DSA, [30] EOF,
     // [31] DRR, [95:32] start address, [99:96] tag, [103:100] reserved
