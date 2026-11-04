@@ -73,6 +73,7 @@ set(RP1_SOURCES
     src/rp1_boot.S
     src/rp1_hal.c
     src/rp1_store.c
+    src/rp1_scheduler.c
     src/rp1_loop.c
     src/rp1_run.c
     src/rp1_pdi.c
