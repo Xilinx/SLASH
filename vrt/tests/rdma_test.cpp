@@ -2,7 +2,14 @@
 #include <gtest/gtest.h>
 #include <vrt/rdma.hpp>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <map>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -183,4 +190,229 @@ TEST(RdmaTest, StatsReadEveryCounter) {
     s = rdma.stats();
     EXPECT_EQ(s.rxFcsDrops, 5000u);
     EXPECT_EQ(s.rxRoomDrops, 37u);
+}
+
+namespace {
+
+// The far end of the sideband, a peer that serves all requests.
+class FakePeer {
+   public:
+    int fd = -1;
+    std::vector<std::string> got;          // every line received
+    ~FakePeer() { if (fd >= 0) ::close(fd); }
+
+    void send(const std::string& s) { ::send(fd, s.data(), s.size(), MSG_NOSIGNAL); }
+    std::string line() {
+        size_t nl;
+        while ((nl = in.find('\n')) == std::string::npos) {
+            char b[256];
+            ssize_t n = recv(fd, b, sizeof(b), 0);
+            if (n <= 0) return "";
+            in.append(b, n);
+        }
+        std::string l = in.substr(0, nl);
+        in.erase(0, nl + 1);
+        got.push_back(l);
+        return l;
+    }
+    void listenOn(uint16_t port) {
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        int one = 1;
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = htons(port);
+        bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+        ::listen(s, 1);
+        fd = accept(s, nullptr, nullptr);
+        ::close(s);
+    }
+    void connectTo(uint16_t port) {
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = htons(port);
+        for (int i = 0; i < 100; i++) {
+            fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0) return;
+            ::close(fd);
+            fd = -1;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+    // the session, then the peer closes the connection
+    void serve(const std::string& roceIp = "10.0.0.3") {
+        session(roceIp);
+        ::close(fd);
+        fd = -1;
+    }
+    // announcements split over segments, then requests until BYE
+    void session(const std::string& roceIp) {
+        send("HELLO v=1 name=peer ro");
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        send("ce_ip=" + roceIp + " qps=1 mrs=1\r\nMR i=0 addr=0x400000000000 len=0x10000000\n"
+             "QP i=0 qpn=1 send_psn=0x200 rkey=0 udp=4791\n");
+        for (std::string l = line(); l.rfind("READY", 0) != 0; l = line()) {
+            if (l.empty() || l.rfind("ERR", 0) == 0) return;
+        }
+        send("READY\n");
+        for (;;) {
+            std::string l = line();
+            if (l.empty()) return;
+            if (l.rfind("BYE", 0) == 0) { send("OK\n"); return; }
+            std::string tag = l.substr(l.find('#'), l.find(' ', l.find('#')) - l.find('#'));
+            if (l.rfind("FILL", 0) == 0) send("OK " + tag + "\n");
+            if (l.rfind("CHECK", 0) == 0) send("OK " + tag + " errors=3 first=0x40\n");
+            if (l.rfind("RUN", 0) == 0) {
+                send("STATS #7\n");          // a request of its own in between
+                line();
+                send("OK " + tag + " ns=1000 retrans=2 psn_drops=0\n");
+            }
+            if (l.rfind("STATS", 0) == 0) send("OK " + tag + " retrans=5 rx_frames=9\n");
+        }
+    }
+
+   private:
+    std::string in;
+};
+
+uint16_t freePort() {
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+    socklen_t len = sizeof(a);
+    getsockname(s, reinterpret_cast<sockaddr*>(&a), &len);
+    ::close(s);
+    return ntohs(a.sin_port);
+}
+
+std::shared_ptr<FakeRegs> linkedRegs() {
+    auto regs = std::make_shared<FakeRegs>();
+    regs->regs[DCMAC0 + 0x1C04] = 0x5;
+    return regs;
+}
+
+}  // namespace
+
+TEST(RdmaSessionTest, ServerSwapsParametersAndConnectsTheQueuePair) {
+    auto regs = linkedRegs();
+    vrt::Rdma rdma(info(), regs);
+    uint16_t port = freePort();
+    rdma.setLocalIp("10.0.0.1");
+    rdma.setRemoteIp("10.0.0.3");
+    rdma.setRole(vrt::Rdma::Role::Server);
+    rdma.setPort(port);
+    rdma.setTimeout(std::chrono::seconds(5));
+    FakePeer peer;
+    std::thread t([&] { peer.connectTo(port); peer.serve(); });
+    rdma.connect();
+    EXPECT_TRUE(rdma.connected());
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::IP], 0x0A000001u);
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::MAC_LO], 0x0A000001u);
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::MAC_HI], 0x0200u);
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::QP_LOCAL_QPN], 1u);
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::QP_REMOTE_QPN], 1u);
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::QP_REMOTE_IP], 0x0A000003u);
+    EXPECT_EQ(regs->regs[STACK + vrt::Rdma::QP_LOCAL_PSN], 0x200u);   // the peer's send_psn
+    EXPECT_EQ(rdma.remoteIp(), "10.0.0.3");
+    ASSERT_EQ(rdma.remoteMemory().size(), 1u);
+    EXPECT_EQ(rdma.remoteMemory()[0].addr, 0x400000000000ull);
+    EXPECT_EQ(rdma.remoteMemory()[0].len, 0x10000000ull);
+    EXPECT_EQ(rdma.qp(0), 1u);
+
+    rdma.peerFill(0, 0, 4096, 0x1234);
+    auto c = rdma.peerCheck(0, 0, 4096, 0x1234);
+    EXPECT_EQ(c.errors, 3u);
+    EXPECT_EQ(c.firstError, 0x40);
+    auto r = rdma.peerWrite(0, 10, 4096, 0x400000000000ull, 0x060000000000ull);
+    EXPECT_EQ(r.ns, 1000u);
+    EXPECT_EQ(r.retrans, 2u);
+    EXPECT_EQ(rdma.peerStats()["retrans"], "5");
+    rdma.close();
+    EXPECT_FALSE(rdma.connected());
+    t.join();
+
+    // what this end announced and asked for
+    auto has = [&](const std::string& s) {
+        for (auto& l : peer.got) if (l.find(s) != std::string::npos) return true;
+        return false;
+    };
+    EXPECT_TRUE(has("HELLO v=1 name=v80 roce_ip=10.0.0.1 qps=1 mrs=1"));
+    EXPECT_TRUE(has("MR i=0 addr=0x60000000000 len=0x800000000"));   // default: the window
+    char psn[64];
+    std::snprintf(psn, sizeof(psn), "send_psn=0x%x ", regs->regs[STACK + vrt::Rdma::QP_REMOTE_PSN]);
+    EXPECT_TRUE(has(std::string("QP i=0 qpn=1 ") + psn));
+    EXPECT_TRUE(has("FILL #1 mr=0 off=0x0 len=0x1000 seed=0x1234"));
+    EXPECT_TRUE(has("RUN #3 op=write qp=0 count=10 size=4096 laddr=0x400000000000 raddr=0x60000000000"));
+    EXPECT_TRUE(has("OK #7 rx_frames="));                             // its STATS answered
+    EXPECT_TRUE(has("BYE"));
+}
+
+TEST(RdmaSessionTest, ClientConnectsToThePeersPort) {
+    auto regs = linkedRegs();
+    vrt::Rdma rdma(info(), regs);
+    uint16_t port = freePort();
+    rdma.setLocalIp("10.0.0.1");
+    rdma.setRole(vrt::Rdma::Role::Client);
+    rdma.setRemoteHost("127.0.0.1");
+    rdma.setPort(port);
+    rdma.addMemory(0x060000100000ull, 0x2000);
+    rdma.setTimeout(std::chrono::seconds(5));
+    FakePeer peer;
+    std::thread t([&] { peer.listenOn(port); peer.serve(); });
+    rdma.connect();
+    rdma.close();
+    t.join();
+    bool mr = false;
+    for (auto& l : peer.got) mr |= l == "MR i=0 addr=0x60000100000 len=0x2000";
+    EXPECT_TRUE(mr);
+}
+
+TEST(RdmaSessionTest, AnotherPeerIpIsRefused) {
+    auto regs = linkedRegs();
+    vrt::Rdma rdma(info(), regs);
+    uint16_t port = freePort();
+    rdma.setLocalIp("10.0.0.1");
+    rdma.setRemoteIp("10.0.0.3");
+    rdma.setPort(port);
+    rdma.setTimeout(std::chrono::seconds(5));
+    FakePeer peer;
+    std::thread t([&] { peer.connectTo(port); peer.serve("10.0.0.9"); });
+    EXPECT_THROW(rdma.connect(), std::runtime_error);
+    rdma.close();
+    t.join();
+    EXPECT_EQ(peer.got.back(), "ERR msg=roce_ip");
+}
+
+TEST(RdmaSessionTest, ConnectNeedsTheSettings) {
+    auto regs = linkedRegs();
+    vrt::Rdma rdma(info(), regs);
+    EXPECT_THROW(rdma.connect(), std::invalid_argument);           // no local IP
+    rdma.setLocalIp("10.0.0.1");
+    rdma.setRole(vrt::Rdma::Role::Client);
+    EXPECT_THROW(rdma.connect(), std::invalid_argument);           // no remote host
+    EXPECT_THROW(rdma.setLocalIp("10.0.0"), std::invalid_argument);
+    EXPECT_THROW(rdma.setQp(0), std::invalid_argument);
+    EXPECT_THROW(rdma.peerStats(), std::logic_error);              // not connected
+    auto down = std::make_shared<FakeRegs>();
+    vrt::Rdma noLink(info(), down);
+    noLink.setLocalIp("10.0.0.1");
+    noLink.setTimeout(std::chrono::milliseconds(1));
+    EXPECT_THROW(noLink.connect(), std::runtime_error);            // link down
+}
+
+TEST(RdmaSessionTest, Pattern) {
+    std::vector<uint32_t> w(1024);
+    vrt::Rdma::fillPattern(w.data(), w.size(), 0xFFFFFFF0u);
+    EXPECT_EQ(w[0], 0xFFFFFFF0u);
+    EXPECT_EQ(w[16], 0u);                                          // wraps
+    EXPECT_EQ(vrt::Rdma::checkPattern(w.data(), w.size(), 0xFFFFFFF0u).errors, 0u);
+    w[5] ^= 1;
+    w[9] = 0;
+    auto r = vrt::Rdma::checkPattern(w.data(), w.size(), 0xFFFFFFF0u);
+    EXPECT_EQ(r.errors, 2u);
+    EXPECT_EQ(r.firstError, 20);
 }

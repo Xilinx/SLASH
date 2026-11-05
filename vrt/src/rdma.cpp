@@ -8,6 +8,8 @@
 
 #include <vrt/utils/logger.hpp>
 
+#include "rdma_sideband.hpp"
+
 namespace vrt {
 
 namespace {
@@ -165,7 +167,7 @@ void Rdma::connect(const RdmaQp& qp) {
     }
 }
 
-uint64_t Rdma::memoryAddress(uint64_t phys, uint64_t offsetBytes, uint32_t length) const {
+uint64_t Rdma::memoryAddress(uint64_t phys, uint64_t offsetBytes, uint64_t length) const {
     uint64_t a = phys + offsetBytes;
     if (a < info.memBase || a + length > info.memBase + info.memRange) {
         throw std::invalid_argument("Rdma: buffer at " + hex(a) +
