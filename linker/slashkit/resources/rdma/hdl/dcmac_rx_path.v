@@ -11,8 +11,15 @@
 //
 // The drop counters are reported in aclk as the network stack expects them:
 // rx_drop_count[11:0] bad FCS, [15:12] overflow (both wrap).
+//
+// The filter holds 512 KiB, in UltraRAM. The stack acknowledges a packet only
+// once it has left the filter, and a peer has at most WR_WINDOW (32) WRITEs
+// per QP unacknowledged, so while those fit (messages up to ~12 KiB) a payload
+// sink slower than the line (one DDR4 channel: ~173 Gb/s) holds the peer back
+// instead of overflowing the filter. With 64 KiB, peer WRITEs into DDR lost a
+// frame in ~600..900 and the peer resent ~32 frames for each.
 module dcmac_rx_path #(
-    parameter integer FILTER_ADDR_BITS = 9      // 512 beats of 128 bytes
+    parameter integer FILTER_ADDR_BITS = 12     // 4096 beats of 128 bytes
 ) (
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 dclk CLK" *)
     (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axis, ASSOCIATED_RESET dresetn" *)
@@ -53,7 +60,8 @@ module dcmac_rx_path #(
 
     rx_fcs_filter #(
         .DATA_BITS(1024),
-        .ADDR_BITS(FILTER_ADDR_BITS)
+        .ADDR_BITS(FILTER_ADDR_BITS),
+        .RAM_STYLE("ultra")
     ) inst_filter (
         .aclk(dclk),
         .aresetn(dresetn),

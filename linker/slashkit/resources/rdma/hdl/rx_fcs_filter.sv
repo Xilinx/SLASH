@@ -12,7 +12,8 @@
 // losing beats in the middle of it.
 module rx_fcs_filter #(
     parameter integer DATA_BITS = 512,
-    parameter integer ADDR_BITS = 9            // 512 beats of 64 bytes
+    parameter integer ADDR_BITS = 9,           // 512 beats of 64 bytes
+    parameter         RAM_STYLE = "block"      // "ultra" for a deep buffer
 ) (
     input  wire                     aclk,
     input  wire                     aresetn,
@@ -37,14 +38,19 @@ module rx_fcs_filter #(
     localparam integer DEPTH = 1 << ADDR_BITS;
     localparam integer SKID = 4;
 
-    (* ram_style = "block" *) reg [W-1:0] mem [0:DEPTH-1];
+    (* ram_style = RAM_STYLE *) reg [W-1:0] mem [0:DEPTH-1];
 
     // write side: wr_ptr runs ahead of commit_ptr while a frame comes in
     reg [ADDR_BITS:0] wr_ptr, commit_ptr, rd_ptr;
     reg frame_bad;                              // a beat of this frame did not fit
 
+    // room, registered off the write enable's path: from the pointers of the
+    // cycle before, with one entry to spare for the beat written meanwhile
     wire [ADDR_BITS:0] used = wr_ptr - rd_ptr;
-    wire fits = used != DEPTH[ADDR_BITS:0];
+    reg fits;
+    always @(posedge aclk)
+        fits <= !aresetn || used < DEPTH - 1;
+
     wire write = s_tvalid && fits && !frame_bad;
     wire lost = s_tvalid && (!fits || frame_bad);
 
