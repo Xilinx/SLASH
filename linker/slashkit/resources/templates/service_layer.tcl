@@ -1180,7 +1180,7 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 # which takes rdma_0/s_axil and the port's DCMAC registers as targets.
 {% if rdma_enabled %}
   source [file normalize "{{ rdma_tcl }}"]
-  slash_add_rdma {{ rdma_eth }} {{ rdma_build }} [file normalize "{{ rdma_dir }}"]
+  slash_add_rdma {{ rdma_eth }} {{ rdma_build }} [file normalize "{{ rdma_dir }}"] {{ '{' }}{{ rdma_lanes|join(' ') }}{{ '}' }}
 {% endif %}
 
 # === AXI-Lite SmartConnect for service_layer control ===

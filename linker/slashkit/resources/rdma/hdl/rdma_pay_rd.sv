@@ -10,8 +10,8 @@
 //                command here); each DataMover's 512-bit output goes into
 //                its own FIFO, which gives two beats per cycle, so the next
 //                packet is read while this one is sent
-//   KIND_STREAM  the next ceil(len / 64) beats of lane 0 or 1 (tkeep and
-//                tlast of the lane are ignored)
+//   KIND_STREAM  the next ceil(len / 64) units of the stream (rdma_stripe_rd;
+//                tkeep is ignored)
 //   KIND_BAD     zeros (an address outside the memory window)
 // DataMover commands are issued ahead of the data; the order FIFO keeps the
 // requests whose data is still to come.
@@ -24,7 +24,7 @@ module rdma_pay_rd #(
     input  wire [1:0]    dm_mask,           // DataMovers used: 3 both, 1 / 2 only 0 / 1
 
     // classified requests: [47:0] address, [63:48] length (1..65535 bytes),
-    // [65:64] kind, [66] lane
+    // [65:64] kind, [66] unused
     input  wire          req_valid,
     output wire          req_ready,
     input  wire [66:0]   req_data,
@@ -40,15 +40,13 @@ module rdma_pay_rd #(
     input  wire [511:0]  mm2s1_tdata,
     input  wire          mm2s1_tlast,
 
-    // the two lanes (rdma_fifo_w1r2 read sides)
-    input  wire [1:0]    lane_avail1,
-    input  wire [1:0]    lane_avail2,
-    input  wire [511:0]  lane0_d0,
-    input  wire [511:0]  lane0_d1,
-    input  wire [511:0]  lane1_d0,
-    input  wire [511:0]  lane1_d1,
-    output wire [1:0]    lane_take1,
-    output wire [1:0]    lane_take2,
+    // the stream (rdma_stripe_rd)
+    input  wire          stream_avail1,
+    input  wire          stream_avail2,
+    input  wire [511:0]  stream_d0,
+    input  wire [511:0]  stream_d1,
+    output wire          stream_take1,
+    output wire          stream_take2,
 
     // payload packets to the stack (through the clock crossing)
     input  wire          out_room,          // a beat can be written
@@ -77,8 +75,8 @@ module rdma_pay_rd #(
     assign mm2s_cmd_tvalid[1] = req_valid && q_room && req_ddr &&  dm_sel;
     assign req_ready = q_room && (!req_ddr || mm2s_cmd_tready[dm_sel]);
     wire   q_push = req_valid && req_ready;
-    // source: [1] DataMover, [0] which (lane or DataMover)
-    wire [1:0] req_src = req_ddr ? {1'b1, dm_sel} : {1'b0, req_data[66]};
+    // source: [1] DataMover, [0] which DataMover (0 for the stream)
+    wire [1:0] req_src = req_ddr ? {1'b1, dm_sel} : 2'b00;
 
     // DataMover command: [22:0] BTT, [23] INCR, [29:24] DSA, [30] EOF,
     // [31] DRR, [95:32] start address, [99:96] tag, [103:100] reserved
@@ -147,15 +145,15 @@ module rdma_pay_rd #(
     wire [6:0]  q_last = (q_len[5:0] == 6'd0) ? 7'd64 : {1'b0, q_len[5:0]};
     assign      q_pop = !busy && !q_empty;
 
-    // the four FIFOs a packet is taken from: lane 0 / 1, DataMover 0 / 1
-    wire [3:0]   avail1 = {dm_avail1, lane_avail1};
-    wire [3:0]   avail2 = {dm_avail2, lane_avail2};
+    // the FIFOs a packet is taken from: the stream (1 unused), DataMover 0 / 1
+    wire [3:0]   avail1 = {dm_avail1, 1'b0, stream_avail1};
+    wire [3:0]   avail2 = {dm_avail2, 1'b0, stream_avail2};
     wire [511:0] d0 [4];
     wire [511:0] d1 [4];
-    assign d0[0] = lane0_d0;
-    assign d1[0] = lane0_d1;
-    assign d0[1] = lane1_d0;
-    assign d1[1] = lane1_d1;
+    assign d0[0] = stream_d0;
+    assign d1[0] = stream_d1;
+    assign d0[1] = 512'd0;
+    assign d1[1] = 512'd0;
     assign d0[2] = dm_d0[0][511:0];
     assign d1[2] = dm_d1[0][511:0];
     assign d0[3] = dm_d0[1][511:0];
@@ -185,8 +183,8 @@ module rdma_pay_rd #(
         assign take1[i] = busy && kind != KIND_BAD && src == i && take == 2'd1;
         assign take2[i] = busy && kind != KIND_BAD && src == i && take == 2'd2;
     end
-    assign lane_take1 = take1[1:0];
-    assign lane_take2 = take2[1:0];
+    assign stream_take1 = take1[0];
+    assign stream_take2 = take2[0];
     assign dm_take1 = take1[3:2];
     assign dm_take2 = take2[3:2];
 

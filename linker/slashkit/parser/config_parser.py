@@ -36,7 +36,9 @@ from slashkit.core.port import BusType
 _RE_TARGET = re.compile(r"^\s*([A-Za-z]+)\s*(\d*)\s*$")
 _RE_NK = re.compile(r"^\s*([^:]+)\s*:\s*(\d+)(?::(.*))?\s*$")
 _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
-_RE_STREAM_EP = re.compile(r"^(eth_(\d+)|rdma)\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
+# eth_<n>.tx0/tx1/rx0/rx1: a port's NoC lanes; rdma.tx / rdma.rx: the RDMA
+# service's stream (one each way, spread over its port's two lanes)
+_RE_STREAM_EP = re.compile(r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma\.(\w+))$", re.IGNORECASE)
 
 # Ethernet ports with a DCMAC in the service layer (eth_0: DCMAC0, eth_2: DCMAC1),
 # the only ones that can carry the RDMA service.
@@ -144,6 +146,7 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     pending_clock: Dict[str, str] = {}
     enabled_eth: set[int] = set()
     rdma_eth: Optional[int] = None
+    rdma_lanes: Optional[Tuple[int, int]] = None
     pre_synth_tcls: list[str] = []
     debug_nets: list[DebugNetSpec] = []
 
@@ -215,6 +218,9 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                         f"Invalid [network] rdma value '{v}'. Expected an Ethernet port, e.g. rdma=eth_0.")
                 rdma_eth = int(m.group(1))
                 continue
+            if k.lower() == "rdma_lanes":
+                rdma_lanes = _parse_rdma_lanes(v)
+                continue
             m = _RE_ETH_KEY.match(k)
             if not m:
                 # ignore unknown keys in [network] to be lenient
@@ -261,7 +267,7 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     _commit_clock()
 
     # Attach network spec
-    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=rdma_eth)
+    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=rdma_eth, rdma_lanes=rdma_lanes)
     _check_rdma(cfg)
     cfg.user_region = UserRegionSpec(pre_synth_tcls=pre_synth_tcls)
     cfg.debug = DebugSpec(nets=debug_nets)
@@ -269,9 +275,32 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     return cfg
 
 
+def _parse_rdma_lanes(v: str) -> Tuple[int, int]:
+    """[network] rdma_lanes=<a>,<b>: two different NoC lanes, 0..7."""
+    try:
+        lanes = tuple(int(t, 0) for t in v.split(","))
+    except ValueError:
+        lanes = ()
+    if len(lanes) != 2 or lanes[0] == lanes[1] or not all(0 <= x <= 7 for x in lanes):
+        raise ValueError(
+            f"Invalid [network] rdma_lanes value '{v}'. Expected two different NoC "
+            f"lanes 0..7, e.g. rdma_lanes=4,6.")
+    return lanes
+
+
 def _check_rdma(cfg: ConnectivityConfig) -> None:
     """The RDMA port must be an enabled DCMAC port, and owns that port's streams."""
     rdma = cfg.net.rdma
+    lanes = cfg.net.rdma_lanes
+    if lanes is not None:
+        if rdma is None:
+            raise ValueError("[network] rdma_lanes needs an rdma= port.")
+        for lane in lanes:
+            port = lane // 2
+            if port != rdma and port in cfg.net.enabled_eth:
+                raise ValueError(
+                    f"[network] rdma_lanes: lane {lane} belongs to eth_{port}, which is "
+                    f"enabled for Ethernet.")
     if rdma is not None:
         if rdma not in RDMA_ETH_PORTS:
             raise ValueError(
@@ -285,13 +314,18 @@ def _check_rdma(cfg: ConnectivityConfig) -> None:
             m = _RE_STREAM_EP.match(ep)
             if not m:
                 continue
-            if m.group(1).lower() == "rdma" and rdma is None:
-                raise ValueError(
-                    f"stream_connect uses '{ep}' but [network] has no rdma= port.")
-            if m.group(2) is not None and int(m.group(2)) == rdma:
+            if m.group(4) is not None:
+                if m.group(4).lower() not in ("tx", "rx"):
+                    raise ValueError(
+                        f"stream_connect uses '{ep}': the RDMA service has one stream "
+                        f"each way, rdma.tx and rdma.rx.")
+                if rdma is None:
+                    raise ValueError(
+                        f"stream_connect uses '{ep}' but [network] has no rdma= port.")
+            elif int(m.group(2)) == rdma:
                 raise ValueError(
                     f"stream_connect uses '{ep}', but eth_{rdma} carries the RDMA "
-                    f"service: connect to rdma.{m.group(3).lower()} instead.")
+                    f"service: connect to rdma.{m.group(3).lower()[:2]} instead.")
 
 
 def _resolve_port_name_for_kernel(kernel: Kernel, requested: str) -> str:

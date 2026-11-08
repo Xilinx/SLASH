@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # -----------------------------
 # Data structures
@@ -32,6 +32,15 @@ class NetworkSpec:
     enabled_eth: set[int]
     # Ethernet port (eth_<n> index) that carries the RDMA service, or None
     rdma: Optional[int] = None
+    # the two NoC lanes (0..7, lane k belongs to eth_<k // 2>) of the RDMA
+    # service's stream; None: the RDMA port's own two
+    rdma_lanes: Optional[Tuple[int, int]] = None
+
+    def rdma_lane_pair(self) -> Tuple[int, int]:
+        """The NoC lanes of rdma.tx / rdma.rx (needs rdma)."""
+        if self.rdma_lanes is not None:
+            return self.rdma_lanes
+        return (2 * self.rdma, 2 * self.rdma + 1)
 
 
 @dataclass

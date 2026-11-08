@@ -294,6 +294,8 @@ def generate_tcl(config: LinkerConfiguration) -> None:
                 "axis_to_fabric": net_ctx["axis_to_fabric"],
                 # /dcmac_axis_noc_s_k/M00_AXIS -> inst.AXIS
                 "axis_from_fabric": net_ctx["axis_from_fabric"],
+                # rdma.tx / rdma.rx: rdma_stream_tx / rdma_stream_rx
+                "rdma_stream_cells": net_ctx["rdma_stream_cells"],
             }
         )
         used_rx_slots: set[int] = set()
@@ -316,6 +318,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         ctx["virt_smart_roots"] = []
         ctx["axis_to_fabric"] = []
         ctx["axis_from_fabric"] = []
+        ctx["rdma_stream_cells"] = []
         ctx["dcmac_rx_tready_tie_pins"] = []
         ctx.update(build_stream_connect_context(instances, streams))
 

@@ -9,18 +9,19 @@
  * local address:
  *   - card memory: the DDR window (Buffer with MemoryRangeType::DDR,
  *     getPhysAddr()), also what a peer's WRITEs and READs address;
- *   - a stream: Rdma::streamAddress(lane), the user-region stream
- *     rdma.tx<lane> for what is sent and rdma.rx<lane> for what is received.
- *     A WRITE from a stream takes ceil(length / 64) beats of the stream; data
- *     received for a stream address arrives with tlast on the last beat of
- *     each message. Use QPs 0..7 for WRITEs from a stream: only those are
+ *   - the stream: Rdma::STREAM, the user-region stream rdma.tx for what is
+ *     sent and rdma.rx for what is received (1024 bits each, over two NoC
+ *     lanes). A WRITE from the stream takes ceil(length / 64) 64-byte units
+ *     of rdma.tx (two per beat, one in a beat with tlast); data received for
+ *     the stream arrives on rdma.rx with tlast on the last beat of each
+ *     message. Use QPs 0..7 for WRITEs from the stream: only those are
  *     retransmitted from the stack's own buffer.
  *
  * A session with a peer (connect()) swaps the queue-pair and memory
  * parameters over a TCP sideband beside the RoCE link, as server or client:
  *
  *   auto rdma = device.getRdmaDevice();
- *   rdma.setLocalIp("10.0.0.1");
+ *   rdma.setLocalIp("192.168.0.1");
  *   rdma.setRole(vrt::Rdma::Role::Client);
  *   rdma.setRemoteHost("192.168.1.50");     // the peer's sideband address
  *   rdma.connect();
@@ -127,11 +128,8 @@ class Rdma {
     static constexpr uint16_t SIDEBAND_PORT = 18515;
     static constexpr unsigned SIDEBAND_VERSION = 1;
 
-    /// stream address bits of a local address
-    static constexpr uint64_t STREAM_BIT = 1ull << 47;
-    static constexpr uint64_t streamAddress(unsigned lane) {
-        return STREAM_BIT | (static_cast<uint64_t>(lane & 1u) << 46);
-    }
+    /// the local address of the stream (rdma.tx / rdma.rx); bits 46:0 do not matter
+    static constexpr uint64_t STREAM = 1ull << 47;
 
     // service registers (offsets in the service window)
     static constexpr uint64_t SVC_ID = 0x000, SVC_BUILD = 0x008, SVC_ETH = 0x00C;
@@ -268,13 +266,13 @@ class Rdma {
               uint32_t length) {
         read(qpn, memoryAddress(dst.getPhysAddr(), offsetBytes, length), remoteAddr, length);
     }
-    /// WRITE the next bytes of user-region stream rdma.tx<lane> to @p remoteAddr
-    void writeFromStream(uint32_t qpn, unsigned lane, uint64_t remoteAddr, uint32_t length) {
-        write(qpn, streamAddress(lane), remoteAddr, length);
+    /// WRITE the next bytes of the user-region stream rdma.tx to @p remoteAddr
+    void writeFromStream(uint32_t qpn, uint64_t remoteAddr, uint32_t length) {
+        write(qpn, STREAM, remoteAddr, length);
     }
-    /// READ @p remoteAddr into user-region stream rdma.rx<lane>
-    void readToStream(uint32_t qpn, unsigned lane, uint64_t remoteAddr, uint32_t length) {
-        read(qpn, streamAddress(lane), remoteAddr, length);
+    /// READ @p remoteAddr into the user-region stream rdma.rx
+    void readToStream(uint32_t qpn, uint64_t remoteAddr, uint32_t length) {
+        read(qpn, STREAM, remoteAddr, length);
     }
 
     /// messages posted through this object

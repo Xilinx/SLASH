@@ -3,8 +3,10 @@
 
 // Functional test of rdma_service's payload paths and registers. The stack
 // is replaced by a test model of rdma_200_ip whose payload request ports the
-// test drives; the AXI DataMover by a behavioural model over a byte memory;
-// the NoC lanes by a source and a sink. Every byte is checked.
+// test drives; the AXI DataMover by a behavioural model over a byte memory.
+// The stream goes through the user region's rdma_stream_tx / rdma_stream_rx
+// (as the linker places them) and a NoC model that stalls each lane on its
+// own, from a 1024-bit source and to a sink. Every byte is checked.
 //
 //   +N=<requests per direction> (default 400); seed: SEED=<n> run_tb_rdma_service.sh
 //
@@ -164,12 +166,11 @@ module tb_rdma_service;
     int dm_cmds [2][2] = '{'{0, 0}, '{0, 0}};   // [MM2S / S2MM][DataMover]
     logic [15:0] rx_drop_count = 16'h0005;
 
-    // lanes
-    logic [1:0] tx_tvalid = 0;
-    wire [1:0] tx_tready;
-    logic [511:0] tx_tdata [2];
-    wire [1:0] rx_tvalid, rx_tlast;
-    logic [1:0] rx_tready = 0;
+    // the service's lanes
+    wire [1:0] tx_tvalid, tx_tready, tx_tlast;
+    wire [511:0] tx_tdata [2];
+    wire [63:0] tx_tkeep [2];
+    wire [1:0] rx_tvalid, rx_tready, rx_tlast;
     wire [511:0] rx_tdata [2];
     wire [63:0] rx_tkeep [2];
 
@@ -215,9 +216,9 @@ module tb_rdma_service;
         .s_axis_s2mm1_sts_tdata(s2mm_sts_tdata[1]),
         .mm2s_addr_posted(2'b00), .mm2s_rd_done(2'b00), .s2mm_addr_posted(2'b00), .s2mm_wr_done(2'b00),
         .s_axis_tx0_tvalid(tx_tvalid[0]), .s_axis_tx0_tready(tx_tready[0]), .s_axis_tx0_tdata(tx_tdata[0]),
-        .s_axis_tx0_tkeep('1), .s_axis_tx0_tlast(1'b0),
+        .s_axis_tx0_tkeep(tx_tkeep[0]), .s_axis_tx0_tlast(tx_tlast[0]),
         .s_axis_tx1_tvalid(tx_tvalid[1]), .s_axis_tx1_tready(tx_tready[1]), .s_axis_tx1_tdata(tx_tdata[1]),
-        .s_axis_tx1_tkeep('1), .s_axis_tx1_tlast(1'b0),
+        .s_axis_tx1_tkeep(tx_tkeep[1]), .s_axis_tx1_tlast(tx_tlast[1]),
         .m_axis_rx0_tvalid(rx_tvalid[0]), .m_axis_rx0_tready(rx_tready[0]), .m_axis_rx0_tdata(rx_tdata[0]),
         .m_axis_rx0_tkeep(rx_tkeep[0]), .m_axis_rx0_tlast(rx_tlast[0]),
         .m_axis_rx1_tvalid(rx_tvalid[1]), .m_axis_rx1_tready(rx_tready[1]), .m_axis_rx1_tdata(rx_tdata[1]),
@@ -305,38 +306,87 @@ module tb_rdma_service;
         end
     end
 
-    // ---------------------------------------------------------------- lanes
-    // source: beat k of lane l carries bytes lane_byte(l, 64k + i)
-    function automatic byte lane_byte(int l, longint i);
-        return byte'(((i + 1) * (l ? 32'h85EBCA6B : 32'hC2B2AE35)) >> 11);
+    // ---------------------------------------------------------------- stream
+    // the user region's end, on sclk here (the NoC crosses to user_clk)
+    logic          k_tx_tvalid = 0, k_tx_tlast;
+    wire           k_tx_tready;
+    logic [1023:0] k_tx_tdata;
+    logic [127:0]  k_tx_tkeep;
+    wire           k_rx_tvalid, k_rx_tlast;
+    logic          k_rx_tready = 0;
+    wire [1023:0]  k_rx_tdata;
+    wire [127:0]   k_rx_tkeep;
+    wire [1:0]     u_tx_tvalid, u_tx_tready, u_rx_tvalid, u_rx_tready;
+    logic [1:0]    noc_tx = 0, noc_rx = 0;  // the lane passes a beat this cycle
+
+    rdma_stream_tx inst_user_tx (
+        .aclk(sclk), .aresetn(sresetn),
+        .s_axis_tvalid(k_tx_tvalid), .s_axis_tready(k_tx_tready), .s_axis_tdata(k_tx_tdata),
+        .s_axis_tkeep(k_tx_tkeep), .s_axis_tlast(k_tx_tlast),
+        .m_axis0_tvalid(u_tx_tvalid[0]), .m_axis0_tready(u_tx_tready[0]), .m_axis0_tdata(tx_tdata[0]),
+        .m_axis0_tkeep(tx_tkeep[0]), .m_axis0_tlast(tx_tlast[0]),
+        .m_axis1_tvalid(u_tx_tvalid[1]), .m_axis1_tready(u_tx_tready[1]), .m_axis1_tdata(tx_tdata[1]),
+        .m_axis1_tkeep(tx_tkeep[1]), .m_axis1_tlast(tx_tlast[1])
+    );
+    rdma_stream_rx inst_user_rx (
+        .aclk(sclk), .aresetn(sresetn),
+        .s_axis0_tvalid(u_rx_tvalid[0]), .s_axis0_tready(u_rx_tready[0]), .s_axis0_tdata(rx_tdata[0]),
+        .s_axis0_tkeep(rx_tkeep[0]), .s_axis0_tlast(rx_tlast[0]),
+        .s_axis1_tvalid(u_rx_tvalid[1]), .s_axis1_tready(u_rx_tready[1]), .s_axis1_tdata(rx_tdata[1]),
+        .s_axis1_tkeep(rx_tkeep[1]), .s_axis1_tlast(rx_tlast[1]),
+        .m_axis_tvalid(k_rx_tvalid), .m_axis_tready(k_rx_tready), .m_axis_tdata(k_rx_tdata),
+        .m_axis_tkeep(k_rx_tkeep), .m_axis_tlast(k_rx_tlast)
+    );
+    // NoC: each lane on its own, 70 % of the cycles
+    assign tx_tvalid = u_tx_tvalid & noc_tx;
+    assign u_tx_tready = tx_tready & noc_tx;
+    assign u_rx_tvalid = rx_tvalid & noc_rx;
+    assign rx_tready = u_rx_tready & noc_rx;
+    always @(posedge sclk) begin
+        noc_tx <= #0.1 {$urandom_range(99) < 70, $urandom_range(99) < 70};
+        noc_rx <= #0.1 {$urandom_range(99) < 70, $urandom_range(99) < 70};
+    end
+
+    // source: unit k of the stream carries bytes stream_byte(64k + i); beats
+    // of two units, or one with tlast (10 % of the beats end a message)
+    function automatic byte stream_byte(longint i);
+        return byte'(((i + 1) * 32'hC2B2AE35) >> 11);
     endfunction
-    longint tx_sent [2] = '{0, 0};          // beats
-    for (genvar l = 0; l < 2; l++) begin : g_src
-        initial begin
-            wait (sresetn);
-            forever begin
-                while ($urandom_range(99) < 30) begin @(posedge sclk); #0.1; end
-                for (int i = 0; i < 64; i++)
-                    tx_tdata[l][8*i +: 8] = lane_byte(l, tx_sent[l]*64 + i);
-                tx_tvalid[l] = 1;
-                do @(posedge sclk); while (tx_tready[l] !== 1'b1);
-                tx_sent[l]++;
-                #0.1 tx_tvalid[l] = 0;
-            end
+    longint tx_units = 0;
+    initial begin
+        wait (sresetn);
+        forever begin
+            bit last, two;
+            while ($urandom_range(99) < 30) begin @(posedge sclk); #0.1; end
+            last = $urandom_range(99) < 10;
+            two = !last || $urandom_range(1);
+            for (int i = 0; i < 128; i++)
+                k_tx_tdata[8*i +: 8] = (i < 64 || two) ? stream_byte(tx_units*64 + i) : 8'hEE;
+            k_tx_tkeep = two ? '1 : {64'd0, {64{1'b1}}};
+            k_tx_tlast = last;
+            k_tx_tvalid = 1;
+            do @(posedge sclk); while (k_tx_tready !== 1'b1);
+            tx_units += two ? 2 : 1;
+            #0.1 k_tx_tvalid = 0;
         end
     end
-    // sink: collect beats as {data, keep, last}
+    // sink: collect the stream's units as {data, keep, last}
     typedef struct { logic [511:0] d; logic [63:0] k; logic l; } beat_t;
-    beat_t rx_q [2][$];
-    for (genvar l = 0; l < 2; l++) begin : g_sink
-        initial begin
-            forever begin
-                rx_tready[l] = $urandom_range(99) >= 30;
-                @(posedge sclk);
-                if (rx_tvalid[l] && rx_tready[l])
-                    rx_q[l].push_back('{rx_tdata[l], rx_tkeep[l], rx_tlast[l]});
-                #0.1;
+    beat_t rx_q [$];
+    initial begin
+        forever begin
+            k_rx_tready = $urandom_range(99) >= 30;
+            @(posedge sclk);
+            if (k_rx_tvalid && k_rx_tready) begin
+                bit two = k_rx_tkeep[127:64] != 0;
+                rx_q.push_back('{k_rx_tdata[511:0], k_rx_tkeep[63:0], k_rx_tlast && !two});
+                if (two)
+                    rx_q.push_back('{k_rx_tdata[1023:512], k_rx_tkeep[127:64], k_rx_tlast});
+                else if (!k_rx_tlast) begin
+                    $display("ERROR: rdma.rx beat with one unit and no tlast"); errors++;
+                end
             end
+            #0.1;
         end
     end
 
@@ -384,27 +434,26 @@ module tb_rdma_service;
 
     int n_rd [3] = '{0, 0, 0};
     int n_wr [3] = '{0, 0, 0};
-    longint rx_taken [2] = '{0, 0};         // lane beats consumed by READ checks
 
     // read side: issue requests, check each packet against what it must carry
-    typedef struct { kind_t k; logic [47:0] a; int len; int lane; longint first_beat; } rq_t;
+    typedef struct { kind_t k; logic [47:0] a; int len; longint first_unit; } rq_t;
     rq_t rd_q [$];
-    longint tx_used [2] = '{0, 0};          // lane beats already promised to requests
+    longint tx_used = 0;                    // stream units already promised to requests
+    longint rx_units = 0;                   // stream units of the stream writes
 
     task automatic do_reads();
         for (int r = 0; r < N; r++) begin
             rq_t q;
             q.k = pick();
             q.len = pick_len();
-            q.lane = $urandom_range(1);
             case (q.k)
                 K_MEM:    q.a = mem_addr();
-                K_STREAM: q.a = {1'b1, q.lane[0], 46'd0};
+                K_STREAM: q.a = {1'b1, 47'($urandom)};      // bits 46:0 do not matter
                 default:  q.a = 48'h0000_0001_0000;
             endcase
             if (q.k == K_STREAM) begin
-                q.first_beat = tx_used[q.lane];
-                tx_used[q.lane] += (q.len + 63) / 64;
+                q.first_unit = tx_used;
+                tx_used += (q.len + 63) / 64;
             end
             rd_q.push_back(q);
             n_rd[q.k]++;
@@ -430,7 +479,7 @@ module tb_rdma_service;
                 byte want;
                 case (q.k)
                     K_MEM:    want = mem_rd(q.a + i);
-                    K_STREAM: want = lane_byte(q.lane, q.first_beat*64 + i);
+                    K_STREAM: want = stream_byte(q.first_unit*64 + i);
                     default:  want = 0;
                 endcase
                 if (got[i] !== want) begin
@@ -443,9 +492,9 @@ module tb_rdma_service;
         end
     endtask
 
-    // write side: mem writes are checked in memory, stream writes on the lanes
+    // write side: mem writes are checked in memory, stream writes at the sink
     typedef struct { int len; bit last; byte data[]; } wpk_t;
-    wpk_t lane_expect [2][$];
+    wpk_t stream_expect [$];
     typedef struct { logic [47:0] a; byte data[]; } mwr_t;
     mwr_t mem_expect [$];
 
@@ -453,7 +502,6 @@ module tb_rdma_service;
         for (int r = 0; r < N; r++) begin
             kind_t k = pick();
             int len = pick_len();
-            int lane = $urandom_range(1);
             bit last = $urandom_range(3) != 0;
             logic [47:0] a;
             byte data[];
@@ -461,10 +509,13 @@ module tb_rdma_service;
             foreach (data[i]) data[i] = byte'($urandom);
             case (k)
                 K_MEM:    a = mem_addr();
-                K_STREAM: a = {1'b1, lane[0], 46'd0};
+                K_STREAM: a = {1'b1, 47'($urandom)};
                 default:  a = 48'h0000_0002_0000;
             endcase
-            if (k == K_STREAM) lane_expect[lane].push_back('{len, last, data});
+            if (k == K_STREAM) begin
+                stream_expect.push_back('{len, last, data});
+                rx_units += (len + 63) / 64;
+            end
             if (k == K_MEM) mem_expect.push_back('{a, data});
             n_wr[k]++;
             fork
@@ -472,25 +523,38 @@ module tb_rdma_service;
                 dut.inst_stack.wr_packet(data, 20);
             join
         end
+        // end the last message on the stream: rdma.rx holds a lone unit
+        // until the one after it or a tlast comes
+        begin
+            byte data[] = new[64];
+            foreach (data[i]) data[i] = byte'($urandom);
+            stream_expect.push_back('{64, 1'b1, data});
+            rx_units += 1;
+            n_wr[K_STREAM]++;
+            fork
+                dut.inst_stack.wr_req(48'h8000_0000_0000, 64, 1'b1);
+                dut.inst_stack.wr_packet(data, 0);
+            join
+        end
     endtask
 
-    task automatic check_lane_writes(int l);
-        while (lane_expect[l].size() > 0) begin
-            wpk_t p = lane_expect[l].pop_front();
+    task automatic check_stream_writes();
+        while (stream_expect.size() > 0) begin
+            wpk_t p = stream_expect.pop_front();
             int beats = (p.len + 63) / 64;
             for (int b = 0; b < beats; b++) begin
                 beat_t x;
                 int nb = (b == beats - 1) ? p.len - 64*b : 64;
                 logic [63:0] k = (nb == 64) ? '1 : ((64'd1 << nb) - 1);
-                wait (rx_q[l].size() > 0);
-                x = rx_q[l].pop_front();
+                wait (rx_q.size() > 0);
+                x = rx_q.pop_front();
                 if (x.k !== k || x.l !== (p.last && b == beats - 1)) begin
-                    $display("ERROR: lane %0d beat %0d of %0d: keep %h last %0d", l, b, beats, x.k, x.l);
+                    $display("ERROR: unit %0d of %0d: keep %h last %0d", b, beats, x.k, x.l);
                     errors++;
                 end
                 for (int i = 0; i < nb; i++)
                     if (x.d[8*i +: 8] !== p.data[64*b + i]) begin
-                        $display("ERROR: lane %0d packet byte %0d differs", l, 64*b + i);
+                        $display("ERROR: stream packet byte %0d differs", 64*b + i);
                         errors++;
                         break;
                     end
@@ -536,10 +600,10 @@ module tb_rdma_service;
         join
         $display("reads: %0d memory, %0d stream, %0d outside; writes: %0d / %0d / %0d",
                  n_rd[K_MEM], n_rd[K_STREAM], n_rd[K_BAD], n_wr[K_MEM], n_wr[K_STREAM], n_wr[K_BAD]);
-        fork
-            check_lane_writes(0);
-            check_lane_writes(1);
-        join
+        check_stream_writes();
+        if (rx_q.size() != 0) begin
+            $display("ERROR: %0d units more on rdma.rx than written", rx_q.size()); errors++;
+        end
         // memory writes: wait for the S2MM model to finish, then compare
         repeat (2000) @(posedge sclk);
         foreach (mem_expect[w]) begin
@@ -568,10 +632,22 @@ module tb_rdma_service;
         expect_reg(24'h00011C, 0, "S2MM_ERR");
         expect_reg(24'h000120, 0, "RD_LEN_ERR");
         expect_reg(24'h000124, 0, "WR_LEN_ERR");
-        reg_rd(24'h000130, d);
-        if (d != tx_used[0]) begin $display("ERROR: TX0 beats %0d, expected %0d", d, tx_used[0]); errors++; end
-        reg_rd(24'h000134, d);
-        if (d != tx_used[1]) begin $display("ERROR: TX1 beats %0d, expected %0d", d, tx_used[1]); errors++; end
+        begin
+            logic [31:0] u0, u1;
+            reg_rd(24'h000130, u0);
+            reg_rd(24'h000134, u1);
+            if (u0 + u1 != tx_used || u0 == 0 || u1 == 0) begin
+                $display("ERROR: units taken from lanes 0 / 1: %0d / %0d, expected %0d in all", u0, u1, tx_used);
+                errors++;
+            end
+            reg_rd(24'h000138, u0);
+            reg_rd(24'h00013C, u1);
+            if (u0 + u1 != rx_units || u0 == 0 || u1 == 0) begin
+                $display("ERROR: units given to lanes 0 / 1: %0d / %0d, expected %0d in all", u0, u1, rx_units);
+                errors++;
+            end
+            $display("stream units: rdma.tx %0d, rdma.rx %0d", tx_used, rx_units);
+        end
 
         $display("DataMover commands: MM2S %0d / %0d, S2MM %0d / %0d",
                  dm_cmds[0][0], dm_cmds[0][1], dm_cmds[1][0], dm_cmds[1][1]);

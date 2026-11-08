@@ -8,9 +8,9 @@
 //                S2MM command, then the packet into that DataMover's FIFO
 //                (512-bit beats, tlast on the last one), so that both write
 //                at once and the memory side keeps up with the line rate
-//   KIND_STREAM  to lane 0 or 1, one or two 512-bit beats per cycle; tkeep
-//                gives the valid bytes and tlast ends a message (the last
-//                packet of a WRITE or READ)
+//   KIND_STREAM  to the stream (rdma_stripe_wr), one or two 64-byte units
+//                per cycle; tkeep gives the valid bytes and tlast ends a
+//                message (the last packet of a WRITE or READ)
 //   KIND_BAD     nowhere (an address outside the memory window)
 // Packets to different DataMovers may reach memory out of order; packets
 // of one message never overlap.
@@ -22,7 +22,7 @@ module rdma_pay_wr #(
     input  wire [1:0]    dm_mask,           // DataMovers used: 3 both, 1 / 2 only 0 / 1
 
     // classified requests: [47:0] address, [63:48] length (1..65535 bytes),
-    // [65:64] kind, [66] lane, [67] last packet of the message
+    // [65:64] kind, [66] unused, [67] last packet of the message
     input  wire          req_valid,
     output wire          req_ready,
     input  wire [67:0]   req_data,
@@ -46,26 +46,26 @@ module rdma_pay_wr #(
     output wire [63:0]   s2mm1_tkeep,
     output wire          s2mm1_tlast,
 
-    // the two lanes (rdma_fifo_w2r1 write sides)
-    input  wire [1:0]    lane_room1,
-    input  wire [1:0]    lane_room2,
-    output wire [1:0]    lane_put1,
-    output wire [1:0]    lane_put2,
-    output wire [511:0]  lane_d0_data,
-    output wire [63:0]   lane_d0_keep,
-    output wire          lane_d0_last,
-    output wire [511:0]  lane_d1_data,
-    output wire [63:0]   lane_d1_keep,
-    output wire          lane_d1_last,
+    // the stream (rdma_stripe_wr)
+    input  wire          stream_room1,
+    input  wire          stream_room2,
+    output wire          stream_put1,
+    output wire          stream_put2,
+    output wire [511:0]  stream_d0_data,
+    output wire [63:0]   stream_d0_keep,
+    output wire          stream_d0_last,
+    output wire [511:0]  stream_d1_data,
+    output wire [63:0]   stream_d1_keep,
+    output wire          stream_d1_last,
 
     output reg           in_len_error       // pulse: packet tlast where not expected
 );
     localparam [1:0] KIND_DDR = 2'd0, KIND_STREAM = 2'd1, KIND_BAD = 2'd2;
 
-    // a packet goes to one of four FIFOs: lane 0 / 1, DataMover 0 / 1
+    // a packet goes to one of three FIFOs: the stream (0), DataMover 0 / 1
     reg         busy;
     reg  [1:0]  kind;
-    reg  [1:0]  dst;                        // [1] DataMover, [0] which
+    reg  [1:0]  dst;                        // [1] DataMover, [0] which DataMover
     reg         msg_last;
     reg  [10:0] rem;                        // 64-byte halves still to write
     reg  [6:0]  last_bytes;                 // valid bytes of the final half
@@ -95,8 +95,8 @@ module rdma_pay_wr #(
     wire        two = rem >= 11'd2;
 
     wire [1:0]  ddr_room1, ddr_room2;
-    wire [3:0]  room1 = {ddr_room1, lane_room1};
-    wire [3:0]  room2 = {ddr_room2, lane_room2};
+    wire [3:0]  room1 = {ddr_room1, 1'b0, stream_room1};
+    wire [3:0]  room2 = {ddr_room2, 1'b0, stream_room2};
 
     // the whole beat (one or two halves) per cycle, to the packet's FIFO
     wire   room = two ? room2[dst] : room1[dst];
@@ -106,14 +106,14 @@ module rdma_pay_wr #(
         assign put1[i] = step && dst == i && !two;
         assign put2[i] = step && dst == i &&  two;
     end
-    assign lane_put1 = put1[1:0];
-    assign lane_put2 = put2[1:0];
-    assign lane_d0_data = in_data[511:0];
-    assign lane_d0_keep = keep_a;
-    assign lane_d0_last = msg_last && rem == 11'd1;
-    assign lane_d1_data = in_data[1023:512];
-    assign lane_d1_keep = keep_b;
-    assign lane_d1_last = msg_last && rem == 11'd2;
+    assign stream_put1 = put1[0];
+    assign stream_put2 = put2[0];
+    assign stream_d0_data = in_data[511:0];
+    assign stream_d0_keep = keep_a;
+    assign stream_d0_last = msg_last && rem == 11'd1;
+    assign stream_d1_data = in_data[1023:512];
+    assign stream_d1_keep = keep_b;
+    assign stream_d1_last = msg_last && rem == 11'd2;
 
     // bad: drop the beat
     wire   bad_step = busy && kind == KIND_BAD && in_valid;
@@ -133,7 +133,7 @@ module rdma_pay_wr #(
             if (req_valid && req_ready) begin
                 busy <= 1'b1;
                 kind <= req_kind;
-                dst <= req_ddr ? {1'b1, dm_sel} : {1'b0, req_data[66]};
+                dst <= req_ddr ? {1'b1, dm_sel} : 2'b00;
                 if (req_ddr)
                     dm_next <= !dm_next;
                 msg_last <= req_data[67];

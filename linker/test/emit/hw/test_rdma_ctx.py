@@ -16,8 +16,8 @@ from slashkit.emit.hw.service_region.service_layer_ctx import (
 from slashkit.emit.render import render_template
 
 
-def _net(enabled, rdma=None):
-    return NetworkSpec(enabled_eth=set(enabled), rdma=rdma)
+def _net(enabled, rdma=None, lanes=None):
+    return NetworkSpec(enabled_eth=set(enabled), rdma=rdma, rdma_lanes=lanes)
 
 
 # ---------------------------------------------------------------- contexts
@@ -114,7 +114,8 @@ def _render(tmp_path, net, rdma_dir=None):
 def test_template_with_rdma(tmp_path):
     text = _render(tmp_path, _net({0, 2}, rdma=0), tmp_path / "rdma")
     assert f'source [file normalize "{tmp_path / "rdma" / "tcl" / "rdma_service.tcl"}"]' in text
-    assert f'slash_add_rdma 0 {rdma_ctx.RDMA_BUILD} [file normalize "{tmp_path / "rdma"}"]' in text
+    assert (f'slash_add_rdma 0 {rdma_ctx.RDMA_BUILD} [file normalize "{tmp_path / "rdma"}"] {{0 1}}\n'
+            in text)
     assert "connect_bd_net [get_bd_pins qsfp_0_n_1/user_clk] [get_bd_pins sl_xbar/aclk1]" in text
     assert "set ::DCMAC0_ENABLED   0" in text and "set ::DCMAC1_ENABLED   1" in text
     # the RDMA block comes before the SmartConnect that targets rdma_0, its
@@ -123,6 +124,12 @@ def test_template_with_rdma(tmp_path):
     assert text.index("slash_add_rdma 0") < text.index("smartconnect:1.0 smartconnect_0")
     i = text.index("slash_rdma_assign_addresses 0")
     assert text.index("smartconnect:1.0 smartconnect_0") < i < text.rindex("\nassign_bd_address\n")
+
+
+def test_template_with_rdma_lanes(tmp_path):
+    text = _render(tmp_path, _net({0}, rdma=0, lanes=(4, 6)), tmp_path / "rdma")
+    assert (f'slash_add_rdma 0 {rdma_ctx.RDMA_BUILD} [file normalize "{tmp_path / "rdma"}"] {{4 6}}'
+            in text)
 
 
 def test_template_without_rdma(tmp_path):

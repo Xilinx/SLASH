@@ -10,7 +10,7 @@ module rdma_service_bd #(
     parameter integer ETH_INDEX = 0,
     parameter [47:0]  MEM_BASE = 48'h0600_0000_0000,
     parameter integer MEM_BITS = 35,                  // 32 GiB
-    parameter integer LANE_DEPTH = 256                // beats per lane FIFO
+    parameter integer LANE_DEPTH = 256                // units per lane FIFO
 ) (
 
     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 aclk CLK" *)
@@ -117,7 +117,8 @@ module rdma_service_bd #(
     input  wire              s2mm1_addr_posted,
     input  wire              s2mm1_wr_done,
 
-    // NoC stream lanes (sclk): user region -> stack, stack -> user region
+    // the stream's NoC lanes (sclk): user region -> stack, stack -> user
+    // region; the units of rdma.tx / rdma.rx alternate between them
     input  wire              s_axis_tx0_tvalid,
     output wire              s_axis_tx0_tready,
     input  wire [511:0]      s_axis_tx0_tdata,

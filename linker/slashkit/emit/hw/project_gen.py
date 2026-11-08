@@ -32,6 +32,7 @@ from contextlib import ExitStack
 
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
+from slashkit.emit.hw.service_region.network_ctx import RDMA_STREAM_IP
 from slashkit.emit.hw.service_region.rdma_ctx import write_rdma_opt_post
 from slashkit.core.command_config import (
     LinkerConfiguration,
@@ -533,6 +534,11 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             shutil.copytree(
                 kernel.component_xml_path.parent, config.ip_repository / kernel.name
             )
+        # rdma.tx / rdma.rx: the user region's end of the RDMA service's
+        # stream, packaged IPs (module references do not work in the RM)
+        if config.configuration.net.rdma is not None:
+            shutil.copytree(RDMA_STREAM_IP, config.ip_repository / "rdma_stream",
+                            dirs_exist_ok=True)
 
     logs_dir = config.build_dir / "logs"
     image_out_dir = config.build_dir / "images"

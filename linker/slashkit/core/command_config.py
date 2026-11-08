@@ -154,9 +154,9 @@ Connectivity Configuration Format:
       Examples:
         stream_connect=dma_in_0.axis_out:passthrough_0.axis_in
         stream_connect=traffic_producer_0.axis_out:eth_0.tx0
-        stream_connect=producer_0.axis_out:rdma.tx0
+        stream_connect=producer_0.axis_out:rdma.tx
       Connects AXI-Stream ports between kernel instances and/or ethernet ports
-      (eth_<idx>.tx0/tx1/rx0/rx1) or the RDMA service (rdma.tx0/tx1/rx0/rx1).
+      (eth_<idx>.tx0/tx1/rx0/rx1) or the RDMA service (rdma.tx / rdma.rx).
 
     sp=<inst>.<port>:<memory_target>
       Example: sp=vadd_0.m_axi_gmem0:HBM0
@@ -174,8 +174,15 @@ Connectivity Configuration Format:
     rdma=eth_<idx>
       Example: rdma=eth_0
       Puts the 200G RoCE v2 RDMA service on an enabled DCMAC port (eth_0 or
-      eth_2; at most one). Its streams are rdma.tx0/tx1 and rdma.rx0/rx1;
-      that port's eth_<idx>.* endpoints are no longer available.
+      eth_2; at most one). Its streams are rdma.tx and rdma.rx, 1024 bits
+      each, which the linker spreads over the port's two NoC lanes; that
+      port's eth_<idx>.* endpoints are no longer available.
+    rdma_lanes=<lane>,<lane>
+      Example: rdma_lanes=4,6
+      The two NoC lanes (0..7; lane k belongs to eth_<k/2>) that carry
+      rdma.tx / rdma.rx instead of the RDMA port's own. The lanes of other
+      ports must not be enabled for Ethernet. Some lane pairs share NoC links
+      in the static shell and carry less than the line rate together.
 
   [user_region]  - Custom TCL scripts
     pre_synth=<path_to_tcl>

@@ -1294,6 +1294,14 @@ connect_bd_intf_net \
 connect_bd_intf_net [get_bd_intf_pins {{ e.src_pin }}] [get_bd_intf_pins {{ e.dst_pin }}]
 {% endfor %}
 
+# === RDMA stream: the user region's end of rdma.tx / rdma.rx, which spreads
+# the 1024-bit stream over the RDMA port's two NoC lanes ===
+{% for c in rdma_stream_cells|default([]) %}
+create_bd_cell -type ip -vlnv {{ c.vlnv }} {{ c.name }}
+connect_bd_net [get_bd_pins {{ c.name }}/aclk]    [get_bd_pins user_clk]
+connect_bd_net [get_bd_pins {{ c.name }}/aresetn] [get_bd_pins ilreduced_logic_0/Res]
+{% endfor %}
+
 # === AXIS network: instance -> fabric TX ===
 {% for e in axis_to_fabric|default([]) %}
 connect_bd_intf_net [get_bd_intf_pins {{ e.src_pin }}] [get_bd_intf_pins {{ e.dst_pin }}]

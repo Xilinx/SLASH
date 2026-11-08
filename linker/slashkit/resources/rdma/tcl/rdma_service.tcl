@@ -4,12 +4,14 @@
 # before the control SmartConnect, which takes rdma_0/s_axil and the port's
 # DCMAC registers as targets.
 #
-#   slash_add_rdma <eth> <build> <rdma dir>      (before the SmartConnect)
+#   slash_add_rdma <eth> <build> <rdma dir> [<lanes>]
+#                                               (before the SmartConnect)
 #   slash_rdma_assign_addresses <eth>           (after it: the control segments
 #                                                are reachable only through it)
 #     eth        0 (DCMAC0, qsfp_0_n_1, QSFP0) or 2 (DCMAC1, qsfp_2_n_3, QSFP2)
 #     build      BUILD register value of rdma_service
 #     rdma dir   the staged resources/rdma (hdl/, tcl/, iprepo/rdma_200)
+#     lanes      the stream's two NoC lanes; empty: the port's own
 #
 # Cells: the port's DCMAC hierarchy with the rdma_dcmac.tcl datapaths (1024-bit
 # at user_clk = 230 MHz), rdma_0 (rdma_service_bd), rdma_dm_0 / rdma_dm_1 (AXI
@@ -18,8 +20,10 @@
 # reset).
 # The port's two SL2NOC ports, SL2NOC_<2n> and SL2NOC_<2n+1> (two per QSFP),
 # take one DataMover each; rdma_service alternates packets between them.
-# The port's NoC lanes (dummy_noc_<2n>/<2n+1>, dummy_noc_m_<2n>/<2n+1>) carry
-# rdma.tx0/tx1 and rdma.rx0/rx1.
+# Two NoC lanes (dummy_noc_<l>, dummy_noc_m_<l>: the port's own <2n>, <2n+1>,
+# or [network] rdma_lanes) carry the stream rdma.tx / rdma.rx, its 64-byte
+# units alternating between them (rdma_stripe here, rdma_stream_tx /
+# rdma_stream_rx in the user region).
 #
 # Addresses (S_AXILITE_INI, PF2 BAR2):
 #   0x203_0200_0000 / 0x203_0300_0000  DCMAC0 / DCMAC1 registers (as in SLASH)
@@ -27,13 +31,17 @@
 # Memory (rdma_dm_*): the DDR window 0x600_0000_0000, 32 GiB, behind SL2NOC
 # (VRT MemoryRangeType::DDR buffers).
 
-proc slash_add_rdma {eth build rdma_dir} {
+# lanes: the two NoC lanes (0..7) of the stream; empty: the port's own
+proc slash_add_rdma {eth build rdma_dir {lanes {}}} {
     switch -- $eth {
         0 { set dc 0; set hier qsfp_0_n_1 }
         2 { set dc 1; set hier qsfp_2_n_3 }
         default { error "slash_add_rdma: eth_$eth has no DCMAC (eth_0 or eth_2)" }
     }
-    set k [expr {2 * $eth}]
+    if {[llength $lanes] == 0} {
+        set lanes [list [expr {2 * $eth}] [expr {2 * $eth + 1}]]
+    }
+    lassign $lanes l0 l1
 
     # ------------------------------------------------------------ sources
     set repos [get_property ip_repo_paths [current_project]]
@@ -54,7 +62,7 @@ proc slash_add_rdma {eth build rdma_dir} {
     }
     set files {}
     foreach f {
-        axis_skid.sv axil_split.sv rx_fcs_filter.sv rdma_lane_fifo.sv rdma_pay_rd.sv
+        axis_skid.sv axil_split.sv rx_fcs_filter.sv rdma_lane_fifo.sv rdma_stripe.sv rdma_pay_rd.sv
         rdma_pay_wr.sv rdma_service.sv rdma_service_bd.v dcmac_rx_path.v dcmac_tx_path.v
         dcmac_tx_cdc.v dcmac_phy_ctl.v rdma_axi_join.v
     } {
@@ -154,17 +162,17 @@ proc slash_add_rdma {eth build rdma_dir} {
 
     # ------------------------------------------------------------ lanes
     # The template ties some of the lanes' tready pins high; these lanes are ours.
-    foreach i [list $k [expr {$k + 1}]] {
+    foreach i $lanes {
         set rdy [get_bd_pins dummy_noc_$i/M00_AXIS_tready]
         set net [get_bd_nets -quiet -of_objects $rdy]
         if {$net ne ""} {
             disconnect_bd_net $net $rdy
         }
     }
-    connect_bd_intf_net [get_bd_intf_pins dummy_noc_$k/M00_AXIS] [get_bd_intf_pins rdma_0/s_axis_tx0]
-    connect_bd_intf_net [get_bd_intf_pins dummy_noc_[expr {$k + 1}]/M00_AXIS] [get_bd_intf_pins rdma_0/s_axis_tx1]
-    connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx0] [get_bd_intf_pins dummy_noc_m_$k/S00_AXIS]
-    connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx1] [get_bd_intf_pins dummy_noc_m_[expr {$k + 1}]/S00_AXIS]
+    connect_bd_intf_net [get_bd_intf_pins dummy_noc_$l0/M00_AXIS] [get_bd_intf_pins rdma_0/s_axis_tx0]
+    connect_bd_intf_net [get_bd_intf_pins dummy_noc_$l1/M00_AXIS] [get_bd_intf_pins rdma_0/s_axis_tx1]
+    connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx0] [get_bd_intf_pins dummy_noc_m_$l0/S00_AXIS]
+    connect_bd_intf_net [get_bd_intf_pins rdma_0/m_axis_rx1] [get_bd_intf_pins dummy_noc_m_$l1/S00_AXIS]
 
     # ------------------------------------------------------------ memory addresses
     # the SL2NOC ports' aperture: the DDR window of the static shell, seen

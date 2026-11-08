@@ -8,8 +8,8 @@
 //   aclk (node clock, 230 MHz from the DCMAC clock wizard): the stack, its
 //     Ethernet side (1024-bit, dcmac_rx_path / dcmac_tx_path), registers
 //   sclk (service clock): the two AXI DataMovers to the memory window (the
-//     port's two SL2NOC ports, one each) and its NoC stream lanes to the
-//     user region
+//     port's two SL2NOC ports, one each) and the two NoC lanes that carry
+//     the stream to and from the user region
 //
 // Payload addresses (48-bit, the local address of a request or the address
 // a peer reads or writes):
@@ -17,8 +17,11 @@
 //               [MEM_BASE, MEM_BASE + 2^MEM_BITS) (VRT DDR buffers), else
 //               reads return zeros and writes are dropped (counted);
 //               packets alternate between the two DataMovers
-//   bit 47 = 1: stream; bit 46 selects lane 0 or 1 (rdma.tx0/tx1 for data
-//               the stack sends, rdma.rx0/rx1 for data it receives)
+//   bit 47 = 1: the stream (rdma.tx for data the stack sends, rdma.rx for
+//               data it receives); bits 46:0 are ignored. The stream's
+//               64-byte units go over the two lanes in turn (rdma_stripe),
+//               which the linker joins to one 1024-bit stream in the user
+//               region
 //
 // Registers (window of 16 MiB): 0x00_0000 this block (below), 0x40_0000 the
 // stack (rdma_200 register map). No register has a read side effect.
@@ -36,8 +39,8 @@
 //   0x118 MM2S_ERR   0x11C S2MM_ERR     DataMover status not OKAY (either)
 //   0x120 RD_LEN_ERR 0x124 WR_LEN_ERR   packet ends not where expected
 //   0x128 LAST_STS   [7:0] last MM2S status, [15:8] last S2MM status
-//   0x130 / 0x134 TX0 / TX1 beats taken from the lanes
-//   0x138 / 0x13C RX0 / RX1 beats given to the lanes
+//   0x130 / 0x134 units taken from lane 0 / 1 (rdma.tx)
+//   0x138 / 0x13C units given to lane 0 / 1 (rdma.rx)
 //   0x140 + 8 k + 4 i  DataMover i (0, 1), diagnosis: k = 0 S2MM commands,
 //                    1 S2MM beats in, 2 S2MM addresses posted on AXI, 3 S2MM
 //                    writes finished (responses), 4 S2MM status, 5 MM2S
@@ -50,7 +53,7 @@ module rdma_service #(
     parameter integer ETH_INDEX = 0,
     parameter [47:0]  MEM_BASE = 48'h0600_0000_0000,
     parameter integer MEM_BITS = 35,                  // 32 GiB
-    parameter integer LANE_DEPTH = 256                // beats per lane FIFO
+    parameter integer LANE_DEPTH = 256                // units per lane FIFO
 ) (
     input  wire            aclk,
     input  wire            aresetn,
@@ -146,7 +149,8 @@ module rdma_service #(
     input  wire [1:0]      s2mm_addr_posted,
     input  wire [1:0]      s2mm_wr_done,
 
-    // NoC stream lanes (sclk): user region -> stack, stack -> user region
+    // the stream's NoC lanes (sclk): user region -> stack, stack -> user
+    // region
     input  wire            s_axis_tx0_tvalid,
     output wire            s_axis_tx0_tready,
     input  wire [511:0]    s_axis_tx0_tdata,
@@ -248,7 +252,7 @@ module rdma_service #(
                 r0_rvalid <= 1'b1;
                 case (r0_araddr[11:0])
                     12'h000: r0_rdata <= 32'h52444D53;
-                    12'h004: r0_rdata <= 32'h0001_0002;
+                    12'h004: r0_rdata <= 32'h0002_0000;   // 2.0: one stream over both lanes
                     12'h008: r0_rdata <= BUILD;
                     12'h00C: r0_rdata <= ETH_INDEX;
                     12'h010: r0_rdata <= MEM_BASE[31:0];
@@ -333,8 +337,8 @@ module rdma_service #(
 
     wire [1:0]  rd_kind = kind_of(rd_req_word[47:0]);
     wire [1:0]  wr_kind = kind_of(wr_req_word[47:0]);
-    wire [71:0] rd_cmd = {5'd0, rd_req_word[46], rd_kind, rd_req_word[79:64], rd_req_word[47:0]};
-    wire [71:0] wr_cmd = {4'd0, wr_req_word[112], wr_req_word[46], wr_kind, wr_req_word[79:64],
+    wire [71:0] rd_cmd = {6'd0, rd_kind, rd_req_word[79:64], rd_req_word[47:0]};
+    wire [71:0] wr_cmd = {4'd0, wr_req_word[112], 1'b0, wr_kind, wr_req_word[79:64],
                           wr_req_word[47:0]};
 
     always @(posedge aclk) begin
@@ -407,41 +411,33 @@ module rdma_service #(
     assign s_rd_room = !s_rd_almost_full;
 
     // ================================================================ lanes (sclk)
-    wire [1:0]   tx_avail1, tx_avail2, tx_take1, tx_take2;
-    wire [511:0] tx_d0 [2];
-    wire [511:0] tx_d1 [2];
-    wire [1:0]   rx_room1, rx_room2, rx_put1, rx_put2;
+    wire         tx_avail1, tx_avail2, tx_take1, tx_take2;
+    wire [511:0] tx_d0, tx_d1;
+    wire         rx_room1, rx_room2, rx_put1, rx_put2;
     wire [511:0] rx_d0_data, rx_d1_data;
     wire [63:0]  rx_d0_keep, rx_d1_keep;
     wire         rx_d0_last, rx_d1_last;
+    wire [1:0]   tx_lane_take, rx_lane_put;
 
-    rdma_fifo_w1r2 #(.DEPTH(LANE_DEPTH)) inst_tx0 (
+    rdma_stripe_rd #(.DEPTH(LANE_DEPTH)) inst_tx (
         .clk(sclk), .resetn(sresetn),
-        .s_tvalid(s_axis_tx0_tvalid), .s_tready(s_axis_tx0_tready), .s_tdata(s_axis_tx0_tdata),
-        .avail1(tx_avail1[0]), .avail2(tx_avail2[0]), .d0(tx_d0[0]), .d1(tx_d1[0]),
-        .take1(tx_take1[0]), .take2(tx_take2[0])
+        .s_tvalid({s_axis_tx1_tvalid, s_axis_tx0_tvalid}),
+        .s_tready({s_axis_tx1_tready, s_axis_tx0_tready}),
+        .s0_tdata(s_axis_tx0_tdata), .s0_tlast(s_axis_tx0_tlast),
+        .s1_tdata(s_axis_tx1_tdata), .s1_tlast(s_axis_tx1_tlast),
+        .avail1(tx_avail1), .avail2(tx_avail2), .d0(tx_d0), .d1(tx_d1),
+        .take1(tx_take1), .take2(tx_take2), .lane_take(tx_lane_take)
     );
-    rdma_fifo_w1r2 #(.DEPTH(LANE_DEPTH)) inst_tx1 (
+    rdma_stripe_wr #(.DEPTH(LANE_DEPTH)) inst_rx (
         .clk(sclk), .resetn(sresetn),
-        .s_tvalid(s_axis_tx1_tvalid), .s_tready(s_axis_tx1_tready), .s_tdata(s_axis_tx1_tdata),
-        .avail1(tx_avail1[1]), .avail2(tx_avail2[1]), .d0(tx_d0[1]), .d1(tx_d1[1]),
-        .take1(tx_take1[1]), .take2(tx_take2[1])
-    );
-    rdma_fifo_w2r1 #(.DEPTH(LANE_DEPTH)) inst_rx0 (
-        .clk(sclk), .resetn(sresetn),
-        .room1(rx_room1[0]), .room2(rx_room2[0]), .put1(rx_put1[0]), .put2(rx_put2[0]),
+        .room1(rx_room1), .room2(rx_room2), .put1(rx_put1), .put2(rx_put2),
         .d0_data(rx_d0_data), .d0_keep(rx_d0_keep), .d0_last(rx_d0_last),
         .d1_data(rx_d1_data), .d1_keep(rx_d1_keep), .d1_last(rx_d1_last),
-        .m_tvalid(m_axis_rx0_tvalid), .m_tready(m_axis_rx0_tready), .m_tdata(m_axis_rx0_tdata),
-        .m_tkeep(m_axis_rx0_tkeep), .m_tlast(m_axis_rx0_tlast)
-    );
-    rdma_fifo_w2r1 #(.DEPTH(LANE_DEPTH)) inst_rx1 (
-        .clk(sclk), .resetn(sresetn),
-        .room1(rx_room1[1]), .room2(rx_room2[1]), .put1(rx_put1[1]), .put2(rx_put2[1]),
-        .d0_data(rx_d0_data), .d0_keep(rx_d0_keep), .d0_last(rx_d0_last),
-        .d1_data(rx_d1_data), .d1_keep(rx_d1_keep), .d1_last(rx_d1_last),
-        .m_tvalid(m_axis_rx1_tvalid), .m_tready(m_axis_rx1_tready), .m_tdata(m_axis_rx1_tdata),
-        .m_tkeep(m_axis_rx1_tkeep), .m_tlast(m_axis_rx1_tlast)
+        .m_tvalid({m_axis_rx1_tvalid, m_axis_rx0_tvalid}),
+        .m_tready({m_axis_rx1_tready, m_axis_rx0_tready}),
+        .m0_tdata(m_axis_rx0_tdata), .m0_tkeep(m_axis_rx0_tkeep), .m0_tlast(m_axis_rx0_tlast),
+        .m1_tdata(m_axis_rx1_tdata), .m1_tkeep(m_axis_rx1_tkeep), .m1_tlast(m_axis_rx1_tlast),
+        .lane_put(rx_lane_put)
     );
 
     // ================================================================ payload engines (sclk)
@@ -465,9 +461,9 @@ module rdma_service #(
         .mm2s_tready({s_axis_mm2s1_tready, s_axis_mm2s0_tready}),
         .mm2s0_tdata(s_axis_mm2s0_tdata), .mm2s0_tlast(s_axis_mm2s0_tlast),
         .mm2s1_tdata(s_axis_mm2s1_tdata), .mm2s1_tlast(s_axis_mm2s1_tlast),
-        .lane_avail1(tx_avail1), .lane_avail2(tx_avail2),
-        .lane0_d0(tx_d0[0]), .lane0_d1(tx_d1[0]), .lane1_d0(tx_d0[1]), .lane1_d1(tx_d1[1]),
-        .lane_take1(tx_take1), .lane_take2(tx_take2),
+        .stream_avail1(tx_avail1), .stream_avail2(tx_avail2),
+        .stream_d0(tx_d0), .stream_d1(tx_d1),
+        .stream_take1(tx_take1), .stream_take2(tx_take2),
         .out_room(s_rd_room), .out_valid(s_rd_valid), .out_data(s_rd_data),
         .out_keep(s_rd_keep), .out_last(s_rd_last),
         .mm2s_len_error(rd_len_error)
@@ -486,9 +482,10 @@ module rdma_service #(
         .s2mm_tready({m_axis_s2mm1_tready, m_axis_s2mm0_tready}),
         .s2mm0_tdata(m_axis_s2mm0_tdata), .s2mm0_tkeep(m_axis_s2mm0_tkeep), .s2mm0_tlast(m_axis_s2mm0_tlast),
         .s2mm1_tdata(m_axis_s2mm1_tdata), .s2mm1_tkeep(m_axis_s2mm1_tkeep), .s2mm1_tlast(m_axis_s2mm1_tlast),
-        .lane_room1(rx_room1), .lane_room2(rx_room2), .lane_put1(rx_put1), .lane_put2(rx_put2),
-        .lane_d0_data(rx_d0_data), .lane_d0_keep(rx_d0_keep), .lane_d0_last(rx_d0_last),
-        .lane_d1_data(rx_d1_data), .lane_d1_keep(rx_d1_keep), .lane_d1_last(rx_d1_last),
+        .stream_room1(rx_room1), .stream_room2(rx_room2),
+        .stream_put1(rx_put1), .stream_put2(rx_put2),
+        .stream_d0_data(rx_d0_data), .stream_d0_keep(rx_d0_keep), .stream_d0_last(rx_d0_last),
+        .stream_d1_data(rx_d1_data), .stream_d1_keep(rx_d1_keep), .stream_d1_last(rx_d1_last),
         .in_len_error(wr_len_error)
     );
     assign m_axis_s2mm0_cmd_tdata = s2mm_cmd_tdata;
@@ -523,22 +520,14 @@ module rdma_service #(
         mm2s_beat, mm2s_cmd_hs,
         s_axis_s2mm1_sts_tvalid, s_axis_s2mm0_sts_tvalid, s2mm_wr_done, s2mm_addr_posted,
         s2mm_beat, s2mm_cmd_hs,
-        rx_put1[1] ? 1'b1 : rx_put2[1],
-        rx_put1[0] ? 1'b1 : rx_put2[0],
-        tx_take1[1] | tx_take2[1],
-        tx_take1[0] | tx_take2[0],
+        rx_lane_put[1], rx_lane_put[0], tx_lane_take[1], tx_lane_take[0],
         wr_len_error, rd_len_error, |s2mm_err, |mm2s_err
     };
-    // beats moved per cycle on the lanes (1 or 2), events (1, or 2 when
-    // both DataMovers report one)
+    // events: 1, or 2 when both DataMovers report one
     function automatic [31:0] inc_of(input integer i);
         case (i)
             0: inc_of = &mm2s_err ? 32'd2 : 32'd1;
             1: inc_of = &s2mm_err ? 32'd2 : 32'd1;
-            4: inc_of = tx_take2[0] ? 32'd2 : 32'd1;
-            5: inc_of = tx_take2[1] ? 32'd2 : 32'd1;
-            6: inc_of = rx_put2[0] ? 32'd2 : 32'd1;
-            7: inc_of = rx_put2[1] ? 32'd2 : 32'd1;
             default: inc_of = 32'd1;
         endcase
     endfunction

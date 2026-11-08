@@ -79,14 +79,14 @@ TEST(RdmaTest, WriteAndReadArePostedWithTheirFields) {
     auto regs = std::make_shared<FakeRegs>();
     vrt::Rdma rdma(info(), regs);
     rdma.write(3, 0x060000001000ull, 0x123456789ABCull, 4096);
-    rdma.read(5, vrt::Rdma::streamAddress(1), 0x40ull, 64);
+    rdma.readToStream(5, 0x40ull, 64);
     ASSERT_EQ(regs->posts.size(), 2u);
     EXPECT_EQ(regs->posts[0].ctrl, 3u << 8);
     EXPECT_EQ(regs->posts[0].len, 4096u);
     EXPECT_EQ(regs->posts[0].laddr, 0x060000001000ull);
     EXPECT_EQ(regs->posts[0].raddr, 0x123456789ABCull);
     EXPECT_EQ(regs->posts[1].ctrl, (5u << 8) | 1);
-    EXPECT_EQ(regs->posts[1].laddr, 0xC00000000000ull);   // stream, lane 1
+    EXPECT_EQ(regs->posts[1].laddr, 0x800000000000ull);   // the stream
     EXPECT_EQ(rdma.posted(), 2u);
 }
 

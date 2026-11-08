@@ -418,14 +418,72 @@ class TestParseConnectivityFile:
             rdma=eth_0
             [connectivity]
             shell=service
-            stream_connect=src_0.out:rdma.tx0
-            stream_connect=rdma.rx1:sink_0.in
+            stream_connect=src_0.out:rdma.tx
+            stream_connect=rdma.rx:sink_0.in
             stream_connect=src_1.out:eth_2.tx0
         """))
         assert len(cfg.streams) == 3
 
+    @pytest.mark.parametrize("ep", ["rdma.tx0", "rdma.rx1", "rdma.data"])
+    def test_rdma_lanes_rejected(self, cfg_file, ep):
+        with pytest.raises(ValueError, match="one stream each way, rdma.tx and rdma.rx"):
+            parse_connectivity_file(cfg_file(f"""\
+                [network]
+                eth_0=1
+                rdma=eth_0
+                [connectivity]
+                stream_connect=src_0.out:{ep}
+            """))
+
+    def test_rdma_lanes(self, cfg_file):
+        cfg = parse_connectivity_file(cfg_file("""\
+            [network]
+            eth_0=1
+            rdma=eth_0
+            rdma_lanes=4, 6
+        """))
+        assert cfg.net.rdma_lanes == (4, 6)
+        assert cfg.net.rdma_lane_pair() == (4, 6)
+
+    def test_rdma_lanes_default_to_the_port(self, cfg_file):
+        cfg = parse_connectivity_file(cfg_file("""\
+            [network]
+            eth_2=1
+            rdma=eth_2
+        """))
+        assert cfg.net.rdma_lanes is None
+        assert cfg.net.rdma_lane_pair() == (4, 5)
+
+    @pytest.mark.parametrize("value", ["4", "4,4", "4,8", "-1,2", "a,b", "1,2,3"])
+    def test_rdma_lanes_invalid(self, cfg_file, value):
+        with pytest.raises(ValueError, match="Invalid \\[network\\] rdma_lanes"):
+            parse_connectivity_file(cfg_file(f"""\
+                [network]
+                eth_0=1
+                rdma=eth_0
+                rdma_lanes={value}
+            """))
+
+    def test_rdma_lanes_need_rdma(self, cfg_file):
+        with pytest.raises(ValueError, match="rdma_lanes needs an rdma= port"):
+            parse_connectivity_file(cfg_file("""\
+                [network]
+                eth_0=1
+                rdma_lanes=4,6
+            """))
+
+    def test_rdma_lanes_of_an_ethernet_port_rejected(self, cfg_file):
+        with pytest.raises(ValueError, match="lane 4 belongs to eth_2, which is enabled"):
+            parse_connectivity_file(cfg_file("""\
+                [network]
+                eth_0=1
+                eth_2=1
+                rdma=eth_0
+                rdma_lanes=4,6
+            """))
+
     def test_rdma_port_streams_rejected(self, cfg_file):
-        with pytest.raises(ValueError, match="connect to rdma.rx0 instead"):
+        with pytest.raises(ValueError, match="connect to rdma.rx instead"):
             parse_connectivity_file(cfg_file("""\
                 [network]
                 eth_0=1
@@ -440,7 +498,7 @@ class TestParseConnectivityFile:
                 [network]
                 eth_0=1
                 [connectivity]
-                stream_connect=src_0.out:rdma.tx0
+                stream_connect=src_0.out:rdma.tx
             """))
 
     def test_user_region_pre_synth_relative_path(self, cfg_file, tmp_path):
