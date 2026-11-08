@@ -24,7 +24,10 @@ from typing import Dict, List
 from slashkit.core.kernel import KernelInstance
 from slashkit.core.port import BusType
 
-_ETH_EP_RE = re.compile(r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma\.\w+)$", re.IGNORECASE)
+_ETH_EP_RE = re.compile(
+    r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma\.\w+)$", re.IGNORECASE)
+
+
 def _port_norm(s): return re.sub(r"[^a-z0-9]", "", s.lower())
 
 

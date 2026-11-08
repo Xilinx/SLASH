@@ -35,7 +35,8 @@ _RDMA_EP_RE = re.compile(r"^rdma\.(\w+)$", re.IGNORECASE)
 RDMA_STREAM_BITS = 1024
 # rdma_stream_tx / rdma_stream_rx, packaged from hdl/user by
 # resources/rdma/tcl/package_stream_ip.tcl
-RDMA_STREAM_IP = Path(__file__).resolve().parents[3] / "resources" / "rdma" / "ip"
+RDMA_STREAM_IP = (Path(__file__).resolve().parents[3]
+                  / "resources" / "rdma" / "ip")
 RDMA_STREAM_VLNV = "slash:rdma:{}:1.0"
 
 
@@ -164,9 +165,11 @@ def build_network_axis_context(
             if _RDMA_EP_RE.match(dst_ep):
                 lanes, name = _parse_rdma_endpoint(dst_ep, net)
                 if name != "tx":
-                    raise ValueError(f"Only rdma.tx takes a stream from the user region, got '{dst_ep}'")
+                    raise ValueError(
+                        f"Only rdma.tx takes a stream from the user region, got '{dst_ep}'")
                 if "tx" in rdma_used:
-                    raise ValueError("rdma.tx is one stream: only one stream_connect may feed it")
+                    raise ValueError(
+                        "rdma.tx is one stream: only one stream_connect may feed it")
                 rdma_used.add("tx")
                 _check_rdma_width(f"{s.src_inst}.{src_port}", src_p)
                 cells.append({"name": "rdma_stream_tx",
@@ -210,9 +213,11 @@ def build_network_axis_context(
             if _RDMA_EP_RE.match(src_ep):
                 lanes, name = _parse_rdma_endpoint(src_ep, net)
                 if name != "rx":
-                    raise ValueError(f"Only rdma.rx gives a stream to the user region, got '{src_ep}'")
+                    raise ValueError(
+                        f"Only rdma.rx gives a stream to the user region, got '{src_ep}'")
                 if "rx" in rdma_used:
-                    raise ValueError("rdma.rx is one stream: only one stream_connect may take it")
+                    raise ValueError(
+                        "rdma.rx is one stream: only one stream_connect may take it")
                 rdma_used.add("rx")
                 _check_rdma_width(f"{s.dst_inst}.{dst_port}", dst_p)
                 cells.append({"name": "rdma_stream_rx",

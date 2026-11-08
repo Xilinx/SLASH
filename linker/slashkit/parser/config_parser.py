@@ -38,7 +38,8 @@ _RE_NK = re.compile(r"^\s*([^:]+)\s*:\s*(\d+)(?::(.*))?\s*$")
 _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
 # eth_<n>.tx0/tx1/rx0/rx1: a port's NoC lanes; rdma.tx / rdma.rx: the RDMA
 # service's stream (one each way, spread over its port's two lanes)
-_RE_STREAM_EP = re.compile(r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma\.(\w+))$", re.IGNORECASE)
+_RE_STREAM_EP = re.compile(
+    r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma\.(\w+))$", re.IGNORECASE)
 
 # Ethernet ports with a DCMAC in the service layer (eth_0: DCMAC0, eth_2: DCMAC1),
 # the only ones that can carry the RDMA service.

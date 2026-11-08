@@ -75,7 +75,8 @@ def test_rdma_rx_comes_over_both_lanes_of_the_rdma_port(rdma, lanes):
 
 
 def test_rdma_stream_on_chosen_lanes():
-    ctx = _ctx([("a", "out", "rdma", "tx"), ("rdma", "rx", "b", "in")], {0}, 0, lanes=(4, 6))
+    ctx = _ctx([("a", "out", "rdma", "tx"), ("rdma", "rx", "b", "in")],
+               {0}, 0, lanes=(4, 6))
     assert [e["dst_pin"] for e in ctx["axis_to_fabric"]] == [
         "rdma_stream_tx/s_axis", "/dcmac_axis_noc_4/S00_AXIS", "/dcmac_axis_noc_6/S00_AXIS"]
     assert [e["src_pin"] for e in ctx["axis_from_fabric"]] == [

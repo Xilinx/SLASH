@@ -639,7 +639,8 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             )
             rdma = config.configuration.net.rdma
             if rdma is not None:
-                opt_post_tcl = write_rdma_opt_post(config.build_dir, opt_post_tcl, rdma)
+                opt_post_tcl = write_rdma_opt_post(
+                    config.build_dir, opt_post_tcl, rdma)
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
         # Distinct task kinds: a single `slashkit link` runs both RM builds, so

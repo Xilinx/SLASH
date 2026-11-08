@@ -54,7 +54,8 @@ def test_rdma_registers_on_a_second_smartconnect_clock():
 
 
 def test_rdma_lanes_are_not_linked_to_the_mac():
-    links = build_service_noc_axis_ctx(_net({0, 2}, rdma=0))["sl_axis_noc_links"]
+    ctx = build_service_noc_axis_ctx(_net({0, 2}, rdma=0))
+    links = ctx["sl_axis_noc_links"]
     pins = {l["src_pin"] for l in links} | {l["dst_pin"] for l in links}
     assert not any(p.startswith("qsfp_0_n_1") or p.startswith("dummy_noc_0") or
                    p.startswith("dummy_noc_m_0") for p in pins)
@@ -82,14 +83,17 @@ def test_stage_rdma_copies_sources_and_ip(tmp_path, fake_ip):
 
 def test_stage_rdma_without_ip_explains(tmp_path, monkeypatch):
     monkeypatch.delenv("SLASH_RDMA_IPREPO", raising=False)
-    monkeypatch.setattr(rdma_ctx, "rdma_ip_candidates", lambda: [tmp_path / "none" / "rdma_200"])
+    monkeypatch.setattr(rdma_ctx, "rdma_ip_candidates",
+                        lambda: [tmp_path / "none" / "rdma_200"])
     with pytest.raises(FileNotFoundError, match="stage-rdma.sh"):
         rdma_ctx.stage_rdma(tmp_path / "rdma")
 
 
 def test_opt_post_chains_slash_hook_then_rdma(tmp_path):
-    out = rdma_ctx.write_rdma_opt_post(tmp_path, Path("/x/service_layer_eth.opt.post.tcl"), 2)
-    assert out.name == "service_layer_eth.opt.post.tcl"     # service_layer_build.tcl looks for it
+    out = rdma_ctx.write_rdma_opt_post(
+        tmp_path, Path("/x/service_layer_eth.opt.post.tcl"), 2)
+    # service_layer_build.tcl looks for it
+    assert out.name == "service_layer_eth.opt.post.tcl"
     lines = out.read_text().splitlines()
     assert lines[0] == "source {/x/service_layer_eth.opt.post.tcl}"
     assert lines[1] == "set ::slash_rdma_eth 2"
@@ -122,19 +126,23 @@ def test_template_with_rdma(tmp_path):
     # the RDMA block comes before the SmartConnect that targets rdma_0, its
     # control addresses after it (else they are not reachable and get placed
     # anywhere: the first hardware image had rdma_0 at 0x203_0000_0000)
-    assert text.index("slash_add_rdma 0") < text.index("smartconnect:1.0 smartconnect_0")
+    assert text.index("slash_add_rdma 0") < text.index(
+        "smartconnect:1.0 smartconnect_0")
     i = text.index("slash_rdma_assign_addresses 0")
-    assert text.index("smartconnect:1.0 smartconnect_0") < i < text.rindex("\nassign_bd_address\n")
+    assert text.index("smartconnect:1.0 smartconnect_0") < i < text.rindex(
+        "\nassign_bd_address\n")
 
 
 def test_template_with_rdma_lanes(tmp_path):
-    text = _render(tmp_path, _net({0}, rdma=0, lanes=(4, 6)), tmp_path / "rdma")
+    net = _net({0}, rdma=0, lanes=(4, 6))
+    text = _render(tmp_path, net, tmp_path / "rdma")
     assert (f'slash_add_rdma 0 {rdma_ctx.RDMA_BUILD} [file normalize "{tmp_path / "rdma"}"] {{4 6}}'
             in text)
 
 
 def test_template_with_rdma_read_window(tmp_path):
-    text = _render(tmp_path, _net({0}, rdma=0, read_window=16), tmp_path / "rdma")
+    net = _net({0}, rdma=0, read_window=16)
+    text = _render(tmp_path, net, tmp_path / "rdma")
     assert (f'slash_add_rdma 0 {rdma_ctx.RDMA_BUILD} [file normalize "{tmp_path / "rdma"}"] {{0 1}} 16\n'
             in text)
 

@@ -83,7 +83,8 @@ def build_service_rdma_ctx(net, rdma_dir: Optional[Path] = None) -> Dict[str, An
     if rdma is None:
         return {"rdma_enabled": False}
     if rdma_dir is None:
-        raise ValueError("build_service_rdma_ctx: the staged rdma directory is needed")
+        raise ValueError(
+            "build_service_rdma_ctx: the staged rdma directory is needed")
     return {
         "rdma_enabled": True,
         "rdma_eth": rdma,
