@@ -28,6 +28,8 @@ _RESOURCES = Path(__file__).resolve().parents[3] / "resources" / "rdma"
 RDMA_IP = "rdma_200"
 #! BUILD register of rdma_service: raise it when the service's RTL changes.
 RDMA_BUILD = 7
+#! READ requests in flight per QP without [network] rdma_read_window
+RDMA_READ_WINDOW = 32
 #! DCMAC hierarchy per Ethernet port
 _QSFP = {0: "qsfp_0_n_1", 2: "qsfp_2_n_3"}
 
@@ -88,6 +90,7 @@ def build_service_rdma_ctx(net, rdma_dir: Optional[Path] = None) -> Dict[str, An
         "rdma_qsfp": _QSFP[rdma],
         "rdma_build": RDMA_BUILD,
         "rdma_lanes": list(net.rdma_lane_pair()),
+        "rdma_read_window": getattr(net, "rdma_read_window", None) or RDMA_READ_WINDOW,
         "rdma_dir": str(rdma_dir),
         "rdma_tcl": str(rdma_dir / "tcl" / "rdma_service.tcl"),
     }

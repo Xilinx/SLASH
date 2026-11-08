@@ -35,6 +35,10 @@ class NetworkSpec:
     # the two NoC lanes (0..7, lane k belongs to eth_<k // 2>) of the RDMA
     # service's stream; None: the RDMA port's own two
     rdma_lanes: Optional[Tuple[int, int]] = None
+    # READ requests the stack keeps in flight per queue pair (1..32); None:
+    # the stack's default. A peer NIC takes only as many as its responder
+    # resources (max_dest_rd_atomic, 16 on many NICs)
+    rdma_read_window: Optional[int] = None
 
     def rdma_lane_pair(self) -> Tuple[int, int]:
         """The NoC lanes of rdma.tx / rdma.rx (needs rdma)."""

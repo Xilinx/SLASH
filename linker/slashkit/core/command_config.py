@@ -183,6 +183,12 @@ Connectivity Configuration Format:
       rdma.tx / rdma.rx instead of the RDMA port's own. The lanes of other
       ports must not be enabled for Ethernet. Some lane pairs share NoC links
       in the static shell and carry less than the line rate together.
+    rdma_read_window=<1..32>
+      Example: rdma_read_window=16
+      READ requests the RDMA service keeps in flight per queue pair (default
+      32). A NIC as the peer answers only as many as its responder resources
+      (max_dest_rd_atomic, 16 on many NICs); more fail the queue pair. READs
+      are posted one per 4 KiB, so a smaller window lowers the READ rate.
 
   [user_region]  - Custom TCL scripts
     pre_synth=<path_to_tcl>

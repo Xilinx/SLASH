@@ -464,6 +464,41 @@ class TestParseConnectivityFile:
                 rdma_lanes={value}
             """))
 
+    def test_rdma_read_window(self, cfg_file):
+        cfg = parse_connectivity_file(cfg_file("""\
+            [network]
+            eth_0=1
+            rdma=eth_0
+            rdma_read_window=16
+        """))
+        assert cfg.net.rdma_read_window == 16
+
+    def test_rdma_read_window_default(self, cfg_file):
+        cfg = parse_connectivity_file(cfg_file("""\
+            [network]
+            eth_0=1
+            rdma=eth_0
+        """))
+        assert cfg.net.rdma_read_window is None
+
+    @pytest.mark.parametrize("value", ["0", "33", "-1", "a", ""])
+    def test_rdma_read_window_invalid(self, cfg_file, value):
+        with pytest.raises(ValueError, match="Invalid \\[network\\] rdma_read_window"):
+            parse_connectivity_file(cfg_file(f"""\
+                [network]
+                eth_0=1
+                rdma=eth_0
+                rdma_read_window={value}
+            """))
+
+    def test_rdma_read_window_needs_rdma(self, cfg_file):
+        with pytest.raises(ValueError, match="rdma_read_window needs an rdma= port"):
+            parse_connectivity_file(cfg_file("""\
+                [network]
+                eth_0=1
+                rdma_read_window=16
+            """))
+
     def test_rdma_lanes_need_rdma(self, cfg_file):
         with pytest.raises(ValueError, match="rdma_lanes needs an rdma= port"):
             parse_connectivity_file(cfg_file("""\

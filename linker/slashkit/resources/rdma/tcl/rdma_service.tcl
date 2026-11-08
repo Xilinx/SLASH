@@ -4,7 +4,7 @@
 # before the control SmartConnect, which takes rdma_0/s_axil and the port's
 # DCMAC registers as targets.
 #
-#   slash_add_rdma <eth> <build> <rdma dir> [<lanes>]
+#   slash_add_rdma <eth> <build> <rdma dir> [<lanes>] [<read window>]
 #                                               (before the SmartConnect)
 #   slash_rdma_assign_addresses <eth>           (after it: the control segments
 #                                                are reachable only through it)
@@ -12,6 +12,7 @@
 #     build      BUILD register value of rdma_service
 #     rdma dir   the staged resources/rdma (hdl/, tcl/, iprepo/rdma_200)
 #     lanes      the stream's two NoC lanes; empty: the port's own
+#     read window  READ requests in flight per QP, 1..32 (RD_WINDOW of the IP)
 #
 # Cells: the port's DCMAC hierarchy with the rdma_dcmac.tcl datapaths (1024-bit
 # at user_clk = 230 MHz), rdma_0 (rdma_service_bd), rdma_dm_0 / rdma_dm_1 (AXI
@@ -32,7 +33,7 @@
 # (VRT MemoryRangeType::DDR buffers).
 
 # lanes: the two NoC lanes (0..7) of the stream; empty: the port's own
-proc slash_add_rdma {eth build rdma_dir {lanes {}}} {
+proc slash_add_rdma {eth build rdma_dir {lanes {}} {read_window 32}} {
     switch -- $eth {
         0 { set dc 0; set hier qsfp_0_n_1 }
         2 { set dc 1; set hier qsfp_2_n_3 }
@@ -55,10 +56,10 @@ proc slash_add_rdma {eth build rdma_dir {lanes {}}} {
         create_ip -vlnv [lindex [get_ipdefs -all *:rdma:rdma_200:*] end] -module_name rdma_200_ip
         # QPs 0..7 retransmit WRITEs from the IP's buffer; dcmac_tx_path pads
         # TX frames, dcmac_rx_path drops bad-FCS frames
-        set_property -dict {
-            CONFIG.RT_QP_BITS 3 CONFIG.WR_WINDOW 32 CONFIG.RD_WINDOW 32 CONFIG.ACK_GAP_CYCLES 20
-            CONFIG.TX_PAD 0 CONFIG.RX_FCS_FILTER 0
-        } [get_ips rdma_200_ip]
+        set_property -dict [list \
+            CONFIG.RT_QP_BITS 3 CONFIG.WR_WINDOW 32 CONFIG.RD_WINDOW $read_window \
+            CONFIG.ACK_GAP_CYCLES 20 CONFIG.TX_PAD 0 CONFIG.RX_FCS_FILTER 0 \
+        ] [get_ips rdma_200_ip]
     }
     set files {}
     foreach f {

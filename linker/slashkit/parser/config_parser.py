@@ -147,6 +147,7 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     enabled_eth: set[int] = set()
     rdma_eth: Optional[int] = None
     rdma_lanes: Optional[Tuple[int, int]] = None
+    rdma_read_window: Optional[int] = None
     pre_synth_tcls: list[str] = []
     debug_nets: list[DebugNetSpec] = []
 
@@ -221,6 +222,9 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
             if k.lower() == "rdma_lanes":
                 rdma_lanes = _parse_rdma_lanes(v)
                 continue
+            if k.lower() == "rdma_read_window":
+                rdma_read_window = _parse_rdma_read_window(v)
+                continue
             m = _RE_ETH_KEY.match(k)
             if not m:
                 # ignore unknown keys in [network] to be lenient
@@ -267,7 +271,8 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     _commit_clock()
 
     # Attach network spec
-    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=rdma_eth, rdma_lanes=rdma_lanes)
+    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=rdma_eth, rdma_lanes=rdma_lanes,
+                          rdma_read_window=rdma_read_window)
     _check_rdma(cfg)
     cfg.user_region = UserRegionSpec(pre_synth_tcls=pre_synth_tcls)
     cfg.debug = DebugSpec(nets=debug_nets)
@@ -288,10 +293,25 @@ def _parse_rdma_lanes(v: str) -> Tuple[int, int]:
     return lanes
 
 
+def _parse_rdma_read_window(v: str) -> int:
+    """[network] rdma_read_window=<n>: READ requests in flight per QP, 1..32."""
+    try:
+        n = int(v, 0)
+    except ValueError:
+        n = 0
+    if not 1 <= n <= 32:
+        raise ValueError(
+            f"Invalid [network] rdma_read_window value '{v}'. Expected 1..32 READ "
+            f"requests in flight per queue pair, e.g. rdma_read_window=16.")
+    return n
+
+
 def _check_rdma(cfg: ConnectivityConfig) -> None:
     """The RDMA port must be an enabled DCMAC port, and owns that port's streams."""
     rdma = cfg.net.rdma
     lanes = cfg.net.rdma_lanes
+    if cfg.net.rdma_read_window is not None and rdma is None:
+        raise ValueError("[network] rdma_read_window needs an rdma= port.")
     if lanes is not None:
         if rdma is None:
             raise ValueError("[network] rdma_lanes needs an rdma= port.")
