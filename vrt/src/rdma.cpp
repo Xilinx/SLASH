@@ -54,6 +54,12 @@ Rdma::Rdma(const RdmaInfo& info_, std::shared_ptr<RdmaRegisters> regs_)
         throw std::runtime_error("Rdma: no RDMA stack at " + hex(info.baseAddr + STACK) +
                                  " (ID " + hex(id) + ")");
     }
+    // with two cores, a mixed-up address would drive the other port
+    uint32_t eth = svcRead(SVC_ETH);
+    if (eth != info.eth) {
+        throw std::runtime_error("Rdma: the core at " + hex(info.baseAddr) + " is on eth_" +
+                                 std::to_string(eth) + ", not eth_" + std::to_string(info.eth));
+    }
     msgsAtStart = stackRead64(CQ_MSGS);
 }
 

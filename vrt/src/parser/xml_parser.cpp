@@ -215,7 +215,7 @@ void XMLParser::parseXML() {
                     r.range = parseU64(getNodeProp(childNode, "range"));
                     r.memBase = parseU64(getNodeProp(childNode, "mem_base"));
                     r.memRange = parseU64(getNodeProp(childNode, "mem_range"));
-                    rdma = r;
+                    rdma.push_back(r);
                 }
             }
         }
@@ -232,7 +232,7 @@ ShellType XMLParser::getShellType() { return this->shellType; }
 
 std::vector<QdmaConnection> XMLParser::getQdmaConnections() { return this->qdmaConnections; }
 
-std::optional<RdmaInfo> XMLParser::getRdma() { return this->rdma; }
+std::vector<RdmaInfo> XMLParser::getRdma() { return this->rdma; }
 
 XMLParser::~XMLParser() {
     if (this->document != nullptr) {

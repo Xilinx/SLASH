@@ -20,7 +20,7 @@
  * A session with a peer (connect()) swaps the queue-pair and memory
  * parameters over a TCP sideband beside the RoCE link, as server or client:
  *
- *   auto rdma = device.getRdmaDevice();
+ *   auto rdma = device.getRdmaDevice();     // getRdmaDevice(eth) with two cores
  *   rdma.setLocalIp("192.168.0.1");
  *   rdma.setRole(vrt::Rdma::Role::Client);
  *   rdma.setRemoteHost("192.168.1.50");     // the peer's sideband address

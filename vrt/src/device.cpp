@@ -27,6 +27,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -412,15 +413,43 @@ class Pf2Bar2Registers : public RdmaRegisters {
 
 }  // namespace
 
+std::vector<uint32_t> Device::getRdmaPorts() const {
+    std::vector<uint32_t> ports;
+    for (const auto& r : rdmaInfo) {
+        ports.push_back(r.eth);
+    }
+    std::sort(ports.begin(), ports.end());
+    return ports;
+}
+
 vrt::Rdma Device::getRdmaDevice() {
-    if (!rdmaInfo.has_value()) {
+    if (rdmaInfo.empty()) {
         throw std::runtime_error(
             "This design has no RDMA service ([network] rdma=eth_<n> in the linker config)");
+    }
+    if (rdmaInfo.size() > 1) {
+        std::string ports;
+        for (uint32_t eth : getRdmaPorts()) {
+            ports += (ports.empty() ? "eth_" : " and eth_") + std::to_string(eth);
+        }
+        throw std::runtime_error("This design has an RDMA core on " + ports +
+                                 ": name the port, getRdmaDevice(eth)");
+    }
+    return getRdmaDevice(rdmaInfo.front().eth);
+}
+
+vrt::Rdma Device::getRdmaDevice(uint32_t eth) {
+    auto it = std::find_if(rdmaInfo.begin(), rdmaInfo.end(),
+                           [eth](const RdmaInfo& r) { return r.eth == eth; });
+    if (it == rdmaInfo.end()) {
+        throw std::runtime_error("This design has no RDMA core on eth_" + std::to_string(eth) +
+                                 " ([network] rdma=eth_" + std::to_string(eth) +
+                                 " in the linker config)");
     }
     if (platform != Platform::HARDWARE || !vrtdDevice.has_value()) {
         throw std::runtime_error("The RDMA service is available on hardware only");
     }
-    return vrt::Rdma(*rdmaInfo, std::make_shared<Pf2Bar2Registers>(vrtdDevice->getBar(2)));
+    return vrt::Rdma(*it, std::make_shared<Pf2Bar2Registers>(vrtdDevice->getBar(2)));
 }
 
 Kernel Device::getKernel(const std::string& name) {

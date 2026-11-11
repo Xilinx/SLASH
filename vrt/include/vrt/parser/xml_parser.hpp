@@ -51,7 +51,7 @@ class XMLParser {
     Platform platform;                            ///< The platform of the device.
     ShellType shellType;                          ///< The required hardware shell type.
     std::vector<QdmaConnection> qdmaConnections;  ///< Vector of QDMA connections.
-    std::optional<RdmaInfo> rdma;                 ///< RDMA service of the service layer, if any.
+    std::vector<RdmaInfo> rdma;                   ///< RDMA cores of the service layer, one per port.
 
    public:
     /**
@@ -103,9 +103,10 @@ class XMLParser {
     std::vector<QdmaConnection> getQdmaConnections();
 
     /**
-     * @brief The RDMA service (<ServiceLayer><Rdma .../>), if the design has one.
+     * @brief The RDMA cores (<ServiceLayer><Rdma .../>, one per Ethernet port),
+     *        in the order of the system map; empty without RDMA.
      */
-    std::optional<RdmaInfo> getRdma();
+    std::vector<RdmaInfo> getRdma();
 
     /**
      * @brief Destructor for XMLParser.

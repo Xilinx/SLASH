@@ -75,6 +75,14 @@ TEST(RdmaTest, ChecksBothIds) {
     EXPECT_THROW(vrt::Rdma(info(1), std::make_shared<FakeRegs>()), std::invalid_argument);
 }
 
+TEST(RdmaTest, ChecksTheCoresPort) {
+    // the fake core reports eth_0
+    EXPECT_THROW(vrt::Rdma(info(2), std::make_shared<FakeRegs>()), std::runtime_error);
+    auto regs = std::make_shared<FakeRegs>();
+    regs->regs[BASE + vrt::Rdma::SVC_ETH] = 2;
+    EXPECT_NO_THROW(vrt::Rdma(info(2), regs));
+}
+
 TEST(RdmaTest, WriteAndReadArePostedWithTheirFields) {
     auto regs = std::make_shared<FakeRegs>();
     vrt::Rdma rdma(info(), regs);
@@ -150,8 +158,10 @@ TEST(RdmaTest, ConfigureAndConnect) {
 }
 
 TEST(RdmaTest, LinkFromTheDcmacOfThePort) {
+    // one register map for both: it reports the port of the core being opened
     auto regs = std::make_shared<FakeRegs>();
     vrt::Rdma eth0(info(0), regs);
+    regs->regs[BASE + vrt::Rdma::SVC_ETH] = 2;
     vrt::Rdma eth2(info(2), regs);
     regs->regs[DCMAC0 + 0x1C04] = 0x5;
     EXPECT_TRUE(eth0.linkUp());
