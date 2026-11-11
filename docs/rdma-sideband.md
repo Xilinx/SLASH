@@ -25,6 +25,10 @@ rdma.setPort(18515);                      // default
 rdma.connect();
 ```
 
+A design with two cores (`rdma=eth_0,eth_2` in the linker config) has a
+session per core: `getRdmaDevice(0)` and `getRdmaDevice(2)` give the core
+of each port, and each one connects to its own peer.
+
 The end that runs the tests is called the driver. It is chosen independently
 of the role, and in version 1 it is always VRT.
 
