@@ -203,6 +203,21 @@ void XMLParser::parseXML() {
                 }
             }
             qdmaConnections.push_back({kernelName, qid, qdmaStream, syncTypeStr});
+        } else if (kernelNode->type == XML_ELEMENT_NODE &&
+                   xmlStrcmp(kernelNode->name, BAD_CAST "ServiceLayer") == 0) {
+            for (xmlNode* childNode = kernelNode->children; childNode;
+                 childNode = childNode->next) {
+                if (childNode->type == XML_ELEMENT_NODE &&
+                    xmlStrcmp(childNode->name, BAD_CAST "Rdma") == 0) {
+                    RdmaInfo r;
+                    r.eth = parseU32(getNodeProp(childNode, "eth"));
+                    r.baseAddr = parseU64(getNodeProp(childNode, "base_addr"));
+                    r.range = parseU64(getNodeProp(childNode, "range"));
+                    r.memBase = parseU64(getNodeProp(childNode, "mem_base"));
+                    r.memRange = parseU64(getNodeProp(childNode, "mem_range"));
+                    rdma.push_back(r);
+                }
+            }
         }
     }
 }
@@ -216,6 +231,8 @@ Platform XMLParser::getPlatform() { return this->platform; }
 ShellType XMLParser::getShellType() { return this->shellType; }
 
 std::vector<QdmaConnection> XMLParser::getQdmaConnections() { return this->qdmaConnections; }
+
+std::vector<RdmaInfo> XMLParser::getRdma() { return this->rdma; }
 
 XMLParser::~XMLParser() {
     if (this->document != nullptr) {

@@ -8,6 +8,9 @@
       <eth index="{{ idx }}" />
 {% endfor %}
     </Ethernet>
+{% for r in service_layer.rdma %}
+    <Rdma eth="{{ r.eth }}" base_addr="{{ r.base_addr }}" range="{{ r.range }}" mem_base="{{ r.mem_base }}" mem_range="{{ r.mem_range }}" />
+{% endfor %}
     <VIRT>
 {% for v in service_layer.virt %}
       <interface index="{{ v.index }}" connection="{{ v.connection }}" />

@@ -1175,6 +1175,17 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   # Ethernet disabled; no DCMAC hierarchy created.
 {% endif %}
 
+# === RDMA cores, one per DCMAC port ([network] rdma=eth_<n>) ===
+# Each core's DCMAC hierarchy, rdma_<n> and its DataMovers; before the
+# SmartConnect, which takes rdma_<n>/s_axil and the port's DCMAC registers as
+# targets.
+{% if rdma_enabled %}
+  source [file normalize "{{ rdma_tcl }}"]
+{% for c in rdma_cores %}
+  slash_add_rdma {{ c.eth }} {{ rdma_build }} [file normalize "{{ rdma_dir }}"] {{ '{' }}{{ c.lanes|join(' ') }}{{ '}' }} {{ rdma_read_window }}
+{% endfor %}
+{% endif %}
+
 # === AXI-Lite SmartConnect for service_layer control ===
 # === AXI-Lite SmartConnect for service_layer control ===
 {% if sl_have_xbar %}
@@ -1211,6 +1222,9 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 
   # Clocks & reset (design pins to SC pins)
   connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ sl_smartconnect_name }}/aclk]
+  {% for c in sl_extra_clks %}
+  connect_bd_net [get_bd_pins {{ c }}] [get_bd_pins {{ sl_smartconnect_name }}/aclk{{ loop.index }}]
+  {% endfor %}
   connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ sl_smartconnect_name }}/aresetn]
 
   # SI: service_layer design's S_AXILITE -> SmartConnect S00_AXI
@@ -1313,6 +1327,13 @@ assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_addre
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_01] [get_bd_addr_segs M_VIRT_1/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_02] [get_bd_addr_segs M_VIRT_2/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_03] [get_bd_addr_segs M_VIRT_3/Reg] -force
+{% if rdma_enabled %}
+# RDMA ports: their DCMACs and cores at fixed control addresses (now that the
+# SmartConnect connects them to S_AXILITE_INI)
+{% for c in rdma_cores %}
+slash_rdma_assign_addresses {{ c.eth }}
+{% endfor %}
+{% endif %}
 {% if sl_window_anchor_enabled|default(false) %}
 # Window anchor: last 64 KiB of the 128 MiB aperture, so the span of
 # S_AXILITE_INI is the full aperture whatever the [network] config maps. Must

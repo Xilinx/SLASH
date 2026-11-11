@@ -21,3 +21,7 @@
 	path = submodules/qemu-devicetrees
 	url = https://github.com/Xilinx/qemu-devicetrees.git
 	update = none
+[submodule "submodules/fpga-network-stack"]
+	path = submodules/fpga-network-stack
+	url = https://github.com/hpc-aulmamei/fpga-network-stack.git
+	branch = rdma-rtl

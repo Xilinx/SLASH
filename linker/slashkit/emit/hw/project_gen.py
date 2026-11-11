@@ -33,6 +33,10 @@ from contextlib import ExitStack
 from slashkit.core.floorplan import floorplan_xdc
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
+from slashkit.emit.hw.service_region.network_ctx import RDMA_STREAM_IP
+from slashkit.emit.hw import noc_shutdown
+from slashkit.emit.hw.service_region.rdma_ctx import (
+    rdma_impl_tcl, write_rdma_opt_post)
 from slashkit.core.command_config import (
     LinkerConfiguration,
     InstallerConfiguration,
@@ -551,6 +555,11 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             shutil.copytree(
                 kernel.component_xml_path.parent, config.ip_repository / kernel.name
             )
+        # rdma_<n>.tx / rdma_<n>.rx: the user region's end of an RDMA core's
+        # stream, packaged IPs (module references do not work in the RM)
+        if config.configuration.net.rdma:
+            shutil.copytree(RDMA_STREAM_IP, config.ip_repository / "rdma_stream",
+                            dirs_exist_ok=True)
 
     logs_dir = config.build_dir / "logs"
     image_out_dir = config.build_dir / "images"
@@ -653,6 +662,13 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
                     "service_layer_eth.opt.post.tcl",
                 )
             )
+            rdma = config.configuration.net.rdma
+            if rdma:
+                opt_post_tcl = write_rdma_opt_post(
+                    config.build_dir, opt_post_tcl, rdma)
+                impl_tcl = rdma_impl_tcl(config.build_dir, rdma)
+                if impl_tcl is not None:
+                    cmd.extend(["--impl-tcl", str(impl_tcl)])
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
         # Distinct task kinds: a single `slashkit link` runs both RM builds, so
@@ -672,6 +688,11 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     if not pdi_out_path.is_file():
         raise FileNotFoundError(
             f"{str(pdi_out_path)} is missing! Check {str(log_path)} for errors!")
+    # Shut the region's NoC ports down before any frame of the old module is
+    # touched, whatever module was loaded before (noc_shutdown.py).
+    # write_device_image ran in the build directory, which names in its BIF
+    # are relative to.
+    noc_shutdown.rebuild_partial(pdi_out_path, config.build_dir)
 
 
 def build_service_layer_rm(config: LinkerConfiguration) -> None:

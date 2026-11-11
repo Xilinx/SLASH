@@ -46,6 +46,7 @@ from slashkit.emit.hw.user_region.anchor_ctx import (
 from slashkit.emit.hw.user_region.param_ctx import build_data_width_param_context
 from slashkit.emit.metadata.system_map_ctx import build_system_map_context, resolve_system_map_clock
 from slashkit.emit.hw.service_region.service_layer_ctx import *
+from slashkit.emit.hw.service_region.rdma_ctx import build_service_rdma_ctx, stage_rdma
 
 from slashkit.core.command_config import LinkerConfiguration, ShellType
 
@@ -293,6 +294,8 @@ def generate_tcl(config: LinkerConfiguration) -> None:
                 "axis_to_fabric": net_ctx["axis_to_fabric"],
                 # /dcmac_axis_noc_s_k/M00_AXIS -> inst.AXIS
                 "axis_from_fabric": net_ctx["axis_from_fabric"],
+                # rdma_<n>.tx / .rx: rdma_<n>_stream_tx / rdma_<n>_stream_rx
+                "rdma_stream_cells": net_ctx["rdma_stream_cells"],
             }
         )
         used_rx_slots: set[int] = set()
@@ -315,6 +318,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         ctx["virt_smart_roots"] = []
         ctx["axis_to_fabric"] = []
         ctx["axis_from_fabric"] = []
+        ctx["rdma_stream_cells"] = []
         ctx["dcmac_rx_tready_tie_pins"] = []
         ctx.update(build_stream_connect_context(instances, streams))
 
@@ -381,7 +385,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         platform="Hardware",
         shell_type=config.shell_type.value,
         kernel_hls_by_type=kernel_hls_by_type,
-        network=getattr(cfg, "network", None),
+        network=cfg.net,
     )
     system_map_out = config.build_dir / "system_map.xml"
     render_template(
@@ -406,6 +410,11 @@ def generate_tcl(config: LinkerConfiguration) -> None:
             # Only Ethernet-enabled designs need the Versal-DCMAC sources.
             stage_versal_dcmac(dcmac_dir / "versal")
         svc_ctx.update(dcmac_paths(dcmac_dir))
+
+        rdma_dir = None
+        if cfg.net.rdma:
+            rdma_dir = stage_rdma(config.build_dir / "rdma")
+        svc_ctx.update(build_service_rdma_ctx(cfg.net, rdma_dir))
 
         svc_out = config.build_dir / "service_layer.tcl"
         render_template(

@@ -1,0 +1,325 @@
+// SPDX-License-Identifier: MIT
+/**
+ * @file rdma.hpp
+ * @brief The RDMA service of the service layer: a RoCE v2 stack on one DCMAC
+ *        port ([network] rdma=eth_<n> in the linker configuration).
+ *
+ * The host sets up the stack (MAC, IP, queue pairs) and posts RDMA WRITEs and
+ * READs through registers on PF2 BAR2. The payload of a request is at its
+ * local address:
+ *   - card memory: the DDR window (Buffer with MemoryRangeType::DDR,
+ *     getPhysAddr()), also what a peer's WRITEs and READs address;
+ *   - the stream: Rdma::STREAM, the user-region stream rdma.tx for what is
+ *     sent and rdma.rx for what is received (1024 bits each, over two NoC
+ *     lanes). A WRITE from the stream takes ceil(length / 64) 64-byte units
+ *     of rdma.tx (two per beat, one in a beat with tlast); data received for
+ *     the stream arrives on rdma.rx with tlast on the last beat of each
+ *     message. Use QPs 0..7 for WRITEs from the stream: only those are
+ *     retransmitted from the stack's own buffer.
+ *
+ * A session with a peer (connect()) swaps the queue-pair and memory
+ * parameters over a TCP sideband beside the RoCE link, as server or client:
+ *
+ *   auto rdma = device.getRdmaDevice();     // getRdmaDevice(eth) with two cores
+ *   rdma.setLocalIp("192.168.0.1");
+ *   rdma.setRole(vrt::Rdma::Role::Client);
+ *   rdma.setRemoteHost("192.168.1.50");     // the peer's sideband address
+ *   rdma.connect();
+ *   rdma.write(rdma.qp(0), buf, 0, rdma.remoteMemory()[0].addr, 4096);
+ *
+ * The protocol is in docs/rdma-sideband.md.
+ */
+
+#ifndef VRT_RDMA_HPP
+#define VRT_RDMA_HPP
+
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+namespace vrt {
+
+/**
+ * @brief Where the service is: from <ServiceLayer><Rdma .../> of the system map.
+ */
+struct RdmaInfo {
+    uint32_t eth = 0;         ///< Ethernet port (0: DCMAC0 / QSFP0, 2: DCMAC1 / QSFP2)
+    uint64_t baseAddr = 0;    ///< register window of the service (AXI address)
+    uint64_t range = 0;       ///< its size
+    uint64_t memBase = 0;     ///< card memory the service reaches
+    uint64_t memRange = 0;    ///< its size
+};
+
+/**
+ * @brief 32-bit register access at AXI addresses (hardware: PF2 BAR2).
+ */
+class RdmaRegisters {
+   public:
+    virtual ~RdmaRegisters() = default;
+    virtual uint32_t read(uint64_t addr) = 0;
+    virtual void write(uint64_t addr, uint32_t value) = 0;
+};
+
+/**
+ * @brief A queue pair to connect. The two ends swap the PSNs: if this end has
+ *        localPsn 0x100 and remotePsn 0x300, the peer has 0x300 and 0x100.
+ */
+struct RdmaQp {
+    uint32_t qpn = 0;          ///< local QPN, 0..63
+    uint32_t remoteQpn = 0;    ///< the peer's QPN
+    std::string remoteIp;      ///< the peer's IPv4 address, dotted
+    uint32_t localPsn = 0;     ///< first PSN expected from the peer
+    uint32_t remotePsn = 0;    ///< first PSN sent to the peer
+    uint32_t rkey = 0;
+    uint16_t remotePort = 0;   ///< UDP port, 0 = 4791
+};
+
+/**
+ * @brief Counters of the stack and of the service.
+ */
+struct RdmaStats {
+    /// stack: RX frames, TX frames, ARP RX, ARP TX, ICMP RX, ICMP TX, RoCE RX,
+    /// RoCE TX, PSN drops, retransmissions, ICRC drops, ACK hold cycles, TX
+    /// packets trimmed, stray completions, bad-FCS drops, RX room drops
+    std::array<uint32_t, 16> stack{};
+    uint64_t requests = 0;         ///< requests (up to 4 KiB) handed to the transport
+    uint64_t completions = 0;      ///< completed requests
+    uint64_t messages = 0;         ///< completed messages
+    uint32_t rdMem = 0, rdStream = 0, rdBad = 0;   ///< payload read requests by kind
+    uint32_t wrMem = 0, wrStream = 0, wrBad = 0;   ///< payload write requests by kind
+    uint32_t mm2sErrors = 0, s2mmErrors = 0;       ///< memory accesses not OKAY
+    uint32_t rdLenErrors = 0, wrLenErrors = 0;     ///< packets ending where not expected
+    /// frames the port dropped before the stack: bad FCS, no room (the stack
+    /// was not taking them); 0 on services before version 1.1
+    uint32_t rxFcsDrops = 0, rxRoomDrops = 0;
+};
+
+/**
+ * @brief Memory a peer announced: what this end puts as remote address in
+ *        WRITEs and READs to it.
+ */
+struct RdmaRemoteMemory {
+    uint64_t addr = 0;
+    uint64_t len = 0;
+};
+
+/// a pattern check: words that differ, byte offset of the first (-1: none)
+struct RdmaCheckResult {
+    uint64_t errors = 0;
+    int64_t firstError = -1;
+};
+
+/// RDMA operations the peer ran on request: time and counter deltas
+struct RdmaRunResult {
+    uint64_t ns = 0;
+    uint64_t retrans = 0;
+    uint64_t psnDrops = 0;
+};
+
+class Rdma {
+   public:
+    /// who opens the sideband: the server listens, the client connects
+    enum class Role { Server, Client };
+    static constexpr uint16_t SIDEBAND_PORT = 18515;
+    static constexpr unsigned SIDEBAND_VERSION = 1;
+
+    /// the local address of the stream (rdma.tx / rdma.rx); bits 46:0 do not matter
+    static constexpr uint64_t STREAM = 1ull << 47;
+
+    // service registers (offsets in the service window)
+    static constexpr uint64_t SVC_ID = 0x000, SVC_BUILD = 0x008, SVC_ETH = 0x00C;
+    static constexpr uint64_t SVC_VERSION = 0x004, SVC_MEM_PORTS = 0x01C;
+    static constexpr uint64_t SVC_PHY_CTRL = 0x020, SVC_PHY_STATUS = 0x024;
+    static constexpr uint64_t SVC_RX_FCS_DROPS = 0x02C, SVC_RX_ROOM_DROPS = 0x030;
+    static constexpr uint64_t SVC_COUNTERS = 0x100;
+    static constexpr uint32_t SVC_ID_VALUE = 0x52444D53;    ///< "RDMS"
+    // the stack's registers (rdma_200 register map), at STACK in the window
+    static constexpr uint64_t STACK = 0x40'0000;
+    static constexpr uint64_t ID = 0x000, MAC_LO = 0x020, MAC_HI = 0x024, IP = 0x028;
+    static constexpr uint64_t ARP_LOOKUP = 0x02C, PENDING = 0x030;
+    static constexpr uint64_t QP_LOCAL_QPN = 0x040, QP_REMOTE_QPN = 0x044, QP_LOCAL_PSN = 0x048;
+    static constexpr uint64_t QP_REMOTE_PSN = 0x04C, QP_REMOTE_IP = 0x050, QP_REMOTE_PORT = 0x054;
+    static constexpr uint64_t QP_RKEY = 0x058, QP_SET = 0x05C;
+    static constexpr uint64_t SQ_CTRL = 0x080, SQ_LEN = 0x084, SQ_LADDR = 0x088, SQ_RADDR = 0x090;
+    static constexpr uint64_t SQ_POST = 0x098, SQ_REQS = 0x0A0;
+    static constexpr uint64_t CQ_COUNT = 0x100, CQ_MSGS = 0x108, STATS = 0x200;
+    static constexpr uint32_t ID_VALUE = 0x52444D41;        ///< "RDMA"
+
+    /**
+     * @brief The service at @p info, through @p regs. Checks both IDs.
+     *        Usually obtained with Device::getRdmaDevice().
+     */
+    Rdma(const RdmaInfo& info, std::shared_ptr<RdmaRegisters> regs);
+    ~Rdma();
+    Rdma(Rdma&&) noexcept;
+    Rdma& operator=(Rdma&&) noexcept;
+
+    const RdmaInfo& getInfo() const { return info; }
+    uint32_t getBuild();
+
+    /// DCMAC port 0 RX aligned and no TX local fault
+    bool linkUp();
+    /// raw PHY status of the port (GT resets done, power good, MMCM lock ...)
+    uint32_t phyStatus();
+    /**
+     * @brief Bring the link up: a GT RX datapath reset, then (if still down)
+     *        the whole GT / DCMAC reset sequence; true when it is up.
+     *        The stack keeps its addresses and queue pairs.
+     */
+    bool bringUp(std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+    // ---- a session with a peer: set what is needed, then connect() ----
+
+    /// own IPv4 address on the RoCE link (required)
+    void setLocalIp(const std::string& ip);
+    /// own MAC; default 02:00 followed by the four bytes of the local IP
+    void setLocalMac(uint64_t mac);
+    /// the peer's RoCE IPv4 address; optional, connect() checks the peer's against it
+    void setRemoteIp(const std::string& ip);
+    /// server (listens on the sideband port) or client (connects to it); default server
+    void setRole(Role role);
+    /// sideband TCP port: the one listened on or connected to; default 18515
+    void setPort(uint16_t port);
+    /// the peer's sideband address, host name or IPv4 (client only)
+    void setRemoteHost(const std::string& host);
+    /// queue pairs to connect, local QPNs 1..n; default 1
+    void setQp(unsigned n);
+    /// memory the peer may address; default the whole memory the service reaches
+    void addMemory(uint64_t addr, uint64_t len);
+    /// a DDR vrt::Buffer, @p bytes long, as memory the peer may address
+    template <typename Buf, typename = std::enable_if_t<!std::is_integral_v<Buf>>>
+    void addMemory(const Buf& buf, uint64_t bytes) {
+        addMemory(memoryAddress(buf.getPhysAddr(), 0, bytes), bytes);
+    }
+    /// how long connect() and each request to the peer may take; default 60 s
+    void setTimeout(std::chrono::milliseconds timeout);
+
+    /**
+     * @brief Bring the link up, open the sideband, swap the parameters with
+     *        the peer and connect the queue pairs. Throws on any failure.
+     */
+    void connect();
+    /// end the session (BYE); the queue pairs stay set in the stack
+    void close();
+    bool connected() const;
+
+    /// local QPN of queue pair @p i (pass it to write() and read())
+    uint32_t qp(unsigned i) const;
+    /// the peer's RoCE IPv4 address, dotted
+    const std::string& remoteIp() const { return peerIp; }
+    /// memory the peer announced
+    const std::vector<RdmaRemoteMemory>& remoteMemory() const { return peerMemory; }
+
+    // requests to the peer: it acts on its own memory and queue pairs
+    /// fill @p len bytes of the peer's memory @p mr from @p off with the pattern of @p seed
+    void peerFill(unsigned mr, uint64_t off, uint64_t len, uint32_t seed);
+    /// check them against the pattern
+    RdmaCheckResult peerCheck(unsigned mr, uint64_t off, uint64_t len, uint32_t seed);
+    /**
+     * @brief The peer WRITEs @p count messages of @p size bytes on queue pair
+     *        @p qp: message k from its @p peerAddr + k * size to @p remoteAddr
+     *        + k * size here, and waits for them.
+     */
+    RdmaRunResult peerWrite(unsigned qp, uint32_t count, uint32_t size, uint64_t peerAddr,
+                            uint64_t remoteAddr);
+    /// the peer READs them from @p remoteAddr here into its @p peerAddr
+    RdmaRunResult peerRead(unsigned qp, uint32_t count, uint32_t size, uint64_t peerAddr,
+                           uint64_t remoteAddr);
+    /// the peer's counters, by name
+    std::map<std::string, std::string> peerStats();
+
+    /// the pattern of @p seed: word k of a range is seed + k
+    static void fillPattern(uint32_t* words, size_t n, uint32_t seed);
+    static RdmaCheckResult checkPattern(const uint32_t* words, size_t n, uint32_t seed);
+
+    // ---- the stack directly, without a session ----
+
+    /// own MAC (48 bits) and IPv4 address (dotted); the subnet is /24
+    void configure(uint64_t mac, const std::string& ip);
+    /// look up @p ip (ARP); packets to an unresolved address are dropped
+    void resolve(const std::string& ip);
+    /// hand a queue pair to the stack
+    void connect(const RdmaQp& qp);
+
+    /**
+     * @brief Post an RDMA WRITE of @p length bytes (a multiple of 4) from
+     *        @p localAddr to @p remoteAddr at the peer of QP @p qpn.
+     */
+    void write(uint32_t qpn, uint64_t localAddr, uint64_t remoteAddr, uint32_t length);
+    /// post an RDMA READ of @p length bytes from @p remoteAddr into @p localAddr
+    void read(uint32_t qpn, uint64_t localAddr, uint64_t remoteAddr, uint32_t length);
+
+    /// WRITE from a vrt::Buffer (MemoryRangeType::DDR), @p offsetBytes into it
+    template <typename Buf>
+    void write(uint32_t qpn, const Buf& src, uint64_t offsetBytes, uint64_t remoteAddr,
+               uint32_t length) {
+        write(qpn, memoryAddress(src.getPhysAddr(), offsetBytes, length), remoteAddr, length);
+    }
+    /// READ into a vrt::Buffer (MemoryRangeType::DDR), @p offsetBytes into it
+    template <typename Buf>
+    void read(uint32_t qpn, const Buf& dst, uint64_t offsetBytes, uint64_t remoteAddr,
+              uint32_t length) {
+        read(qpn, memoryAddress(dst.getPhysAddr(), offsetBytes, length), remoteAddr, length);
+    }
+    /// WRITE the next bytes of the user-region stream rdma.tx to @p remoteAddr
+    void writeFromStream(uint32_t qpn, uint64_t remoteAddr, uint32_t length) {
+        write(qpn, STREAM, remoteAddr, length);
+    }
+    /// READ @p remoteAddr into the user-region stream rdma.rx
+    void readToStream(uint32_t qpn, uint64_t remoteAddr, uint32_t length) {
+        read(qpn, STREAM, remoteAddr, length);
+    }
+
+    /// messages posted through this object
+    uint64_t posted() const { return postedMsgs; }
+    /// messages completed since this object was made
+    uint64_t completed();
+    /// wait until every posted message completed; false on timeout
+    bool wait(std::chrono::milliseconds timeout = std::chrono::seconds(10));
+
+    RdmaStats stats();
+
+    /// IPv4 dotted -> 32 bits, first octet on top
+    static uint32_t parseIp(const std::string& ip);
+
+   private:
+    uint32_t svcRead(uint64_t off) { return regs->read(info.baseAddr + off); }
+    void svcWrite(uint64_t off, uint32_t v) { regs->write(info.baseAddr + off, v); }
+    uint32_t stackRead(uint64_t off) { return regs->read(info.baseAddr + STACK + off); }
+    void stackWrite(uint64_t off, uint32_t v) { regs->write(info.baseAddr + STACK + off, v); }
+    uint64_t stackRead64(uint64_t off);
+    uint64_t dcmacBase() const;
+    void post(uint32_t ctrl, uint64_t localAddr, uint64_t remoteAddr, uint32_t length);
+    void phyPulse(unsigned bit);
+    bool waitLink(std::chrono::milliseconds timeout);
+    uint64_t memoryAddress(uint64_t phys, uint64_t offsetBytes, uint64_t length) const;
+
+    struct Sideband;
+    std::map<std::string, std::string> request(const std::string& line);
+    RdmaRunResult peerRun(const char* op, unsigned qp, uint32_t count, uint32_t size,
+                          uint64_t peerAddr, uint64_t remoteAddr);
+
+    RdmaInfo info;
+    std::shared_ptr<RdmaRegisters> regs;
+    uint64_t postedMsgs = 0;
+    uint64_t msgsAtStart = 0;
+
+    // session settings and what the peer announced
+    std::string localIp, wantedPeerIp, remoteHost, peerIp;
+    uint64_t localMac = 0;
+    Role role = Role::Server;
+    uint16_t sidebandPort = SIDEBAND_PORT;
+    unsigned numQps = 1;
+    std::vector<RdmaRemoteMemory> localMemory, peerMemory;
+    std::chrono::milliseconds timeout{60000};
+    std::unique_ptr<Sideband> sideband;
+};
+
+}  // namespace vrt
+
+#endif  // VRT_RDMA_HPP

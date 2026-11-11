@@ -40,6 +40,15 @@ logger = logging.getLogger(__name__)
 _RE_TARGET = re.compile(r"^\s*([A-Za-z]+)\s*(\d*)\s*$")
 _RE_NK = re.compile(r"^\s*([^:]+)\s*:\s*(\d+)(?::(.*))?\s*$")
 _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
+# eth_<n>.tx0/tx1/rx0/rx1: a port's NoC lanes; rdma_<n>.tx / rdma_<n>.rx: the
+# stream of the RDMA core on eth_<n> (one each way, spread over two lanes),
+# rdma.tx / rdma.rx when there is only one core
+_RE_STREAM_EP = re.compile(
+    r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma(?:_(\d+))?\.(\w+))$", re.IGNORECASE)
+
+# Ethernet ports with a DCMAC in the service layer (eth_0: DCMAC0, eth_2: DCMAC1),
+# the only ones that can carry an RDMA core (one each).
+RDMA_ETH_PORTS = (0, 2)
 _RE_DEBUG_NET = re.compile(r"^\s*([^.:\s]+)\.([^.:\s]+)\s*$")
 _RE_SLR = re.compile(r"^\s*SLR(\d+)\s*$", re.IGNORECASE)
 
@@ -158,6 +167,8 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     section: Optional[str] = None
     pending_clock: Dict[str, str] = {}
     enabled_eth: set[int] = set()
+    rdma_eth: list[int] = []
+    rdma_read_window: Optional[int] = None
     pre_synth_tcls: list[str] = []
     debug_nets: list[DebugNetSpec] = []
 
@@ -219,6 +230,23 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                 raise ValueError(
                     f"Invalid line in [network] section: '{line}'")
             k, v = [t.strip() for t in line.split("=", 1)]
+            if k.lower() == "rdma":
+                for t in v.split(","):
+                    m = _RE_ETH_KEY.match(t.strip())
+                    if not m:
+                        raise ValueError(
+                            f"Invalid [network] rdma value '{v}'. Expected Ethernet "
+                            f"ports, e.g. rdma=eth_0 or rdma=eth_0,eth_2.")
+                    eth = int(m.group(1))
+                    if eth in rdma_eth:
+                        raise ValueError(
+                            f"[network] rdma: eth_{eth} is given more than once "
+                            f"(one RDMA core per port).")
+                    rdma_eth.append(eth)
+                continue
+            if k.lower() == "rdma_read_window":
+                rdma_read_window = _parse_rdma_read_window(v)
+                continue
             m = _RE_ETH_KEY.match(k)
             if not m:
                 # ignore unknown keys in [network] to be lenient
@@ -276,11 +304,75 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     _commit_clock()
 
     # Attach network spec
-    cfg.net = NetworkSpec(enabled_eth=enabled_eth)
+    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=tuple(sorted(rdma_eth)),
+                          rdma_read_window=rdma_read_window)
+    _check_rdma(cfg)
     cfg.user_region = UserRegionSpec(pre_synth_tcls=pre_synth_tcls)
     cfg.debug = DebugSpec(nets=debug_nets)
 
     return cfg
+
+
+def _parse_rdma_read_window(v: str) -> int:
+    """[network] rdma_read_window=<n>: READ requests in flight per QP, 1..32."""
+    try:
+        n = int(v, 0)
+    except ValueError:
+        n = 0
+    if not 1 <= n <= 32:
+        raise ValueError(
+            f"Invalid [network] rdma_read_window value '{v}'. Expected 1..32 READ "
+            f"requests in flight per queue pair, e.g. rdma_read_window=16.")
+    return n
+
+
+def _check_rdma(cfg: ConnectivityConfig) -> None:
+    """
+    Every RDMA core sits on an enabled DCMAC port and owns that port's streams.
+    The linker picks the cores' NoC lanes (connectivity.RDMA_LANES).
+    """
+    net = cfg.net
+    rdma = net.rdma
+    if net.rdma_read_window is not None and not rdma:
+        raise ValueError("[network] rdma_read_window needs an rdma= port.")
+    for port in rdma:
+        if port not in RDMA_ETH_PORTS:
+            raise ValueError(
+                f"[network] rdma=eth_{port}: RDMA needs a port with a DCMAC "
+                f"({', '.join(f'eth_{i}' for i in RDMA_ETH_PORTS)}).")
+        if port not in net.enabled_eth:
+            raise ValueError(
+                f"[network] rdma=eth_{port} needs eth_{port}=1.")
+    for s in cfg.streams:
+        for ep in (f"{s.src_inst}.{s.src_port}", f"{s.dst_inst}.{s.dst_port}"):
+            m = _RE_STREAM_EP.match(ep)
+            if not m:
+                continue
+            if m.group(5) is not None:
+                name = "rdma" if m.group(4) is None else f"rdma_{m.group(4)}"
+                if m.group(5).lower() not in ("tx", "rx"):
+                    raise ValueError(
+                        f"stream_connect uses '{ep}': an RDMA core has one stream "
+                        f"each way, {name}.tx and {name}.rx.")
+                if not rdma:
+                    raise ValueError(
+                        f"stream_connect uses '{ep}' but [network] has no rdma= port.")
+                if m.group(4) is None and len(rdma) > 1:
+                    ports = " and ".join(f"eth_{p}" for p in rdma)
+                    raise ValueError(
+                        f"stream_connect uses '{ep}', but there is an RDMA core on "
+                        f"{ports}: name it, e.g. "
+                        f"rdma_{rdma[0]}.{m.group(5).lower()}.")
+                if m.group(4) is not None and int(m.group(4)) not in rdma:
+                    raise ValueError(
+                        f"stream_connect uses '{ep}' but there is no RDMA core on "
+                        f"eth_{m.group(4)} (rdma=eth_{m.group(4)} in [network]).")
+            elif int(m.group(2)) in rdma:
+                port = int(m.group(2))
+                name = "rdma" if len(rdma) == 1 else f"rdma_{port}"
+                raise ValueError(
+                    f"stream_connect uses '{ep}', but eth_{port} carries an RDMA "
+                    f"core: connect to {name}.{m.group(3).lower()[:2]} instead.")
 
 
 def _resolve_port_name_for_kernel(kernel: Kernel, requested: str) -> str:

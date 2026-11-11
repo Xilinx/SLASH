@@ -220,6 +220,66 @@ TEST_F(XMLParserTest, ParseQdmaConnections) {
     EXPECT_EQ(conns[0].getQid(), 3u);
 }
 
+TEST_F(XMLParserTest, ParseServiceLayerRdma) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ServiceLayer>
+    <Ethernet enabled="true">
+      <eth index="2" />
+    </Ethernet>
+    <Rdma eth="2" base_addr="0x020304000000" range="0x01000000" mem_base="0x060000000000" mem_range="0x000800000000" />
+    <VIRT>
+      <interface index="0" connection="unused" />
+    </VIRT>
+  </ServiceLayer>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    auto rs = parser.getRdma();
+    ASSERT_EQ(rs.size(), 1u);
+    const auto& r = rs[0];
+    EXPECT_EQ(r.eth, 2u);
+    EXPECT_EQ(r.baseAddr, 0x020304000000ull);
+    EXPECT_EQ(r.range, 0x01000000ull);
+    EXPECT_EQ(r.memBase, 0x060000000000ull);
+    EXPECT_EQ(r.memRange, 0x000800000000ull);
+}
+
+TEST_F(XMLParserTest, ParseTwoRdmaCores) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ServiceLayer>
+    <Ethernet enabled="true">
+      <eth index="0" />
+      <eth index="2" />
+    </Ethernet>
+    <Rdma eth="0" base_addr="0x020304000000" range="0x01000000" mem_base="0x060000000000" mem_range="0x000800000000" />
+    <Rdma eth="2" base_addr="0x020305000000" range="0x01000000" mem_base="0x060000000000" mem_range="0x000800000000" />
+  </ServiceLayer>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    auto rs = parser.getRdma();
+    ASSERT_EQ(rs.size(), 2u);
+    EXPECT_EQ(rs[0].eth, 0u);
+    EXPECT_EQ(rs[0].baseAddr, 0x020304000000ull);
+    EXPECT_EQ(rs[1].eth, 2u);
+    EXPECT_EQ(rs[1].baseAddr, 0x020305000000ull);
+}
+
+TEST_F(XMLParserTest, NoRdmaWithoutTheElement) {
+    auto path = writeXml(R"(<?xml version="1.0"?>
+<SystemMap>
+  <Platform>Hardware</Platform>
+  <ServiceLayer><Ethernet enabled="true"><eth index="0" /></Ethernet></ServiceLayer>
+</SystemMap>)");
+    vrt::XMLParser parser(path);
+    parser.parseXML();
+    EXPECT_TRUE(parser.getRdma().empty());
+}
+
 TEST_F(XMLParserTest, ParseMultipleKernels) {
     auto path = writeXml(R"(<?xml version="1.0"?>
 <SystemMap>

@@ -46,6 +46,7 @@
 #include <vrt/vrtbin.hpp>
 #include <vrt/driver/qdma_logic.hpp>
 #include <vrt/parser/xml_parser.hpp>
+#include <vrt/rdma.hpp>
 #include <vrt/qdma/qdma_connection.hpp>
 #include <vrt/qdma/qdma_intf.hpp>
 #include <vrt/utils/logger.hpp>
@@ -110,6 +111,7 @@ class Device {
     std::shared_ptr<ZmqServer> zmqServer;                       ///< ZeroMQ server object
     std::vector<QdmaConnection> qdmaConnections;                ///< Vector of QDMA connections
     std::vector<QdmaIntf*> qdmaIntfs;                           ///< Vector of QDMA interfaces for streaming
+    std::vector<RdmaInfo> rdmaInfo;                             ///< RDMA cores, from the system map
     std::shared_ptr<vrtd::Session> vrtdSession;                 ///< vrtd session for hardware access
     std::optional<vrtd::Device> vrtdDevice;                     ///< vrtd device handle (requires session)
     std::thread runtimeThread;                                  ///< sw_emu/sim runtime launcher thread
@@ -136,6 +138,25 @@ class Device {
      * @return The Kernel object.
      */
     vrt::Kernel getKernel(const std::string& name);
+
+    /**
+     * @brief The RDMA core of the service layer ([network] rdma=eth_<n>), for
+     *        a design with exactly one. Hardware only. Keep one object per
+     *        core: it counts the messages it posted.
+     */
+    vrt::Rdma getRdmaDevice();
+
+    /**
+     * @brief The RDMA core on Ethernet port eth_<eth> (0 or 2), for a design
+     *        with one or two ([network] rdma=eth_0,eth_2). Hardware only.
+     */
+    vrt::Rdma getRdmaDevice(uint32_t eth);
+
+    /**
+     * @brief The Ethernet ports that carry an RDMA core, ascending; empty
+     *        without RDMA.
+     */
+    std::vector<uint32_t> getRdmaPorts() const;
 
     /**
      * @brief Gets the Bus:Device.Function identifier.
@@ -287,6 +308,21 @@ class Device {
     vrt::Kernel getKernel(const std::string& name) {
         return handle->getKernel(name);
     }
+
+    /**
+     * @brief The RDMA service of the service layer (see vrt::Rdma).
+     */
+    vrt::Rdma getRdmaDevice() { return handle->getRdmaDevice(); }
+
+    /**
+     * @brief The RDMA core on Ethernet port eth_<eth> (see vrt::Rdma).
+     */
+    vrt::Rdma getRdmaDevice(uint32_t eth) { return handle->getRdmaDevice(eth); }
+
+    /**
+     * @brief The Ethernet ports that carry an RDMA core, ascending.
+     */
+    std::vector<uint32_t> getRdmaPorts() const { return handle->getRdmaPorts(); }
 
     /**
      * @brief Gets the Bus:Device.Function identifier.

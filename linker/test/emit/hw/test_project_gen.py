@@ -26,6 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from slashkit.core.connectivity import ConnectivityConfig
 from slashkit.core import launcher
 from slashkit.core.command_config import ShellType
 from slashkit.emit.hw import project_gen
@@ -207,6 +208,7 @@ def _rm_config(tmp_path):
         project_name="test",
         n_jobs=1,
         vivado_bin=Path("/usr/bin/true"),
+        configuration=ConnectivityConfig(),
     )
 
 
