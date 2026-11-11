@@ -354,7 +354,7 @@ class TestParseConnectivityFile:
             [network]
             eth_0=1
         """))
-        assert cfg.net.rdma is None
+        assert cfg.net.rdma == ()
 
     @pytest.mark.parametrize("port", [0, 2])
     def test_network_rdma_port(self, cfg_file, port):
@@ -363,7 +363,7 @@ class TestParseConnectivityFile:
             eth_{port}=1
             rdma=eth_{port}
         """))
-        assert cfg.net.rdma == port
+        assert cfg.net.rdma == (port,)
         assert cfg.net.enabled_eth == {port}
 
     def test_network_rdma_before_eth_line(self, cfg_file):
@@ -372,7 +372,7 @@ class TestParseConnectivityFile:
             rdma=ETH_2
             eth_2=1
         """))
-        assert cfg.net.rdma == 2
+        assert cfg.net.rdma == (2,)
 
     def test_network_rdma_needs_enabled_port(self, cfg_file):
         with pytest.raises(ValueError, match="rdma=eth_0 needs eth_0=1"):
@@ -400,15 +400,42 @@ class TestParseConnectivityFile:
                 rdma={value}
             """))
 
-    def test_network_only_one_rdma_stack(self, cfg_file):
-        with pytest.raises(ValueError, match="Only one RDMA stack"):
+    @pytest.mark.parametrize("lines", [
+        "rdma=eth_0\nrdma=eth_2", "rdma=eth_2,eth_0", "rdma = eth_0, eth_2"])
+    def test_network_two_rdma_cores(self, cfg_file, lines):
+        cfg = parse_connectivity_file(cfg_file(
+            "[network]\neth_0=1\neth_2=1\n" + lines + "\n"))
+        assert cfg.net.rdma == (0, 2)
+        assert cfg.net.rdma_lane_pair(0) == (0, 1)
+        assert cfg.net.rdma_lane_pair(2) == (2, 6)
+
+    @pytest.mark.parametrize("lines", ["rdma=eth_0\nrdma=eth_0", "rdma=eth_0,eth_0"])
+    def test_network_one_rdma_core_per_port(self, cfg_file, lines):
+        with pytest.raises(ValueError, match="eth_0 is given more than once"):
+            parse_connectivity_file(cfg_file(
+                "[network]\neth_0=1\n" + lines + "\n"))
+
+    def test_two_cores_need_both_ports_enabled(self, cfg_file):
+        with pytest.raises(ValueError, match="rdma=eth_2 needs eth_2=1"):
             parse_connectivity_file(cfg_file("""\
                 [network]
                 eth_0=1
-                eth_2=1
-                rdma=eth_0
-                rdma=eth_2
+                rdma=eth_0,eth_2
             """))
+
+    def test_two_cores_streams(self, cfg_file):
+        cfg = parse_connectivity_file(cfg_file("""\
+            [network]
+            eth_0=1
+            eth_2=1
+            rdma=eth_0,eth_2
+            [connectivity]
+            stream_connect=src_0.out:rdma_0.tx
+            stream_connect=rdma_0.rx:sink_0.in
+            stream_connect=src_1.out:rdma_2.tx
+            stream_connect=rdma_2.rx:sink_1.in
+        """))
+        assert len(cfg.streams) == 4
 
     def test_rdma_streams_accepted(self, cfg_file):
         cfg = parse_connectivity_file(cfg_file("""\
@@ -435,34 +462,34 @@ class TestParseConnectivityFile:
                 stream_connect=src_0.out:{ep}
             """))
 
-    def test_rdma_lanes(self, cfg_file):
-        cfg = parse_connectivity_file(cfg_file("""\
+    @pytest.mark.parametrize("eth, lanes", [(0, (4, 6)), (2, (2, 6))])
+    def test_rdma_lanes_of_one_core(self, cfg_file, eth, lanes):
+        cfg = parse_connectivity_file(cfg_file(f"""\
+            [network]
+            eth_{eth}=1
+            rdma=eth_{eth}
+        """))
+        assert cfg.net.rdma_lane_pair(eth) == lanes
+
+    @pytest.mark.parametrize("other", [2, 3])
+    def test_rdma_lanes_of_eth_0_leave_an_ethernet_port_its_lanes(self, cfg_file, other):
+        cfg = parse_connectivity_file(cfg_file(f"""\
             [network]
             eth_0=1
+            eth_{other}=1
             rdma=eth_0
-            rdma_lanes=4, 6
         """))
-        assert cfg.net.rdma_lanes == (4, 6)
-        assert cfg.net.rdma_lane_pair() == (4, 6)
+        assert cfg.net.rdma_lane_pair(0) == (0, 1)
 
-    def test_rdma_lanes_default_to_the_port(self, cfg_file):
-        cfg = parse_connectivity_file(cfg_file("""\
+    @pytest.mark.parametrize("other", [1, 3])
+    def test_rdma_lanes_of_eth_2_leave_an_ethernet_port_its_lanes(self, cfg_file, other):
+        cfg = parse_connectivity_file(cfg_file(f"""\
             [network]
+            eth_{other}=1
             eth_2=1
             rdma=eth_2
         """))
-        assert cfg.net.rdma_lanes is None
-        assert cfg.net.rdma_lane_pair() == (4, 5)
-
-    @pytest.mark.parametrize("value", ["4", "4,4", "4,8", "-1,2", "a,b", "1,2,3"])
-    def test_rdma_lanes_invalid(self, cfg_file, value):
-        with pytest.raises(ValueError, match="Invalid \\[network\\] rdma_lanes"):
-            parse_connectivity_file(cfg_file(f"""\
-                [network]
-                eth_0=1
-                rdma=eth_0
-                rdma_lanes={value}
-            """))
+        assert cfg.net.rdma_lane_pair(2) == (4, 5)
 
     def test_rdma_read_window(self, cfg_file):
         cfg = parse_connectivity_file(cfg_file("""\
@@ -497,24 +524,6 @@ class TestParseConnectivityFile:
                 [network]
                 eth_0=1
                 rdma_read_window=16
-            """))
-
-    def test_rdma_lanes_need_rdma(self, cfg_file):
-        with pytest.raises(ValueError, match="rdma_lanes needs an rdma= port"):
-            parse_connectivity_file(cfg_file("""\
-                [network]
-                eth_0=1
-                rdma_lanes=4,6
-            """))
-
-    def test_rdma_lanes_of_an_ethernet_port_rejected(self, cfg_file):
-        with pytest.raises(ValueError, match="lane 4 belongs to eth_2, which is enabled"):
-            parse_connectivity_file(cfg_file("""\
-                [network]
-                eth_0=1
-                eth_2=1
-                rdma=eth_0
-                rdma_lanes=4,6
             """))
 
     def test_rdma_port_streams_rejected(self, cfg_file):

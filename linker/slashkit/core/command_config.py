@@ -156,7 +156,8 @@ Connectivity Configuration Format:
         stream_connect=traffic_producer_0.axis_out:eth_0.tx0
         stream_connect=producer_0.axis_out:rdma.tx
       Connects AXI-Stream ports between kernel instances and/or ethernet ports
-      (eth_<idx>.tx0/tx1/rx0/rx1) or the RDMA service (rdma.tx / rdma.rx).
+      (eth_<idx>.tx0/tx1/rx0/rx1) or the RDMA cores (rdma_<idx>.tx /
+      rdma_<idx>.rx, or rdma.tx / rdma.rx with one core).
 
     sp=<inst>.<port>:<memory_target>
       Example: sp=vadd_0.m_axi_gmem0:HBM0
@@ -171,21 +172,21 @@ Connectivity Configuration Format:
   [network]  - Enable Ethernet interfaces
     eth_<idx>=<0|1>
       Example: eth_0=1
-    rdma=eth_<idx>
-      Example: rdma=eth_0
-      Puts the 200G RoCE v2 RDMA service on an enabled DCMAC port (eth_0 or
-      eth_2; at most one). Its streams are rdma.tx and rdma.rx, 1024 bits
-      each, which the linker spreads over the port's two NoC lanes; that
-      port's eth_<idx>.* endpoints are no longer available.
-    rdma_lanes=<lane>,<lane>
-      Example: rdma_lanes=4,6
-      The two NoC lanes (0..7; lane k belongs to eth_<k/2>) that carry
-      rdma.tx / rdma.rx instead of the RDMA port's own. The lanes of other
-      ports must not be enabled for Ethernet. Some lane pairs share NoC links
-      in the static shell and carry less than the line rate together.
+    rdma=eth_<idx>[,eth_<idx>]
+      Examples: rdma=eth_0
+                rdma=eth_0,eth_2
+      Puts a 200G RoCE v2 RDMA core on each listed DCMAC port (eth_0 and/or
+      eth_2, which must be enabled). The streams of the core on eth_<idx> are
+      rdma_<idx>.tx and rdma_<idx>.rx (rdma.tx and rdma.rx when there is only
+      one core), 1024 bits each, which the linker spreads over two NoC lanes;
+      the port's eth_<idx>.* endpoints are no longer available.
+      The linker picks the two NoC lanes of each core's stream: 4,6 for a
+      core on eth_0 alone, 2,6 for one on eth_2, and 0,1 for eth_0 when both
+      ports have a core. A core whose lanes belong to a port enabled for
+      Ethernet takes its own port's lanes instead.
     rdma_read_window=<1..32>
       Example: rdma_read_window=16
-      READ requests the RDMA service keeps in flight per queue pair (default
+      READ requests every RDMA core keeps in flight per queue pair (default
       32). A NIC as the peer answers only as many as its responder resources
       (max_dest_rd_atomic, 16 on many NICs); more fail the queue pair. READs
       are posted one per 4 KiB, so a smaller window lowers the READ rate.

@@ -37,50 +37,43 @@ def _instances(width=1024):
     return {n: KernelInstance(name=n, kernel=k) for n in ("a", "b")}
 
 
-def _ctx(streams, enabled, rdma=None, width=1024, lanes=None):
-    net = NetworkSpec(enabled_eth=set(enabled), rdma=rdma, rdma_lanes=lanes)
+def _ctx(streams, enabled, rdma=None, width=1024):
+    """rdma: a port or a tuple of ports."""
+    ports = () if rdma is None else (rdma,) if isinstance(rdma, int) else tuple(rdma)
+    net = NetworkSpec(enabled_eth=set(enabled), rdma=ports)
     return build_network_axis_context(
         _instances(width), [StreamConnect(*s) for s in streams], net)
 
 
 @pytest.mark.parametrize("rdma, lanes", [
-    (0, ["/dcmac_axis_noc_0/S00_AXIS", "/dcmac_axis_noc_1/S00_AXIS"]),
-    (2, ["/dcmac_axis_noc_4/S00_AXIS", "/dcmac_axis_noc_5/S00_AXIS"]),
+    (0, ["/dcmac_axis_noc_4/S00_AXIS", "/dcmac_axis_noc_6/S00_AXIS"]),
+    (2, ["/dcmac_axis_noc_2/S00_AXIS", "/dcmac_axis_noc_6/S00_AXIS"]),
 ])
-def test_rdma_tx_goes_over_both_lanes_of_the_rdma_port(rdma, lanes):
+def test_rdma_tx_goes_over_the_lanes_of_the_core(rdma, lanes):
     ctx = _ctx([("a", "out", "rdma", "tx")], {rdma}, rdma)
     assert ctx["axis_to_fabric"] == [
-        {"src_pin": "a/out", "dst_pin": "rdma_stream_tx/s_axis"},
-        {"src_pin": "rdma_stream_tx/m_axis0", "dst_pin": lanes[0]},
-        {"src_pin": "rdma_stream_tx/m_axis1", "dst_pin": lanes[1]},
+        {"src_pin": "a/out", "dst_pin": f"rdma_{rdma}_stream_tx/s_axis"},
+        {"src_pin": f"rdma_{rdma}_stream_tx/m_axis0", "dst_pin": lanes[0]},
+        {"src_pin": f"rdma_{rdma}_stream_tx/m_axis1", "dst_pin": lanes[1]},
     ]
-    assert ctx["rdma_stream_cells"] == [{"name": "rdma_stream_tx",
+    assert ctx["rdma_stream_cells"] == [{"name": f"rdma_{rdma}_stream_tx",
                                          "vlnv": "slash:rdma:rdma_stream_tx:1.0"}]
     assert ctx["streams_leftover"] == []
 
 
 @pytest.mark.parametrize("rdma, lanes", [
-    (0, ["/dcmac_axis_noc_s_0/M00_AXIS", "/dcmac_axis_noc_s_1/M00_AXIS"]),
-    (2, ["/dcmac_axis_noc_s_4/M00_AXIS", "/dcmac_axis_noc_s_5/M00_AXIS"]),
+    (0, ["/dcmac_axis_noc_s_4/M00_AXIS", "/dcmac_axis_noc_s_6/M00_AXIS"]),
+    (2, ["/dcmac_axis_noc_s_2/M00_AXIS", "/dcmac_axis_noc_s_6/M00_AXIS"]),
 ])
-def test_rdma_rx_comes_over_both_lanes_of_the_rdma_port(rdma, lanes):
+def test_rdma_rx_comes_over_the_lanes_of_the_core(rdma, lanes):
     ctx = _ctx([("rdma", "rx", "b", "in")], {rdma}, rdma)
     assert ctx["axis_from_fabric"] == [
-        {"src_pin": lanes[0], "dst_pin": "rdma_stream_rx/s_axis0"},
-        {"src_pin": lanes[1], "dst_pin": "rdma_stream_rx/s_axis1"},
-        {"src_pin": "rdma_stream_rx/m_axis", "dst_pin": "b/in"},
+        {"src_pin": lanes[0], "dst_pin": f"rdma_{rdma}_stream_rx/s_axis0"},
+        {"src_pin": lanes[1], "dst_pin": f"rdma_{rdma}_stream_rx/s_axis1"},
+        {"src_pin": f"rdma_{rdma}_stream_rx/m_axis", "dst_pin": "b/in"},
     ]
-    assert ctx["rdma_stream_cells"] == [{"name": "rdma_stream_rx",
+    assert ctx["rdma_stream_cells"] == [{"name": f"rdma_{rdma}_stream_rx",
                                          "vlnv": "slash:rdma:rdma_stream_rx:1.0"}]
-
-
-def test_rdma_stream_on_chosen_lanes():
-    ctx = _ctx([("a", "out", "rdma", "tx"), ("rdma", "rx", "b", "in")],
-               {0}, 0, lanes=(4, 6))
-    assert [e["dst_pin"] for e in ctx["axis_to_fabric"]] == [
-        "rdma_stream_tx/s_axis", "/dcmac_axis_noc_4/S00_AXIS", "/dcmac_axis_noc_6/S00_AXIS"]
-    assert [e["src_pin"] for e in ctx["axis_from_fabric"]] == [
-        "/dcmac_axis_noc_s_4/M00_AXIS", "/dcmac_axis_noc_s_6/M00_AXIS", "rdma_stream_rx/m_axis"]
 
 
 def test_rdma_stream_ips_are_shipped():
@@ -101,7 +94,7 @@ def test_rdma_and_plain_ethernet_side_by_side():
     ctx = _ctx([("a", "out", "rdma", "tx"), ("a", "out", "eth_2", "tx0"),
                 ("eth_2", "rx0", "b", "in")], {0, 2}, 0)
     assert [e["dst_pin"] for e in ctx["axis_to_fabric"]] == [
-        "rdma_stream_tx/s_axis", "/dcmac_axis_noc_0/S00_AXIS", "/dcmac_axis_noc_1/S00_AXIS",
+        "rdma_0_stream_tx/s_axis", "/dcmac_axis_noc_0/S00_AXIS", "/dcmac_axis_noc_1/S00_AXIS",
         "/dcmac_axis_noc_4/S00_AXIS"]
     assert [e["src_pin"] for e in ctx["axis_from_fabric"]] == [
         "/dcmac_axis_noc_s_4/M00_AXIS"]
@@ -114,24 +107,24 @@ def test_no_rdma_stream_no_cells():
 
 @pytest.mark.parametrize("lane", ["tx0", "tx1", "rx0", "rx1", "foo"])
 def test_rdma_lanes_are_not_endpoints(lane):
-    with pytest.raises(ValueError, match="one stream each way: rdma.tx and rdma.rx"):
+    with pytest.raises(ValueError, match="one stream each way: rdma_<n>.tx and rdma_<n>.rx"):
         _ctx([("a", "out", "rdma", lane)], {0}, 0)
 
 
 def test_rdma_tx_is_one_stream():
-    with pytest.raises(ValueError, match="rdma.tx is one stream"):
+    with pytest.raises(ValueError, match="rdma_0.tx is one stream"):
         _ctx([("a", "out", "rdma", "tx"), ("b", "out", "rdma", "tx")], {0}, 0)
 
 
 def test_rdma_rx_is_one_stream():
-    with pytest.raises(ValueError, match="rdma.rx is one stream"):
+    with pytest.raises(ValueError, match="rdma_0.rx is one stream"):
         _ctx([("rdma", "rx", "a", "in"), ("rdma", "rx", "b", "in")], {0}, 0)
 
 
 def test_rdma_directions():
-    with pytest.raises(ValueError, match="Only rdma.tx takes"):
+    with pytest.raises(ValueError, match=r"Only rdma\[_<n>\].tx takes"):
         _ctx([("a", "out", "rdma", "rx")], {0}, 0)
-    with pytest.raises(ValueError, match="Only rdma.rx gives"):
+    with pytest.raises(ValueError, match=r"Only rdma\[_<n>\].rx gives"):
         _ctx([("rdma", "tx", "b", "in")], {0}, 0)
 
 
@@ -154,3 +147,41 @@ def test_generic_stream_builder_rejects_rdma_endpoints():
     with pytest.raises(ValueError, match="rdma"):
         build_stream_connect_context(
             _instances(), [StreamConnect("a", "out", "rdma", "tx")])
+
+
+# ---------------------------------------------------------------- two cores
+
+def test_two_cores_each_on_their_lanes():
+    ctx = _ctx([("a", "out", "rdma_0", "tx"), ("rdma_0", "rx", "b", "in"),
+                ("b", "out", "rdma_2", "tx"), ("rdma_2", "rx", "a", "in")],
+               {0, 2}, (0, 2))
+    assert [c["name"] for c in ctx["rdma_stream_cells"]] == [
+        "rdma_0_stream_tx", "rdma_0_stream_rx", "rdma_2_stream_tx", "rdma_2_stream_rx"]
+    to = {(e["src_pin"], e["dst_pin"]) for e in ctx["axis_to_fabric"]}
+    assert ("rdma_0_stream_tx/m_axis1", "/dcmac_axis_noc_1/S00_AXIS") in to
+    assert ("rdma_2_stream_tx/m_axis0", "/dcmac_axis_noc_2/S00_AXIS") in to
+    assert ("b/out", "rdma_2_stream_tx/s_axis") in to
+    frm = {(e["src_pin"], e["dst_pin"]) for e in ctx["axis_from_fabric"]}
+    assert ("/dcmac_axis_noc_s_6/M00_AXIS", "rdma_2_stream_rx/s_axis1") in frm
+    assert ("rdma_0_stream_rx/m_axis", "b/in") in frm
+
+
+def test_named_core_with_one_core():
+    ctx = _ctx([("a", "out", "rdma_2", "tx")], {2}, 2)
+    assert ctx["rdma_stream_cells"][0]["name"] == "rdma_2_stream_tx"
+
+
+def test_bare_rdma_endpoint_with_two_cores_rejected():
+    with pytest.raises(ValueError, match="more than one RDMA core"):
+        _ctx([("a", "out", "rdma", "tx")], {0, 2}, (0, 2))
+
+
+def test_endpoint_of_a_port_without_core_rejected():
+    with pytest.raises(ValueError, match="no RDMA core on eth_2"):
+        _ctx([("a", "out", "rdma_2", "tx")], {0, 2}, 0)
+
+
+def test_each_core_takes_one_stream_each_way():
+    with pytest.raises(ValueError, match="rdma_2.tx is one stream"):
+        _ctx([("a", "out", "rdma_2", "tx"), ("b", "out", "rdma_2", "tx")],
+             {0, 2}, (0, 2))

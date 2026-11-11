@@ -19,7 +19,7 @@
 # ##################################################################################################
 
 from __future__ import annotations
-from typing import Set, Dict, Any, List, Optional
+from typing import Set, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
@@ -77,7 +77,7 @@ def stage_versal_dcmac(dest: Path) -> Path:
 @dataclass(frozen=True)
 class NetworkSpecView:
     enabled_eth: Set[int]
-    rdma: Optional[int] = None
+    rdma: Tuple[int, ...] = ()
 
 
 # eth_<n> -> the DCMAC hierarchy of the service layer
@@ -91,14 +91,14 @@ def build_service_layer_context(net) -> dict:
       qsfp_2_n_3 -> DCMAC1 ⇔ eth_2
     Dual-QSFP knobs remain 0 for now.
 
-    The port of the RDMA service ([network] rdma=eth_<n>) is not created here:
+    The port of an RDMA core ([network] rdma=eth_<n>) is not created here:
     resources/rdma/tcl/rdma_service.tcl builds it with its own datapaths, so
     its enable stays 0 while the DCMAC sources are still needed.
     """
     enabled = getattr(net, "enabled_eth", set())
-    rdma = getattr(net, "rdma", None)
-    dc0 = 1 if 0 in enabled and rdma != 0 else 0
-    dc1 = 1 if 2 in enabled and rdma != 2 else 0
+    rdma = tuple(getattr(net, "rdma", ()) or ())
+    dc0 = 1 if 0 in enabled and 0 not in rdma else 0
+    dc1 = 1 if 2 in enabled and 2 not in rdma else 0
     return {
         "needs_dcmac": bool(set(enabled) & set(QSFP_BLOCK)),
         "dc_enable_0": dc0,
@@ -130,22 +130,22 @@ def build_service_axilite_ctx(net) -> Dict[str, Any]:
     We map eth_0 -> qsfp_0_n_1, eth_2 -> qsfp_2_n_3 (as per your convention).
     """
     enabled = getattr(net, "enabled_eth", set())
-    rdma = getattr(net, "rdma", None)
+    rdma = tuple(getattr(net, "rdma", ()) or ())
 
     qsfp_blocks: list[str] = []
     mi_targets: list[str] = []
     extra_clks: list[str] = []
 
     for eth, blk in QSFP_BLOCK.items():
-        if eth in enabled and eth != rdma:
+        if eth in enabled and eth not in rdma:
             qsfp_blocks.append(blk)
             mi_targets.append(f"{blk}/s_axi")
-    # The RDMA port's DCMAC registers and the service's registers run on the
-    # port's user_clk (230 MHz): a second SmartConnect clock.
-    if rdma is not None:
-        mi_targets.append(f"{QSFP_BLOCK[rdma]}/s_axi")
-        mi_targets.append("rdma_0/s_axil")
-        extra_clks.append(f"{QSFP_BLOCK[rdma]}/user_clk")
+    # An RDMA port's DCMAC registers and its core's registers run on the
+    # port's user_clk (230 MHz): one more SmartConnect clock per core.
+    for eth in rdma:
+        mi_targets.append(f"{QSFP_BLOCK[eth]}/s_axi")
+        mi_targets.append(f"rdma_{eth}/s_axil")
+        extra_clks.append(f"{QSFP_BLOCK[eth]}/user_clk")
 
     # The service-layer RP has the same NoC aperture problem as the slash RP
     # (issue 228): the static shell declares a constant 128 MiB at
@@ -211,13 +211,13 @@ def build_service_noc_axis_ctx(net) -> Dict[str, Any]:
       Fabric -> MAC:  dummy_noc_X/M00_AXIS  -> qsfp_*/S_AXIS_0
       MAC -> Fabric:  qsfp_*/M_AXIS_0       -> dummy_noc_m_X/S00_AXIS
 
-    The RDMA port's lanes go to rdma_0 instead (rdma_service.tcl).
+    An RDMA port's lanes go to its core, rdma_<n>, instead (rdma_service.tcl).
     """
     enabled = getattr(net, "enabled_eth", set())
-    rdma = getattr(net, "rdma", None)
+    rdma = tuple(getattr(net, "rdma", ()) or ())
     links: List[dict] = []
 
-    if 0 in enabled and rdma != 0:
+    if 0 in enabled and 0 not in rdma:
         links.append({  # fabric -> MAC
             "src_pin": "dummy_noc_0/M00_AXIS",
             "dst_pin": "qsfp_0_n_1/S_AXIS_0",
@@ -227,7 +227,7 @@ def build_service_noc_axis_ctx(net) -> Dict[str, Any]:
             "dst_pin": "dummy_noc_m_0/S00_AXIS",
         })
 
-    if 2 in enabled and rdma != 2:
+    if 2 in enabled and 2 not in rdma:
         links.append({
             "src_pin": "dummy_noc_4/M00_AXIS",
             "dst_pin": "qsfp_2_n_3/S_AXIS_0",

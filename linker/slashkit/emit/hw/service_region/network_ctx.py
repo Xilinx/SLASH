@@ -27,11 +27,12 @@ from slashkit.core.port import BusType
 
 # eth_<i>.(tx0|tx1|rx0|rx1): the NoC lanes of an Ethernet port
 _ETH_EP_RE = re.compile(r"^eth_(\d+)\.(tx0|tx1|rx0|rx1)$", re.IGNORECASE)
-# rdma.tx / rdma.rx: the RDMA service's stream ([network] rdma=eth_<i>), one
-# 1024-bit stream each way, which rdma_stream_tx / rdma_stream_rx (placed
-# here in the user region) spread over two NoC lanes: the port's own, or
-# [network] rdma_lanes
-_RDMA_EP_RE = re.compile(r"^rdma\.(\w+)$", re.IGNORECASE)
+# rdma_<i>.tx / rdma_<i>.rx: the stream of the RDMA core on eth_<i> ([network]
+# rdma=eth_<i>), one 1024-bit stream each way, which rdma_<i>_stream_tx /
+# rdma_<i>_stream_rx (placed here in the user region) spread over two NoC
+# lanes, which the linker picks (connectivity.RDMA_LANES). rdma.tx / rdma.rx
+# name the only core.
+_RDMA_EP_RE = re.compile(r"^rdma(?:_(\d+))?\.(\w+)$", re.IGNORECASE)
 RDMA_STREAM_BITS = 1024
 # rdma_stream_tx / rdma_stream_rx, packaged from hdl/user by
 # resources/rdma/tcl/package_stream_ip.tcl
@@ -67,29 +68,43 @@ def _parse_eth_endpoint(s: str) -> Tuple[int, str]:
     if not m:
         raise ValueError(
             f"Invalid eth endpoint '{s}'. Expected eth_<0..3>.(tx0|tx1|rx0|rx1) "
-            f"or rdma.(tx|rx)")
+            f"or rdma[_<n>].(tx|rx)")
     return int(m.group(1)), m.group(2).lower()
 
 
-def _parse_rdma_endpoint(s: str, net=None) -> Tuple[Tuple[int, int], str]:
-    """rdma.tx / rdma.rx -> (the NoC lanes of the RDMA service's stream, 'tx' / 'rx')."""
+def _parse_rdma_endpoint(s: str, net=None) -> Tuple[int, Tuple[int, int], str]:
+    """
+    rdma_<n>.tx / rdma_<n>.rx (rdma.tx / rdma.rx: the only core) -> (the core's
+    port n, the NoC lanes of its stream, 'tx' / 'rx').
+    """
     m = _RDMA_EP_RE.match(s)
-    name = m.group(1).lower() if m else ""
+    name = m.group(2).lower() if m else ""
     if name not in ("tx", "rx"):
         raise ValueError(
-            f"Invalid RDMA endpoint '{s}'. The RDMA service has one stream each "
-            f"way: rdma.tx and rdma.rx (the linker spreads it over the port's two lanes)")
-    rdma = getattr(net, "rdma", None)
-    if rdma is None:
+            f"Invalid RDMA endpoint '{s}'. An RDMA core has one stream each "
+            f"way: rdma_<n>.tx and rdma_<n>.rx, or rdma.tx and rdma.rx with one "
+            f"core (the linker spreads it over two NoC lanes)")
+    rdma = tuple(getattr(net, "rdma", ()) or ())
+    if not rdma:
         raise ValueError(f"'{s}' needs an rdma= port in [network]")
-    return net.rdma_lane_pair(), name
+    if m.group(1) is None:
+        if len(rdma) != 1:
+            raise ValueError(
+                f"'{s}': there is more than one RDMA core, name it "
+                f"(rdma_{rdma[0]}.{name})")
+        eth = rdma[0]
+    else:
+        eth = int(m.group(1))
+        if eth not in rdma:
+            raise ValueError(f"'{s}': there is no RDMA core on eth_{eth}")
+    return eth, net.rdma_lane_pair(eth), name
 
 
 def _check_rdma_width(where: str, port) -> None:
     width = getattr(port, "width", None)
     if width and width != RDMA_STREAM_BITS:
         raise ValueError(
-            f"{where} is {width}-bit; rdma.tx / rdma.rx are {RDMA_STREAM_BITS}-bit streams")
+            f"{where} is {width}-bit; the RDMA streams are {RDMA_STREAM_BITS}-bit")
 
 
 def _port_norm(s): return re.sub(r"[^a-z0-9]", "", s.lower())
@@ -127,7 +142,7 @@ def build_network_axis_context(
       {
         "axis_to_fabric":   [{ "src_pin": "<inst>/<axis_port>", "dst_pin": "<fabric_tx_pin>"}],
         "axis_from_fabric": [{ "src_pin": "<fabric_rx_pin>",   "dst_pin": "<inst>/<axis_port>"}],
-        "rdma_stream_cells": [{ "name": ..., "vlnv": ... }],   # rdma.tx / rdma.rx ends
+        "rdma_stream_cells": [{ "name": ..., "vlnv": ... }],   # rdma_<n>.tx / .rx ends
         "streams_leftover": [ non-eth streams ]
       }
     """
@@ -163,21 +178,22 @@ def build_network_axis_context(
 
             dst_ep = f"{s.dst_inst}.{s.dst_port}"
             if _RDMA_EP_RE.match(dst_ep):
-                lanes, name = _parse_rdma_endpoint(dst_ep, net)
+                eth, lanes, name = _parse_rdma_endpoint(dst_ep, net)
                 if name != "tx":
                     raise ValueError(
-                        f"Only rdma.tx takes a stream from the user region, got '{dst_ep}'")
-                if "tx" in rdma_used:
+                        f"Only rdma[_<n>].tx takes a stream from the user region, got '{dst_ep}'")
+                if (eth, "tx") in rdma_used:
                     raise ValueError(
-                        "rdma.tx is one stream: only one stream_connect may feed it")
-                rdma_used.add("tx")
+                        f"rdma_{eth}.tx is one stream: only one stream_connect may feed it")
+                rdma_used.add((eth, "tx"))
                 _check_rdma_width(f"{s.src_inst}.{src_port}", src_p)
-                cells.append({"name": "rdma_stream_tx",
+                cell = f"rdma_{eth}_stream_tx"
+                cells.append({"name": cell,
                               "vlnv": RDMA_STREAM_VLNV.format("rdma_stream_tx")})
                 to_fabric.append({"src_pin": f"{s.src_inst}/{src_port}",
-                                  "dst_pin": "rdma_stream_tx/s_axis"})
+                                  "dst_pin": f"{cell}/s_axis"})
                 for i, k in enumerate(lanes):
-                    to_fabric.append({"src_pin": f"rdma_stream_tx/m_axis{i}",
+                    to_fabric.append({"src_pin": f"{cell}/m_axis{i}",
                                       "dst_pin": _tx_pin(k)})
                 continue
 
@@ -211,21 +227,22 @@ def build_network_axis_context(
 
             src_ep = f"{s.src_inst}.{s.src_port}"
             if _RDMA_EP_RE.match(src_ep):
-                lanes, name = _parse_rdma_endpoint(src_ep, net)
+                eth, lanes, name = _parse_rdma_endpoint(src_ep, net)
                 if name != "rx":
                     raise ValueError(
-                        f"Only rdma.rx gives a stream to the user region, got '{src_ep}'")
-                if "rx" in rdma_used:
+                        f"Only rdma[_<n>].rx gives a stream to the user region, got '{src_ep}'")
+                if (eth, "rx") in rdma_used:
                     raise ValueError(
-                        "rdma.rx is one stream: only one stream_connect may take it")
-                rdma_used.add("rx")
+                        f"rdma_{eth}.rx is one stream: only one stream_connect may take it")
+                rdma_used.add((eth, "rx"))
                 _check_rdma_width(f"{s.dst_inst}.{dst_port}", dst_p)
-                cells.append({"name": "rdma_stream_rx",
+                cell = f"rdma_{eth}_stream_rx"
+                cells.append({"name": cell,
                               "vlnv": RDMA_STREAM_VLNV.format("rdma_stream_rx")})
                 for i, k in enumerate(lanes):
                     from_fabric.append({"src_pin": _rx_pin(k),
-                                        "dst_pin": f"rdma_stream_rx/s_axis{i}"})
-                from_fabric.append({"src_pin": "rdma_stream_rx/m_axis",
+                                        "dst_pin": f"{cell}/s_axis{i}"})
+                from_fabric.append({"src_pin": f"{cell}/m_axis",
                                     "dst_pin": f"{s.dst_inst}/{dst_port}"})
                 continue
 

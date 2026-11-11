@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 """
-The RDMA service of the service layer ([network] rdma=eth_<n>): staging of its
-sources and of the RoCE v2 stack IP into the build directory, and the template
-context of service_layer.tcl.
+The RDMA service of the service layer ([network] rdma=eth_<n>, one core per
+DCMAC port, so up to two): staging of its sources and of the RoCE v2 stack IP
+into the build directory, and the template context of service_layer.tcl.
 
 The stack is the packaged IP rdma_200 of fpga-network-stack (submodule
 submodules/fpga-network-stack, `make rdma_200`). It is looked up, in order, in
@@ -79,37 +79,50 @@ def stage_rdma(dest: Path) -> Path:
 
 
 def build_service_rdma_ctx(net, rdma_dir: Optional[Path] = None) -> Dict[str, Any]:
-    rdma = getattr(net, "rdma", None)
-    if rdma is None:
-        return {"rdma_enabled": False}
+    rdma = tuple(getattr(net, "rdma", ()) or ())
+    if not rdma:
+        return {"rdma_enabled": False, "rdma_cores": []}
     if rdma_dir is None:
         raise ValueError(
             "build_service_rdma_ctx: the staged rdma directory is needed")
     return {
         "rdma_enabled": True,
-        "rdma_eth": rdma,
-        "rdma_qsfp": _QSFP[rdma],
+        # one per port; rdma_service.tcl names the core rdma_<eth>
+        "rdma_cores": [{"eth": eth, "qsfp": _QSFP[eth],
+                        "lanes": list(net.rdma_lane_pair(eth))}
+                       for eth in rdma],
         "rdma_build": RDMA_BUILD,
-        "rdma_lanes": list(net.rdma_lane_pair()),
         "rdma_read_window": getattr(net, "rdma_read_window", None) or RDMA_READ_WINDOW,
         "rdma_dir": str(rdma_dir),
         "rdma_tcl": str(rdma_dir / "tcl" / "rdma_service.tcl"),
     }
 
 
-def write_rdma_opt_post(build_dir: Path, base_hook: Path, rdma: int) -> Path:
+def write_rdma_opt_post(build_dir: Path, base_hook: Path, rdma) -> Path:
     """
     The service-layer build takes one opt_design post hook: SLASH's, then the
-    RDMA port's constraints (resources/rdma/constraints/rdma.opt.post.tcl).
-    service_layer_build.tcl finds the hook by its file name, so it keeps
-    SLASH's name, in a directory of its own.
+    constraints of each RDMA port (resources/rdma/constraints/rdma.opt.post.tcl,
+    once per port). service_layer_build.tcl finds the hook by its file name, so it
+    keeps SLASH's name, in a directory of its own.
     """
+    ports = [rdma] if isinstance(rdma, int) else list(rdma)
     out = build_dir / "rdma" / "opt_post" / "service_layer_eth.opt.post.tcl"
     out.parent.mkdir(parents=True, exist_ok=True)
     hook = build_dir / "rdma" / "constraints" / "rdma.opt.post.tcl"
-    out.write_text(
-        f"source {{{base_hook}}}\n"
-        f"set ::slash_rdma_eth {rdma}\n"
-        f"source {{{hook}}}\n",
-        encoding="utf-8")
+    text = f"source {{{base_hook}}}\n"
+    for eth in ports:
+        text += f"set ::slash_rdma_eth {eth}\nsource {{{hook}}}\n"
+    out.write_text(text, encoding="utf-8")
     return out
+
+
+def rdma_impl_tcl(build_dir: Path, rdma) -> Optional[Path]:
+    """
+    The implementation steps of the service layer (rdma.impl.tcl, staged with
+    the other RDMA resources), for two cores; None for one, which keeps
+    SLASH's strategy as it is.
+    """
+    ports = [rdma] if isinstance(rdma, int) else list(rdma)
+    if len(ports) < 2:
+        return None
+    return build_dir / "rdma" / "constraints" / "rdma.impl.tcl"

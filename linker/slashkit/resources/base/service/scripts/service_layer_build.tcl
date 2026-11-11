@@ -19,7 +19,7 @@
 # ##################################################################################################
 
 proc _service_usage {} {
-    return "Expected -tclargs: --project-name <name> --ip-repo <path> --static-shell-dcp <path> --base-bd <path> --opt-post-tcl <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --jobs <n>"
+    return "Expected -tclargs: --project-name <name> --ip-repo <path> --static-shell-dcp <path> --base-bd <path> --opt-post-tcl <path> \[--impl-tcl <path>\] --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --jobs <n>"
 }
 
 proc _require_file {path label} {
@@ -40,6 +40,7 @@ array set opts {
     --static-shell-dcp ""
     --base-bd ""
     --opt-post-tcl ""
+    --impl-tcl ""
     --linker-results-dir ""
     --rm-work-dir ""
     --artifact-out-dir ""
@@ -71,6 +72,7 @@ set ip_repo [file normalize $opts(--ip-repo)]
 set static_shell_dcp [file normalize $opts(--static-shell-dcp)]
 set base_bd [file normalize $opts(--base-bd)]
 set opt_post_tcl [file normalize $opts(--opt-post-tcl)]
+set impl_tcl $opts(--impl-tcl)
 set linker_results_dir [file normalize $opts(--linker-results-dir)]
 set rm_work_dir $opts(--rm-work-dir)
 set artifact_out_dir $opts(--artifact-out-dir)
@@ -139,6 +141,13 @@ set rm_synth_dcp [file join $rm_work_dir "${rm_proj_name}.runs" "${rm_name}_synt
 add_files $rm_synth_dcp
 set_property SCOPED_TO_CELLS {top_i/service_layer} [get_files $rm_synth_dcp]
 set_property strategy Congestion_SSI_SpreadLogic_high [get_runs impl_1]
+# a service layer may change the run's steps (the RDMA service does with two
+# cores)
+if {$impl_tcl ne ""} {
+    _require_file $impl_tcl "service_layer impl Tcl"
+    puts "IMPL HOOK:         $impl_tcl"
+    source $impl_tcl
+}
 set_property STEPS.OPT_DESIGN.TCL.POST $opt_post_hook [get_runs impl_1]
 puts "Attached impl_1 post-opt hook: $opt_post_hook"
 

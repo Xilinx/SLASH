@@ -36,13 +36,14 @@ from slashkit.core.port import BusType
 _RE_TARGET = re.compile(r"^\s*([A-Za-z]+)\s*(\d*)\s*$")
 _RE_NK = re.compile(r"^\s*([^:]+)\s*:\s*(\d+)(?::(.*))?\s*$")
 _RE_ETH_KEY = re.compile(r"^eth_(\d+)$", re.IGNORECASE)
-# eth_<n>.tx0/tx1/rx0/rx1: a port's NoC lanes; rdma.tx / rdma.rx: the RDMA
-# service's stream (one each way, spread over its port's two lanes)
+# eth_<n>.tx0/tx1/rx0/rx1: a port's NoC lanes; rdma_<n>.tx / rdma_<n>.rx: the
+# stream of the RDMA core on eth_<n> (one each way, spread over two lanes),
+# rdma.tx / rdma.rx when there is only one core
 _RE_STREAM_EP = re.compile(
-    r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma\.(\w+))$", re.IGNORECASE)
+    r"^(eth_(\d+)\.(tx0|tx1|rx0|rx1)|rdma(?:_(\d+))?\.(\w+))$", re.IGNORECASE)
 
 # Ethernet ports with a DCMAC in the service layer (eth_0: DCMAC0, eth_2: DCMAC1),
-# the only ones that can carry the RDMA service.
+# the only ones that can carry an RDMA core (one each).
 RDMA_ETH_PORTS = (0, 2)
 _RE_DEBUG_NET = re.compile(r"^\s*([^.:\s]+)\.([^.:\s]+)\s*$")
 
@@ -146,8 +147,7 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     section: Optional[str] = None
     pending_clock: Dict[str, str] = {}
     enabled_eth: set[int] = set()
-    rdma_eth: Optional[int] = None
-    rdma_lanes: Optional[Tuple[int, int]] = None
+    rdma_eth: list[int] = []
     rdma_read_window: Optional[int] = None
     pre_synth_tcls: list[str] = []
     debug_nets: list[DebugNetSpec] = []
@@ -211,17 +211,18 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
                     f"Invalid line in [network] section: '{line}'")
             k, v = [t.strip() for t in line.split("=", 1)]
             if k.lower() == "rdma":
-                if rdma_eth is not None:
-                    raise ValueError(
-                        "Only one RDMA stack is supported: [network] has more than one 'rdma=' line.")
-                m = _RE_ETH_KEY.match(v)
-                if not m:
-                    raise ValueError(
-                        f"Invalid [network] rdma value '{v}'. Expected an Ethernet port, e.g. rdma=eth_0.")
-                rdma_eth = int(m.group(1))
-                continue
-            if k.lower() == "rdma_lanes":
-                rdma_lanes = _parse_rdma_lanes(v)
+                for t in v.split(","):
+                    m = _RE_ETH_KEY.match(t.strip())
+                    if not m:
+                        raise ValueError(
+                            f"Invalid [network] rdma value '{v}'. Expected Ethernet "
+                            f"ports, e.g. rdma=eth_0 or rdma=eth_0,eth_2.")
+                    eth = int(m.group(1))
+                    if eth in rdma_eth:
+                        raise ValueError(
+                            f"[network] rdma: eth_{eth} is given more than once "
+                            f"(one RDMA core per port).")
+                    rdma_eth.append(eth)
                 continue
             if k.lower() == "rdma_read_window":
                 rdma_read_window = _parse_rdma_read_window(v)
@@ -272,26 +273,13 @@ def parse_connectivity_file(path: str | Path) -> ConnectivityConfig:
     _commit_clock()
 
     # Attach network spec
-    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=rdma_eth, rdma_lanes=rdma_lanes,
+    cfg.net = NetworkSpec(enabled_eth=enabled_eth, rdma=tuple(sorted(rdma_eth)),
                           rdma_read_window=rdma_read_window)
     _check_rdma(cfg)
     cfg.user_region = UserRegionSpec(pre_synth_tcls=pre_synth_tcls)
     cfg.debug = DebugSpec(nets=debug_nets)
 
     return cfg
-
-
-def _parse_rdma_lanes(v: str) -> Tuple[int, int]:
-    """[network] rdma_lanes=<a>,<b>: two different NoC lanes, 0..7."""
-    try:
-        lanes = tuple(int(t, 0) for t in v.split(","))
-    except ValueError:
-        lanes = ()
-    if len(lanes) != 2 or lanes[0] == lanes[1] or not all(0 <= x <= 7 for x in lanes):
-        raise ValueError(
-            f"Invalid [network] rdma_lanes value '{v}'. Expected two different NoC "
-            f"lanes 0..7, e.g. rdma_lanes=4,6.")
-    return lanes
 
 
 def _parse_rdma_read_window(v: str) -> int:
@@ -308,45 +296,52 @@ def _parse_rdma_read_window(v: str) -> int:
 
 
 def _check_rdma(cfg: ConnectivityConfig) -> None:
-    """The RDMA port must be an enabled DCMAC port, and owns that port's streams."""
-    rdma = cfg.net.rdma
-    lanes = cfg.net.rdma_lanes
-    if cfg.net.rdma_read_window is not None and rdma is None:
+    """
+    Every RDMA core sits on an enabled DCMAC port and owns that port's streams.
+    The linker picks the cores' NoC lanes (connectivity.RDMA_LANES).
+    """
+    net = cfg.net
+    rdma = net.rdma
+    if net.rdma_read_window is not None and not rdma:
         raise ValueError("[network] rdma_read_window needs an rdma= port.")
-    if lanes is not None:
-        if rdma is None:
-            raise ValueError("[network] rdma_lanes needs an rdma= port.")
-        for lane in lanes:
-            port = lane // 2
-            if port != rdma and port in cfg.net.enabled_eth:
-                raise ValueError(
-                    f"[network] rdma_lanes: lane {lane} belongs to eth_{port}, which is "
-                    f"enabled for Ethernet.")
-    if rdma is not None:
-        if rdma not in RDMA_ETH_PORTS:
+    for port in rdma:
+        if port not in RDMA_ETH_PORTS:
             raise ValueError(
-                f"[network] rdma=eth_{rdma}: RDMA needs a port with a DCMAC "
+                f"[network] rdma=eth_{port}: RDMA needs a port with a DCMAC "
                 f"({', '.join(f'eth_{i}' for i in RDMA_ETH_PORTS)}).")
-        if rdma not in cfg.net.enabled_eth:
+        if port not in net.enabled_eth:
             raise ValueError(
-                f"[network] rdma=eth_{rdma} needs eth_{rdma}=1.")
+                f"[network] rdma=eth_{port} needs eth_{port}=1.")
     for s in cfg.streams:
         for ep in (f"{s.src_inst}.{s.src_port}", f"{s.dst_inst}.{s.dst_port}"):
             m = _RE_STREAM_EP.match(ep)
             if not m:
                 continue
-            if m.group(4) is not None:
-                if m.group(4).lower() not in ("tx", "rx"):
+            if m.group(5) is not None:
+                name = "rdma" if m.group(4) is None else f"rdma_{m.group(4)}"
+                if m.group(5).lower() not in ("tx", "rx"):
                     raise ValueError(
-                        f"stream_connect uses '{ep}': the RDMA service has one stream "
-                        f"each way, rdma.tx and rdma.rx.")
-                if rdma is None:
+                        f"stream_connect uses '{ep}': an RDMA core has one stream "
+                        f"each way, {name}.tx and {name}.rx.")
+                if not rdma:
                     raise ValueError(
                         f"stream_connect uses '{ep}' but [network] has no rdma= port.")
-            elif int(m.group(2)) == rdma:
+                if m.group(4) is None and len(rdma) > 1:
+                    ports = " and ".join(f"eth_{p}" for p in rdma)
+                    raise ValueError(
+                        f"stream_connect uses '{ep}', but there is an RDMA core on "
+                        f"{ports}: name it, e.g. "
+                        f"rdma_{rdma[0]}.{m.group(5).lower()}.")
+                if m.group(4) is not None and int(m.group(4)) not in rdma:
+                    raise ValueError(
+                        f"stream_connect uses '{ep}' but there is no RDMA core on "
+                        f"eth_{m.group(4)} (rdma=eth_{m.group(4)} in [network]).")
+            elif int(m.group(2)) in rdma:
+                port = int(m.group(2))
+                name = "rdma" if len(rdma) == 1 else f"rdma_{port}"
                 raise ValueError(
-                    f"stream_connect uses '{ep}', but eth_{rdma} carries the RDMA "
-                    f"service: connect to rdma.{m.group(3).lower()[:2]} instead.")
+                    f"stream_connect uses '{ep}', but eth_{port} carries an RDMA "
+                    f"core: connect to {name}.{m.group(3).lower()[:2]} instead.")
 
 
 def _resolve_port_name_for_kernel(kernel: Kernel, requested: str) -> str:

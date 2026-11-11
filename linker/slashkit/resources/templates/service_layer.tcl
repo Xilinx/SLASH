@@ -1175,12 +1175,15 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   # Ethernet disabled; no DCMAC hierarchy created.
 {% endif %}
 
-# === RDMA service on one DCMAC port ([network] rdma=eth_<n>) ===
-# Its DCMAC hierarchy, rdma_0 and its DataMover; before the SmartConnect,
-# which takes rdma_0/s_axil and the port's DCMAC registers as targets.
+# === RDMA cores, one per DCMAC port ([network] rdma=eth_<n>) ===
+# Each core's DCMAC hierarchy, rdma_<n> and its DataMovers; before the
+# SmartConnect, which takes rdma_<n>/s_axil and the port's DCMAC registers as
+# targets.
 {% if rdma_enabled %}
   source [file normalize "{{ rdma_tcl }}"]
-  slash_add_rdma {{ rdma_eth }} {{ rdma_build }} [file normalize "{{ rdma_dir }}"] {{ '{' }}{{ rdma_lanes|join(' ') }}{{ '}' }} {{ rdma_read_window }}
+{% for c in rdma_cores %}
+  slash_add_rdma {{ c.eth }} {{ rdma_build }} [file normalize "{{ rdma_dir }}"] {{ '{' }}{{ c.lanes|join(' ') }}{{ '}' }} {{ rdma_read_window }}
+{% endfor %}
 {% endif %}
 
 # === AXI-Lite SmartConnect for service_layer control ===
@@ -1325,9 +1328,11 @@ assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_addre
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_02] [get_bd_addr_segs M_VIRT_2/Reg] -force
 assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_address_space [get_bd_addr_spaces S_VIRT_03] [get_bd_addr_segs M_VIRT_3/Reg] -force
 {% if rdma_enabled %}
-# RDMA port: its DCMAC and rdma_0 at their fixed control addresses (now that
-# the SmartConnect connects them to S_AXILITE_INI)
-slash_rdma_assign_addresses {{ rdma_eth }}
+# RDMA ports: their DCMACs and cores at fixed control addresses (now that the
+# SmartConnect connects them to S_AXILITE_INI)
+{% for c in rdma_cores %}
+slash_rdma_assign_addresses {{ c.eth }}
+{% endfor %}
 {% endif %}
 {% if sl_window_anchor_enabled|default(false) %}
 # Window anchor: last 64 KiB of the 128 MiB aperture, so the span of

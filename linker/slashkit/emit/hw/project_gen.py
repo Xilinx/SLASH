@@ -33,7 +33,8 @@ from contextlib import ExitStack
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
 from slashkit.emit.hw.service_region.network_ctx import RDMA_STREAM_IP
-from slashkit.emit.hw.service_region.rdma_ctx import write_rdma_opt_post
+from slashkit.emit.hw.service_region.rdma_ctx import (
+    rdma_impl_tcl, write_rdma_opt_post)
 from slashkit.core.command_config import (
     LinkerConfiguration,
     InstallerConfiguration,
@@ -534,9 +535,9 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
             shutil.copytree(
                 kernel.component_xml_path.parent, config.ip_repository / kernel.name
             )
-        # rdma.tx / rdma.rx: the user region's end of the RDMA service's
+        # rdma_<n>.tx / rdma_<n>.rx: the user region's end of an RDMA core's
         # stream, packaged IPs (module references do not work in the RM)
-        if config.configuration.net.rdma is not None:
+        if config.configuration.net.rdma:
             shutil.copytree(RDMA_STREAM_IP, config.ip_repository / "rdma_stream",
                             dirs_exist_ok=True)
 
@@ -638,9 +639,12 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
                 )
             )
             rdma = config.configuration.net.rdma
-            if rdma is not None:
+            if rdma:
                 opt_post_tcl = write_rdma_opt_post(
                     config.build_dir, opt_post_tcl, rdma)
+                impl_tcl = rdma_impl_tcl(config.build_dir, rdma)
+                if impl_tcl is not None:
+                    cmd.extend(["--impl-tcl", str(impl_tcl)])
             cmd.extend(["--opt-post-tcl", str(opt_post_tcl)])
 
         # Distinct task kinds: a single `slashkit link` runs both RM builds, so

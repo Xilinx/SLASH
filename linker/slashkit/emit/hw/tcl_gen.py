@@ -294,7 +294,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
                 "axis_to_fabric": net_ctx["axis_to_fabric"],
                 # /dcmac_axis_noc_s_k/M00_AXIS -> inst.AXIS
                 "axis_from_fabric": net_ctx["axis_from_fabric"],
-                # rdma.tx / rdma.rx: rdma_stream_tx / rdma_stream_rx
+                # rdma_<n>.tx / .rx: rdma_<n>_stream_tx / rdma_<n>_stream_rx
                 "rdma_stream_cells": net_ctx["rdma_stream_cells"],
             }
         )
@@ -412,7 +412,7 @@ def generate_tcl(config: LinkerConfiguration) -> None:
         svc_ctx.update(dcmac_paths(dcmac_dir))
 
         rdma_dir = None
-        if cfg.net.rdma is not None:
+        if cfg.net.rdma:
             rdma_dir = stage_rdma(config.build_dir / "rdma")
         svc_ctx.update(build_service_rdma_ctx(cfg.net, rdma_dir))
 
