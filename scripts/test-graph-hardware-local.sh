@@ -24,7 +24,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
-ACCEPTANCE="$SCRIPT_DIR/test-graph-hardware.sh"
+ACCEPTANCE="$SCRIPT_DIR/extra/test-graph-hardware.sh"
 
 git -C "$REPO_ROOT" check-ignore -q tmp ||
     {
@@ -63,8 +63,8 @@ set -euo pipefail
     echo "VRT_RP1_TRACE was not enabled" >&2
     exit 91
 }
-[[ ${VRT_RP1_CQ:-} == 1 ]] || {
-    echo "VRT_RP1_CQ was not enabled" >&2
+[[ ${VRT_RP1_RESULT:-} == 1 ]] || {
+    echo "VRT_RP1_RESULT was not enabled" >&2
     exit 92
 }
 
@@ -136,15 +136,24 @@ if [[ ${FAKE_MODE:-success} == missing-pdi ]]; then
     pdis=0
 fi
 
-echo "[rp1-cq] entries=$pdis"
-for ((i = 0; i < pdis; ++i)); do
-    echo "  cq[$i] node=$i opcode=PDI_LOAD status=OK(0) detail=0x0 timestamp=$((i + 1))"
-done
-
 trace_suffix=
 if [[ ${FAKE_MODE:-success} == overflow ]]; then
     trace_suffix=' overflow'
 fi
+result_flags=0x8
+if [[ $name == sharpen_loop ]]; then
+    # The unchosen conditional branch remains pending on successful hardware.
+    result_flags=0x28
+fi
+printf '%s\n' "$result_flags" >"$FAKE_STATE_DIR/result-flags"
+if [[ ${FAKE_MODE:-success} != missing-result ]]; then
+    result_outcome='SUCCESS(1)'
+    if [[ ${FAKE_MODE:-success} == failed-result ]]; then
+        result_outcome='FAILED(2)'
+    fi
+    echo "[rp1-result] seq=$((seq + 1)) outcome=$result_outcome flags=$result_flags image=KNOWN(1):1 completed=$((pdis + 1)) graph_ticks=$((pdis + 10)) publish_ticks=$((pdis + 12)) trace_write_idx=$((pdis + 2)) quiescence=0/0/0"
+fi
+
 echo "[rp1-trace] written=$((pdis + 2)) entries=$((pdis + 2))$trace_suffix"
 for ((i = 0; i < pdis; ++i)); do
     echo "  trace[$i] t=$((i + 1)) event=PDI_LOAD(9) node=$i aux0=0x0 aux1=0x0"
@@ -170,18 +179,37 @@ dump_count=$(<"$FAKE_STATE_DIR/dump-count")
 printf '%s\n' "$((dump_count + 1))" >"$FAKE_STATE_DIR/dump-count"
 hb=$((1000 + dump_count * 10))
 
+result_magic=0x00000000
+result_outcome=0
+result_flags=0x00000000
+result_image=0
+result_image_state=0
+result_completed=0
+result_graph_ticks=0
+result_publish_ticks=0
+result_trace_idx=0
+if ((seq != 0)); then
+    result_magic=0x52534c54
+    result_outcome=1
+    result_flags=$(<"$FAKE_STATE_DIR/result-flags")
+    result_image=1
+    result_image_state=1
+    result_completed=$((seq + 1))
+    result_graph_ticks=$((seq + 10))
+    result_publish_ticks=$((seq + 12))
+    result_trace_idx=$((seq + 2))
+fi
+
 cat <<DUMP
 RP1 control block @ R5 0x30000000 (BAR4 + 0x4000000):
   magic            = 0x53515231 (SQR1)
-  version          = 4
-  capabilities     = 0x0000001f
-  required_capabilities = 0x0000001f
+  version          = 6
+  capabilities     = 0x0000007b
+  required_capabilities = 0x0000007b
   missing_capabilities  = 0x00000000
   pdi_ipi_platform_id   = 0x1234abcd (generated platform/IPI identity)
   graph_seq        = $seq
   graph_done_seq   = $seq
-  cq_write_idx     = $seq
-  cq_read_idx      = $seq
   rp1_state        = 1 (READY)
   rp1_error_code   = 0
   rp1_current_node = 4294967295
@@ -189,6 +217,23 @@ RP1 control block @ R5 0x30000000 (BAR4 + 0x4000000):
   terminal_error_detail = 0x00000000
   terminal_error_aux    = 0x00000000
   heartbeat        = $hb
+Graph result:
+  result.magic              = $result_magic
+  result.graph_seq          = $seq
+  result.outcome            = $result_outcome
+  result.flags              = $result_flags
+  result.error_code         = 0
+  result.terminal_node      = 0xffffffff (none)
+  result.terminal_opcode    = 0xffffffff (NONE)
+  result.error_detail       = 0x00000000
+  result.error_aux          = 0x00000000
+  result.active_image_id    = $result_image
+  result.image_state        = $result_image_state
+  result.completed_operations = $result_completed
+  result.graph_elapsed_ticks  = $result_graph_ticks
+  result.publish_elapsed_ticks = $result_publish_ticks
+  result.trace_write_idx      = $result_trace_idx
+  result.quiescence           = 0x00000000
 Protocol contract: compatible
 Liveness: heartbeat advanced $hb -> $((hb + 1)) (running)
 DUMP
@@ -215,6 +260,7 @@ reset_state() {
     printf '0\n' >"$FAKE_STATE/seq"
     printf '0\n' >"$FAKE_STATE/multi-count"
     printf '0\n' >"$FAKE_STATE/dump-count"
+    printf '0x0\n' >"$FAKE_STATE/result-flags"
     : >"$FAKE_STATE/invocations"
 }
 
@@ -281,6 +327,8 @@ expect_failure() {
 }
 
 expect_failure missing-pdi missing-pdi
+expect_failure missing-result missing-result
+expect_failure failed-result failed-result
 expect_failure missing-graph missing-graph
 expect_failure overflow trace-overflow
 expect_failure timeout watchdog 1s

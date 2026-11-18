@@ -50,7 +50,13 @@ heterogeneous graph execution.
      - sharpen_loop
      - Loops and conditionals: a fixed-count FPGA loop carrying state, running
        alongside a CPU reduction, followed by a post-loop conditional.
+   * - extra
+     - rp1_latency
+     - Latency microbenchmarks rather than a tutorial: the RP1 command
+       processor dispatch path against the legacy host-driven VRT path, using
+       the same no-op kernel on the same board.
 
 Each example includes a ``CMakeLists.txt`` with targets for hardware (``hw``), emulation (``emu``),
 and simulation (``sim``) flows. See ``examples/README.md`` in the repository for build
-instructions.
+instructions. The ``extra/`` projects are the exception: they build standalone against an
+installed or in-repo VRT and link a hardware vbin only.
