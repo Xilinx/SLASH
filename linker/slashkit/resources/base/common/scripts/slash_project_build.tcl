@@ -18,6 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # ##################################################################################################
 
+# slash_add_hbm_boundary_slices, called by the generated BD Tcl sourced below.
+source [file join [file dirname [file normalize [info script]]] \
+        "hbm_boundary_slices.tcl"]
+
 proc _slash_usage {} {
     return "Expected -tclargs: --project-name <name> --ip-repo <path> --static-shell-dcp <path> --base-bd <path> --linker-results-dir <path> --rm-work-dir <path> --artifact-out-dir <path> --util-report-file <path> --jobs <n> --pre-synth-tcl <path> ..."
 }
