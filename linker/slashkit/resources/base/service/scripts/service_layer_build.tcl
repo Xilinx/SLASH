@@ -146,6 +146,33 @@ launch_runs impl_1 -jobs $jobs
 wait_on_run impl_1
 open_run impl_1
 
+# Registers the router inserts for auto-pipelining (the *_psap cells of the
+# AXIS register slices in SLR-crossing "auto" mode, e.g. the DCMAC RX
+# datapath's rx_reg_slice) belong to no pblock, and write_device_image then
+# fails its DRC with HDPR-1 ("Cells must have a Pblock defined"). They are
+# placed next to the logic they pipeline: put each into the pblock of the cell
+# that drives it, following the pipeline back to a cell that has one.
+set psap_added 0
+set psap_cells [get_cells -quiet -hierarchical -filter {IS_PRIMITIVE && NAME =~ top_i/service_layer/* && NAME =~ *_psap*}]
+foreach c $psap_cells {
+    if {[get_pblocks -quiet -of_objects $c] ne ""} continue
+    set pb ""
+    set cur $c
+    for {set i 0} {$i < 64 && $pb eq ""} {incr i} {
+        set drv [get_cells -quiet -of_objects [get_pins -quiet -leaf -filter {DIRECTION == OUT} \
+            -of_objects [get_nets -quiet -of_objects [get_pins -quiet $cur/D]]]]
+        if {$drv eq ""} break
+        set pb [get_pblocks -quiet -of_objects $drv]
+        set cur $drv
+    }
+    if {$pb eq ""} {
+        error "service_layer_build: no pblock found for auto-pipeline cell $c"
+    }
+    add_cells_to_pblock $pb $c
+    incr psap_added
+}
+puts "service_layer_build: $psap_added of [llength $psap_cells] auto-pipeline cells added to their driver's pblock"
+
 set partial_pdi [file join $artifact_out_dir "top_i_service_layer_service_layer_${proj_name}_inst_0_partial.pdi"]
 write_device_image -cell top_i/service_layer -force $partial_pdi
 

@@ -33,6 +33,7 @@ from contextlib import ExitStack
 from slashkit.core.floorplan import floorplan_xdc
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
+from slashkit.emit.hw import noc_shutdown
 from slashkit.core.command_config import (
     LinkerConfiguration,
     InstallerConfiguration,
@@ -672,6 +673,11 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     if not pdi_out_path.is_file():
         raise FileNotFoundError(
             f"{str(pdi_out_path)} is missing! Check {str(log_path)} for errors!")
+    # Shut the region's NoC ports down before any frame of the old module is
+    # touched, whatever module was loaded before (noc_shutdown.py).
+    # write_device_image ran in the build directory, which names in its BIF
+    # are relative to.
+    noc_shutdown.rebuild_partial(pdi_out_path, config.build_dir)
 
 
 def build_service_layer_rm(config: LinkerConfiguration) -> None:
