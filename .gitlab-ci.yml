@@ -5,6 +5,15 @@ workflow:
 variables:
   SLURM_ACCOUNT: hpc-prf-cifi
   GIT_SUBMODULE_STRATEGY: recursive
+  SLURM_TIMEOUT_LINKER:
+    description: "Slurm time limit for package_linker (synthesis)"
+    value: "24:00:00" # [hours:minutes:seconds]
+  SLURM_TIMEOUT_INTEGRATION_TEST:
+    description: "Slurm time limit for integration tests"
+    value: "02:00:00"
+  SLURM_TIMEOUT_PACKAGE_RPM:
+    description: "Slurm time limit for package_rpm"
+    value: "01:00:00"
 
 default:
   id_tokens:
@@ -37,7 +46,7 @@ package_linker:
       description: Build the base design from scratch?
       type: boolean
   variables:
-    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal --exclusive -t 12:00:00"
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -q fpgasynthesis -p normal --exclusive -t $SLURM_TIMEOUT_LINKER"
     BASE_DESIGN_REF: dev
   needs:
     - project: $CI_PROJECT_PATH
@@ -108,7 +117,7 @@ package_linker:
     - job: package_linker
       artifacts: true
   variables:
-    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p normal -c 8 --mem 80G -t 02:00:00"
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p normal -c 8 --mem 80G -t $SLURM_TIMEOUT_INTEGRATION_TEST"
   before_script:
     - !reference [default, before_script]
     # Install the linker into the virtualenv
@@ -197,7 +206,7 @@ package_rpm:
     - job: package_linker
       artifacts: true
   variables:
-    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p fpga -t 01:00:00"
+    SCHEDULER_PARAMETERS: "-A $SLURM_ACCOUNT -p fpga -t $SLURM_TIMEOUT_PACKAGE_RPM"
     SLASH_PKG_SKIP_ROOT_DESIGN_BUILD: "1"
     PIP_REQUIRE_VIRTUALENV: "0"
   script:
