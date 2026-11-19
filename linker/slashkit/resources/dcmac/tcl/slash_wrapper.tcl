@@ -53,7 +53,7 @@ proc add_dcmac_inst {} {
     upvar #0 DUAL_QSFP_DCMAC0 dq0  DUAL_QSFP_DCMAC1 dq1
 
     # DCMAC AXIS clock in MHz; consumed by cr_bd_dcmac for aclk FREQ_HZ.
-    set NCLK_F 391
+    set NCLK_F 250
 
     if { $dc0 == 1 } {
         # bd_dcmac_qsfp args: parentCell, dcmac_index, dual_dcmac, dcmac_axil, board, nclk_f

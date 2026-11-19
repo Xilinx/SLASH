@@ -25,6 +25,10 @@ set -euxo pipefail
 # SLASH root
 cd "$(dirname "$0")/.."
 
+# The staged Versal-DCMAC copy takes precedence over the submodule, so refresh
+# it before building or a copy left by a previous run gets built in.
+bash scripts/stage-versal-dcmac.sh
+
 make -C linker/slashkit/resources/base/common/iprepo
 
 pushd linker
