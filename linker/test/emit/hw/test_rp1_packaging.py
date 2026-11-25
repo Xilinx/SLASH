@@ -80,6 +80,94 @@ def test_rp1_package_resources_stage_without_generated_dirs(tmp_path):
     _assert_no_generated_dirs(staged)
 
 
+def test_plm_package_resources_patch_sparse_ipi_dispatch(tmp_path):
+    """The staged custom PLM replaces the faulty sparse-mask demultiplexer."""
+    aved_resources = resources.files("slashkit.resources.aved")
+    root = aved_resources.joinpath("plm")
+    required = ("build-plm.sh", "tools/patch_xilplmi.py")
+    assert all(root.joinpath(*name.split("/")).is_file()
+               for name in required)
+    build_all = aved_resources.joinpath("build_all.sh").read_text()
+    bif = aved_resources.joinpath("pdi_combine.bif").read_text()
+    assert "build-plm.sh" not in build_all
+    assert "type=bootloader, file=./build/plm.elf" not in bif
+    _assert_no_generated_dirs(root)
+
+    aved_dir = tmp_path / "AVED"
+    project_gen._copy_plm_sources_to_aved(aved_dir)
+    staged = aved_dir / "fw" / "PLM"
+    assert all((staged / name).is_file() for name in required)
+
+    platform_source = (
+        tmp_path / "bsp" / "libsrc" / "xilplmi" / "src" /
+        "versal" / "server" / "xplmi_plat.c"
+    )
+    platform_source.parent.mkdir(parents=True)
+    platform_source.write_text(
+        """
+\tu32 IpiIndex;
+\tu32 IpiIndexMask;
+\tfor (IpiIndex = 0U; IpiIndex < XPLMI_IPI_MASK_COUNT; ++IpiIndex) {
+\t\tIpiIndexMask = (u32)1U << IpiIndex;
+\t\tif (((IpiIntrVal & IpiIndexMask) != 0U) &&
+\t\t\t((IpiMaskVal & IpiIndexMask) == 0U)) {
+\t\t\tXPlmi_GicIntrAddTask(XPlmi_GetIpiIntrId(IpiIndex));
+\t\t}
+\t}
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(staged / "tools" / "patch_xilplmi.py"),
+            "--bsp-root",
+            str(tmp_path / "bsp"),
+        ],
+        check=True,
+    )
+
+    patched = platform_source.read_text(encoding="utf-8")
+    assert "IpiInstance->Config.TargetCount" in patched
+    assert "TargetList[IpiIndex].Mask" in patched
+    assert "TargetList[IpiIndex].BufferIndex" in patched
+    assert "1U << IpiIndex" not in patched
+
+
+def test_patched_plm_build_reuses_existing_amc_sdt(tmp_path, monkeypatch):
+    """Firmware-only repacks avoid regenerating SDT metadata when possible."""
+    aved_dir = tmp_path / "AVED"
+    plm_dir = aved_dir / "fw" / "PLM"
+    plm_dir.mkdir(parents=True)
+    (plm_dir / "build-plm.sh").write_text("# fixture\n")
+    xsa = tmp_path / "shell.xsa"
+    xsa.write_bytes(b"xsa")
+    amc_sdt = (
+        aved_dir / "fw" / "AMC" / "amc_bsp" /
+        "versal_sdt" / "system-top.dts"
+    )
+    amc_sdt.parent.mkdir(parents=True)
+    amc_sdt.write_text("/dts-v1/;\n")
+    calls = []
+
+    def fake_run(command, cwd, env, check):
+        calls.append((command, Path(cwd), env, check))
+        output = plm_dir / "build" / "plm.elf"
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"plm")
+
+    monkeypatch.setattr(project_gen.subprocess, "run", fake_run)
+
+    output = project_gen._build_patched_plm(aved_dir, xsa)
+
+    assert output.read_bytes() == b"plm"
+    assert calls[0][0] == ["bash", "build-plm.sh"]
+    assert calls[0][1] == plm_dir
+    assert calls[0][2]["XSA"] == str(xsa)
+    assert calls[0][2]["PLM_SDT"] == str(amc_sdt)
+    assert calls[0][3] is True
+
+
 def test_packaged_rp1_protocol_header_is_synchronized():
     repo_root = Path(__file__).resolve().parents[4]
     subprocess.run(
@@ -116,6 +204,7 @@ def test_rp1_repack_installs_fpt_and_nofpt_outputs(tmp_path, monkeypatch):
         aved_build_dir / "top_wrapper.pdi",
         aved_build_dir / f"{project_gen.AVED_DESIGN_NAME}.xsa",
         aved_build_dir / "amc.elf",
+        aved_build_dir / "plm.elf",
         aved_build_dir / "fpt.bin",
         fpt_dir / "pdi_combine.bif",
         fpt_dir / "fpt_pdi_gen.py",

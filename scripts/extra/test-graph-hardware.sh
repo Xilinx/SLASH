@@ -56,7 +56,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd -P)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 BDF=$1
 ROOT=${2:-${GRAPH_EXAMPLES_ROOT:-"$REPO_ROOT/examples/graph"}}
 
@@ -256,13 +256,11 @@ run_foreground() {
 verify_case_evidence() {
     local label=$1
     local log=$2
-    local expected_pdis=$3
+    local expected_pdi_traces=$3
     local pass_text=$4
 
     grep -Fq "$pass_text" "$log" ||
         die "$label did not report its host-reference PASS"
-    grep -Eq '^\[rp1-cq\] entries=[0-9]+' "$log" ||
-        die "$label is missing VRT_RP1_CQ output"
     grep -Eq '^\[rp1-trace\] written=[0-9]+ entries=[0-9]+' "$log" ||
         die "$label is missing VRT_RP1_TRACE output"
     if grep -Eq '^\[rp1-trace\].*([[:space:]]|^)overflow([[:space:]]|$)' "$log"; then
@@ -271,16 +269,71 @@ verify_case_evidence() {
     grep -Eq 'event=GRAPH_DONE\([0-9]+\).*aux0=0x0([[:space:]]|$)' "$log" ||
         die "$label is missing successful RP1 GRAPH_DONE evidence"
 
+    # Every diagnostic is one complete result line. Validate all fields rather
+    # than accepting a success token detached from recovery, image, timing,
+    # trace, or quiescence evidence.
+    local result_count=0
+    local last_result_seq=
+    local line
+    while IFS= read -r line; do
+        [[ -n $line ]] || continue
+        local fields
+        read -r -a fields <<<"$line"
+        ((${#fields[@]} == 10)) ||
+            die "$label has a malformed RP1 result diagnostic: $line"
+        [[ ${fields[0]} == "[rp1-result]" ]] ||
+            die "$label has an invalid RP1 result prefix"
+
+        local seq=${fields[1]#seq=}
+        local outcome=${fields[2]#outcome=}
+        local flags=${fields[3]#flags=}
+        local image=${fields[4]#image=}
+        local completed=${fields[5]#completed=}
+        local graph_ticks=${fields[6]#graph_ticks=}
+        local publish_ticks=${fields[7]#publish_ticks=}
+        local trace_write_idx=${fields[8]#trace_write_idx=}
+        local quiescence=${fields[9]#quiescence=}
+
+        [[ $seq =~ ^[0-9]+$ ]] ||
+            die "$label result has a non-numeric sequence"
+        [[ $outcome == "SUCCESS(1)" ]] ||
+            die "$label result outcome is $outcome, expected SUCCESS(1)"
+        [[ $flags =~ ^0[xX][0-9a-fA-F]+$ ]] ||
+            die "$label result has malformed flags: $flags"
+        local flag_value=$((flags))
+        (( (flag_value & 0xffffffc0) == 0 )) ||
+            die "$label result reports unknown protocol-v6 flags: $flags"
+        (( (flag_value & 0x08) != 0 )) ||
+            die "$label result does not report trace-enabled execution"
+        (( (flag_value & 0x17) == 0 )) ||
+            die "$label result reports failure/recovery flags: $flags"
+        [[ $image =~ ^KNOWN\(1\):([1-9][0-9]*)$ ]] ||
+            die "$label result does not report a known non-zero image: $image"
+        [[ $completed =~ ^[1-9][0-9]*$ ]] ||
+            die "$label result has no completed operations"
+        [[ $graph_ticks =~ ^[0-9]+$ &&
+           $publish_ticks =~ ^[0-9]+$ &&
+           $trace_write_idx =~ ^[1-9][0-9]*$ ]] ||
+            die "$label result has malformed timing/trace fields"
+        local publish_delta=$(((publish_ticks - graph_ticks) & 0xffffffff))
+        ((publish_delta < 0x80000000)) ||
+            die "$label result publication precedes graph completion"
+        [[ $quiescence == "0/0/0" ]] ||
+            die "$label result required quiescence: $quiescence"
+
+        last_result_seq=$seq
+        ((result_count += 1))
+    done < <(grep -E '^\[rp1-result\]' "$log" || true)
+    ((result_count > 0)) ||
+        die "$label is missing VRT_RP1_RESULT output"
+    CASE_LAST_RESULT_SEQ=$last_result_seq
+
     local pdi_trace_count
-    local pdi_cq_count
     pdi_trace_count=$(grep -Ec \
         'event=PDI_LOAD\([0-9]+\).*aux0=0x0[[:space:]]+aux1=0x[0-9a-fA-F]+([[:space:]]|$)' \
         "$log" || true)
-    pdi_cq_count=$(grep -Ec 'opcode=PDI_LOAD status=OK\(0\)' "$log" || true)
-    ((pdi_trace_count >= expected_pdis)) ||
-        die "$label has $pdi_trace_count successful PDI trace record(s), expected at least $expected_pdis"
-    ((pdi_cq_count >= expected_pdis)) ||
-        die "$label has $pdi_cq_count successful PDI CQ record(s), expected at least $expected_pdis"
+    ((pdi_trace_count >= expected_pdi_traces)) ||
+        die "$label has $pdi_trace_count successful PDI trace record(s), expected at least $expected_pdi_traces"
 }
 
 run_case() {
@@ -290,7 +343,7 @@ run_case() {
     shift 3
     local log="$ARTIFACT_DIR/$label.log"
     run_foreground "$label" "$CASE_TIMEOUT" "$log" \
-        "$ENV_PATH" VRT_RP1_TRACE=1 VRT_RP1_CQ=1 "$@"
+        "$ENV_PATH" VRT_RP1_TRACE=1 VRT_RP1_RESULT=1 "$@"
     verify_case_evidence "$label" "$log" "$expected_pdis" "$pass_text"
 }
 
@@ -307,6 +360,8 @@ is_zero_value() {
 }
 
 RP1_LAST_SEQ=
+RP1_LAST_RESULT_SEQ=
+CASE_LAST_RESULT_SEQ=
 run_rp1_dump() {
     local label=$1
     local log="$ARTIFACT_DIR/$label.log"
@@ -338,7 +393,7 @@ run_rp1_dump() {
     done_seq=$(field_value "$log" graph_done_seq) ||
         die "$label is missing graph_done_seq"
 
-    [[ $version == 4 ]] || die "$label reports protocol v$version, expected v4"
+    [[ $version == 6 ]] || die "$label reports protocol v$version, expected v6"
     is_zero_value "$missing" || die "$label reports missing capabilities: $missing"
     ! is_zero_value "$platform" || die "$label reports an unknown platform/IPI identity"
     [[ $state == 1 ]] || die "$label reports RP1 state $state, expected READY (1)"
@@ -349,7 +404,108 @@ run_rp1_dump() {
         die "$label reports non-numeric graph sequence fields"
     [[ $seq == "$done_seq" ]] ||
         die "$label reports incomplete graph sequence: graph_seq=$seq graph_done_seq=$done_seq"
+
+    local result_magic result_seq result_outcome result_flags
+    local result_error result_node result_opcode result_detail result_aux
+    local result_image result_image_state result_completed
+    local result_graph_ticks result_publish_ticks result_trace_idx
+    local result_quiescence
+    result_magic=$(field_value "$log" result.magic) ||
+        die "$label is missing graph-result magic"
+    result_seq=$(field_value "$log" result.graph_seq) ||
+        die "$label is missing graph-result sequence"
+    result_outcome=$(field_value "$log" result.outcome) ||
+        die "$label is missing graph-result outcome"
+    result_flags=$(field_value "$log" result.flags) ||
+        die "$label is missing graph-result flags"
+    result_error=$(field_value "$log" result.error_code) ||
+        die "$label is missing graph-result error code"
+    result_node=$(field_value "$log" result.terminal_node) ||
+        die "$label is missing graph-result terminal node"
+    result_opcode=$(field_value "$log" result.terminal_opcode) ||
+        die "$label is missing graph-result terminal opcode"
+    result_detail=$(field_value "$log" result.error_detail) ||
+        die "$label is missing graph-result error detail"
+    result_aux=$(field_value "$log" result.error_aux) ||
+        die "$label is missing graph-result error auxiliary detail"
+    result_image=$(field_value "$log" result.active_image_id) ||
+        die "$label is missing graph-result active image"
+    result_image_state=$(field_value "$log" result.image_state) ||
+        die "$label is missing graph-result image state"
+    result_completed=$(field_value "$log" result.completed_operations) ||
+        die "$label is missing graph-result completed-operation count"
+    result_graph_ticks=$(field_value "$log" result.graph_elapsed_ticks) ||
+        die "$label is missing graph-result graph timing"
+    result_publish_ticks=$(field_value "$log" result.publish_elapsed_ticks) ||
+        die "$label is missing graph-result publication timing"
+    result_trace_idx=$(field_value "$log" result.trace_write_idx) ||
+        die "$label is missing graph-result trace cursor"
+    result_quiescence=$(field_value "$log" result.quiescence) ||
+        die "$label is missing graph-result quiescence"
+
+    if is_zero_value "$result_magic"; then
+        [[ $done_seq == 0 ]] ||
+            die "$label has no committed result for graph_done_seq=$done_seq"
+        is_zero_value "$result_seq" ||
+            die "$label has an uncommitted non-zero result sequence"
+        is_zero_value "$result_outcome" ||
+            die "$label has an uncommitted terminal result outcome"
+    else
+        [[ ${result_magic,,} == 0x52534c54 ]] ||
+            die "$label has invalid graph-result magic: $result_magic"
+        [[ $result_seq == "$done_seq" ]] ||
+            die "$label result sequence $result_seq does not match graph_done_seq=$done_seq"
+        [[ $result_outcome == 1 ]] ||
+            die "$label result outcome is $result_outcome, expected SUCCESS (1)"
+        [[ $result_flags =~ ^0[xX][0-9a-fA-F]+$ ]] ||
+            die "$label has malformed graph-result flags: $result_flags"
+        local result_flag_value=$((result_flags))
+        (( (result_flag_value & 0xffffffc0) == 0 )) ||
+            die "$label result reports unknown protocol-v6 flags: $result_flags"
+        (( (result_flag_value & 0x17) == 0 )) ||
+            die "$label result reports failure/recovery flags: $result_flags"
+        if (( (result_flag_value & 0x08) != 0 )); then
+            [[ $result_trace_idx =~ ^[1-9][0-9]*$ ]] ||
+                die "$label traced result has no trace records"
+        else
+            is_zero_value "$result_trace_idx" ||
+                die "$label untraced result carries trace cursor $result_trace_idx"
+        fi
+        is_zero_value "$result_error" ||
+            die "$label result reports error code $result_error"
+        [[ ${result_node,,} == 0xffffffff ]] ||
+            die "$label result reports terminal node $result_node"
+        [[ ${result_opcode,,} == 0xffffffff ]] ||
+            die "$label result reports terminal opcode $result_opcode"
+        is_zero_value "$result_detail" ||
+            die "$label result reports error detail $result_detail"
+        is_zero_value "$result_aux" ||
+            die "$label result reports error auxiliary detail $result_aux"
+        if [[ $result_image_state == 0 ]]; then
+            is_zero_value "$result_image" ||
+                die "$label result NONE image state carries id $result_image"
+        elif [[ $result_image_state == 1 ]]; then
+            ! is_zero_value "$result_image" ||
+                die "$label result KNOWN image state carries id zero"
+        else
+            die "$label result reports unhealthy image state $result_image_state"
+        fi
+        [[ $result_completed =~ ^[1-9][0-9]*$ ]] ||
+            die "$label result has no completed operations"
+        [[ $result_graph_ticks =~ ^[0-9]+$ &&
+           $result_publish_ticks =~ ^[0-9]+$ &&
+           $result_trace_idx =~ ^[0-9]+$ ]] ||
+            die "$label result has malformed timing/trace fields"
+        local result_publish_delta=$((
+            (result_publish_ticks - result_graph_ticks) & 0xffffffff
+        ))
+        ((result_publish_delta < 0x80000000)) ||
+            die "$label result publication precedes graph completion"
+        is_zero_value "$result_quiescence" ||
+            die "$label result reports quiescence $result_quiescence"
+    fi
     RP1_LAST_SEQ=$seq
+    RP1_LAST_RESULT_SEQ=$result_seq
 }
 
 run_case_and_dump() {
@@ -359,9 +515,12 @@ run_case_and_dump() {
     shift 3
     local previous_seq=$RP1_LAST_SEQ
     run_case "$label" "$expected_pdis" "$pass_text" "$@"
+    local case_result_seq=$CASE_LAST_RESULT_SEQ
     run_rp1_dump "$label.rp1"
     [[ $RP1_LAST_SEQ != "$previous_seq" ]] ||
         die "$label returned success without advancing graph_done_seq"
+    [[ $RP1_LAST_RESULT_SEQ == "$case_result_seq" ]] ||
+        die "$label VRT result seq=$case_result_seq disagrees with RP1 dump seq=$RP1_LAST_RESULT_SEQ"
 }
 
 socket_args=()
