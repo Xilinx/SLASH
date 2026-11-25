@@ -940,8 +940,13 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   connect_bd_net -net util_ds_buf_0_BUFG_FABRIC_O  [get_bd_pins util_ds_buf_0/BUFG_FABRIC_O] \
   [get_bd_pins ilreduced_logic_0/Op1]
 
+  # Reset of the network_clk domain (DCMAC aclk side, AXIS NoC ports)
+  set proc_sys_reset_network [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_network ]
+  set_property CONFIG.C_EXT_RESET_HIGH {0} $proc_sys_reset_network
+
   connect_bd_net -net arstn_1  [get_bd_ports arstn] \
-  [get_bd_pins c_shift_ram_0/D]
+  [get_bd_pins c_shift_ram_0/D] \
+  [get_bd_pins proc_sys_reset_network/ext_reset_in]
   
   connect_bd_net -net c_shift_ram_0_Q  [get_bd_pins c_shift_ram_0/Q] \
   [get_bd_pins util_ds_buf_0/BUFG_FABRIC_I]
@@ -1035,7 +1040,7 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   connect_bd_intf_net -intf_net sl2noc_7_M00_INI [get_bd_intf_ports SL2NOC_7] [get_bd_intf_pins sl2noc_7/M00_INI]
 
 
-  connect_bd_net -net service_clk_1  [get_bd_pins service_clk] \
+  connect_bd_net -net network_clk_1  [get_bd_ports network_clk] \
   [get_bd_pins dummy_noc_0/aclk0] \
   [get_bd_pins dummy_noc_1/aclk0] \
   [get_bd_pins dummy_noc_2/aclk0] \
@@ -1052,6 +1057,9 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   [get_bd_pins dummy_noc_m_5/aclk0] \
   [get_bd_pins dummy_noc_m_6/aclk0] \
   [get_bd_pins dummy_noc_m_7/aclk0] \
+  [get_bd_pins proc_sys_reset_network/slowest_sync_clk]
+
+  connect_bd_net -net service_clk_1  [get_bd_pins service_clk] \
   [get_bd_pins sl2noc_0/aclk0] \
   [get_bd_pins sl2noc_1/aclk0] \
   [get_bd_pins sl2noc_2/aclk0] \
@@ -1156,6 +1164,8 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
     set_property -dict [list CONFIG.FREQ_HZ {322265625}] $__clk
     connect_bd_intf_net $__clk [get_bd_intf_pins ${__hier}/qsfp_gt_clk]
 
+    connect_bd_net [get_bd_ports freerunning_clk] [get_bd_pins ${__hier}/freerunning_clk]
+
     set __gt0 [slash_get_or_create_intf_port qsfp${__idx}_4x Master \
                  xilinx.com:interface:gt_rtl:1.0]
     connect_bd_intf_net $__gt0 [get_bd_intf_pins ${__hier}/qsfp_gt0]
@@ -1188,12 +1198,21 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   # small slave into the last 64 KiB of the aperture makes the span constant,
   # which is what the DFX flow requires of a reconfigurable NoC instance.
   # Created before the MI loop below, which wires it as the last MI target.
+  #
+  # Its outputs are also the per-QSFP reset enables (see "Tie QSFP block
+  # clocks/resets" below): bit i, 1 after reset, is ANDed into the aresetn of
+  # the i-th QSFP block. Writing 0 then 1 reruns that block's dcmac_reset_ctrl
+  # sequence (GT reset, then DCMAC TX/RX) on its own: the power-on sequence
+  # resets both ports' GTs at once, before either far end transmits, and the
+  # receivers do not train.
   {% if sl_window_anchor_enabled|default(false) %}
+  {% set sl_anchor_width = [sl_qsfp_blocks|default([])|length, 1]|max %}
   create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 {{ sl_window_anchor_name }}
   set_property -dict [list \
-    CONFIG.C_ALL_OUTPUTS {1} \
-    CONFIG.C_GPIO_WIDTH  {1} \
-    CONFIG.C_IS_DUAL     {0} \
+    CONFIG.C_ALL_OUTPUTS  {1} \
+    CONFIG.C_GPIO_WIDTH   {{ "{" ~ sl_anchor_width ~ "}" }} \
+    CONFIG.C_DOUT_DEFAULT {{ "{" ~ "0x%08X"|format(2 ** sl_anchor_width - 1) ~ "}" }} \
+    CONFIG.C_IS_DUAL      {0} \
   ] [get_bd_cells {{ sl_window_anchor_name }}]
   connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ sl_window_anchor_name }}/s_axi_aclk]
   connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ sl_window_anchor_name }}/s_axi_aresetn]
@@ -1212,6 +1231,10 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
   # Clocks & reset (design pins to SC pins)
   connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ sl_smartconnect_name }}/aclk]
   connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ sl_smartconnect_name }}/aresetn]
+  {% if sl_num_clks > 1 %}
+  # DCMAC AXI4-Lite runs on freerunning_clk (Versal-DCMAC bd_dcmac_qsfp)
+  connect_bd_net [get_bd_ports freerunning_clk] [get_bd_pins {{ sl_smartconnect_name }}/aclk1]
+  {% endif %}
 
   # SI: service_layer design's S_AXILITE -> SmartConnect S00_AXI
   connect_bd_intf_net \
@@ -1228,8 +1251,27 @@ set_property APERTURES {{0x208_0000_0000 32G}} [get_bd_intf_ports S_VIRT_03]
 
   # Tie QSFP block clocks/resets
   {% for q in sl_qsfp_blocks %}
-    connect_bd_net [get_bd_pins {{ sl_clk0 }}] [get_bd_pins {{ q }}/aclk]
-    connect_bd_net [get_bd_pins {{ sl_rstn }}] [get_bd_pins {{ q }}/aresetn]
+    connect_bd_net [get_bd_ports network_clk] [get_bd_pins {{ q }}/aclk]
+    {% if sl_window_anchor_enabled|default(false) %}
+    # aresetn of {{ q }} = network reset AND window-anchor GPIO bit {{ loop.index0 }}
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlslice:1.0 {{ q }}_rst_bit
+    set_property -dict [list \
+      CONFIG.DIN_WIDTH {{ "{" ~ sl_anchor_width ~ "}" }} \
+      CONFIG.DIN_FROM  {{ "{" ~ loop.index0 ~ "}" }} \
+      CONFIG.DIN_TO    {{ "{" ~ loop.index0 ~ "}" }} \
+    ] [get_bd_cells {{ q }}_rst_bit]
+    connect_bd_net [get_bd_pins {{ sl_window_anchor_name }}/gpio_io_o] [get_bd_pins {{ q }}_rst_bit/Din]
+    create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 {{ q }}_rst_and
+    set_property -dict [list \
+      CONFIG.C_OPERATION {and} \
+      CONFIG.C_SIZE      {1} \
+    ] [get_bd_cells {{ q }}_rst_and]
+    connect_bd_net [get_bd_pins proc_sys_reset_network/peripheral_aresetn] [get_bd_pins {{ q }}_rst_and/Op1]
+    connect_bd_net [get_bd_pins {{ q }}_rst_bit/Dout] [get_bd_pins {{ q }}_rst_and/Op2]
+    connect_bd_net [get_bd_pins {{ q }}_rst_and/Res] [get_bd_pins {{ q }}/aresetn]
+    {% else %}
+    connect_bd_net [get_bd_pins proc_sys_reset_network/peripheral_aresetn] [get_bd_pins {{ q }}/aresetn]
+    {% endif %}
   {% endfor %}
 
 {% else %}
@@ -1319,6 +1361,21 @@ assign_bd_address -offset 0x00000000 -range 0x00010000000000000000 -target_addre
 # precede the bare assign_bd_address below, which would otherwise auto-place it.
 assign_bd_address -offset {{ sl_window_anchor_offset }} -range {{ sl_window_anchor_range }} -target_address_space [get_bd_addr_spaces S_AXILITE_INI] [get_bd_addr_segs {{ sl_window_anchor_name }}/S_AXI/Reg] -force
 {% endif %}
+# DCMAC register spaces (256 KiB each, as in dcmac/tcl/slash_wrapper.tcl). The
+# assign_bd_address calls of add_dcmac_inst run before the DCMAC s_axi ports are
+# wired to the AXI-Lite crossbar, so they map nothing; left to the bare
+# assign_bd_address below, the DCMACs land at 0x203_0000_0000 and
+# 0x203_0001_0000 with 64 KiB each, and every access to the second one hits its
+# internal offset 0x10000 + x (0x0BAD0BAD on the port registers).
+foreach {__seg __off} {
+  qsfp_0_n_1/dcmac_wrapper/dcmac_0/s_axi/Reg 0x020302000000
+  qsfp_2_n_3/dcmac_wrapper/dcmac_1/s_axi/Reg 0x020303000000
+} {
+  set __s [get_bd_addr_segs -quiet $__seg]
+  if {[llength $__s] == 1} {
+    assign_bd_address -offset $__off -range 0x00040000 -target_address_space [get_bd_addr_spaces S_AXILITE_INI] $__s -force
+  }
+}
 assign_bd_address
 validate_bd_design
 save_bd_design

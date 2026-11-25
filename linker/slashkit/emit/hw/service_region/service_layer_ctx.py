@@ -158,7 +158,8 @@ def build_service_axilite_ctx(net) -> Dict[str, Any]:
         "sl_window_anchor_range": f"0x{ANCHOR_RANGE:08X}",
 
         # properties
-        "sl_num_clks": 1,
+        # aclk: service_clk; aclk1: freerunning_clk, the DCMAC AXI4-Lite clock
+        "sl_num_clks": 2 if qsfp_blocks else 1,
         "sl_num_si": 1,
         "sl_num_mi": num_mi,
 
