@@ -125,6 +125,12 @@ struct slash_hotplug_device_request {
  * remove the device's functions before LINK_DISABLE and rescan after
  * LINK_ENABLE.  Both resolve the bridge from the bus number of @bdf, so they
  * also work after the device itself has been removed from the PCI tree.
+ *
+ * From LINK_DISABLE until LINK_ENABLE the driver keeps the bridge
+ * runtime-resumed (D0).  A bridge left without children is otherwise
+ * runtime-suspended with Link Disable in its saved state, and the resume before
+ * the rescan restores it.  Both fail with -EIO if Link Disable does not read
+ * back in the requested state.
  */
 #define SLASH_HOTPLUG_IOCTL_LINK_DISABLE _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x34, struct slash_hotplug_device_request)
 #define SLASH_HOTPLUG_IOCTL_LINK_ENABLE  _IOW(SLASH_HOTPLUG_IOCTL_MAGIC, 0x35, struct slash_hotplug_device_request)
