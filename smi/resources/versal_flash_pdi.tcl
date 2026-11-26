@@ -45,6 +45,7 @@
 #
 # Optional:
 #   V80_TARGET_ID=<xsdb-target-id> PDI_PATH=/path/to/boot.pdi xsdb versal_flash_pdi.tcl
+#   V80_CABLE_SERIAL=<jtag-cable-serial-or-prefix> PDI_PATH=/path/to/boot.pdi xsdb versal_flash_pdi.tcl
 
 if {![info exists ::env(PDI_PATH)]} {
     error "PDI_PATH environment variable must be set to the PDI file to program"
@@ -69,35 +70,109 @@ proc describe_targets {targets} {
     return [join $descriptions "; "]
 }
 
-proc resolve_v80_targets {} {
-    set target_properties [targets -target-properties]
+# Return true if $target is a Versal xcv80 that matches the caller's selection:
+# V80_CABLE_SERIAL (exact jtag_cable_serial or its prefix, e.g. the board serial
+# without the FTDI channel suffix), V80_TARGET_ID, or any Versal when neither is set.
+proc versal_target_selected {target} {
+    if {![dict exists $target name] || [dict get $target name] ne "Versal xcv80"} {
+        return 0
+    }
+    if {![dict exists $target target_id]} {
+        return 0
+    }
+    if {[info exists ::env(V80_CABLE_SERIAL)]} {
+        if {![dict exists $target jtag_cable_serial]} {
+            return 0
+        }
+        set serial [dict get $target jtag_cable_serial]
+        set want $::env(V80_CABLE_SERIAL)
+        if {$serial ne $want && ![string match "${want}*" $serial]} {
+            return 0
+        }
+    }
+    if {[info exists ::env(V80_TARGET_ID)] && [dict get $target target_id] ne $::env(V80_TARGET_ID)} {
+        return 0
+    }
+    return 1
+}
 
+# Return true if $target_properties lists a PMC under the Versal target $versal_ctx.
+proc pmc_target_present {target_properties versal_ctx} {
+    foreach target $target_properties {
+        if {[dict exists $target name] && [dict get $target name] eq "PMC" &&
+            [dict exists $target parent_ctx] && [dict get $target parent_ctx] eq $versal_ctx} {
+            return 1
+        }
+    }
+    return 0
+}
+
+# hw_server presents an empty (or partial) target list to a client that connects
+# within a fraction of a second after the previous client disconnected (measured
+# <0.6 s on a two-board host, 2026-10-21), and briefly after the server was just
+# launched.  Poll until the selected Versal target and its PMC are present instead
+# of trusting the first answer; on timeout return the last list so the caller
+# reports it.
+proc wait_for_versal_targets {{timeout_ms 5000} {poll_ms 250}} {
+    set waited 0
+    while {1} {
+        set target_properties [targets -target-properties]
+        foreach target $target_properties {
+            if {[versal_target_selected $target] && [dict exists $target target_ctx] &&
+                [pmc_target_present $target_properties [dict get $target target_ctx]]} {
+                return $target_properties
+            }
+        }
+        if {$waited >= $timeout_ms} {
+            return $target_properties
+        }
+        after $poll_ms
+        incr waited $poll_ms
+    }
+}
+
+proc selection_description {} {
+    set parts {}
+    if {[info exists ::env(V80_CABLE_SERIAL)]} {
+        lappend parts "jtag_cable_serial=$::env(V80_CABLE_SERIAL)"
+    }
+    if {[info exists ::env(V80_TARGET_ID)]} {
+        lappend parts "target_id=$::env(V80_TARGET_ID)"
+    }
+    return [join $parts ", "]
+}
+
+proc resolve_v80_targets {} {
     if {[info exists ::env(V80_TARGET_ID)] && ![string is integer -strict $::env(V80_TARGET_ID)]} {
         error "V80_TARGET_ID must be a numeric XSDB target_id"
     }
+    if {[info exists ::env(V80_CABLE_SERIAL)] && $::env(V80_CABLE_SERIAL) eq ""} {
+        error "V80_CABLE_SERIAL must not be empty"
+    }
+
+    set target_properties [wait_for_versal_targets]
 
     set versal_targets {}
+    set all_versal_targets {}
     foreach target $target_properties {
         if {![dict exists $target name] || [dict get $target name] ne "Versal xcv80"} {
             continue
         }
-        if {![dict exists $target target_id]} {
-            continue
+        lappend all_versal_targets $target
+        if {[versal_target_selected $target]} {
+            lappend versal_targets $target
         }
-        if {[info exists ::env(V80_TARGET_ID)] && [dict get $target target_id] ne $::env(V80_TARGET_ID)} {
-            continue
-        }
-        lappend versal_targets $target
     }
 
+    set selection [selection_description]
     if {[llength $versal_targets] == 0} {
-        if {[info exists ::env(V80_TARGET_ID)]} {
-            error "no Versal xcv80 target found with target_id=$::env(V80_TARGET_ID)"
+        if {$selection ne ""} {
+            error "no Versal xcv80 target found with $selection; present: [describe_targets $all_versal_targets]"
         }
         error "no Versal xcv80 target found"
     }
-    if {[info exists ::env(V80_TARGET_ID)] && [llength $versal_targets] != 1} {
-        error "multiple Versal xcv80 targets found with target_id=$::env(V80_TARGET_ID): [describe_targets $versal_targets]"
+    if {$selection ne "" && [llength $versal_targets] != 1} {
+        error "multiple Versal xcv80 targets found with $selection: [describe_targets $versal_targets]"
     }
     if {[llength $versal_targets] != 1} {
         error "multiple Versal xcv80 targets found: [describe_targets $versal_targets]"

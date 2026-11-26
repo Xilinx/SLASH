@@ -27,22 +27,26 @@
 
 typedef ap_axiu<DWIDTH, 1, 1, TDWIDTH> pkt;
 
+// Free-running (ap_ctrl_none) consumer: counts the beats it receives.
+// rx_flits is a volatile pointer so HLS writes the AXI-Lite register on every
+// beat; with a plain reference the write inside the endless loop is never
+// committed and the register stays at its reset value 0.
 void traffic_consumer(hls::stream<pkt> &axis_in,
-                      ap_uint<32>     &rx_flits)
+                      volatile ap_uint<32> *rx_flits)
 {
 #pragma HLS INTERFACE mode=axis      port=axis_in depth=16
 #pragma HLS INTERFACE mode=s_axilite port=rx_flits bundle=control
 #pragma HLS INTERFACE ap_ctrl_none   port=return
 
     ap_uint<32> rx = 0;
-    rx_flits = 0;
+    *rx_flits = 0;
 
     while (1) {
 #pragma HLS PIPELINE II=1
         if (!axis_in.empty()) {
             (void)axis_in.read();  // consume one beat
             rx++;
-            rx_flits = rx;         // readable via AXI-Lite
+            *rx_flits = rx;        // readable via AXI-Lite
         }
     }
 }

@@ -30,8 +30,10 @@ import importlib.resources as resources
 from typing import List, Optional, Dict
 from contextlib import ExitStack
 
+from slashkit.core.floorplan import floorplan_xdc
 from slashkit.emit.metadata.report_util import convert_report_utilization_to_xml
 from slashkit.emit.render import export_package
+from slashkit.emit.hw import noc_shutdown
 from slashkit.core.command_config import (
     LinkerConfiguration,
     InstallerConfiguration,
@@ -518,6 +520,24 @@ def _generate_user_clock_xdc(
     return xdc_path
 
 
+def _generate_floorplan_xdc(config: LinkerConfiguration) -> Optional[Path]:
+    # [floorplan] pins become one child pblock of pblock_slash per used SLR,
+    # holding the pinned kernel cells. None when nothing is pinned.
+    slr_by_inst = {
+        inst.name: inst.params["slr"]
+        for inst in config.kernel_instances
+        if "slr" in inst.params
+    }
+    if not slr_by_inst:
+        return None
+    xdc_path = config.build_dir / "floorplan.xdc"
+    xdc_path.write_text(
+        floorplan_xdc(config.shell_type.value, slr_by_inst), encoding="utf-8")
+    logger.info("Wrote floorplan constraints for %d instance(s) to %s",
+                len(slr_by_inst), xdc_path)
+    return xdc_path
+
+
 def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     # Copy all base IP cores into the ip repository
     config.ip_repository.mkdir(parents=True, exist_ok=True)
@@ -623,6 +643,10 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
                 user_clock_xdc = _generate_user_clock_xdc(config, target_hz)
                 cmd.extend(["--user-clock-xdc", str(user_clock_xdc)])
 
+            floorplan_xdc_path = _generate_floorplan_xdc(config)
+            if floorplan_xdc_path is not None:
+                cmd.extend(["--floorplan-xdc", str(floorplan_xdc_path)])
+
         if rm_kind == RM_KIND.SERVICE_LAYER:
             opt_post_tcl = stack.enter_context(
                 resources.path(
@@ -649,6 +673,11 @@ def _run_rm_build(config: LinkerConfiguration, rm_kind: RM_KIND) -> None:
     if not pdi_out_path.is_file():
         raise FileNotFoundError(
             f"{str(pdi_out_path)} is missing! Check {str(log_path)} for errors!")
+    # Shut the region's NoC ports down before any frame of the old module is
+    # touched, whatever module was loaded before (noc_shutdown.py).
+    # write_device_image ran in the build directory, which names in its BIF
+    # are relative to.
+    noc_shutdown.rebuild_partial(pdi_out_path, config.build_dir)
 
 
 def build_service_layer_rm(config: LinkerConfiguration) -> None:
