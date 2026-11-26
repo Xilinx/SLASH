@@ -471,6 +471,21 @@ enum vrtd_device_hotplug_op {
     VRTD_DEVICE_HOTPLUG_OP_TOGGLE_SBR = 2,
     VRTD_DEVICE_HOTPLUG_OP_HOTPLUG = 3,
     VRTD_DEVICE_HOTPLUG_OP_RESET_SEQUENCE = 4,
+    /**
+     * Prepare a device for a device-side reset (e.g. a JTAG-driven PMC
+     * reset): close the daemon's handles, remove PF0..PF2 from the PCI bus
+     * and disable the link of the upstream bridge (Link Control: Link
+     * Disable).  Requires function == VRTD_DEVICE_HOTPLUG_FUNCTION_ALL.  The
+     * disabled link is owned by the connection; it is re-enabled by
+     * LINK_ENABLE or, as a safety net, when the connection closes.
+     */
+    VRTD_DEVICE_HOTPLUG_OP_LINK_DISABLE = 5,
+    /**
+     * Re-enable the link disabled by LINK_DISABLE, rescan PCI and
+     * re-discover devices.  Device-independent like RESCAN (dev_number and
+     * function are ignored).
+     */
+    VRTD_DEVICE_HOTPLUG_OP_LINK_ENABLE = 6,
 };
 
 #define VRTD_DEVICE_HOTPLUG_FUNCTION_ALL UINT8_MAX

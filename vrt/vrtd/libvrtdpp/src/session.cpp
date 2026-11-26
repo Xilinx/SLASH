@@ -430,6 +430,18 @@ void Session::hotplugRescan() const {
     }
 }
 
+void Session::hotplugLinkEnable() const {
+    if (isClosed()) {
+        throw Error(VRTD_RET_BAD_LIB_CALL);
+    }
+    std::lock_guard<std::mutex> lk(*m);
+
+    auto ret = vrtd_device_hotplug_link_enable(fd);
+    if (ret != VRTD_RET_OK) {
+        throw Error(ret);
+    }
+}
+
 uint64_t Session::cfgmemProgramStart(
     const Device& device,
     int input_fd,

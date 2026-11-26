@@ -40,6 +40,7 @@ void slash_chrdev_exit(void);
  * Return: Class device pointer, or ERR_PTR on failure.
  */
 struct device *slash_chrdev_add(struct cdev *cdev,
+                                struct kobject *cdev_parent,
                                 const struct file_operations *fops,
                                 unsigned int minor,
                                 struct device *parent,

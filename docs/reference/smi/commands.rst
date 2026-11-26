@@ -288,11 +288,13 @@ Modes:
    Source a shell setup script before running ``xsdb``. May be repeated and is
    valid only with ``--jtag``.
 
-In JTAG mode, ``v80-smi`` removes all V80 PCIe functions through VRTD unless
+In JTAG mode, ``v80-smi`` asks VRTD to remove all V80 PCIe functions and to
+disable the link of the board's upstream bridge (``LINK_DISABLE``) unless
 ``--no-remove-device`` is used, runs ``/bin/bash -c 'source ...; xsdb ...'``
 with ``PDI_PATH`` set to the selected PDI, sets ``V80_CABLE_SERIAL`` and
 ``V80_TARGET_ID`` from the cable serial and ``--xsdb-target-id`` when present,
-and always asks VRTD to rescan PCIe after the ``xsdb`` step completes.
+and then asks VRTD to re-enable the link, rescan PCIe and re-discover the board
+(``LINK_ENABLE``; a plain rescan with ``--no-remove-device``).
 With ``-d``, the board serial is read before the PCIe functions are removed. The
 command stops without removing them if the serial cannot be read, does not
 match ``--xsdb-cable-serial``, or no USB-JTAG device with that serial is present.
@@ -300,7 +302,19 @@ This check assumes the board's on-board USB-JTAG interface; to program through
 another JTAG cable, use ``--no-remove-device`` with ``--xsdb-cable-serial``. The Tcl
 script polls for the selected target for up to 5 s, because ``hw_server`` briefly
 reports no targets to a client that connects right after the previous one
-disconnected. Since default PDI resolution uses
+disconnected.
+
+The link is kept disabled across ``xsdb`` because the Tcl script resets the
+Versal PMC, which drops the PCIe link from the device side. Some root ports
+never retrain after such a device-initiated Surprise Down and need a host
+reboot (observed on AMD Turin GPP bridges with firmware-first error handling);
+with the Link Disable bit already set the link drop is host-initiated and the
+port retrains as soon as the bit is cleared, without a reset being asserted
+towards the board. VRTD re-enables the link by itself if ``v80-smi`` dies while
+``xsdb`` is running. On such hosts ``--no-remove-device`` leaves the drivers
+bound during the PMC reset and the root port without a host-initiated link
+down, so it should only be used where a device-side link drop is known to be
+harmless. Since default PDI resolution uses
 ``python3 -m slashkit``, setting ``PYTHONPATH`` can select an in-repo
 ``slashkit``.
 

@@ -617,6 +617,37 @@ TEST_F(hotplug, toggle_sbr_no_upstream_bridge)
 						   "ffff:ff:00.0"));
 }
 
+/* LINK_DISABLE / LINK_ENABLE share the toggle_sbr bridge lookup: a malformed
+ * BDF is -EINVAL, a bus without an upstream bridge is -ENODEV.  Neither
+ * touches a real bridge, so the tests are non-destructive. */
+TEST_F(hotplug, link_disable_malformed_bdf)
+{
+	EXPECT_EQ(-EINVAL,
+			  hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_LINK_DISABLE,
+						   "not-a-bdf"));
+}
+
+TEST_F(hotplug, link_disable_no_upstream_bridge)
+{
+	EXPECT_EQ(-ENODEV,
+			  hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_LINK_DISABLE,
+						   "ffff:ff:00.0"));
+}
+
+TEST_F(hotplug, link_enable_malformed_bdf)
+{
+	EXPECT_EQ(-EINVAL,
+			  hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_LINK_ENABLE,
+						   "not-a-bdf"));
+}
+
+TEST_F(hotplug, link_enable_no_upstream_bridge)
+{
+	EXPECT_EQ(-ENODEV,
+			  hp_ioctl_bdf(self->hp_fd, SLASH_HOTPLUG_IOCTL_LINK_ENABLE,
+						   "ffff:ff:00.0"));
+}
+
 /* ====================================================================
  * ABI size-versioning tests
  *

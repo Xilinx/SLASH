@@ -59,6 +59,7 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
+#include <linux/kobject.h>
 #include <linux/kref.h>
 #include <linux/ktime.h>
 #include <linux/limits.h>
@@ -276,6 +277,8 @@ struct slash_qdma_dev {
     unsigned long qdma_handle;
 
     struct cdev cdev;
+    /* Parent kobject of @cdev; pins this struct until the cdev is released. */
+    struct kobject cdev_kobj;
     struct device *device;
     int slot;
     struct kref ref;
@@ -630,6 +633,16 @@ static void slash_qdma_remove(struct pci_dev *pdev);
 static int slash_qdma_create_qdma_device(struct pci_dev *pdev, struct slash_qdma_dev **pdevice);
 static void slash_qdma_destroy_qdma_device(struct slash_qdma_dev *device);
 static void slash_qdma_dev_release(struct kref *ref);
+static void slash_qdma_cdev_parent_release(struct kobject *kobj);
+
+/*
+ * Parent kobject type for the embedded cdev: holds one reference on the
+ * QDMA device while the cdev is alive so the container outlives
+ * cdev_purge() (see slash_chrdev_add()).
+ */
+static struct kobj_type slash_qdma_cdev_parent_ktype = {
+    .release = slash_qdma_cdev_parent_release,
+};
 static void slash_qdma_conf_options(struct qdma_dev_conf *conf, struct pci_dev *pdev);
 static int slash_qdma_ioctl_info_w(struct slash_qdma_dev *qdma_dev,
                                    void __user *uarg);
@@ -1165,10 +1178,14 @@ static int slash_qdma_probe(struct pci_dev *pdev, const struct pci_device_id *id
     }
 
     snprintf(name, sizeof(name), SLASH_QDMA_CTLDEV_NAME_FMT, pci_name(pdev));
+    /* See slash_ctldev_create(): the cdev pins @device via cdev_kobj. */
+    kref_get(&device->ref);
+    kobject_init(&device->cdev_kobj, &slash_qdma_cdev_parent_ktype);
     device->device =
-        slash_chrdev_add(&device->cdev, &slash_qdma_fops,
+        slash_chrdev_add(&device->cdev, &device->cdev_kobj, &slash_qdma_fops,
                          SLASH_QDMA_MINOR(device->slot), &pdev->dev,
                          device, name);
+    kobject_put(&device->cdev_kobj);
     if (IS_ERR(device->device)) {
         err = PTR_ERR(device->device);
         device->device = NULL;
@@ -1374,6 +1391,15 @@ static void slash_qdma_dev_release(struct kref *ref)
     mutex_destroy(&device->lock);
     pci_dev_put(device->pdev);
     kfree(device);
+}
+
+static void slash_qdma_cdev_parent_release(struct kobject *kobj)
+{
+    struct slash_qdma_dev *device =
+        container_of(kobj, struct slash_qdma_dev, cdev_kobj);
+
+    /* Last user of the cdev is gone: drop the reference it held on us. */
+    kref_put(&device->ref, slash_qdma_dev_release);
 }
 
 /* ─────────────────────────────────────────────────────────────────────

@@ -53,8 +53,12 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/pm_runtime.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 
@@ -374,6 +378,47 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
     return 0;
 }
 
+/*
+ * Ports whose link this driver has disabled.  Each entry owns a reference on
+ * the port and a runtime-PM usage reference that keeps it in D0 until
+ * LINK_ENABLE.  Without it, a port left with no children (the endpoint's
+ * functions are removed before LINK_DISABLE) is runtime-suspended to D3hot by
+ * the PCI core, which saves Link Control *with* Link Disable set.  Its
+ * upstream bridges then suspend too and stop forwarding config requests, so a
+ * LINK_ENABLE write that does not resume the port is lost (it reads back
+ * 0xffff), and the runtime resume that the rescan triggers restores the saved
+ * value, keeping the link disabled.  Observed behind a PLX PEX 8747 switch.
+ */
+struct slash_link_hold {
+    struct list_head node;
+    struct pci_dev *port;
+};
+
+static LIST_HEAD(slash_link_holds);
+/* Serialises Link Control updates and protects slash_link_holds. */
+static DEFINE_MUTEX(slash_link_lock);
+
+static struct slash_link_hold *slash_link_hold_find(struct pci_dev *port)
+{
+    struct slash_link_hold *hold;
+
+    list_for_each_entry(hold, &slash_link_holds, node) {
+        if (hold->port == port)
+            return hold;
+    }
+    return NULL;
+}
+
+/* Let the port runtime-suspend again and drop the references the hold owns. */
+static void slash_link_hold_release(struct slash_link_hold *hold)
+{
+    list_del(&hold->node);
+    pm_runtime_mark_last_busy(&hold->port->dev);
+    pm_runtime_put_autosuspend(&hold->port->dev);
+    pci_dev_put(hold->port);
+    kfree(hold);
+}
+
 /**
  * slash_hotplug_ioctl() - Dispatch hotplug ioctl commands.
  * @file: Open file for the hotplug character device.
@@ -382,6 +427,139 @@ static int slash_hotplug_handle_hotplug(const char *bdf)
  *
  * Return: 0 on success, negative errno on failure.
  */
+/**
+ * slash_hotplug_handle_link_set() - Disable or re-enable the PCIe link on the
+ *                                   upstream port of @bdf.
+ * @bdf:     Endpoint BDF string ("DDDD:BB:DD.F").  Only the bus number is used
+ *           to find the port, so this works after the endpoint was removed.
+ * @disable: true to set PCI_EXP_LNKCTL_LD (Link Disable), false to clear it.
+ *
+ * Unlike slash_hotplug_handle_toggle_sbr() this does not reset the bus; it
+ * only takes the link down, and the caller decides how long it stays down
+ * (see the uapi header for why).  On disable we give the LTSSM a moment to
+ * reach the Disabled state; on enable we wait 1000 ms for link training,
+ * matching slash_hotplug_handle_toggle_sbr().
+ *
+ * The port is runtime-resumed for the access, and from a successful disable
+ * until the matching enable it is kept resumed (see struct slash_link_hold).
+ * The write is verified by reading Link Control back.
+ *
+ * Return: 0 on success, -EIO if Link Disable does not read back in the
+ * requested state, other negative errno on failure.
+ */
+static int slash_hotplug_handle_link_set(const char *bdf, bool disable)
+{
+    const char *what = disable ? "link_disable" : "link_enable";
+    struct slash_link_hold *hold;
+    struct slash_link_hold *new_hold = NULL;
+    struct pci_bus *ep_bus;
+    struct pci_dev *port;
+    int domain, bus_nr, slot, func;
+    u16 lnkctl = 0;
+    int ret;
+
+    if (sscanf(bdf, "%x:%x:%x.%x", &domain, &bus_nr, &slot, &func) != 4) {
+        pr_err("slash_hotplug: %s: malformed BDF '%s'\n", what, bdf);
+        return -EINVAL;
+    }
+
+    pci_lock_rescan_remove();
+    ep_bus = pci_find_bus(domain, bus_nr);
+    if (!ep_bus || !ep_bus->self) {
+        pci_unlock_rescan_remove();
+        pr_err("slash_hotplug: %s: no upstream port for %s\n", what, bdf);
+        return -ENODEV;
+    }
+    port = pci_dev_get(ep_bus->self);
+    pci_unlock_rescan_remove();
+
+    if (!pci_is_pcie(port)) {
+        pr_err("slash_hotplug: %s: %s has no PCIe capability\n", what,
+               pci_name(port));
+        pci_dev_put(port);
+        return -ENODEV;
+    }
+
+    mutex_lock(&slash_link_lock);
+
+    hold = slash_link_hold_find(port);
+    if (disable && !hold) {
+        new_hold = kzalloc(sizeof(*new_hold), GFP_KERNEL);
+        if (!new_hold) {
+            ret = -ENOMEM;
+            goto out_unlock;
+        }
+    }
+
+    /*
+     * Bring the port to D0 for the access.  -EACCES means runtime PM is
+     * disabled for it, so it cannot be suspended either; the usage count was
+     * still taken and is dropped below as usual.
+     */
+    ret = pm_runtime_get_sync(&port->dev);
+    if (ret < 0 && ret != -EACCES) {
+        pm_runtime_put_noidle(&port->dev);
+        pr_err("slash_hotplug: %s: runtime resume of %s failed (%d)\n", what,
+               pci_name(port), ret);
+        goto out_unlock;
+    }
+
+    if (disable)
+        ret = pcie_capability_set_word(port, PCI_EXP_LNKCTL, PCI_EXP_LNKCTL_LD);
+    else
+        ret = pcie_capability_clear_word(port, PCI_EXP_LNKCTL, PCI_EXP_LNKCTL_LD);
+    if (ret) {
+        ret = pcibios_err_to_errno(ret);
+        pr_err("slash_hotplug: %s: Link Control write on %s failed (%d)\n", what,
+               pci_name(port), ret);
+        goto out_put_access;
+    }
+
+    ret = pcie_capability_read_word(port, PCI_EXP_LNKCTL, &lnkctl);
+    pr_info("slash_hotplug: %s: port=%s lnkctl=0x%04x\n", what,
+            pci_name(port), lnkctl);
+    if (ret || lnkctl == 0xffff || !!(lnkctl & PCI_EXP_LNKCTL_LD) != disable) {
+        pr_err("slash_hotplug: %s: Link Disable on %s does not read back %s (lnkctl=0x%04x)\n",
+               what, pci_name(port), disable ? "set" : "clear", lnkctl);
+        /* Do not leave a half-done disable behind without a hold. */
+        if (disable)
+            pcie_capability_clear_word(port, PCI_EXP_LNKCTL, PCI_EXP_LNKCTL_LD);
+        ret = -EIO;
+        goto out_put_access;
+    }
+
+    if (disable) {
+        /* Let the LTSSM reach Disabled before the caller resets the device. */
+        msleep(10);
+        if (new_hold) {
+            /* The hold takes over the port and runtime-PM references. */
+            new_hold->port = port;
+            list_add(&new_hold->node, &slash_link_holds);
+            mutex_unlock(&slash_link_lock);
+            return 0;
+        }
+        /* Already held by an earlier LINK_DISABLE: one hold per port. */
+        ret = 0;
+        goto out_put_access;
+    }
+
+    /* The port is still in D0 here, so the link trains with it awake. */
+    pr_info("slash_hotplug: %s: waiting 1000 ms for PCIe link training\n", what);
+    msleep(1000);
+    if (hold)
+        slash_link_hold_release(hold);
+    ret = 0;
+
+out_put_access:
+    pm_runtime_mark_last_busy(&port->dev);
+    pm_runtime_put_autosuspend(&port->dev);
+out_unlock:
+    mutex_unlock(&slash_link_lock);
+    kfree(new_hold);
+    pci_dev_put(port);
+    return ret;
+}
+
 static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct slash_hotplug_device_request req = {0};
@@ -432,6 +610,23 @@ static long slash_hotplug_ioctl(struct file *file, unsigned int cmd, unsigned lo
         if (!ret)
             pr_info("slash_hotplug: ioctl: HOTPLUG succeeded\n");
         break;
+    case SLASH_HOTPLUG_IOCTL_LINK_DISABLE:
+    case SLASH_HOTPLUG_IOCTL_LINK_ENABLE: {
+        const bool disable = (cmd == SLASH_HOTPLUG_IOCTL_LINK_DISABLE);
+        const char *what = disable ? "LINK_DISABLE" : "LINK_ENABLE";
+
+        pr_info("slash_hotplug: ioctl: dispatching %s\n", what);
+        ret = slash_hotplug_copy_request(arg, &req);
+        if (ret) {
+            pr_err("slash_hotplug: %s: copy_request failed (%d)\n", what, ret);
+            break;
+        }
+        pr_info("slash_hotplug: %s: BDF %s\n", what, req.bdf);
+        ret = slash_hotplug_handle_link_set(req.bdf, disable);
+        if (!ret)
+            pr_info("slash_hotplug: ioctl: %s succeeded\n", what);
+        break;
+    }
     default:
         pr_err("slash_hotplug: unknown ioctl cmd 0x%x\n", cmd);
         ret = -ENOTTY;
@@ -481,7 +676,7 @@ static const struct file_operations slash_hotplug_fops = {
 int slash_hotplug_init(void)
 {
     slash_hotplug_device.device =
-        slash_chrdev_add(&slash_hotplug_device.cdev, &slash_hotplug_fops,
+        slash_chrdev_add(&slash_hotplug_device.cdev, NULL, &slash_hotplug_fops,
                          SLASH_HOTPLUG_MINOR, NULL, &slash_hotplug_device,
                          SLASH_HOTPLUG_DEVICE_NAME);
     if (IS_ERR(slash_hotplug_device.device)) {
@@ -500,7 +695,22 @@ int slash_hotplug_init(void)
 
 void slash_hotplug_exit(void)
 {
+    struct slash_link_hold *hold, *tmp;
+
     slash_chrdev_del(&slash_hotplug_device.cdev,
                      slash_hotplug_device.device);
     slash_hotplug_device.device = NULL;
+
+    /*
+     * No ioctl can run any more.  A link still disabled here would be saved
+     * as disabled once the port may suspend again, so re-enable it first.
+     */
+    mutex_lock(&slash_link_lock);
+    list_for_each_entry_safe(hold, tmp, &slash_link_holds, node) {
+        pr_warn("slash_hotplug: link of %s still disabled at unload; re-enabling it\n",
+                pci_name(hold->port));
+        pcie_capability_clear_word(hold->port, PCI_EXP_LNKCTL, PCI_EXP_LNKCTL_LD);
+        slash_link_hold_release(hold);
+    }
+    mutex_unlock(&slash_link_lock);
 }

@@ -199,3 +199,13 @@ int slash_hotplug_toggle_sbr(struct slash_hotplug *hotplug, const char *bdf) {
 int slash_hotplug_hotplug(struct slash_hotplug *hotplug, const char *bdf) {
     return slash_hotplug_ioctl(hotplug, SLASH_HOTPLUG_IOCTL_HOTPLUG, true, bdf);
 }
+
+int slash_hotplug_link_disable(struct slash_hotplug *hotplug, const char *bdf) {
+    return slash_hotplug_ioctl(hotplug, SLASH_HOTPLUG_IOCTL_LINK_DISABLE, true,
+                               bdf);
+}
+
+int slash_hotplug_link_enable(struct slash_hotplug *hotplug, const char *bdf) {
+    return slash_hotplug_ioctl(hotplug, SLASH_HOTPLUG_IOCTL_LINK_ENABLE, true,
+                               bdf);
+}
